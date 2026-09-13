@@ -10,8 +10,12 @@ export interface RunnerSpawnConfig {
 
 const STDERR_TAIL_BYTES = 4096;
 
-/** Signals the runner's whole process group (it is spawned detached, as the group leader), else just the pid. */
+/**
+ * Signals the runner's whole process group (it is spawned detached, as the group leader), else just the pid. Once the
+ * runner has exited its pid, and so its group id, may belong to an unrelated process, so nothing is signalled then.
+ */
 function killProcessGroup(proc: Subprocess): void {
+  if (proc.exitCode !== null || proc.signalCode !== null) return;
   try {
     process.kill(-proc.pid, "SIGKILL");
   } catch {
@@ -23,13 +27,18 @@ export class BunRunnerProcess {
   readonly #listeners = new Set<(message: RunnerToMain) => void>();
   readonly #proc: Subprocess;
   #stderrTail = "";
+  #hasExited = false;
   lastHeartbeat = Date.now();
   bunVersion = "";
   readonly exited: Promise<number | null>;
 
   private constructor(proc: Subprocess) {
     this.#proc = proc;
-    this.exited = proc.exited.then(() => proc.exitCode);
+    // Set in the same callback that resolves `exited`, so anything awaiting `exited` already sees it.
+    this.exited = proc.exited.then(() => {
+      this.#hasExited = true;
+      return proc.exitCode;
+    });
     // The stderr tail is best-effort diagnostics: a stream error must not become an unhandled rejection.
     this.#collectStderr(proc.stderr as ReadableStream<Uint8Array>).catch(() => {});
   }
@@ -94,8 +103,12 @@ export class BunRunnerProcess {
     }
   }
 
-  /** SIGKILLs the runner and everything in its process group (supersede, Kill, idle expiry, stop escalation, quit). */
+  /**
+   * SIGKILLs the runner and everything in its process group (supersede, Kill, idle expiry, stop escalation, quit).
+   * A no-op once the runner has exited.
+   */
   kill(): void {
+    if (this.#hasExited) return;
     killProcessGroup(this.#proc);
   }
 

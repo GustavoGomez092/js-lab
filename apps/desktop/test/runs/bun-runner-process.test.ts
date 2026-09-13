@@ -47,6 +47,35 @@ async function startRunner(): Promise<BunRunnerProcess> {
   return runner;
 }
 
+test.skipIf(process.platform === "win32")(
+  "kill() sends no signal to a runner that already exited on its own",
+  async () => {
+    const runner = await BunRunnerProcess.start({
+      bunPath: process.execPath,
+      bootstrapPath: join(import.meta.dir, "fixtures/exit-after-ready-runner.ts"),
+      cwd: dir,
+      env: { PATH: process.env.PATH ?? "" },
+    });
+    runners.push(runner);
+    await runner.exited;
+
+    // Its pid (and so its process-group id) may already belong to an unrelated process: nothing may be signalled.
+    const signalled: [number, unknown][] = [];
+    const originalKill = process.kill;
+    process.kill = ((pid: number, signal?: string | number) => {
+      signalled.push([pid, signal]);
+      return true;
+    }) as typeof process.kill;
+    try {
+      runner.kill();
+    } finally {
+      process.kill = originalKill;
+    }
+    expect(signalled).toEqual([]);
+  },
+  15_000,
+);
+
 test.skipIf(process.platform === "win32")("the runner leads its own process group", async () => {
   const runner = await startRunner();
   expect(pgid(runner.pid)).toBe(runner.pid);

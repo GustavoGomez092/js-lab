@@ -383,6 +383,21 @@ describe("RunCoordinator", () => {
     expect((h.events.at(-1) as { message: string }).message).toContain("code 3");
   }, 15_000);
 
+  test("Kill after the runner already exited treats the runner as gone", async () => {
+    const h = await createHarness();
+    const { runId } = h.coordinator.start({
+      tabId: "t1",
+      code: "process.exit(3)",
+      language: "typescript",
+      logpoints: [],
+    });
+    await h.waitForState("failed", runId);
+    h.coordinator.kill("t1");
+    await flush();
+    expect(h.states.filter((s) => s.runId === runId).at(-1)?.state).toBe("failed");
+    expect(h.states.some((s) => s.runId === runId && s.state === "killed")).toBe(false);
+  }, 15_000);
+
   test("updates promise results when they settle", async () => {
     const h = await createHarness();
     const { runId } = h.coordinator.start({

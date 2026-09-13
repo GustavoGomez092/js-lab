@@ -274,11 +274,11 @@ export class RunCoordinator {
     }
     run.unsubscribe?.();
     this.deps.runLock.remove(run.runId);
+    const stderrTail = run.runner?.stderrTail ?? "";
+    // The runner is gone: Kill, supersede, expand and quit must not act on it (or signal its possibly reused pid).
+    run.runner = null;
     if (run.expectedExit || !this.#isCurrent(run)) return;
-    this.#runnerError(
-      run,
-      `Runtime exited unexpectedly (code ${code ?? "unknown"}). ${run.runner?.stderrTail ?? ""}`.trim(),
-    );
+    this.#runnerError(run, `Runtime exited unexpectedly (code ${code ?? "unknown"}). ${stderrTail}`.trim());
   }
 
   #runnerError(run: ActiveRun, message: string): void {

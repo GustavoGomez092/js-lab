@@ -91,6 +91,52 @@ describe("ValueView", () => {
     expect(screen.getByText("Promise { <pending> }")).toBeTruthy();
     expect(screen.getByText("TypeError: bad")).toBeTruthy();
   });
+
+  test("shows a retryable message when expanding fails", async () => {
+    let calls = 0;
+    const expand = mock(async (): Promise<EncodedValue | null> => {
+      calls++;
+      if (calls === 1) throw new Error("rpc failed");
+      return { t: "object", id: 2, ctor: "Deep", props: [[{ k: "d" }, num("1")]] };
+    });
+    const { container } = render(
+      <ValueView value={{ t: "handle", handle: "h1", preview: "Object {…}" }} expand={expand} />,
+    );
+    const toggle = screen.getByRole("button", { name: /Object/ });
+    fireEvent.click(toggle);
+    await waitFor(() => expect(screen.getByText(/Couldn't expand/)).toBeTruthy());
+    fireEvent.click(toggle);
+    await waitFor(() => expect(container.textContent).toContain("d: 1"));
+    expect(expand).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not expand the same node twice while a request is in flight", async () => {
+    let resolveExpand: (value: EncodedValue) => void = () => {};
+    const expand = mock(
+      () =>
+        new Promise<EncodedValue>((resolve) => {
+          resolveExpand = resolve;
+        }),
+    );
+    const { container } = render(
+      <ValueView value={{ t: "handle", handle: "h1", preview: "Object {…}" }} expand={expand} />,
+    );
+    const toggle = screen.getByRole("button", { name: /Object/ });
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    expect(expand).toHaveBeenCalledTimes(1);
+    resolveExpand({ t: "object", id: 2, ctor: "Deep", props: [[{ k: "d" }, num("1")]] });
+    await waitFor(() => expect(container.textContent).toContain("d: 1"));
+  });
+
+  test("expands a function to show its source", async () => {
+    const source = "function foo() { return 1; }";
+    const expand = mock(async (): Promise<EncodedValue | null> => ({ t: "string", v: source }));
+    render(<ValueView value={{ t: "function", name: "foo", kind: "function", handle: "h3" }} expand={expand} />);
+    fireEvent.click(screen.getByRole("button", { name: /foo/ }));
+    await waitFor(() => expect(screen.getByText(source)).toBeTruthy());
+    expect(expand).toHaveBeenCalledWith("h3");
+  });
 });
 
 describe("tableModel", () => {

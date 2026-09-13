@@ -13,6 +13,7 @@ export class EventBuffer {
   #dropped = 0;
   #reportedDropped = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
+  #closed = false;
 
   constructor(
     private readonly send: (events: RawRunEvent[]) => void,
@@ -23,6 +24,7 @@ export class EventBuffer {
 
   /** Returns the event's sequence number, or null when the event was dropped by the cap. */
   push(body: RawRunEventBody): number | null {
+    if (this.#closed) return null;
     if (body.kind !== "promiseSettled") {
       if (this.#counted >= this.maxEntries) {
         this.#dropped++;
@@ -50,6 +52,12 @@ export class EventBuffer {
     const events = this.#queue;
     this.#queue = [];
     this.send(events);
+  }
+
+  /** Sends whatever is pending, then drops every later push (the run was stopped). */
+  close(): void {
+    this.flush();
+    this.#closed = true;
   }
 
   #schedule(): void {

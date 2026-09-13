@@ -12,11 +12,62 @@ function sandbox(): { tracker: HandleTracker; g: any } {
     setImmediate,
     clearImmediate,
     fetch,
+    WebSocket,
     Bun: { serve: Bun.serve },
   };
   installHandleTracking(tracker, g);
   return { tracker, g };
 }
+
+function webSocketServer() {
+  return Bun.serve({
+    port: 0,
+    fetch: (req, server) => (server.upgrade(req) ? undefined : new Response("no upgrade", { status: 400 })),
+    websocket: { message: () => {} },
+  });
+}
+
+test("a WebSocket is tracked from construction until it closes", async () => {
+  const server = webSocketServer();
+  try {
+    const { tracker, g } = sandbox();
+    const socket = new g.WebSocket(`ws://127.0.0.1:${server.port}/`);
+    expect(socket).toBeInstanceOf(WebSocket);
+    expect(tracker.count).toBe(1);
+    await new Promise((resolve) => socket.addEventListener("open", resolve, { once: true }));
+    const closed = new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
+    socket.close();
+    await closed;
+    expect(tracker.count).toBe(0);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("disposeAll closes tracked WebSockets", async () => {
+  const server = webSocketServer();
+  try {
+    const { tracker, g } = sandbox();
+    const socket = new g.WebSocket(`ws://127.0.0.1:${server.port}/`);
+    await new Promise((resolve) => socket.addEventListener("open", resolve, { once: true }));
+    const closed = new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
+    tracker.disposeAll();
+    await closed;
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(tracker.count).toBe(0);
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("a WebSocket that fails to connect is no longer tracked", async () => {
+  const { tracker, g } = sandbox();
+  // Port 1 refuses connections, so the socket errors and closes without ever opening.
+  const socket = new g.WebSocket("ws://127.0.0.1:1/");
+  expect(tracker.count).toBe(1);
+  await new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
+  expect(tracker.count).toBe(0);
+});
 
 test("a timeout is tracked until it fires", async () => {
   const { tracker, g } = sandbox();

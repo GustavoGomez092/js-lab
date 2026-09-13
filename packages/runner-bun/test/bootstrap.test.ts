@@ -78,6 +78,34 @@ test("stop disposes active handles", async () => {
   expect(runner.messages.findLast((m) => m.type === "state")).toMatchObject({ state: "stopped", activeHandles: 0 });
 });
 
+test("no output crosses IPC after the run is stopped", async () => {
+  const runner = startRunner();
+  await runner.run('for (let i = 0; ; i++) {\n  await Bun.sleep(20);\n  console.log("tick", i);\n}\n');
+  await runner.until((m) => m.type === "events" && m.events.some((e) => e.kind === "console"));
+  runner.proc.send({ type: "stop" });
+  await runner.until((m) => m.type === "state" && m.state === "stopped");
+  const stoppedAt = runner.messages.findIndex((m) => m.type === "state" && m.state === "stopped");
+  await Bun.sleep(300);
+  const after = runner.messages.slice(stoppedAt + 1).filter((m) => m.type === "events");
+  expect(after).toEqual([]);
+});
+
+test("handles created after stop are disposed", async () => {
+  const runner = startRunner();
+  const marks = join(dir, "marks.txt");
+  await runner.run(
+    `import { appendFileSync } from "node:fs";\nawait Bun.sleep(150);\nsetInterval(() => appendFileSync(${JSON.stringify(marks)}, "x"), 10);\n`,
+  );
+  await runner.until((m) => m.type === "state" && m.state === "evaluating");
+  runner.proc.send({ type: "stop" });
+  await runner.until((m) => m.type === "state" && m.state === "stopped");
+  await Bun.sleep(300); // the continuation resumes after stop and creates the interval
+  const size = async () => ((await Bun.file(marks).exists()) ? Bun.file(marks).size : 0);
+  const before = await size();
+  await Bun.sleep(150);
+  expect(await size()).toBe(before);
+});
+
 test("answers expand requests for deep values", async () => {
   const runner = startRunner();
   await runner.run("__jl.log(1, { a: { b: { c: { d: 1 } } } });\n");

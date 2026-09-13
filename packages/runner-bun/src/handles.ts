@@ -95,6 +95,21 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
     return f(input, { ...init, signal }).finally(() => tracker.remove(key));
   }, f);
 
+  // Spec §5.6: a WebSocket is active from construction until it closes or errors; disposing closes it. A subclass
+  // keeps `instanceof WebSocket`, the static readyState constants and `new` semantics intact.
+  if (typeof g.WebSocket === "function") {
+    const NativeWebSocket: new (...args: any[]) => WebSocket = g.WebSocket;
+    g.WebSocket = class WebSocket extends NativeWebSocket {
+      constructor(...args: any[]) {
+        super(...args);
+        const release = () => tracker.remove(this);
+        this.addEventListener("close", release);
+        this.addEventListener("error", release);
+        tracker.add(this, () => this.close());
+      }
+    };
+  }
+
   for (const name of ["node:http", "node:https", "node:net"]) {
     try {
       const mod = require(name);

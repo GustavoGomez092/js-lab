@@ -36,7 +36,10 @@ const registry = new HandleRegistry();
 
 const tracker = new HandleTracker((count) => {
   if (!run) return;
-  if (run.state === "settled" && count === 0) setState("idle");
+  // Untracked continuations (an awaited Bun.sleep, an un-awaited promise) can resume after Stop and create new
+  // handles: dispose them at once so stopped user code can't keep timers, servers or sockets alive.
+  if (run.state === "stopped" && count > 0) tracker.disposeAll();
+  else if (run.state === "settled" && count === 0) setState("idle");
   else if (run.state === "idle" && count > 0) setState("settled");
 });
 installHandleTracking(tracker);
@@ -113,7 +116,8 @@ Object.defineProperty(globalThis, "__jl", {
 
 installConsole({
   push: (body) => run?.buffer.push(body) ?? null,
-  encode: (value) => (run ? run.encoder.encode(value) : { t: "undefined" }),
+  // A stopped run's buffer is closed, so don't spend time encoding values that would be dropped.
+  encode: (value) => (run && run.state !== "stopped" ? run.encoder.encode(value) : { t: "undefined" }),
   entryBase: () => run?.entryBase ?? null,
 });
 installStdio((kind, text) => {
@@ -157,6 +161,8 @@ process.on("message", (message: MainToRunner) => {
       if (run) run.state = "stopped";
       tracker.disposeAll();
       setState("stopped");
+      // setState flushed everything buffered before Stop; nothing the run does afterwards may cross IPC.
+      run?.buffer.close();
       return;
     case "expand":
       send({ type: "expanded", reqId: message.reqId, value: run?.encoder.expand(message.handleId) ?? null });

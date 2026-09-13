@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { type TransformOptions, type TransformResult, transform } from "@jslab/transform";
+import type { TransformOptions, TransformResult } from "@jslab/transform";
+import { transform } from "@jslab/transform";
 import { CachingTransformHost, type TransformHost, WorkerTransformHost } from "../../src/main/transform/transform-host";
 
 const options: TransformOptions = {
@@ -68,4 +69,90 @@ test("the caching host evicts the least recently used entry", async () => {
   expect(calls()).toBe(3);
   await host.transform("2", options);
   expect(calls()).toBe(4);
+});
+
+test("recreates the worker after it exits", async () => {
+  const host = new WorkerTransformHost(new URL("./fixtures/exit-worker.ts", import.meta.url).href);
+  hosts.push(host);
+  await expect(host.transform("__exit__", options)).rejects.toThrow();
+  const result = await host.transform("1 + 1", options);
+  expect(result.ok).toBe(true);
+});
+
+test("rejects transforms after dispose", async () => {
+  const host = new WorkerTransformHost();
+  hosts.push(host);
+  host.dispose();
+  await expect(host.transform("1", options)).rejects.toThrow("Transform host disposed");
+});
+
+test("a late failure does not evict a newer entry for the same key", async () => {
+  let calls = 0;
+  let rejectFirst: ((error: Error) => void) | undefined;
+  let resolveSecond: ((value: TransformResult) => void) | undefined;
+  let resolveThird: ((value: TransformResult) => void) | undefined;
+
+  const inner: TransformHost = {
+    transform: async () => {
+      calls++;
+      if (calls === 1) {
+        return new Promise<TransformResult>((_resolve, reject) => {
+          rejectFirst = reject;
+        });
+      }
+      if (calls === 2) {
+        return new Promise<TransformResult>((resolve) => {
+          resolveSecond = resolve;
+        });
+      }
+      return new Promise<TransformResult>((resolve) => {
+        resolveThird = resolve;
+      });
+    },
+    dispose: () => {},
+  };
+
+  const host = new CachingTransformHost(inner, 1);
+
+  // Call A, which stays pending as p1
+  const p1 = host.transform("key", options);
+
+  // Call B, which evicts A
+  const p2 = host.transform("other", options);
+
+  // Call A again: the inner count increases and entry for key is re-cached
+  host.transform("key", options);
+  expect(calls).toBe(3);
+
+  // Resolve the "other" promise
+  resolveSecond?.({
+    ok: true,
+    code: "other",
+    map: { version: 3, sources: [], names: [], mappings: "" },
+    diagnostics: [],
+  });
+  await p2;
+
+  // Reject the first "key" promise, and let microtasks flush
+  rejectFirst?.(new Error("first failed"));
+  try {
+    await p1;
+  } catch {
+    // Expected to reject
+  }
+  await Bun.sleep(0);
+
+  // Call A a third time and assert inner.transform was NOT called again
+  const p4 = host.transform("key", options);
+  expect(calls).toBe(3); // Still 3, not 4
+
+  // Resolve the pending promise
+  resolveThird?.({
+    ok: true,
+    code: "key",
+    map: { version: 3, sources: [], names: [], mappings: "" },
+    diagnostics: [],
+  });
+  const result = await p4;
+  expect(result.ok).toBe(true);
 });

@@ -9,25 +9,37 @@ type WorkerReply = { id: number; result: TransformResult } | { id: number; error
 
 /** Runs Babel off the main thread (spec §4.1). Recreates the worker if it crashes. */
 export class WorkerTransformHost implements TransformHost {
-  #worker: Worker;
+  #worker: Worker | undefined;
   #nextId = 1;
+  #disposed = false;
   readonly #pending = new Map<number, { resolve(result: TransformResult): void; reject(error: Error): void }>();
 
-  constructor(private readonly workerUrl: string = new URL("./transform-worker.ts", import.meta.url).href) {
-    this.#worker = this.#spawn();
-  }
+  constructor(private readonly workerUrl: string = new URL("./transform-worker.ts", import.meta.url).href) {}
 
   transform(source: string, options: TransformOptions): Promise<TransformResult> {
+    if (this.#disposed) {
+      return Promise.reject(new Error("Transform host disposed"));
+    }
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
-      this.#worker.postMessage({ id, source, options });
+      this.#ensureWorker().postMessage({ id, source, options });
     });
   }
 
   dispose(): void {
-    this.#worker.terminate();
+    this.#disposed = true;
+    if (this.#worker) {
+      this.#worker.terminate();
+      this.#worker = undefined;
+    }
     this.#rejectAll(new Error("Transform host disposed"));
+  }
+
+  #ensureWorker(): Worker {
+    if (this.#worker) return this.#worker;
+    this.#worker = this.#spawn();
+    return this.#worker;
   }
 
   #spawn(): Worker {
@@ -41,9 +53,12 @@ export class WorkerTransformHost implements TransformHost {
     };
     worker.onerror = (event) => {
       this.#rejectAll(new Error(`Transform worker crashed: ${event.message}`));
-      worker.terminate();
-      this.#worker = this.#spawn();
+      if (this.#worker === worker) this.#worker = undefined;
     };
+    worker.addEventListener("close", () => {
+      this.#rejectAll(new Error("Transform worker exited"));
+      if (this.#worker === worker) this.#worker = undefined;
+    });
     return worker;
   }
 
@@ -80,7 +95,9 @@ export class CachingTransformHost implements TransformHost {
       return cached;
     }
     const result = this.inner.transform(source, options);
-    result.catch(() => this.#cache.delete(key));
+    result.catch(() => {
+      if (this.#cache.get(key) === result) this.#cache.delete(key);
+    });
     this.#cache.set(key, result);
     if (this.#cache.size > this.maxEntries) this.#cache.delete(this.#cache.keys().next().value as string);
     return result;

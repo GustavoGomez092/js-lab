@@ -64,6 +64,8 @@
       "version": "0.0.0",
       "dependencies": {
         "@jslab/rpc-schema": "workspace:*",
+      },
+      "devDependencies": {
         "fast-check": "4.10.0",
       },
     },

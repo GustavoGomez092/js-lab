@@ -7,7 +7,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@jslab/rpc-schema": "workspace:*",
+    "@jslab/rpc-schema": "workspace:*"
+  },
+  "devDependencies": {
     "fast-check": "4.10.0"
   },
   "scripts": {

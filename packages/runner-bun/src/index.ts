@@ -1,2 +1,3 @@
-export { EventBuffer, type TimerFns } from "./event-buffer";
-export { HandleTracker, installHandleTracking } from "./handles";
+export * from "./console-hook";
+export * from "./event-buffer";
+export * from "./handles";

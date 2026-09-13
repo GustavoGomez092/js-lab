@@ -68,7 +68,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | LB-02 | Default Language setting | Docs | `run.defaultLanguage` | §8 | M2 | U | ⬜ |
 | LB-03 | TypeScript compiled before running; types don't block execution | Docs | Babel preset-typescript | §5.4 | M1 | U | ⬜ |
 | LB-04 | JSX/TSX automatic runtime (no React import) | Docs | `runtime: "automatic"` | §5.4 | M1 | U | ⬜ |
-| LB-05 | Syntax proposals (decorators, pipeline, do-expressions, throw expressions, partial application, function.sent, regexp modifiers, optional chaining assignment, async do) | Docs (v3, archived), CL 1.10–2.10 | Build settings tab | §8 | M3 | U | ⬜ |
+| LB-05 | Syntax proposals (decorators, pipeline, do-expressions, throw expressions, partial application, function.sent, regexp modifiers, optional chaining assignment, async do) | Docs (v3, archived), CL 1.10–2.10 | Build settings tab, except partial application and async do expressions (Babel 8 removed both plugins) | §8 | M3 | U | 📝 |
 | LB-06 | Bundling for ESM imports | CL 2.6.0 | Not needed for `bun` (native ESM); `Bun.build` for browser runtimes | §5.3, §5.12 | M1/M4 | I | 📝 no toggle needed |
 | LB-07 | `declare` fields (#526), legacy TS decorators (#574) | #526, #574 | `allowDeclareFields`; `build.decorators: legacy` | §5.4, §8 | M3 | U | ⬜ |
 

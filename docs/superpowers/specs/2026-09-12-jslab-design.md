@@ -149,7 +149,7 @@ flowchart LR
    - **`bun`:** Main writes `entry.<ext>` (§5.3), takes the tab's spare, and sends `run`.
    - **`browser` / `browser-node`:** Main calls `Bun.build` (§5.12), then tells the tab's Web runner to reload and load the bundle.
 4. The runner emits `RunEvent`s. Main maps generated positions to source lines using the source map, batches the events (flushing every 16 ms or every 200 events), and sends `run.events` to the UI.
-5. Main enforces the per-run output cap (§5.10) and tracks run state (§5.7).
+5. The runner enforces the per-run output cap (§5.10), so a flood never crosses IPC. Main tracks run state (§5.7).
 
 ### 4.3 RPC contracts
 
@@ -221,7 +221,7 @@ docs/
 
 ### 4.5 App data layout
 
-The root is `~/Library/Application Support/JSLab/` (from `Utils.paths.userData`).
+The root is Electrobun's `Utils.paths.userData`, which is laid out as `~/Library/Application Support/dev.jslab.app/<channel>/` (for example `…/stable/`). Dev and canary builds therefore never share data with stable.
 
 ```
 settings.json          versioned settings (+ settings.json.bak)
@@ -290,9 +290,8 @@ The default is set by `run.defaultRuntime`. Tabs change runtime from the status 
 
 ### 5.3 Bun runner: module semantics
 
-- The entry file is `<appdata>/packages/.runs/<tabId>/entry.<ext>`.
-  - It sits inside the shared packages project, so Node-style resolution walks up to `packages/node_modules`.
-  - `<ext>` is `.ts`, `.tsx`, `.js`, or `.jsx` from the tab language. Babel output is plain JS, but the extension is kept for stack-trace readability.
+- The entry file is `<appdata>/runs/<tabId>/entry-<runId>.mjs`. It is always `.mjs`: Babel output is plain ESM JavaScript, and a `.ts` extension would make Bun transpile it again. No `sourceMappingURL` comment is written, so Bun reports generated positions and Main does all source mapping.
+  - It sits outside the packages project on purpose, so walk-up resolution finds nothing and `NODE_PATH` alone controls package lookup (below).
   - The file is written atomically, and its source map is written beside it.
 - Code runs as a real **ES module** through `await import(entryUrl + '?r=' + runId)` in the runner. Supported natively:
   - top-level `await`
@@ -300,10 +299,7 @@ The default is set by `run.defaultRuntime`. Tabs change runtime from the status 
   - `import.meta`
   - `require` (Bun allows `require` in ESM)
   - `node:` specifiers
-- **Bare specifier resolution order** is implemented by a `Bun.plugin` `onResolve` hook in the preload bootstrap:
-  1. The WD's `node_modules`, walking up from the WD.
-  2. `<appdata>/packages/node_modules`.
-  3. Built-ins.
+- **Bare specifier resolution order** is implemented with `NODE_PATH`, set at spawn to `<WD>/node_modules:<appdata>/packages/node_modules` (without the WD entry when no WD is set). Bun's built-ins always resolve first. Verified on Bun 1.3.13 on 2026-09-12: `NODE_PATH` and walk-up resolution both work for a spawned runner, but a preload `Bun.plugin` `onResolve` hook does **not** intercept bare imports of dynamically imported modules, so no runtime plugin is used.
 - **Relative specifiers** (`./x`, `../x`) resolve against the WD when a WD is set, and against the entry directory otherwise. Local `.ts` and `.tsx` files in the WD run natively through Bun; they are not instrumented.
 - **WD globals.** When a WD is set, `process.cwd()` is the WD. `__dirname` and `import.meta.dir` report the WD, and `__filename` and `import.meta.path` report `<WD>/<tab title>.<ext>`. This is done by defining those identifiers in the transform and passing `cwd` at spawn.
 - **Environment** is built at spawn, in this order (later entries override earlier ones):
@@ -379,7 +375,7 @@ The bootstrap is started with `bun --preload <bootstrap> <idle-script>` and conn
 1. Installs `__jl` (`log`, `mc`, and the serializer).
 2. **Hooks `console`**: `log`, `info`, `warn`, `error`, `debug`, `table`, `dir`, `dirxml`, `assert`, `count`, `countReset`, `time`, `timeLog`, `timeEnd`, `group`, `groupCollapsed`, `groupEnd`, `trace`, and `clear`. For each call it records the calling position from a lightweight stack capture (generated line/column; Main maps it to the source line).
 3. **Hooks `process.stdout.write` / `process.stderr.write`**, which produce `stdout` / `stderr` events.
-4. **Tracks active handles** by wrapping `setTimeout`, `setInterval`, `setImmediate`, `Bun.serve`, `net.createServer`, `http.createServer`, `child_process.spawn`/`exec`, `WebSocket`, and `fetch` (through an AbortController registry). Where Bun offers `process.getActiveResourcesInfo()`, it is used as a cross-check (verified in M0).
+4. **Tracks active handles** by wrapping `setTimeout`, `setInterval`, `setImmediate`, `Bun.serve`, `net.createServer`, `http.createServer`, `child_process.spawn`/`exec`, `WebSocket`, and `fetch` (through an AbortController registry). `process.getActiveResourcesInfo()` is **not** used: on Bun 1.3.13 it returns `[]` even while a timer is pending (checked 2026-09-12).
 5. Listens for `uncaughtException` and `unhandledRejection`, which become `error` events.
 6. Sends a heartbeat every 500 ms from the JS thread.
 7. On `run`, applies `cwd` and settings, then `await import(entry)`, then emits the state `settled`, then `idle` once no tracked handles remain.
@@ -796,9 +792,7 @@ The Settings window has these tabs: **General · Editor · Formatting · Appeara
 | Build | `build.decorators` | enum | `2023-11` | `none`, `2023-11`, `legacy` (TS experimentalDecorators) |
 | Build | `build.pipelineOperator` | bool | `false` | Hack-style `\|>` with `%` topic |
 | Build | `build.doExpressions` | bool | `false` | |
-| Build | `build.asyncDoExpressions` | bool | `false` | |
 | Build | `build.throwExpressions` | bool | `false` | |
-| Build | `build.partialApplication` | bool | `false` | |
 | Build | `build.functionSent` | bool | `false` | |
 | Build | `build.regexpModifiers` | bool | `true` | |
 | Build | `build.optionalChainingAssign` | bool | `true` | |
@@ -1280,7 +1274,7 @@ Each milestone gets its own implementation plan in `docs/superpowers/plans/`, an
 | R7 | Bun ≠ Node in edge cases (V8-only APIs, some native addons, `node:vm`/`inspector`) | High / Medium | Runtime adapter interface; `docs/user/bun-vs-node.md`; "Report a Bun incompatibility" template; clear error hints |
 | R8 | `browser-node` lacks sync Node APIs, so libraries using `fs.*Sync` fail in the default runtime | High / Medium | Explicit errors with a one-click "Switch tab to Bun"; **after M4 dogfooding, decide whether `bun` becomes the default runtime** |
 | R9 | The bundled Bun version (pinned by Electrobun, 1.4.0) is tied to Electrobun releases | Medium / Medium | M0-S3 evaluates shipping a separately pinned Bun binary for runners (signed nested executable), which decouples user-runtime upgrades from the shell |
-| R10 | Active-handle tracking misses handles created by native code, so "Settled/Idle" state is wrong | Medium / Low | Cross-check with `process.getActiveResourcesInfo()` where available; the state label is advisory; Stop/Kill always work |
+| R10 | Active-handle tracking misses handles created by native code, so "Settled/Idle" state is wrong | Medium / Low | Wrap every handle-creating API JSLab knows about; the state label is advisory; Stop/Kill always work. (`getActiveResourcesInfo()` is unusable on Bun 1.3.13.) |
 | R11 | `@babel/standalone` is too heavy or slow for large files | Low / Medium | Worker + cache; `packages/transform` interface permits swapping to oxc/SWC plus a custom instrument pass later |
 | R12 | No Intel Mac support | Certain / Low | Documented; revisit if Electrobun ships x64 |
 | R13 | Electrobun menu accelerators can't express multi-modifier shortcuts | Certain / Low | UI keybinding registry; shortcut text shown in menu labels |

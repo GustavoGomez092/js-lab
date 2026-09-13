@@ -136,3 +136,67 @@ test("stop does not report errors from work it aborted", async () => {
     server.stop(true);
   }
 });
+
+test("the runner exits when its parent dies", async () => {
+  const bootstrapPath = JSON.stringify(BOOTSTRAP);
+  const dirPath = JSON.stringify(dir);
+  const parentScript = `const child = Bun.spawn([process.execPath, "--no-env-file", ${bootstrapPath}], { cwd: ${dirPath}, env: { PATH: process.env.PATH ?? "" }, stdout: "ignore", stderr: "ignore", serialization: "json", ipc(message) { if (message?.type === "ready") console.log(\`RUNNER \${child.pid}\`); } }); setInterval(() => {}, 1000);`;
+  const parentPath = join(dir, "parent.ts");
+  await Bun.write(parentPath, parentScript);
+
+  let runnerPid: number | null = null;
+  let exited = false;
+
+  const parent = Bun.spawn([process.execPath, "--no-env-file", parentPath], {
+    stdout: "pipe",
+    stderr: "inherit",
+  });
+  procs.push(parent);
+
+  try {
+    // Read stdout until we get the runner PID
+    const stdout = parent.stdout!;
+    const reader = stdout.getReader();
+    let data = "";
+    const started = Date.now();
+    while (!runnerPid) {
+      if (Date.now() - started > 5000) throw new Error("timed out waiting for RUNNER pid");
+      const { done, value } = await reader.read();
+      if (done) break;
+      data += new TextDecoder().decode(value);
+      const match = /RUNNER (\d+)/.exec(data);
+      if (match) {
+        runnerPid = parseInt(match[1]!, 10);
+      }
+    }
+    reader.releaseLock();
+
+    if (!runnerPid) throw new Error("never got runner pid");
+
+    // Kill the parent
+    parent.kill("SIGKILL");
+
+    // Poll to see if the runner exits
+    const pollStart = Date.now();
+    while (Date.now() - pollStart < 3000) {
+      try {
+        process.kill(runnerPid, 0); // signal 0 checks if process exists
+      } catch {
+        exited = true;
+        break;
+      }
+      await Bun.sleep(20);
+    }
+  } finally {
+    // Clean up any leftover runner
+    if (!exited && runnerPid) {
+      try {
+        process.kill(runnerPid, "SIGKILL");
+      } catch {
+        // Already dead
+      }
+    }
+  }
+
+  expect(exited).toBe(true);
+});

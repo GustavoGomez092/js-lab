@@ -122,6 +122,7 @@ installStdio((kind, text) => {
 
 process.on("uncaughtException", (error) => pushError("runtime", error));
 process.on("unhandledRejection", (reason) => pushError("unhandledRejection", reason));
+process.on("disconnect", () => process.exit(0));
 
 async function startRun(message: Extract<MainToRunner, { type: "run" }>): Promise<void> {
   if (run) return;

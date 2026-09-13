@@ -1,7 +1,16 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/dist", "!**/build", "!**/artifacts", "!**/.hutch", "!spikes"]
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/build",
+      "!**/artifacts",
+      "!**/.hutch",
+      "!**/.cottontail-tmp",
+      "!spikes"
+    ]
   },
   "formatter": {
     "indentStyle": "space",

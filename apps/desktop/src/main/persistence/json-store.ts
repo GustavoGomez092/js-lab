@@ -48,25 +48,37 @@ export interface DebouncedWriter {
 }
 
 /** Coalesces rapid writes; writes run sequentially and `flush` resolves after the last one lands. */
-export function createDebouncedWriter(write: (data: string) => Promise<void>, delayMs = 500): DebouncedWriter {
+export function createDebouncedWriter(
+  write: (data: string) => Promise<void>,
+  delayMs = 500,
+  onError: (error: unknown) => void = (error) => console.error("[jslab] persistence write failed", error),
+): DebouncedWriter {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pending: string | null = null;
   let inflight: Promise<void> = Promise.resolve();
+  let lastFlushPromise: Promise<void> = Promise.resolve();
 
   const run = (): Promise<void> => {
     clearTimeout(timer);
     timer = undefined;
     const data = pending;
     pending = null;
-    if (data !== null) inflight = inflight.then(() => write(data));
-    return inflight;
+    if (data !== null) {
+      // Chain from settled promise so past failures don't block future writes
+      const next = inflight.catch(() => {}).then(() => write(data));
+      inflight = next;
+      lastFlushPromise = next;
+    }
+    return lastFlushPromise;
   };
 
   return {
     schedule(data) {
       pending = data;
       clearTimeout(timer);
-      timer = setTimeout(() => void run(), delayMs);
+      timer = setTimeout(() => {
+        run().catch(onError);
+      }, delayMs);
     },
     flush: run,
   };

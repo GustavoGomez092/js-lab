@@ -1,4 +1,4 @@
-import { copyFile, mkdir, open, rename, unlink } from "node:fs/promises";
+import { chmod, copyFile, mkdir, open, rename, stat, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export interface AtomicWriteOptions {
@@ -16,19 +16,33 @@ export async function writeFileAtomic(
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tmp = `${path}.tmp-${process.pid}-${crypto.randomUUID()}`;
-  const handle = await open(tmp, "w", options.mode ?? 0o644);
-  try {
-    await handle.writeFile(data);
-    await handle.sync();
-  } finally {
-    await handle.close();
+
+  // Determine the mode to use: explicit option, existing file's mode, or default
+  let mode = options.mode;
+  if (mode === undefined) {
+    try {
+      mode = (await stat(path)).mode & 0o777;
+    } catch {
+      mode = 0o644;
+    }
   }
-  if (options.backup) {
-    await copyFile(path, `${path}.bak`).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") throw error;
-    });
-  }
+
+  const handle = await open(tmp, "w", mode);
   try {
+    try {
+      await handle.writeFile(data);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    // Ensure mode is applied even if umask interfered
+    await chmod(tmp, mode);
+
+    if (options.backup) {
+      await copyFile(path, `${path}.bak`).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+    }
     await rename(tmp, path);
   } catch (error) {
     await unlink(tmp).catch(() => {});

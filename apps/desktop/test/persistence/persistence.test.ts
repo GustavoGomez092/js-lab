@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +41,26 @@ describe("writeFileAtomic", () => {
   test("applies the requested file mode", async () => {
     const path = join(dir, "env.json");
     await writeFileAtomic(path, "{}", { mode: 0o600 });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  test("removes its temp file when the write fails", async () => {
+    const path = join(dir, "x.json");
+    const badData = Symbol("bad") as unknown as string;
+    try {
+      await writeFileAtomic(path, badData);
+    } catch {
+      // Expected to throw
+    }
+    const files = readdirSync(dir);
+    expect(files.some((f) => f.includes(".tmp-"))).toBe(false);
+  });
+
+  test("keeps an existing file's permissions when mode is omitted", async () => {
+    const path = join(dir, "env.json");
+    await writeFileAtomic(path, "initial", { mode: 0o600 });
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    await writeFileAtomic(path, "updated");
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 });
@@ -97,6 +117,35 @@ describe("createDebouncedWriter", () => {
     await writer.flush();
     await writer.flush();
     expect(writes).toEqual(["a"]);
+  });
+
+  test("a failed write does not stop later writes", async () => {
+    const writes: string[] = [];
+    let callCount = 0;
+    const errors: unknown[] = [];
+    const onError = (error: unknown) => errors.push(error);
+
+    const writer = createDebouncedWriter(
+      async (data) => {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error("first write failed");
+        }
+        writes.push(data);
+      },
+      10,
+      onError,
+    );
+
+    writer.schedule("a");
+    await Bun.sleep(40);
+    expect(errors.length).toBe(1);
+    expect(writes).toEqual([]);
+
+    writer.schedule("b");
+    await writer.flush();
+    expect(writes).toEqual(["b"]);
+    expect(errors.length).toBe(1);
   });
 });
 

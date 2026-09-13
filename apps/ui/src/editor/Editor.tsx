@@ -54,6 +54,14 @@ export function Editor({ store }: EditorProps) {
       );
     };
 
+    const applyHover = (line: number | null) => {
+      hover.set(
+        line
+          ? [{ range: new monaco.Range(line, 1, line, 1), options: { isWholeLine: true, className: "line-hover" } }]
+          : [],
+      );
+    };
+
     const unsubscribe = store.subscribe((state, previous) => {
       if (state.tab && previous.tab && state.tab.language !== previous.tab.language) {
         // Recreate the model so its URI extension matches the new language.
@@ -63,20 +71,34 @@ export function Editor({ store }: EditorProps) {
         model.dispose();
         model = next;
         contentSubscription = listenToModel(model);
+        // The new model starts with no markers or hover decoration; reapply both immediately.
+        applyMarkers();
+        applyHover(state.hoveredLine);
       }
       if (state.code !== model.getValue()) {
+        // Replace the content as an edit (not `setValue`) so undo history survives, then restore the
+        // cursor/selection clamped to the new content instead of losing it to the start of the buffer.
+        const savedSelections = editor.getSelections();
         applyingExternal = true;
-        model.setValue(state.code);
+        model.pushEditOperations(savedSelections, [{ range: model.getFullModelRange(), text: state.code }], () => null);
         applyingExternal = false;
+        if (savedSelections) {
+          editor.setSelections(
+            savedSelections.map((selection) => {
+              const anchor = model.validatePosition({
+                lineNumber: selection.selectionStartLineNumber,
+                column: selection.selectionStartColumn,
+              });
+              const active = model.validatePosition({
+                lineNumber: selection.positionLineNumber,
+                column: selection.positionColumn,
+              });
+              return new monaco.Selection(anchor.lineNumber, anchor.column, active.lineNumber, active.column);
+            }),
+          );
+        }
       }
-      if (state.hoveredLine !== previous.hoveredLine) {
-        const line = state.hoveredLine;
-        hover.set(
-          line
-            ? [{ range: new monaco.Range(line, 1, line, 1), options: { isWholeLine: true, className: "line-hover" } }]
-            : [],
-        );
-      }
+      if (state.hoveredLine !== previous.hoveredLine) applyHover(state.hoveredLine);
       if (state.revealRequest && state.revealRequest !== previous.revealRequest) {
         const { line } = state.revealRequest;
         editor.revealLineInCenterIfOutsideViewport(line);

@@ -1,11 +1,14 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { visibleEntries } from "../state/output";
 import type { AppStore } from "../state/store";
+import { copyEntriesToClipboard } from "./copy";
 import { EntryRow } from "./EntryRow";
 import { entryToText } from "./text";
+
+const COPY_STATUS_DURATION_MS = 2000;
 
 interface OutputPanelProps {
   store: AppStore;
@@ -20,6 +23,15 @@ export function OutputPanel({ store, api }: OutputPanelProps) {
 
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
+  const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(null);
+  const copyStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
+    },
+    [],
+  );
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scroller.current,
@@ -34,7 +46,14 @@ export function OutputPanel({ store, api }: OutputPanelProps) {
   const expand = (handle: string) =>
     tabId && output.runId ? api.expand({ tabId, runId: output.runId, handleId: handle }) : Promise.resolve(null);
 
-  const copyAll = () => navigator.clipboard.writeText(entries.map((entry) => entryToText(entry.event)).join("\n"));
+  const copyAll = () => {
+    const text = entries.map((entry) => entryToText(entry.event)).join("\n");
+    void copyEntriesToClipboard(text).then((status) => {
+      if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
+      setCopyStatus(status);
+      copyStatusTimer.current = setTimeout(() => setCopyStatus(null), COPY_STATUS_DURATION_MS);
+    });
+  };
 
   return (
     <section className="output" aria-label="Output">
@@ -43,6 +62,9 @@ export function OutputPanel({ store, api }: OutputPanelProps) {
         <button type="button" onClick={copyAll} disabled={entries.length === 0}>
           Copy All
         </button>
+        {copyStatus && (
+          <span className="output-copy-status">{copyStatus === "copied" ? "Copied" : "Couldn't copy"}</span>
+        )}
         <button type="button" onClick={() => store.getState().clearOutput()} disabled={entries.length === 0}>
           Clear
         </button>

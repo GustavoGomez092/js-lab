@@ -10,9 +10,34 @@ export default function App() {
     rpc.send.viewReport({ section: "S1-view", data: { probeLib: probeLib("view") } });
     void rpc.request.probes({}).then(setProbes);
   }, []);
+
+  useEffect(() => {
+    // S6 automated probe (ruling R1): trigger the osascript Save dialog once on
+    // launch, with no human click, and keep sending RPC messages while it is
+    // open, so an external observer can confirm from the committed report that
+    // the app stayed responsive rather than blocking on the dialog. A separate
+    // "Save As..." button below covers the manual pass-criteria checks (choose
+    // a path / cancel / a name with quotes) that still need a human click.
+    const openedAt = Date.now();
+    rpc.send.viewReport({ section: "S6-dialog-opened", data: { at: openedAt } });
+    rpc.send.saveDialog({ defaultName: "scratch.ts" });
+
+    let seq = 0;
+    const heartbeat = setInterval(() => {
+      seq += 1;
+      rpc.send.viewReport({ section: "S6-heartbeat", data: { seq, at: Date.now() } });
+    }, 500);
+    const stopHeartbeat = setTimeout(() => clearInterval(heartbeat), 5000);
+    return () => {
+      clearInterval(heartbeat);
+      clearTimeout(stopHeartbeat);
+    };
+  }, []);
+
   return (
     <main style={{ fontFamily: "monospace", padding: 16 }}>
       <h1>JSLab spikes</h1>
+      <button onClick={() => rpc.send.saveDialog({ defaultName: "scratch.ts" })}>Save As...</button>
       <pre>{JSON.stringify(probes, null, 2)}</pre>
       <MonacoProbe />
       <WebviewProbe />

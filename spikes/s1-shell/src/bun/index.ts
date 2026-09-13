@@ -3,6 +3,7 @@ import { probeLib } from "@spike/probe-lib";
 import { mkdirSync, appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SpikeRPC } from "../shared/rpc";
+import { saveDialog } from "./save-dialog";
 
 const reportPath = join(Utils.paths.userData, "spike-report.json");
 mkdirSync(Utils.paths.userData, { recursive: true });
@@ -54,7 +55,12 @@ const rpc = BrowserView.defineRPC<SpikeRPC>({
     requests: { probes: () => s1 },
     messages: {
       viewReport: ({ section, data }) => writeReport(section, data),
-      saveDialog: () => {},
+      saveDialog: ({ defaultName }) => {
+        const started = performance.now();
+        saveDialog({ defaultName, defaultDir: Utils.paths.documents })
+          .then((path) => rpc.send.saveDialogResult({ path, ms: Math.round(performance.now() - started) }))
+          .catch((error) => rpc.send.saveDialogResult({ path: null, error: String(error), ms: Math.round(performance.now() - started) }));
+      },
       startThroughput: () => {},
     },
   },

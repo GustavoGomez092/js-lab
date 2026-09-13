@@ -7,7 +7,11 @@ export const rpc = Electroview.defineRPC<SpikeRPC>({
   maxRequestTime: 10_000,
   handlers: {
     requests: {},
-    messages: { saveDialogResult: () => {}, throughputBatch: () => {}, throughputDone: () => {} },
+    messages: {
+      saveDialogResult: (payload) => rpc.send.viewReport({ section: "S6", data: payload }),
+      throughputBatch: () => {},
+      throughputDone: () => {},
+    },
   },
 });
 new Electroview({ rpc });

@@ -49,7 +49,7 @@ function setState(state: RunnerState): void {
 }
 
 function pushError(phase: "runtime" | "unhandledRejection", error: unknown): void {
-  if (!run) return;
+  if (!run || run.state === "stopped") return;
   const e = error as { name?: unknown; message?: unknown; stack?: unknown } | null;
   run.buffer.push({
     kind: "error",

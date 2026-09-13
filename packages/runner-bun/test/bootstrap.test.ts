@@ -102,3 +102,37 @@ test("reports errors thrown while evaluating the module", async () => {
     message: "boom",
   });
 });
+
+test("stop does not report errors from work it aborted", async () => {
+  let requests = 0;
+  const notify = { resolve: () => {} };
+  const _waiter = new Promise<void>((resolve) => {
+    notify.resolve = resolve;
+  });
+  const server = Bun.serve({
+    port: 0,
+    fetch: (_req) => {
+      requests++;
+      notify.resolve();
+      return new Promise(() => {});
+    },
+  });
+  try {
+    const port = server.port;
+    const runner = startRunner();
+    const source = `fetch("http://127.0.0.1:${port}/a").then(() => {});\nawait fetch("http://127.0.0.1:${port}/b");\nexport {};\n`;
+    await runner.run(source);
+    // Wait until the server has received 2 requests
+    const started = Date.now();
+    while (requests < 2) {
+      if (Date.now() - started > 5000) throw new Error(`timed out; requests=${requests}`);
+      await Bun.sleep(10);
+    }
+    runner.proc.send({ type: "stop" });
+    await runner.until((m) => m.type === "state" && m.state === "stopped");
+    await Bun.sleep(100);
+    expect(runner.events().filter((e) => e.kind === "error")).toEqual([]);
+  } finally {
+    server.stop(true);
+  }
+});

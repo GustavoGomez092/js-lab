@@ -1,0 +1,188 @@
+import { mkdirSync } from "node:fs";
+import type { MainMessages, MainRequests, ViewMessages } from "@jslab/rpc-schema";
+import { runnerSettings } from "@jslab/shared";
+import Electrobun, {
+  ApplicationMenu,
+  type ApplicationMenuItemConfig,
+  BrowserView,
+  BrowserWindow,
+  PATHS,
+  type RPCSchema,
+  Updater,
+  Utils,
+} from "electrobun/main";
+import { resolveAppPaths, runnerEnvironment } from "./app-paths";
+import { buildMenu, commandForMenuAction, type MenuItem } from "./menu";
+import { RunLock } from "./persistence/run-lock";
+import { createRpcHandlers } from "./rpc-handlers";
+import { BunRunnerProcess } from "./runs/bun-runner-process";
+import { RunCoordinator } from "./runs/run-coordinator";
+import { SparePool } from "./runs/spare-pool";
+import { detectSafeMode, isShiftHeld } from "./services/safe-mode";
+import { SessionStore } from "./services/session-store";
+import { SettingsStore } from "./services/settings-store";
+import { CachingTransformHost, WorkerTransformHost } from "./transform/transform-host";
+
+// `.hutch/devkit`'s `api/sdks/main/proc/native.ts` references the WebWorker global `self` in a carrot/Bunny Ears
+// bridge class we never instantiate, but this project's tsconfig has no "dom"/"webworker" lib entry (a Bun main
+// process has no DOM). Importing any `electrobun/main` API pulls that vendored file into the type-check program,
+// so it fails `tsc` even though the code path is unreachable here. `declare global` merges into the single
+// program-wide global scope, so this ambient declaration (scoped to this file's diff) satisfies the reference
+// without changing apps/desktop's project-wide lib settings.
+declare global {
+  // eslint-disable-next-line no-var
+  var self: typeof globalThis;
+}
+
+type JSLabRPC = {
+  bun: RPCSchema<{ requests: MainRequests; messages: MainMessages }>;
+  webview: RPCSchema<{ requests: Record<string, never>; messages: ViewMessages }>;
+};
+
+const APP_VERSION = "0.0.1";
+const DEV_SERVER_URL = "http://localhost:5173";
+const UI_HEARTBEAT_TIMEOUT_MS = 6000;
+
+const log = (message: string, detail?: unknown) => console.error(`[jslab] ${message}`, detail ?? "");
+
+const paths = resolveAppPaths({
+  resourcesFolder: PATHS.RESOURCES_FOLDER,
+  userData: Utils.paths.userData,
+  execPath: process.execPath,
+  env: process.env,
+});
+
+// A fresh install has no userData directory yet: settings/session recovery tolerates that (it treats a missing
+// primary file as "none", never writing until an update or a real recovery), but SparePool's pre-warmed runner
+// spawns with this as its cwd, and Bun.spawn throws synchronously (ENOENT) for a cwd that doesn't exist yet.
+mkdirSync(paths.dataDir, { recursive: true });
+
+// Read the modifier keys as early as possible: the user may release Shift while stores load.
+const shiftHeld = isShiftHeld();
+const runLock = new RunLock(paths.runLock);
+const [settings, session] = await Promise.all([SettingsStore.open(paths.dataDir), SessionStore.open(paths.dataDir)]);
+const safeMode = await detectSafeMode({ uncleanPreviousExit: runLock.uncleanPreviousExit, shiftHeld: () => shiftHeld });
+if (settings.recovered !== "none") log(`settings.json recovered from ${settings.recovered}`);
+if (session.recovered !== "none") log(`session.json recovered from ${session.recovered}`);
+if (safeMode.active) log(`starting in Safe Mode (${safeMode.reason})`);
+
+let lastUiHeartbeat = Date.now();
+const transform = new CachingTransformHost(new WorkerTransformHost(paths.transformWorker));
+const spares = new SparePool(
+  (config) => BunRunnerProcess.start(config),
+  () => ({
+    bunPath: paths.bunBinary,
+    bootstrapPath: paths.runnerBootstrap,
+    cwd: paths.dataDir,
+    env: runnerEnvironment(paths, process.env),
+  }),
+);
+
+const coordinator: RunCoordinator = new RunCoordinator({
+  transform: (source, options) => transform.transform(source, options),
+  spares,
+  runsDir: paths.runsDir,
+  settings: () => runnerSettings(settings.current),
+  onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
+  onState: (tabId, runId, state, activeHandles) =>
+    rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
+  onDiagnostics: (tabId, runId, diagnostics) => rpc.send["run.diagnostics"]({ tabId, runId, diagnostics }),
+  runLock,
+});
+
+const rpc = BrowserView.defineRPC<JSLabRPC>({
+  maxRequestTime: 10_000,
+  handlers: createRpcHandlers({
+    coordinator,
+    settings,
+    session,
+    safeMode,
+    versions: { app: APP_VERSION, bun: Bun.version },
+    log,
+    onUiHeartbeat: () => {
+      lastUiHeartbeat = Date.now();
+    },
+  }),
+});
+
+async function mainViewUrl(): Promise<string> {
+  if ((await Updater.localInfo.channel()) === "dev") {
+    try {
+      await fetch(DEV_SERVER_URL, { method: "HEAD" });
+      return DEV_SERVER_URL;
+    } catch {
+      // No Vite dev server; use the built view.
+    }
+  }
+  return "views://mainview/index.html";
+}
+
+const url = await mainViewUrl();
+const window = new BrowserWindow({
+  title: "JSLab",
+  url,
+  frame: session.session.window ?? { x: 120, y: 80, width: 1280, height: 820 },
+  rpc,
+});
+
+const saveFrame = () => session.setWindow(window.getFrame());
+window.on("resize", saveFrame);
+window.on("move", saveFrame);
+
+// `MenuItem` (Task 13) models the shape ApplicationMenu.setApplicationMenu ends up accepting at runtime
+// (`type: "separator"` is treated identically to "divider", see .hutch/devkit's ApplicationMenu.ts), but its
+// `type` field isn't a discriminated union, so it doesn't structurally satisfy the devkit's real
+// `ApplicationMenuItemConfig` union. Adapt it here rather than reshaping menu.ts's own interface (Task 13's file).
+function toApplicationMenuItems(items: MenuItem[]): ApplicationMenuItemConfig[] {
+  return items.map((item): ApplicationMenuItemConfig => {
+    if (item.type === "separator") return { type: "divider" };
+    const submenu = item.submenu ? toApplicationMenuItems(item.submenu) : undefined;
+    if (item.role) {
+      return {
+        role: item.role,
+        ...(item.label !== undefined ? { label: item.label } : {}),
+        ...(item.accelerator !== undefined ? { accelerator: item.accelerator } : {}),
+        ...(submenu ? { submenu } : {}),
+      };
+    }
+    return {
+      label: item.label ?? "",
+      ...(item.action !== undefined ? { action: item.action } : {}),
+      ...(item.accelerator !== undefined ? { accelerator: item.accelerator } : {}),
+      ...(submenu ? { submenu } : {}),
+    };
+  });
+}
+
+ApplicationMenu.setApplicationMenu(toApplicationMenuItems(buildMenu()));
+ApplicationMenu.on("application-menu-clicked", (event: unknown) => {
+  const action = (event as { data?: { action?: string } }).data?.action;
+  const command = action ? commandForMenuAction(action) : null;
+  if (command) rpc.send["menu.command"]({ command });
+});
+
+// Warm the first runner so the first run is fast (spec §5.3).
+spares.prepare(session.session.activeTabId);
+
+// WKWebView can freeze after sleep (Electrobun #550): reload the view if UI heartbeats stop (spec §4.6).
+setInterval(() => {
+  if (Date.now() - lastUiHeartbeat <= UI_HEARTBEAT_TIMEOUT_MS) return;
+  log("UI heartbeat missed; reloading the view");
+  lastUiHeartbeat = Date.now();
+  window.webview.loadURL(url);
+}, 2000);
+
+let quitting = false;
+Electrobun.events.on("before-quit", (event: { response?: unknown }) => {
+  if (quitting) return;
+  // before-quit does not await promises: cancel, flush state, then quit for real.
+  event.response = { allow: false };
+  quitting = true;
+  coordinator.dispose();
+  transform.dispose();
+  runLock.releaseAll();
+  void session
+    .flush()
+    .catch((error) => log("session flush failed at quit", error))
+    .finally(() => Utils.quit());
+});

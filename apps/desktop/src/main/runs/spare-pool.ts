@@ -35,22 +35,28 @@ export class SparePool {
 
   async take(tabId: string): Promise<BunRunnerProcess> {
     let lastError: unknown;
+    // Captured once, for the trailing pre-warm decision below: an invalidate() mid-take (e.g. a runner config
+    // change, or the tab closing) must not stop a still-current caller from getting a fresh runner via retry, but
+    // must stop the pool from pre-warming a spare that a closed tab will never come back to collect (I4).
+    const generationAtEntry = this.#generationFor(tabId);
     for (let attempt = 0; attempt < START_ATTEMPTS; attempt++) {
       if (this.#disposed) throw new Error("Spare pool disposed");
       this.prepare(tabId);
       const spare = this.#spares.get(tabId);
       this.#spares.delete(tabId);
       if (!spare) continue;
-      const generation = this.#generationFor(tabId);
+      const generationBeforeAwait = this.#generationFor(tabId);
       try {
         const runner = await spare.promise;
-        // dispose()/invalidate(tabId) may have run while we were awaiting start() above; re-preparing (or handing
-        // this runner back) would leak it since nothing will ever come looking for it again (I4).
-        if (this.#disposed || this.#generationFor(tabId) !== generation) {
+        if (this.#disposed) {
           runner.kill();
           throw new Error("Spare pool disposed");
         }
-        this.prepare(tabId);
+        if (this.#generationFor(tabId) !== generationBeforeAwait) {
+          runner.kill();
+          throw new Error(`Runner configuration for tab ${tabId} changed while starting`);
+        }
+        if (this.#generationFor(tabId) === generationAtEntry) this.prepare(tabId);
         return runner;
       } catch (error) {
         lastError = error;

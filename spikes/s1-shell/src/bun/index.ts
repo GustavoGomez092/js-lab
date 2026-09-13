@@ -1,6 +1,6 @@
 import Electrobun, { BrowserView, BrowserWindow, PATHS, Utils } from "electrobun/main";
 import { probeLib } from "@spike/probe-lib";
-import { mkdirSync, appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { mkdirSync, appendFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SpikeRPC } from "../shared/rpc";
 import { saveDialog } from "./save-dialog";
@@ -155,3 +155,58 @@ async function s3Probe(): Promise<unknown> {
   return out;
 }
 writeReport("S3", await s3Probe());
+
+async function run(cmd: string[], cwd: string, env: Record<string, string | undefined>) {
+  const proc = Bun.spawn(cmd, { cwd, env, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  return { code, stdout: stdout.slice(-2000), stderr: stderr.slice(-2000) };
+}
+
+async function s8Probe(): Promise<unknown> {
+  const root = join(Utils.paths.userData, "s8");
+  const fakeHome = join(root, "home");
+  const project = join(root, "packages");
+  mkdirSync(fakeHome, { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(fakeHome, ".npmrc"), "registry=http://127.0.0.1:9/\n");
+  writeFileSync(join(project, "package.json"), JSON.stringify({ name: "s8", private: true, dependencies: {} }));
+  const baseEnv = { PATH: process.env.PATH, HOME: fakeHome, TMPDIR: process.env.TMPDIR };
+
+  writeFileSync(join(project, ".npmrc"), "");
+  const emptyProjectRc = await run([process.execPath, "add", "--exact", "is-number@7.0.0"], project, baseEnv);
+
+  const userconfigOverride = await run([process.execPath, "add", "--exact", "is-odd@3.0.1"], project, {
+    ...baseEnv,
+    NPM_CONFIG_USERCONFIG: join(project, ".npmrc"),
+  });
+
+  writeFileSync(join(project, ".npmrc"), "registry=https://registry.npmjs.org/\n");
+  const projectRegistry = await run([process.execPath, "add", "--exact", "is-even@1.0.0"], project, baseEnv);
+
+  // Beyond the brief (see the report's S8 deviations): both brief isolation strategies failed, and an
+  // out-of-app control found that only an app-owned HOME without an .npmrc isolates Bun 1.4.0. This run
+  // proves that strategy inside the packaged app, with the install cache pinned to an explicit directory.
+  const isolatedHome = join(root, "npm-home");
+  const cacheDir = join(fakeHome, ".bun", "install", "cache");
+  mkdirSync(isolatedHome, { recursive: true });
+  const isolatedHomeRun = await run([process.execPath, "add", "--exact", "@isaacs/string-locale-compare@1.1.0"], project, {
+    ...baseEnv,
+    HOME: isolatedHome,
+    BUN_INSTALL_CACHE_DIR: cacheDir,
+  });
+
+  return {
+    bunVersion: Bun.version,
+    hasPeek: typeof Bun.peek === "function" && typeof Bun.peek.status === "function",
+    emptyProjectRc,
+    userconfigOverride,
+    projectRegistry,
+    isolatedHomeRun: {
+      ...isolatedHomeRun,
+      isolatedHomeEntries: readdirSync(isolatedHome),
+      cacheHasPackage: existsSync(join(cacheDir, "@isaacs")),
+    },
+    installed: await Bun.file(join(project, "package.json")).json(),
+  };
+}
+writeReport("S8", await s8Probe());

@@ -110,17 +110,17 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 |---|---|---|---|---|---|---|---|
 | OU-01 | Console output with warn/error styling | Docs | Same | §7.2 | M1 | E | ✅ `apps/ui/test/output.test.ts` |
 | OU-02 | Expandable trees for objects, arrays, Maps, Sets | Docs, CL 1.10.0 | Value tree + lazy handles | §5.9, §7.2 | M1 | U, E | ✅ `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx` |
-| OU-03 | Expand everything | Docs | Entry menu → Expand All | §7.2 | M1 | E | 🚧 pending M1 manual QA (M2 E2E) |
+| OU-03 | Expand everything | Docs | Entry menu → Expand All | §7.2 | M1 | E | 🚧 pending M1 manual QA (M2 E2E) — no unit/integration test covers the aggregate "Expand All" menu command (only per-node expand is tested, `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx`); the canary boot fix (R-M1-14) doesn't exercise menu clicks |
 | OU-04 | Functions, classes, Promises identifiable without expanding | Docs | Encoded kinds; Promise updates in place | §5.9 | M1 | U | ✅ `packages/serializer/test/encode.test.ts` |
 | OU-05 | Strings verbatim at top level, quoted when nested | Docs | Same | §7.2 | M1 | U | ✅ `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx` |
-| OU-06 | Nested objects and `__proto__` auto-folded | CL 2.7.5, 2.9.0 | Same | §7.2 | M1 | M | 🚧 pending M1 manual QA (M2 E2E) |
+| OU-06 | Nested objects and `__proto__` auto-folded | CL 2.7.5, 2.9.0 | Same | §7.2 | M1 | M | 🚧 pending M1 manual QA (M2 E2E) — `Verify=M` by design; a visual-folding assertion with no unit/integration test and no scripted way to inspect rendered fold state |
 | OU-07 | Side-effect-free getter values | CL 4.0.5 | Native getter allowlist eager; user getters on expand | §5.9 | M1 | U | ✅ `packages/serializer/test/encode.test.ts` (📝 user-defined getters evaluate on click) |
 | OU-08 | Line number per entry; click → caret | Docs | `L<n>` badge | §7.2 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/logic.test.ts` |
 | OU-09 | Hover entry highlights editor line | Docs | Same | §7.2 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx` |
 | OU-10 | Entry menu: Copy, Explain Result | Docs | Same + Copy as JSON | §7.2 | M1/M5 | E | ⬜ |
 | OU-11 | Right-click: Copy, Copy All, Clear | Strings, CL 2.11.0 | Same | §7.2 | M1 | E | ✅ `apps/ui/test/copy.test.ts` |
 | OU-12 | Clear output shortcut / Edit → Clear | Strings | Edit → Clear Output (`Cmd+K`) | §6.5 | M1 | E | ✅ `apps/ui/test/store.test.ts`, `apps/ui/test/logic.test.ts` |
-| OU-13 | Cmd/Ctrl-click URLs in output | CL 2.3.0 | Same | §7.2 | M1 | M | 🚧 pending M1 manual QA (M2 E2E) |
+| OU-13 | Cmd/Ctrl-click URLs in output | CL 2.3.0 | Same | §7.2 | M1 | M | 🚧 pending M1 manual QA (M2 E2E) — `Verify=M` by design; needs an actual Cmd/Ctrl-click, no unit/integration test and out of scope for the scripted canary-boot evidence |
 | OU-14 | Uncaught errors with message and stack | Docs | Source-mapped, clickable frames (#722) | §5.11 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/output.test.ts` |
 | OU-15 | Large output handled | CL 2.2.2, 4.0.5, #567 | Virtualized list, 10k cap (configurable), truncation marker | §5.10 | M1 | I | ✅ `apps/ui/test/output.test.ts`, `apps/ui/test/logic.test.ts` |
 | OU-16 | Output syntax highlighting toggle (v3) | Docs (v3, archived), CL 2.12.0 | `output.highlighting` | §8 | M2 | M | ⬜ |

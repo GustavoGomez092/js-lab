@@ -921,12 +921,16 @@ Built-in type packages ship inside the app, not in this project.
 
 ### 11.3 Operations
 
-Each operation runs the bundled Bun (`process.execPath`) with `cwd = <appdata>/packages`. The environment is the login-shell environment with two overrides, so the user's `~/.npmrc` is ignored (verified by M0-S8 with Bun 1.4.0 in the packaged app):
+Each operation runs the bundled Bun (`process.execPath`) with `cwd = <appdata>/packages`. The environment is the login-shell environment with two overrides, so the user's `~/.npmrc` is ignored.
 
-- **`HOME=<appdata>/npm-home`:** an app-owned directory that never contains an `.npmrc`. Bun reads the user-level config from `$HOME/.npmrc`, and pointing `HOME` elsewhere is the only isolation M0-S8 found that works. The following do **not** isolate:
-  - `NPM_CONFIG_USERCONFIG`: Bun ignores it.
-  - `XDG_CONFIG_HOME` and `BUN_CONFIG_NO_GLOBAL_NPMRC=1`: `$HOME/.npmrc` is still read.
-  - `BUN_CONFIG_REGISTRY`, or a `registry=` line in the project `.npmrc`: these override only the default registry, and scoped `@scope:registry` keys from `~/.npmrc` still apply.
+- **`HOME=<appdata>/npm-home`:** an app-owned directory that never contains an `.npmrc`. Bun reads the user-level config from `$HOME/.npmrc`. Verified in the packaged app with the bundled Bun 1.4.0 (M0-S8 Run 3):
+  - Setup: an empty project `.npmrc`, and a user-home `.npmrc` whose only line is a dead scoped registry.
+  - The scoped install fails when `HOME` is that home, and succeeds with `HOME=<empty npm-home>`.
+
+  The following do **not** isolate:
+  - `NPM_CONFIG_USERCONFIG`: Bun ignores it (M0-S8, in-app).
+  - `XDG_CONFIG_HOME` and `BUN_CONFIG_NO_GLOBAL_NPMRC=1`: `$HOME/.npmrc` is still read (M0-S8 out-of-app controls with the same bundled Bun).
+  - `BUN_CONFIG_REGISTRY`, or a `registry=` line in the project `.npmrc`: these override only the default registry, and scoped `@scope:registry` keys from `~/.npmrc` still apply (M0-S8 out-of-app controls).
 - **`BUN_INSTALL_CACHE_DIR`:** set to the user's Bun cache, which is the login-shell `BUN_INSTALL_CACHE_DIR` if set, otherwise Bun's default `<real HOME>/.bun/install/cache`. The package cache stays shared and never lands in `npm-home`. M0-S8 verified that Bun honors this variable while `HOME` is overridden.
 
 Registry, scoped registry and auth settings come **only** from `<packages>/.npmrc`, and its `registry=` line takes effect (M0-S8).

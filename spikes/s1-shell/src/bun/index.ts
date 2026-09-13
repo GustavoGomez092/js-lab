@@ -183,13 +183,27 @@ async function s8Probe(): Promise<unknown> {
   writeFileSync(join(project, ".npmrc"), "registry=https://registry.npmjs.org/\n");
   const projectRegistry = await run([process.execPath, "add", "--exact", "is-even@1.0.0"], project, baseEnv);
 
-  // Beyond the brief (see the report's S8 deviations): both brief isolation strategies failed, and an
-  // out-of-app control found that only an app-owned HOME without an .npmrc isolates Bun 1.4.0. This run
-  // proves that strategy inside the packaged app, with the install cache pinned to an explicit directory.
+  // Beyond the brief (see the report's S8 deviations): a discriminating in-app test of the HOME override.
+  // The project .npmrc is emptied (no registry line), and the fake user-home .npmrc holds only a dead
+  // *scoped* registry, so the scoped install below can fail only if Bun reads $HOME/.npmrc.
+  // (i) HOME = fake user home holding that .npmrc -> expected to fail (proves ~/.npmrc is read).
+  // (ii) HOME = empty app-owned npm-home, plus an explicit BUN_INSTALL_CACHE_DIR -> expected exit 0.
+  const scopedSpec = "@isaacs/string-locale-compare@1.1.0";
+  const userRc = "@isaacs:registry=http://127.0.0.1:9/\n";
+  writeFileSync(join(project, ".npmrc"), "");
+  writeFileSync(join(fakeHome, ".npmrc"), userRc);
+  const isolationSetup = {
+    projectNpmrc: await Bun.file(join(project, ".npmrc")).text(),
+    fakeUserHomeNpmrc: await Bun.file(join(fakeHome, ".npmrc")).text(),
+    spec: scopedSpec,
+  };
+  const scopedWithUserHome = await run([process.execPath, "add", "--exact", scopedSpec], project, baseEnv);
+
   const isolatedHome = join(root, "npm-home");
-  const cacheDir = join(fakeHome, ".bun", "install", "cache");
+  const cacheDir = join(root, "bun-cache");
   mkdirSync(isolatedHome, { recursive: true });
-  const isolatedHomeRun = await run([process.execPath, "add", "--exact", "@isaacs/string-locale-compare@1.1.0"], project, {
+  mkdirSync(cacheDir, { recursive: true });
+  const scopedWithIsolatedHome = await run([process.execPath, "add", "--exact", scopedSpec], project, {
     ...baseEnv,
     HOME: isolatedHome,
     BUN_INSTALL_CACHE_DIR: cacheDir,
@@ -201,8 +215,10 @@ async function s8Probe(): Promise<unknown> {
     emptyProjectRc,
     userconfigOverride,
     projectRegistry,
-    isolatedHomeRun: {
-      ...isolatedHomeRun,
+    isolationSetup,
+    scopedWithUserHome,
+    scopedWithIsolatedHome: {
+      ...scopedWithIsolatedHome,
       isolatedHomeEntries: readdirSync(isolatedHome),
       cacheHasPackage: existsSync(join(cacheDir, "@isaacs")),
     },

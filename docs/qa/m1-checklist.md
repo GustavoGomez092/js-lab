@@ -2,16 +2,16 @@
 
 Run against a packaged canary build (`cd apps/desktop && hutch run build`), on macOS arm64, starting from a clean data folder. Launch it the way M0-S1 recorded:
 - The canary `.app` (`JSLab-canary.app`) is a self-extracting installer. On first launch it extracts into the data folder below.
-- Copy it to internal disk first. Launched from an external volume (`/Volumes/...`), it stalls on a hidden removable-volume permission prompt.
-- **R-M1-14: always launch with the shell's working directory set to an internal-disk directory before exec'ing the launcher — e.g. `cd` into the copy's own folder first.** At startup Bun opens its current working directory. If that cwd is itself on an external/removable volume (for example, a shell left `cd`'d into a worktree under `/Volumes/...`), macOS raises a `kTCCServiceSystemPolicyRemovableVolumes` consent prompt — and a script-launched, backgrounded app has no session to show that prompt in, so the process hangs forever in the underlying `openat` syscall, before ever creating a window. A normal Finder/LaunchServices double-click launch uses `cwd=/` and is never affected; this only bites scripted/background launches whose invoking shell happens to be sitting in a directory on a non-internal volume. `cd`-ing into the internal-disk copy (or any internal-disk directory) before exec'ing the launcher avoids it entirely.
+- Copy it to internal disk first. Launched from an external/removable volume, it stalls on a hidden removable-volume permission prompt.
+- **R-M1-14: always launch with the shell's working directory set to an internal-disk directory before exec'ing the launcher — e.g. `cd` into the copy's own folder first.** At startup Bun opens its current working directory. If that cwd is itself on an external/removable volume (for example, a shell left `cd`'d into a worktree checked out on such a volume), macOS raises a `kTCCServiceSystemPolicyRemovableVolumes` consent prompt — and a script-launched, backgrounded app has no session to show that prompt in, so the process hangs forever in the underlying `openat` syscall, before ever creating a window. A normal Finder/LaunchServices double-click launch uses `cwd=/` and is never affected; this only bites scripted/background launches whose invoking shell happens to be sitting in a directory on a non-internal volume. `cd`-ing into the internal-disk copy (or any internal-disk directory) before exec'ing the launcher avoids it entirely.
 - Set `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1`, so the installer panel closes without a click.
 
 From the repository root (the build step above leaves the shell in `apps/desktop`, so return first):
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-rm -rf ~/Library/Application\ Support/dev.jslab.app/canary
-QA_DIR="<an internal-disk working directory>"   # e.g. mktemp -d; must NOT be under /Volumes
+rm -rf "$HOME/Library/Application Support/dev.jslab.app/canary"
+QA_DIR="<an internal-disk working directory>"   # e.g. mktemp -d; must NOT be on an external/removable volume
 cp -R "apps/desktop/build/canary-macos-arm64/JSLab-canary.app" "$QA_DIR/"
 cd "$QA_DIR"   # R-M1-14: cwd must be internal disk before exec'ing the launcher
 ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "$QA_DIR/JSLab-canary.app/Contents/MacOS/launcher" &
@@ -19,7 +19,17 @@ ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "$QA_DIR/JSLab-canary.app/Contents/MacOS/lau
 
 - Use this explicit path. `find build -name '*.app' | head -1` can pick the dev app instead of the canary.
 - Relaunch with the same `launcher` command (from the same internal-disk cwd).
-- To quit from a script, kill by PID (`pkill -f "$QA_DIR/JSLab-canary.app"`), because `osascript -e 'quit app …'` does not quit the app. Items that test a clean quit (Q14) still use ⌘Q.
+- To quit from a script, use a scoped, zsh-safe per-PID teardown — never a bare `pkill` on a broad name, and never word-split an unquoted PID list:
+
+  ```bash
+  pids=( $(pgrep -f "$QA_DIR/") $(pgrep -f "Library/Application Support/dev.jslab.app/canary") )
+  for p in "${pids[@]}"; do kill -TERM "$p"; done
+  sleep 5
+  survivors=( $(pgrep -f "$QA_DIR/") $(pgrep -f "Library/Application Support/dev.jslab.app/canary") )
+  for p in "${survivors[@]}"; do kill -KILL "$p"; done
+  ```
+
+  because `osascript -e 'quit app …'` does not quit the app. Items that test a clean quit (Q14) still use ⌘Q.
 
 Each item passes only if the result matches exactly. Record failures as issues and link them in the M1 PR.
 
@@ -80,7 +90,7 @@ This task ran the full automated suite from a clean install (`rm -rf node_module
 
 It then built the packaged canary app (`cd apps/desktop && hutch run build`, produced `apps/desktop/build/canary-macos-arm64/JSLab-canary.app`) and attempted a fully scripted, no-interaction launch and exercise, per the constraint that no human was available to type, click, use ⌘Q, hold Shift at launch, or view the screen.
 
-**First attempt — boot hang, root-caused (R-M1-14).** The first scripted launch reproducibly hung during startup: Main never created a window, never wrote `settings.json`/`session.json`, and never spawned a warm runner, even after 6+ minutes; `sample` showed the main thread blocked 100% of the time in a single `openat`/`__ulock_wait` call stack. Root cause: the launching shell's *working directory* was itself on an external volume (the git worktree under `<volume>/...`), and Bun opens its cwd at startup. That triggered a `kTCCServiceSystemPolicyRemovableVolumes` consent prompt (confirmed in the unified log: `tccd AUTHREQ_PROMPTING service=kTCCServiceSystemPolicyRemovableVolumes`, with the canary launcher as subject, at the exact launch timestamp) which a backgrounded, non-interactive process has no session to display — so the underlying `openat` blocked forever. This is not a JSLab defect: a normal Finder/LaunchServices launch always uses `cwd=/` and is unaffected. See R-M1-14 in the launch procedure above.
+**First attempt — boot hang, root-caused (R-M1-14).** The first scripted launch reproducibly hung during startup: Main never created a window, never wrote `settings.json`/`session.json`, and never spawned a warm runner, even after 6+ minutes; `sample` showed the main thread blocked 100% of the time in a single `openat`/`__ulock_wait` call stack. Root cause: the launching shell's *working directory* was itself on an external volume (the git worktree), and Bun opens its cwd at startup. That triggered a `kTCCServiceSystemPolicyRemovableVolumes` consent prompt (confirmed in the unified log: `tccd AUTHREQ_PROMPTING service=kTCCServiceSystemPolicyRemovableVolumes`, with the canary launcher as subject, at the exact launch timestamp) which a backgrounded, non-interactive process has no session to display — so the underlying `openat` blocked forever. This is not a JSLab defect: a normal Finder/LaunchServices launch always uses `cwd=/` and is unaffected. See R-M1-14 in the launch procedure above.
 
 **Second attempt — cwd fixed, clean boot.** Relaunched with the shell `cd`'d into `$QA_DIR` (internal disk) before exec'ing the launcher (`builtin cd "$QA_DIR" && ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "$QA_DIR/JSLab-canary.app/Contents/MacOS/launcher" > "$QA_DIR/canary-2.log" 2>&1 &`), against the already-extracted canary data dir (no re-extraction needed). Verified by script only:
 - **(i) processes alive with internal-disk cwd:** Main (`…/Contents/MacOS/bun … Resources/main.js`) and the runner (`…/Contents/Resources/app/runner/bootstrap.js --no-env-file`) both appeared within 2 s of launch and stayed alive for the full observation window (2 min 27 s). `lsof -a -p <pid> -d cwd` showed Main's cwd as `$QA_DIR/JSLab-canary.app/Contents/MacOS` and the runner's cwd as `~/Library/Application Support/dev.jslab.app/canary` — both internal disk.

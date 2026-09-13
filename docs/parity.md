@@ -27,7 +27,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | EX-03 | Stop (Cmd/Ctrl+Shift+R), cancels async work | Docs, CL 2.4.0 | Graceful stop, escalates to kill after 500 ms | §5.8 | M1 | I | ✅ `apps/desktop/test/runs/run-coordinator.test.ts` |
 | EX-04 | Kill | CL 2.4.0, Strings | Actions → Kill (`Cmd+Alt+R`) | §5.8 | M1 | I | ✅ `apps/desktop/test/runs/run-coordinator.test.ts` |
 | EX-05 | Tab Unresponsive dialog (Kill tab / Wait) | CL 3.1.0, Strings | Heartbeat-based dialog | §5.8 | M1 | I, E | ✅ `apps/desktop/test/runs/run-coordinator.test.ts`, `apps/ui/test/app.test.tsx` |
-| EX-06 | State doesn't persist between runs | CL 1.2.2, 1.3.1 | Fresh process/realm per run | §5.1, §5.12 | M1 | I | ✅ `apps/desktop/test/runs/run-coordinator.test.ts` |
+| EX-06 | State doesn't persist between runs | CL 1.2.2, 1.3.1 | Fresh process/realm per run | §5.1, §5.12 | M1 | I | 🚧 no direct test that two runs get distinct fresh runner processes with no state carryover — `run-coordinator.test.ts` "supersedes a running run and kills its runner" only asserts the *superseded* runner exits (`runners.length` check is `toBeGreaterThanOrEqual(1)`, not an exact count of two distinct processes), and `runner-bun`'s `bootstrap.test.ts` has no one-run-per-process test |
 | EX-07 | Auto Log: value of each top-level expression | Docs | Auto Log instrumentation with exclusions | §5.5 | M1 | U | ✅ `packages/transform/test/transform.test.ts` |
 | EX-08 | Show Undefined | Docs | `run.showUndefined` | §5.5, §8 | M1 | U, E | ✅ `apps/ui/test/output.test.ts`, `packages/shared/test/settings.test.ts` |
 | EX-09 | Top-of-file string literals shown | CL 4.1.0, #733 | Non-directive strings logged | §5.5 | M1 | U | ✅ `packages/transform/test/transform.test.ts` ("logs a leading string literal but not 'use strict'") |
@@ -40,14 +40,14 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | EX-16 | Logpoint change triggers a run | Docs | Same | §6.3 | M5 | E | ⬜ |
 | EX-17 | Loop protection (2000 iterations), toggleable | Docs, #683 | Same default, configurable limit, **covers `for…of` too** (#744) | §5.5, §8 | M1 | U | ✅ `packages/transform/test/transform.test.ts`, `packages/transform/test/semantics.test.ts` |
 | EX-18 | Top-level await in every language | Docs, CL 3.0.3 | Native ESM TLA | §5.3 | M1 | U, I | ✅ `packages/transform/test/semantics.test.ts` |
-| EX-19 | ES modules and CommonJS, `node:` specifiers | Docs | Real ESM with `require` available | §5.3 | M1 | I | ✅ `packages/transform/test/semantics.test.ts`, `packages/runner-bun/test/bootstrap.test.ts` |
+| EX-19 | ES modules and CommonJS, `node:` specifiers | Docs | Real ESM with `require` available | §5.3 | M1 | I | 🚧 CJS `require`/`node:` interop not yet covered by a test (M3) |
 | EX-20 | Unhandled promise rejections surface as errors | Docs, CL 1.13.0 | `error` event (`unhandledRejection`) | §5.11 | M1 | I | ✅ `apps/desktop/test/runs/run-coordinator.test.ts`, `apps/ui/test/entry-row.test.tsx` |
 | EX-21 | Syntax error messages | CL 1.2.1 | Squiggle + code frame; previous output dimmed | §5.11 | M1 | E | ✅ `packages/transform/test/transform.test.ts`, `apps/ui/test/logic.test.ts`, `apps/ui/test/output.test.ts` |
 | EX-22 | Runtime environments per tab: Browser & Node.js (default), Node.js, Browser | Docs, CL 4.0.0 | `browser-node` (default), `bun`, `browser` | §5.2 | M1/M4 | E | 📝 Node.js → Bun (D2); `browser-node` Node APIs are async-only for fs/child_process (§5.13) |
 | EX-23 | Default runtime setting | Docs | `run.defaultRuntime` | §8 | M2 | U | ⬜ |
 | EX-24 | Status-bar runtime switcher | Docs | Same + Actions → Runtime | §7.1 | M2 | E | ⬜ |
 | EX-25 | `alert` / `confirm` / `prompt` | CL 3.0.3, 3.1.0 | Native if supported, async fallback otherwise | §5.12 | M4 | E | ⬜ (📝 if M0-S4 fails) |
-| EX-26 | `process.memoryUsage()` and most of `process` available | CL 1.7.0, 1.8.0 | Full in `bun`; snapshot in `browser-node` | §5.13 | M1/M4 | I | ✅ `packages/runner-bun/test/bootstrap.test.ts`, `packages/transform/test/semantics.test.ts` |
+| EX-26 | `process.memoryUsage()` and most of `process` available | CL 1.7.0, 1.8.0 | Full in `bun`; snapshot in `browser-node` | §5.13 | M1/M4 | I | 🚧 no automated test yet (planned with the M3 runner environment work) |
 | EX-27 | `console.time*`, `console.assert`, `console.clear`, `console.table` | CL 1.10–2.3 | All console methods incl. `group*`, `trace`, `count`, `dir` | §5.6, §5.10 | M1 | U, I | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/output.test.ts` |
 | EX-28 | stdout/stderr output | #273 | `stdout`/`stderr` events | §5.6 | M1 | I | ✅ `packages/runner-bun/test/bootstrap.test.ts`, `packages/runner-bun/test/event-buffer.test.ts` |
 | EX-29 | Loading spinner while running | CL 1.12.0 | Run state indicators | §5.7 | M1 | E | ✅ `apps/ui/test/logic.test.ts`, `apps/ui/test/app.test.tsx` |
@@ -108,7 +108,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
-| OU-01 | Console output with warn/error styling | Docs | Same | §7.2 | M1 | E | ✅ `apps/ui/test/output.test.ts` |
+| OU-01 | Console output with warn/error styling | Docs | Same | §7.2 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx` ("styles console levels and indents groups") |
 | OU-02 | Expandable trees for objects, arrays, Maps, Sets | Docs, CL 1.10.0 | Value tree + lazy handles | §5.9, §7.2 | M1 | U, E | ✅ `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx` |
 | OU-03 | Expand everything | Docs | Entry menu → Expand All | §7.2 | M1 | E | 🚧 pending M1 manual QA (M2 E2E) — no unit/integration test covers the aggregate "Expand All" menu command (only per-node expand is tested, `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx`); the canary boot fix (R-M1-14) doesn't exercise menu clicks |
 | OU-04 | Functions, classes, Promises identifiable without expanding | Docs | Encoded kinds; Promise updates in place | §5.9 | M1 | U | ✅ `packages/serializer/test/encode.test.ts` |
@@ -118,7 +118,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | OU-08 | Line number per entry; click → caret | Docs | `L<n>` badge | §7.2 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/logic.test.ts` |
 | OU-09 | Hover entry highlights editor line | Docs | Same | §7.2 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx` |
 | OU-10 | Entry menu: Copy, Explain Result | Docs | Same + Copy as JSON | §7.2 | M1/M5 | E | ⬜ |
-| OU-11 | Right-click: Copy, Copy All, Clear | Strings, CL 2.11.0 | Same | §7.2 | M1 | E | ✅ `apps/ui/test/copy.test.ts` |
+| OU-11 | Right-click: Copy, Copy All, Clear | Strings, CL 2.11.0 | Same | §7.2 | M1 | E | 🚧 Clear is tested (`apps/ui/test/store.test.ts` "run events and states flow through the output reducer" exercises `clearOutput()`; `apps/ui/test/logic.test.ts` "maps the M1 shortcuts" maps `Cmd+K` → `output.clear`), but Copy All's actual multi-entry composition (`entries.map(entryToText).join("\n")` in `OutputPanel.tsx`) has no test joining its two already-tested pieces (`entryToText` in `apps/ui/test/logic.test.ts`, `copyEntriesToClipboard` in `apps/ui/test/copy.test.ts`), and there is no right-click context menu or per-entry Copy in the current UI/tests at all |
 | OU-12 | Clear output shortcut / Edit → Clear | Strings | Edit → Clear Output (`Cmd+K`) | §6.5 | M1 | E | ✅ `apps/ui/test/store.test.ts`, `apps/ui/test/logic.test.ts` |
 | OU-13 | Cmd/Ctrl-click URLs in output | CL 2.3.0 | Same | §7.2 | M1 | M | 🚧 pending M1 manual QA (M2 E2E) — `Verify=M` by design; needs an actual Cmd/Ctrl-click, no unit/integration test and out of scope for the scripted canary-boot evidence |
 | OU-14 | Uncaught errors with message and stack | Docs | Source-mapped, clickable frames (#722) | §5.11 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/output.test.ts` |

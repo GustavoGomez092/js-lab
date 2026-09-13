@@ -14,6 +14,7 @@ const BOOTSTRAP = Bun.resolveSync("@jslab/runner-bun/bootstrap", import.meta.dir
 interface Harness {
   coordinator: RunCoordinator;
   events: RunEvent[];
+  batches: RunEvent[][];
   states: { runId: string; state: RunState; activeHandles?: number }[];
   locks: Set<string>;
   settings: RunnerSettings;
@@ -27,6 +28,8 @@ interface HarnessHooks {
   onDiagnostics?: (tabId: string, runId: string) => void;
   onRunnerStart?: (runner: BunRunnerProcess) => void;
   transform?: (source: string, options: TransformOptions) => Promise<TransformResult>;
+  /** A stand-in runner script (see fixtures/) instead of the real bootstrap. */
+  bootstrapPath?: string;
 }
 
 const harnesses: Harness[] = [];
@@ -42,6 +45,7 @@ async function createHarness(overrides: Partial<RunnerSettings> = {}, hooks: Har
     ...overrides,
   };
   const events: RunEvent[] = [];
+  const batches: RunEvent[][] = [];
   const states: Harness["states"] = [];
   const locks = new Set<string>();
   const spares = new SparePool(
@@ -52,7 +56,7 @@ async function createHarness(overrides: Partial<RunnerSettings> = {}, hooks: Har
     },
     () => ({
       bunPath: process.execPath,
-      bootstrapPath: BOOTSTRAP,
+      bootstrapPath: hooks.bootstrapPath ?? BOOTSTRAP,
       cwd: dir,
       env: { PATH: process.env.PATH ?? "", JSLAB_HEARTBEAT_MS: "50" },
     }),
@@ -62,7 +66,10 @@ async function createHarness(overrides: Partial<RunnerSettings> = {}, hooks: Har
     spares,
     runsDir: join(dir, "runs"),
     settings: () => settings,
-    onEvents: (_tab, _run, batch) => events.push(...batch),
+    onEvents: (_tab, _run, batch) => {
+      batches.push(batch);
+      events.push(...batch);
+    },
     onState: (_tab, runId, state, activeHandles) => states.push({ runId, state, activeHandles }),
     onDiagnostics: (tabId, runId) => hooks.onDiagnostics?.(tabId, runId),
     runLock: {
@@ -83,7 +90,7 @@ async function createHarness(overrides: Partial<RunnerSettings> = {}, hooks: Har
       await Bun.sleep(10);
     }
   };
-  const harness = { coordinator, events, states, locks, settings, waitForState, dir };
+  const harness = { coordinator, events, batches, states, locks, settings, waitForState, dir };
   harnesses.push(harness);
   return harness;
 }
@@ -403,6 +410,27 @@ describe("RunCoordinator", () => {
     await h.waitForState("idle", runId);
     await flush();
     expect(h.events.find((e) => e.kind === "error")).toMatchObject({ phase: "unhandledRejection", message: "nope" });
+  }, 15_000);
+
+  test("forwards run events to the UI in batches of at most 200", async () => {
+    const h = await createHarness({}, { bootstrapPath: join(import.meta.dir, "fixtures/burst-runner.ts") });
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1", language: "typescript", logpoints: [] });
+    await h.waitForState("idle", runId);
+    await flush();
+    expect(h.events).toHaveLength(450);
+    expect(Math.max(...h.batches.map((batch) => batch.length))).toBeLessThanOrEqual(200);
+    expect(h.events.map((e) => e.seq)).toEqual(Array.from({ length: 450 }, (_, i) => i + 1));
+  }, 15_000);
+
+  test("does not forward events a runner sends after it reports stopped", async () => {
+    const h = await createHarness({}, { bootstrapPath: join(import.meta.dir, "fixtures/chatty-runner.ts") });
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1", language: "typescript", logpoints: [] });
+    await h.waitForState("evaluating", runId);
+    h.coordinator.stop("t1");
+    await h.waitForState("stopped", runId);
+    const forwarded = h.events.length;
+    await Bun.sleep(200);
+    expect(h.events).toHaveLength(forwarded);
   }, 15_000);
 
   test("labels logpoint results and captures stdout writes", async () => {

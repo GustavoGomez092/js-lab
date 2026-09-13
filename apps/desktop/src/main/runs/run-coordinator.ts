@@ -56,6 +56,9 @@ interface ActiveRun {
 // arrive. Stop must still work during that window (I1).
 const STOPPABLE_STATES: ReadonlySet<RunState> = new Set(["transpiling", "evaluating", "settled", "unresponsive"]);
 
+/** Maximum events per `run.events` message sent to the UI (spec §4.2, verified by M0-S7). */
+const UI_BATCH_EVENTS = 200;
+
 export class RunCoordinator {
   readonly #runs = new Map<string, ActiveRun>();
   readonly #pendingExpands = new Map<number, (value: EncodedValue | null) => void>();
@@ -234,9 +237,16 @@ export class RunCoordinator {
       case "heartbeat":
         if (run.state === "unresponsive") this.#setState(run, run.resumeState ?? "evaluating", run.activeHandles);
         return;
-      case "events":
-        this.deps.onEvents(run.tabId, run.runId, message.events.map(mapper));
+      case "events": {
+        // Output from code that resumed after Stop (or from a killed runner's last gasp) is never shown (I1).
+        if (run.state === "stopped" || run.state === "killed") return;
+        // Re-batch for the UI (spec §4.2): at most 200 events per run.events message, whatever the runner sent.
+        const events = message.events.map(mapper);
+        for (let i = 0; i < events.length; i += UI_BATCH_EVENTS) {
+          this.deps.onEvents(run.tabId, run.runId, events.slice(i, i + UI_BATCH_EVENTS));
+        }
         return;
+      }
       case "state":
         if (message.state === "stopped") clearTimeout(run.stopTimer);
         if (message.state !== "evaluating") this.deps.runLock.remove(run.runId);

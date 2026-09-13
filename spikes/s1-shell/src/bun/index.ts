@@ -1,6 +1,6 @@
 import { BrowserView, BrowserWindow, PATHS, Utils } from "electrobun/main";
 import { probeLib } from "@spike/probe-lib";
-import { mkdirSync, appendFileSync } from "node:fs";
+import { mkdirSync, appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SpikeRPC } from "../shared/rpc";
 
@@ -60,3 +60,57 @@ export const mainWindow = new BrowserWindow({
   rpc,
 });
 export { rpc };
+
+async function s3Probe(): Promise<unknown> {
+  const appDir = join(PATHS.RESOURCES_FOLDER, "app");
+  const childPath = join(appDir, "runner", "child.mjs");
+  const cwd = join(Utils.paths.userData, "s3-cwd");
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(cwd, ".env"), "SPIKE_DOTENV=should-not-load\n");
+  const out: Record<string, unknown> = { childPath, childExists: existsSync(childPath) };
+
+  const runBinary = async (bin: string, serialization?: "json") => {
+    const result: Record<string, unknown> = { bin, serialization: serialization ?? "advanced" };
+    const started = performance.now();
+    const messages: unknown[] = [];
+    const child = Bun.spawn([bin, "--no-env-file", childPath], {
+      cwd,
+      env: { ...process.env, NODE_PATH: join(appDir, "runner", "fixture-pkg", "node_modules") },
+      stderr: "pipe",
+      ipc(message) {
+        messages.push(message);
+        if ((message as { type: string }).type === "ready") {
+          result.readyMs = Math.round(performance.now() - started);
+          child.send({ type: "run" });
+        }
+      },
+      ...(serialization ? { serialization } : {}),
+    });
+    await Bun.sleep(3000);
+    child.kill("SIGKILL");
+    result.exitCode = await child.exited;
+    result.messages = messages;
+    result.stderr = await new Response(child.stderr).text();
+    const codesign = Bun.spawnSync(["codesign", "-dv", bin], { stderr: "pipe" });
+    result.codesign = codesign.stderr.toString();
+    return result;
+  };
+
+  const pinnedBunPath = join(appDir, "runner", "bun-bin", "bun");
+  const pinnedBunExists = existsSync(pinnedBunPath);
+  out.pinnedBunPath = pinnedBunPath;
+  out.pinnedBunExists = pinnedBunExists;
+
+  const [execPathRun, pinnedBunRun, pinnedBunJsonRun] = await Promise.all([
+    runBinary(process.execPath),
+    pinnedBunExists ? runBinary(pinnedBunPath) : Promise.resolve(null),
+    // Cross-version IPC follow-up: does explicit JSON serialization avoid the
+    // "advanced" (V8 structured-clone) serializer's cross-version incompatibility?
+    pinnedBunExists ? runBinary(pinnedBunPath, "json") : Promise.resolve(null),
+  ]);
+  out.execPathRun = execPathRun;
+  out.pinnedBunRun = pinnedBunRun;
+  out.pinnedBunJsonRun = pinnedBunJsonRun;
+  return out;
+}
+writeReport("S3", await s3Probe());

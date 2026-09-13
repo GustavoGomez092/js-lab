@@ -1,58 +1,35 @@
-# React + Tailwind + Vite Electrobun Template
+# M0 spike shell (throwaway)
 
-A fast Electrobun desktop app template with React, Tailwind CSS, and Vite for hot module replacement (HMR).
+Throwaway Electrobun 2.0.1 app used for the M0 spikes S1–S8. Results, raw output and decisions are in `docs/spikes/2026-09-m0-report.md`. Nothing here ships.
 
-## Getting Started
+## Toolchain
+
+- Hutch is pinned to **0.24.3**, the release `electrobun@2.0.1` requires. Install it with `sh install.sh --version 0.24.3` (see the report's "Toolchain setup"). Never run `hutch upgrade`: the `electrobun@2.0.1` bootstrap rejects any other Hutch version.
+- Electrobun is pinned to 2.0.1 in `hutch.config.ts`. The bundled Bun is 1.4.0.
 
 ```bash
-# Install dependencies
-hutch run install
-
-# Development without HMR (uses bundled assets)
-hutch run dev
-
-# Development with HMR (recommended)
-hutch run dev:hmr
-
-# Build for production
-hutch run build:canary
+hutch install            # delegates to the vendored Bun (packageManager: "bun")
+hutch electrobun sync    # projects Electrobun 2.0.1 into .hutch/devkit
+hutch run dev            # dev build + launch
+hutch run build          # canary build -> build/canary-macos-arm64
 ```
 
-## How HMR Works
+## Re-running the packaged probes
 
-When you run `hutch run dev:hmr`:
+Each spike section in the report has the exact procedure. In short:
 
-1. **Vite dev server** starts on `http://localhost:5173` with HMR enabled
-2. **Electrobun** starts and detects the running Vite server
-3. The app loads from the Vite dev server instead of bundled assets
-4. Changes to React components update instantly without full page reload
+1. `hutch run build`, then copy `build/canary-macos-arm64/JSLab Spike-canary.app` to an **internal disk** directory. Launched from an external volume (`/Volumes/...`) it stalls on a hidden removable-volume permission prompt.
+2. Delete `~/Library/Application Support/dev.jslab.spike/canary/` for a fresh self-extraction and a clean `spike-report.json`.
+3. Launch the copied app's `Contents/MacOS/launcher` directly (not `open`, so the environment reaches the process) with `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1`:
 
-When you run `hutch run dev` (without HMR):
+   ```bash
+   ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "<copy>/JSLab Spike-canary.app/Contents/MacOS/launcher"
+   ```
 
-1. Electrobun starts and loads from `views://mainview/index.html`
-2. Vite rebuilds the bundled assets before Electrobun starts
+   Opt-in probes:
+   - `JSLAB_SPIKE_S6=1` auto-opens the S6 Save dialog on launch. The **Save As...** button works without it.
+   - `JSLAB_SPIKE_S7=1` runs the S7 throughput sequence (200/batch, then 1000/batch). The throughput buttons work without it.
+4. Read the results from `~/Library/Application Support/dev.jslab.spike/canary/spike-report.json`.
+5. Quit by PID (`pgrep -f "JSLab Spike-canary.app"`, then `kill -9 <pid>`). `osascript -e 'quit app "JSLab Spike"'` does not quit this app.
 
-## Project Structure
-
-```
-├── src/
-│   ├── bun/
-│   │   └── index.ts        # Main process (Electrobun/Cottontail)
-│   └── mainview/
-│       ├── App.tsx         # React app component
-│       ├── main.tsx        # React entry point
-│       ├── index.html      # HTML template
-│       └── index.css       # Tailwind CSS
-├── electrobun.config.ts    # Electrobun configuration
-├── vite.config.ts          # Vite configuration
-├── tailwind.config.js      # Tailwind configuration
-└── package.json
-```
-
-## Customizing
-
-- **React components**: Edit files in `src/mainview/`
-- **Tailwind theme**: Edit `tailwind.config.js`
-- **Vite settings**: Edit `vite.config.ts`
-- **Window settings**: Edit `src/bun/index.ts`
-- **App metadata**: Edit `electrobun.config.ts`
+The S3 pinned-Bun check (R9) also expects a Bun 1.3.13 binary at `runner/bun-bin/bun`. It is gitignored; the download commands are in the report's S3 "System changes".

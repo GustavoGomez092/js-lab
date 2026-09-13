@@ -1,4 +1,4 @@
-import { BrowserView, BrowserWindow, PATHS, Utils } from "electrobun/main";
+import Electrobun, { BrowserView, BrowserWindow, PATHS, Utils } from "electrobun/main";
 import { probeLib } from "@spike/probe-lib";
 import { mkdirSync, appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -40,6 +40,13 @@ const s1 = {
   worker: await workerProbe(),
 };
 writeReport("S1", s1);
+
+// S5 spike probe: confirm file-association opens are delivered through the
+// `open-url` event as a file:// URL. Kept committed (not a temporary edit)
+// per the task-5 brief's instruction to reuse writeReport for the probe.
+Electrobun.events.on("open-url", (event) => {
+  writeReport("S5-open-url", event.data);
+});
 
 const rpc = BrowserView.defineRPC<SpikeRPC>({
   maxRequestTime: 10_000,

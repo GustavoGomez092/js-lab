@@ -18,4 +18,14 @@ export default {
     watchIgnore: ["dist/**"],
     mac: { bundleCEF: false },
   },
+  // S5 spike: patch CFBundleDocumentTypes into the .app's Info.plist before
+  // signing. Wired to both hooks (see scripts/patch-plist.ts for why):
+  // `postBuild` patches the real, not-yet-compressed .app, which is what
+  // actually matters on macOS; `postWrap` (docs: "after wrapper assembled,
+  // before final packaging/signing") only reaches the self-extracting
+  // installer stub by the time it fires, so it's kept as a harmless extra.
+  scripts: {
+    postBuild: "./scripts/patch-plist.ts",
+    postWrap: "./scripts/patch-plist.ts",
+  },
 } satisfies ElectrobunConfig;

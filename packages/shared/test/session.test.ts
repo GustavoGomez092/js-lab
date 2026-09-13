@@ -1,0 +1,45 @@
+import { describe, expect, test } from "bun:test";
+import { bufferFileName, createTab, defaultSession, normalizeSession, sessionSchema } from "../src/session";
+
+const tab = (id: string) => createTab({ id });
+
+describe("session", () => {
+  test("default session has exactly one active tab", () => {
+    const s = defaultSession(() => tab("t1"));
+    expect(s.tabOrder).toEqual(["t1"]);
+    expect(s.activeTabId).toBe("t1");
+    expect(s.tabs.t1).toMatchObject({ title: "Untitled", language: "typescript", runtime: "bun" });
+    expect(s.window).toBeNull();
+  });
+
+  test("normalize drops unknown and duplicate ids, appends unordered tabs and fixes the active tab", () => {
+    const s = normalizeSession(
+      sessionSchema.parse({
+        tabOrder: ["missing", "a", "a"],
+        activeTabId: "missing",
+        tabs: { a: tab("a"), b: tab("b") },
+      }),
+    );
+    expect(s.tabOrder).toEqual(["a", "b"]);
+    expect(s.activeTabId).toBe("a");
+  });
+
+  test("normalize creates a tab when none exist", () => {
+    const s = normalizeSession(sessionSchema.parse({ tabs: {} }), () => tab("fresh"));
+    expect(s.tabOrder).toEqual(["fresh"]);
+  });
+
+  test("invalid tab fields fall back to defaults", () => {
+    const s = sessionSchema.parse({ tabs: { a: { id: "a", language: "cobol", layout: { editorSize: 500 } } } });
+    expect(s.tabs.a).toMatchObject({ language: "typescript", layout: { orientation: "horizontal", editorSize: 55 } });
+  });
+
+  test("an invalid window frame becomes null", () => {
+    expect(sessionSchema.parse({ window: { x: 0, y: 0, width: 10, height: 10 } }).window).toBeNull();
+  });
+
+  test("buffer file names use the language extension", () => {
+    expect(bufferFileName({ id: "a", language: "tsx" })).toBe("a.tsx");
+    expect(bufferFileName({ id: "b", language: "javascript" })).toBe("b.js");
+  });
+});

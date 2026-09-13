@@ -5,6 +5,14 @@ export const RUNTIMES = ["browser-node", "bun", "browser"] as const;
 export type Language = (typeof LANGUAGES)[number];
 export type Runtime = (typeof RUNTIMES)[number];
 
+/**
+ * Defaults for new tabs (spec §8 `run.defaultRuntime` / `run.defaultLanguage`; §7.3 "New uses the default language and
+ * runtime"). Both the settings schema and the tab schema read these, so they can't drift apart. M1 runs every tab on
+ * Bun regardless: `run.start` carries no runtime and the coordinator only has the Bun adapter (runtime switching is M4).
+ */
+export const DEFAULT_RUNTIME: Runtime = "browser-node";
+export const DEFAULT_LANGUAGE: Language = "typescript";
+
 // Every field repairs itself: a missing or invalid value falls back to its default (spec §8).
 const bool = (fallback: boolean) => z.boolean().catch(fallback);
 const int = (fallback: number, min: number, max: number) => z.number().int().min(min).max(max).catch(fallback);
@@ -25,8 +33,8 @@ export const settingsSchema = z.looseObject({
     loopProtectionMaxIterations: int(2000, 100, 10_000_000),
     autoRunDelayMs: int(300, 0, 5000),
     unresponsiveTimeoutMs: int(3000, 1000, 60_000),
-    defaultLanguage: z.enum(LANGUAGES).catch("typescript"),
-    defaultRuntime: z.enum(RUNTIMES).catch("browser-node"),
+    defaultLanguage: z.enum(LANGUAGES).catch(DEFAULT_LANGUAGE),
+    defaultRuntime: z.enum(RUNTIMES).catch(DEFAULT_RUNTIME),
   }),
   output: section({
     maxEntries: int(10_000, 100, 100_000),

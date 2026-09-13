@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { bufferFileName, createTab, defaultSession, normalizeSession, sessionSchema } from "../src/session";
+import { defaultSettings } from "../src/settings";
 
 const tab = (id: string) => createTab({ id });
 
@@ -8,8 +9,16 @@ describe("session", () => {
     const s = defaultSession(() => tab("t1"));
     expect(s.tabOrder).toEqual(["t1"]);
     expect(s.activeTabId).toBe("t1");
-    expect(s.tabs.t1).toMatchObject({ title: "Untitled", language: "typescript", runtime: "bun" });
+    expect(s.tabs.t1).toMatchObject({ title: "Untitled", language: "typescript", runtime: "browser-node" });
     expect(s.window).toBeNull();
+  });
+
+  test("new tabs use the settings defaults for runtime and language (spec §7.3, §8)", () => {
+    const defaults = defaultSettings().run;
+    expect(createTab()).toMatchObject({ runtime: defaults.defaultRuntime, language: defaults.defaultLanguage });
+    expect(sessionSchema.parse({ tabs: { a: { id: "a", runtime: "deno" } } }).tabs.a?.runtime).toBe(
+      defaults.defaultRuntime,
+    );
   });
 
   test("normalize drops unknown and duplicate ids, appends unordered tabs and fixes the active tab", () => {

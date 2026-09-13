@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { LANGUAGES, type Language, RUNTIMES } from "./settings";
+import { DEFAULT_LANGUAGE, DEFAULT_RUNTIME, LANGUAGES, type Language, RUNTIMES } from "./settings";
 
 export const tabStateSchema = z.object({
   id: z.string().min(1),
   title: z.string().catch("Untitled"),
   titleIsCustom: z.boolean().catch(false),
-  language: z.enum(LANGUAGES).catch("typescript"),
-  runtime: z.enum(RUNTIMES).catch("bun"),
+  language: z.enum(LANGUAGES).catch(DEFAULT_LANGUAGE),
+  runtime: z.enum(RUNTIMES).catch(DEFAULT_RUNTIME),
   layout: z
     .object({
       orientation: z.enum(["horizontal", "vertical"]).catch("horizontal"),

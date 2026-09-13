@@ -8,21 +8,30 @@ export interface SafeModeState {
 /** NSEventModifierFlagShift */
 export const SHIFT_MASK = 1 << 17;
 
-async function readModifierFlags(): Promise<string> {
+/** Spawns osascript and kills it if it hasn't exited within `timeoutMs`, so a hung process is never orphaned. */
+async function readModifierFlags(timeoutMs?: number): Promise<string> {
   const proc = Bun.spawn(["osascript", "-l", "JavaScript", "-e", 'ObjC.import("AppKit"); $.NSEvent.modifierFlags'], {
     stdout: "pipe",
     stderr: "ignore",
   });
-  const output = await new Response(proc.stdout).text();
-  await proc.exited;
-  return output;
+  const timer = timeoutMs === undefined ? undefined : setTimeout(() => proc.kill(), timeoutMs);
+  try {
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+    return output;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** True when Shift is held right now. Never throws; gives up after `timeoutMs`. */
-export async function isShiftHeld(read: () => Promise<string> = readModifierFlags, timeoutMs = 1000): Promise<boolean> {
+export async function isShiftHeld(
+  read: (timeoutMs?: number) => Promise<string> = readModifierFlags,
+  timeoutMs = 1000,
+): Promise<boolean> {
   try {
     const output = await Promise.race([
-      read(),
+      read(timeoutMs),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs)),
     ]);
     const flags = Number.parseInt(output.trim(), 10);

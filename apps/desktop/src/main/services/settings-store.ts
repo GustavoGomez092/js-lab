@@ -19,7 +19,9 @@ export class SettingsStore {
     const path = join(dataDir, "settings.json");
     const { value, recovered } = await loadJson(path, settingsSchema, defaultSettings);
     const store = new SettingsStore(path, value, recovered);
-    if (recovered !== "none") await store.#save();
+    // The recovery rewrite must not back up: `path` still holds the corrupt/stale primary at this point, and
+    // backing it up would clobber a good `.bak` that recovery just read from (ruling I1).
+    if (recovered !== "none") await store.#save({ backup: false });
     return store;
   }
 
@@ -39,7 +41,9 @@ export class SettingsStore {
     return () => this.#listeners.delete(listener);
   }
 
-  #save(): Promise<void> {
-    return writeFileAtomic(this.path, `${JSON.stringify(this.#settings, null, 2)}\n`, { backup: true });
+  #save(options: { backup?: boolean } = {}): Promise<void> {
+    return writeFileAtomic(this.path, `${JSON.stringify(this.#settings, null, 2)}\n`, {
+      backup: options.backup ?? true,
+    });
   }
 }

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTab, sessionSchema } from "@jslab/shared";
+import { createTab, defaultSession, defaultSettings, sessionSchema, settingsSchema } from "@jslab/shared";
 import { detectSafeMode, isShiftHeld, SHIFT_MASK } from "../../src/main/services/safe-mode";
 import { SessionStore } from "../../src/main/services/session-store";
 import { SettingsStore } from "../../src/main/services/settings-store";
@@ -78,6 +78,28 @@ describe("SessionStore", () => {
     expect(store.recovered).not.toBe("none");
     const onDisk = JSON.parse(await readFile(join(dir, "session.json"), "utf8"));
     expect(sessionSchema.parse(onDisk)).toEqual(onDisk);
+  });
+});
+
+describe("recovery preserves backups", () => {
+  test("recovery from a backup leaves the backup intact", async () => {
+    const validSettings = defaultSettings();
+    await writeFile(join(dir, "settings.json.bak"), JSON.stringify(validSettings));
+    await writeFile(join(dir, "settings.json"), "{oops");
+    const settingsStore = await SettingsStore.open(dir);
+    expect(settingsStore.recovered).toBe("backup");
+    const settingsBackup = JSON.parse(await readFile(join(dir, "settings.json.bak"), "utf8"));
+    expect(settingsSchema.parse(settingsBackup)).toEqual(settingsBackup);
+    expect(settingsBackup.run.autoRun).toBe(true);
+
+    const validSession = defaultSession(() => createTab({ id: "t1" }));
+    await writeFile(join(dir, "session.json.bak"), JSON.stringify(validSession));
+    await writeFile(join(dir, "session.json"), "{oops");
+    const sessionStore = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }) });
+    expect(sessionStore.recovered).toBe("backup");
+    const sessionBackup = JSON.parse(await readFile(join(dir, "session.json.bak"), "utf8"));
+    expect(sessionSchema.parse(sessionBackup)).toEqual(sessionBackup);
+    expect(sessionBackup.tabOrder).toEqual(["t1"]);
   });
 });
 

@@ -104,4 +104,14 @@ describe("messages", () => {
     handlers.messages["ui.heartbeat"]();
     expect(deps.onUiHeartbeat).toHaveBeenCalled();
   });
+
+  test("logs a failed tab patch instead of rejecting", async () => {
+    const { handlers, deps } = setup();
+    deps.session.patchTab = mock(async () => {
+      throw new Error("disk full");
+    });
+    expect(() => handlers.messages["tab.patch"]({ tabId: "t1", patch: { language: "tsx" } })).not.toThrow();
+    await Bun.sleep(0);
+    expect(deps.log).toHaveBeenCalledWith("Handler for tab.patch failed", "Error: disk full");
+  });
 });

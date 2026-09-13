@@ -48,9 +48,11 @@ export class SessionStore {
     );
     const session = normalizeSession(value, newTab);
     const store = new SessionStore(dataDir, session, recovered, options.delayMs ?? 500);
+    // No backup here: `session.json` still holds the corrupt/stale primary at this point, and backing it up
+    // would clobber a good `.bak` that recovery just read from (ruling I1).
     if (recovered !== "none") {
       await writeFileAtomic(join(dataDir, "session.json"), `${JSON.stringify(session, null, 2)}\n`, {
-        backup: true,
+        backup: false,
       });
     }
     return store;

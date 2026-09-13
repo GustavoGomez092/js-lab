@@ -76,7 +76,11 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         deps.session.setBuffer(tabId, content),
       ),
       "tab.patch": message(tabPatchSchema, "tab.patch", ({ tabId, patch }) => {
-        void deps.session.patchTab(tabId, patch);
+        // The write happens after this returns (e.g. a buffer flush during a language rename), so a failure
+        // must be caught here rather than left as an unhandled rejection (ruling I2).
+        void deps.session
+          .patchTab(tabId, patch)
+          .catch((error) => deps.log("Handler for tab.patch failed", String(error)));
       }),
       "ui.heartbeat": () => deps.onUiHeartbeat(),
     },

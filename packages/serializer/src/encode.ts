@@ -146,9 +146,16 @@ export class Encoder {
       } catch (error) {
         if (error !== BUDGET_EXCEEDED) throw error;
         this.registry.rollback(mark);
-        const fallback = this.#oversized(value);
         remaining = Math.max(0, remaining - NODE_BYTES - MAX_PREVIEW);
-        return fallback;
+        // The fallback must not charge the exhausted budget: `finally` only resets it after this returns, and a
+        // charge here would throw the sentinel out of encodeMany and into user code (console.log).
+        this.#remaining = Number.POSITIVE_INFINITY;
+        try {
+          return this.#oversized(value);
+        } catch (fallbackError) {
+          if (fallbackError !== BUDGET_EXCEEDED) throw fallbackError;
+          return { t: "string", v: "[Value too large to show]" };
+        }
       } finally {
         this.#remaining = Number.POSITIVE_INFINITY;
       }

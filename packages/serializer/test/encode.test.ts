@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { types } from "node:util";
+import type { EncodedValue } from "@jslab/rpc-schema";
 import fc from "fast-check";
 import { DEFAULT_LIMITS, Encoder, HandleRegistry, parseStack } from "../src/encode";
 
@@ -265,6 +266,42 @@ describe("per-event size budget", () => {
     expect(items).toHaveLength(1000);
     expect(items[0]?.[1]).toMatchObject({ t: "handle" });
     expect(e.expand(items[0]?.[1].handle ?? "")).toMatchObject({ t: "object", props: expect.any(Array) });
+  });
+
+  test("encodeMany never throws when a value leaves less than one node of budget", () => {
+    const tails: unknown[] = [1, 10n, null, true, undefined, Symbol("s")];
+    for (let n = 0; n <= 120; n++) {
+      for (const tail of tails) {
+        let out: EncodedValue[] = [];
+        expect(() => {
+          out = make({ ...DEFAULT_LIMITS, maxEncodedBytes: 100 }).encodeMany(["x".repeat(n), tail]);
+        }).not.toThrow();
+        expect(out[1]).toEqual(make().encode(tail));
+      }
+      let strings: EncodedValue[] = [];
+      expect(() => {
+        strings = make({ ...DEFAULT_LIMITS, maxEncodedBytes: 100 }).encodeMany(["x".repeat(n), "short"]);
+      }).not.toThrow();
+      expect(strings[1]).toMatchObject({ t: "string", v: "short" });
+    }
+    // The re-review's reproduction with the default limits: the array fits and leaves under 48 bytes.
+    const nearCap = Array.from({ length: 1000 }, (_, i) => "y".repeat(i === 999 ? 274 : 214));
+    let out: EncodedValue[] = [];
+    expect(() => {
+      out = make().encodeMany([nearCap, 1]);
+    }).not.toThrow();
+    expect(out[1]).toEqual({ t: "number", v: "1" });
+  });
+
+  test("encodeMany never throws after many oversized values", () => {
+    const big = Array.from({ length: 1000 }, () => "x".repeat(10_000));
+    let out: EncodedValue[] = [];
+    expect(() => {
+      out = make().encodeMany([...Array(2000).fill(big), 1]);
+    }).not.toThrow();
+    expect(out).toHaveLength(2001);
+    expect(out[0]).toMatchObject({ t: "handle", preview: "Array(1000)" });
+    expect(out.at(-1)).toEqual({ t: "number", v: "1" });
   });
 
   test("encodeMany shares one budget across the values of one event", () => {

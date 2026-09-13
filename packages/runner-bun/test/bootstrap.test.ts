@@ -115,6 +115,21 @@ test("console arguments share one per-event size budget", async () => {
   expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThanOrEqual(256 * 1024 + 1024);
 });
 
+test("console.log never throws into user code when an argument exhausts the size budget", async () => {
+  const runner = startRunner();
+  // The first argument fits but leaves less than one node's worth of budget for the second one.
+  await runner.run(
+    'const arr = Array.from({ length: 1000 }, (_, i) => "y".repeat(i === 999 ? 274 : 214));\nconsole.log(arr, 1);\n__jl.log(3, "after");\nexport {};\n',
+  );
+  await runner.until((m) => m.type === "state" && m.state === "idle");
+  const events = runner.events();
+  expect(events.filter((e) => e.kind === "error")).toEqual([]);
+  expect(events.find((e) => e.kind === "console")).toMatchObject({
+    args: [expect.anything(), { t: "number", v: "1" }],
+  });
+  expect(events.find((e) => e.kind === "result")).toMatchObject({ line: 3, value: { t: "string", v: "after" } });
+});
+
 test("answers expand requests for deep values", async () => {
   const runner = startRunner();
   await runner.run("__jl.log(1, { a: { b: { c: { d: 1 } } } });\n");

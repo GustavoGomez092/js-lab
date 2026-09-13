@@ -1,0 +1,314 @@
+:root {
+  --bg: #21222c;
+  --bg-elevated: #282a36;
+  --fg: #f8f8f2;
+  --fg-muted: #6272a4;
+  --border: #191a21;
+  --accent: #bd93f9;
+  --danger: #ff5555;
+  --warning: #f1fa8c;
+  --selection: #44475a;
+  --string: #f1fa8c;
+  --number: #bd93f9;
+  --key: #8be9fd;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px / 1.4 -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.activity-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 40px;
+  padding: 6px 4px;
+  background: var(--border);
+}
+
+.activity-bar button {
+  height: 32px;
+}
+
+.activity-spinner {
+  width: 16px;
+  height: 16px;
+  margin: 4px auto;
+  border: 2px solid var(--fg-muted);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.split-vertical {
+  flex-direction: column;
+}
+
+.split-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.split-pane-rest {
+  flex: 1;
+}
+
+.split-divider {
+  flex: 0 0 4px;
+  background: var(--border);
+  cursor: col-resize;
+}
+
+.split-vertical .split-divider {
+  cursor: row-resize;
+}
+
+.editor {
+  height: 100%;
+}
+
+.line-hover {
+  background: var(--selection);
+}
+
+.output {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-elevated);
+}
+
+.output-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.output-title {
+  flex: 1;
+  color: var(--fg-muted);
+}
+
+.output-scroller {
+  flex: 1;
+  overflow: auto;
+  font-family: var(--mono);
+}
+
+.entry {
+  display: flex;
+  gap: 8px;
+  padding: 2px 8px;
+  border-bottom: 1px solid #ffffff08;
+}
+
+.entry-stale {
+  opacity: 0.45;
+}
+
+.entry-body {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.entry-line {
+  align-self: flex-start;
+  color: var(--fg-muted);
+}
+
+.entry-console-warn {
+  background: #f1fa8c14;
+}
+
+.entry-console-error,
+.entry-error {
+  background: #ff555514;
+  color: var(--danger);
+}
+
+.entry-frame {
+  display: block;
+  color: var(--fg-muted);
+  text-align: left;
+}
+
+.entry-codeframe,
+.entry-stream {
+  margin: 0;
+  font-family: var(--mono);
+}
+
+.entry-args > * + * {
+  margin-left: 8px;
+}
+
+.entry-table {
+  border-collapse: collapse;
+}
+
+.entry-table th,
+.entry-table td {
+  padding: 1px 6px;
+  border: 1px solid var(--selection);
+}
+
+.v-string {
+  color: var(--string);
+}
+
+.v-number,
+.v-bigint,
+.v-boolean {
+  color: var(--number);
+}
+
+.v-key {
+  color: var(--key);
+}
+
+.v-toggle {
+  padding: 0;
+  text-align: left;
+}
+
+.v-children {
+  padding-left: 16px;
+}
+
+.v-hole,
+.v-expired {
+  color: var(--fg-muted);
+}
+
+.output-truncated {
+  padding: 6px 8px;
+  color: var(--warning);
+}
+
+.status-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 2px 8px;
+  background: var(--border);
+  color: var(--fg-muted);
+}
+
+.status-bar select {
+  color: inherit;
+  background: transparent;
+  border: none;
+}
+
+.status-run {
+  margin-left: auto;
+}
+
+.banner {
+  display: block;
+  padding: 6px 12px;
+}
+
+.banner-warning {
+  background: #f1fa8c22;
+  color: var(--warning);
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #0008;
+}
+
+.dialog {
+  max-width: 420px;
+  padding: 16px 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--selection);
+  border-radius: 8px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog-actions button {
+  padding: 4px 12px;
+  border-color: var(--selection);
+}
+
+.dialog-actions .danger {
+  background: var(--danger);
+  color: var(--bg);
+}

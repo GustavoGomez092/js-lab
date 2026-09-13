@@ -89,3 +89,34 @@ test("adding the same key twice counts once and notifies on change", () => {
   tracker.remove(key);
   expect(counts).toEqual([1, 0]);
 });
+
+test("a child process that fails to spawn is no longer tracked", async () => {
+  const tracker = new HandleTracker(() => {});
+  const g = {
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    setImmediate,
+    clearImmediate,
+    fetch,
+    Bun: { serve: Bun.serve },
+  };
+  installHandleTracking(tracker, g);
+
+  let errorFired = false;
+  const errorPromise = new Promise<void>((resolve) => {
+    // Accessing child_process through require like handles.ts does
+    const cp = require("node:child_process");
+    const child = cp.spawn("jslab-definitely-missing-binary-xyz", []);
+    child.once("error", () => {
+      errorFired = true;
+      resolve();
+    });
+  });
+
+  await errorPromise;
+  expect(errorFired).toBe(true);
+  await Bun.sleep(10);
+  expect(tracker.count).toBe(0);
+});

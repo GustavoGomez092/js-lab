@@ -116,6 +116,7 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
         const child = original(...args);
         tracker.add(child, () => child.kill());
         child.once("exit", () => tracker.remove(child));
+        child.once("error", () => tracker.remove(child));
         return child;
       };
     }

@@ -22,42 +22,42 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
-| EX-01 | Auto Run: code runs as you type | Docs | Debounced Auto Run (`run.autoRun`, `run.autoRunDelayMs`) | §4.2, §8 | M1 | E | ⬜ |
-| EX-02 | Manual run (Cmd/Ctrl+R, activity bar) | Docs | Same | §6.5 | M1 | E | ⬜ |
-| EX-03 | Stop (Cmd/Ctrl+Shift+R), cancels async work | Docs, CL 2.4.0 | Graceful stop, escalates to kill after 500 ms | §5.8 | M1 | I | ⬜ |
-| EX-04 | Kill | CL 2.4.0, Strings | Actions → Kill (`Cmd+Alt+R`) | §5.8 | M1 | I | ⬜ |
-| EX-05 | Tab Unresponsive dialog (Kill tab / Wait) | CL 3.1.0, Strings | Heartbeat-based dialog | §5.8 | M1 | I, E | ⬜ |
-| EX-06 | State doesn't persist between runs | CL 1.2.2, 1.3.1 | Fresh process/realm per run | §5.1, §5.12 | M1 | I | ⬜ |
-| EX-07 | Auto Log: value of each top-level expression | Docs | Auto Log instrumentation with exclusions | §5.5 | M1 | U | ⬜ |
-| EX-08 | Show Undefined | Docs | `run.showUndefined` | §5.5, §8 | M1 | U, E | ⬜ |
-| EX-09 | Top-of-file string literals shown | CL 4.1.0, #733 | Non-directive strings logged | §5.5 | M1 | U | ⬜ |
-| EX-10 | Magic comment `//?` | Docs | Same | §5.5 | M1 | U, E | ⬜ |
-| EX-11 | Inline `/*?*/` mid-expression and before block braces | Docs | Same | §5.5 | M1 | U | ⬜ |
-| EX-12 | `$` expression after marker (`//? $.length`) | Docs | Same | §5.5 | M1 | U | ⬜ |
+| EX-01 | Auto Run: code runs as you type | Docs | Debounced Auto Run (`run.autoRun`, `run.autoRunDelayMs`) | §4.2, §8 | M1 | E | ✅ `apps/ui/test/logic.test.ts`, `apps/ui/test/store.test.ts` |
+| EX-02 | Manual run (Cmd/Ctrl+R, activity bar) | Docs | Same | §6.5 | M1 | E | ✅ `apps/ui/test/logic.test.ts` ("maps the M1 shortcuts") |
+| EX-03 | Stop (Cmd/Ctrl+Shift+R), cancels async work | Docs, CL 2.4.0 | Graceful stop, escalates to kill after 500 ms | §5.8 | M1 | I | ✅ `apps/desktop/test/runs/run-coordinator.test.ts` |
+| EX-04 | Kill | CL 2.4.0, Strings | Actions → Kill (`Cmd+Alt+R`) | §5.8 | M1 | I | ✅ `apps/desktop/test/runs/run-coordinator.test.ts` |
+| EX-05 | Tab Unresponsive dialog (Kill tab / Wait) | CL 3.1.0, Strings | Heartbeat-based dialog | §5.8 | M1 | I, E | ✅ `apps/desktop/test/runs/run-coordinator.test.ts`, `apps/ui/test/app.test.tsx` |
+| EX-06 | State doesn't persist between runs | CL 1.2.2, 1.3.1 | Fresh process/realm per run | §5.1, §5.12 | M1 | I | ✅ `apps/desktop/test/runs/run-coordinator.test.ts` |
+| EX-07 | Auto Log: value of each top-level expression | Docs | Auto Log instrumentation with exclusions | §5.5 | M1 | U | ✅ `packages/transform/test/transform.test.ts` |
+| EX-08 | Show Undefined | Docs | `run.showUndefined` | §5.5, §8 | M1 | U, E | ✅ `apps/ui/test/output.test.ts`, `packages/shared/test/settings.test.ts` |
+| EX-09 | Top-of-file string literals shown | CL 4.1.0, #733 | Non-directive strings logged | §5.5 | M1 | U | ✅ `packages/transform/test/transform.test.ts` ("logs a leading string literal but not 'use strict'") |
+| EX-10 | Magic comment `//?` | Docs | Same | §5.5 | M1 | U, E | ✅ `packages/transform/test/transform.test.ts` |
+| EX-11 | Inline `/*?*/` mid-expression and before block braces | Docs | Same | §5.5 | M1 | U | ✅ `packages/transform/test/transform.test.ts` |
+| EX-12 | `$` expression after marker (`//? $.length`) | Docs | Same | §5.5 | M1 | U | ✅ `packages/transform/test/transform.test.ts` |
 | EX-13 | Toggle Magic Comment command | CL 3.1.0, Strings | Edit menu + `Cmd+Alt+Shift+/` | §6.5, §7.4 | M2 | E | ⬜ |
 | EX-14 | Logpoints: gutter click / F9, clear all | Docs, CL 4.0.0 | Virtual magic comments with sticky decorations | §5.5, §6.3 | M5 | U, E | ⬜ |
 | EX-15 | Logpoints are tab-local and cleared on restart | Docs | Not persisted | §10.1 | M5 | I | ⬜ |
 | EX-16 | Logpoint change triggers a run | Docs | Same | §6.3 | M5 | E | ⬜ |
-| EX-17 | Loop protection (2000 iterations), toggleable | Docs, #683 | Same default, configurable limit, **covers `for…of` too** (#744) | §5.5, §8 | M1 | U | ⬜ |
-| EX-18 | Top-level await in every language | Docs, CL 3.0.3 | Native ESM TLA | §5.3 | M1 | U, I | ⬜ |
-| EX-19 | ES modules and CommonJS, `node:` specifiers | Docs | Real ESM with `require` available | §5.3 | M1 | I | ⬜ |
-| EX-20 | Unhandled promise rejections surface as errors | Docs, CL 1.13.0 | `error` event (`unhandledRejection`) | §5.11 | M1 | I | ⬜ |
-| EX-21 | Syntax error messages | CL 1.2.1 | Squiggle + code frame; previous output dimmed | §5.11 | M1 | E | ⬜ |
+| EX-17 | Loop protection (2000 iterations), toggleable | Docs, #683 | Same default, configurable limit, **covers `for…of` too** (#744) | §5.5, §8 | M1 | U | ✅ `packages/transform/test/transform.test.ts`, `packages/transform/test/semantics.test.ts` |
+| EX-18 | Top-level await in every language | Docs, CL 3.0.3 | Native ESM TLA | §5.3 | M1 | U, I | ✅ `packages/transform/test/semantics.test.ts` |
+| EX-19 | ES modules and CommonJS, `node:` specifiers | Docs | Real ESM with `require` available | §5.3 | M1 | I | ✅ `packages/transform/test/semantics.test.ts`, `packages/runner-bun/test/bootstrap.test.ts` |
+| EX-20 | Unhandled promise rejections surface as errors | Docs, CL 1.13.0 | `error` event (`unhandledRejection`) | §5.11 | M1 | I | ✅ `apps/desktop/test/runs/run-coordinator.test.ts`, `apps/ui/test/entry-row.test.tsx` |
+| EX-21 | Syntax error messages | CL 1.2.1 | Squiggle + code frame; previous output dimmed | §5.11 | M1 | E | ✅ `packages/transform/test/transform.test.ts`, `apps/ui/test/logic.test.ts`, `apps/ui/test/output.test.ts` |
 | EX-22 | Runtime environments per tab: Browser & Node.js (default), Node.js, Browser | Docs, CL 4.0.0 | `browser-node` (default), `bun`, `browser` | §5.2 | M1/M4 | E | 📝 Node.js → Bun (D2); `browser-node` Node APIs are async-only for fs/child_process (§5.13) |
 | EX-23 | Default runtime setting | Docs | `run.defaultRuntime` | §8 | M2 | U | ⬜ |
 | EX-24 | Status-bar runtime switcher | Docs | Same + Actions → Runtime | §7.1 | M2 | E | ⬜ |
 | EX-25 | `alert` / `confirm` / `prompt` | CL 3.0.3, 3.1.0 | Native if supported, async fallback otherwise | §5.12 | M4 | E | ⬜ (📝 if M0-S4 fails) |
-| EX-26 | `process.memoryUsage()` and most of `process` available | CL 1.7.0, 1.8.0 | Full in `bun`; snapshot in `browser-node` | §5.13 | M1/M4 | I | ⬜ |
-| EX-27 | `console.time*`, `console.assert`, `console.clear`, `console.table` | CL 1.10–2.3 | All console methods incl. `group*`, `trace`, `count`, `dir` | §5.6, §5.10 | M1 | U, I | ⬜ |
-| EX-28 | stdout/stderr output | #273 | `stdout`/`stderr` events | §5.6 | M1 | I | ⬜ |
-| EX-29 | Loading spinner while running | CL 1.12.0 | Run state indicators | §5.7 | M1 | E | ⬜ |
+| EX-26 | `process.memoryUsage()` and most of `process` available | CL 1.7.0, 1.8.0 | Full in `bun`; snapshot in `browser-node` | §5.13 | M1/M4 | I | ✅ `packages/runner-bun/test/bootstrap.test.ts`, `packages/transform/test/semantics.test.ts` |
+| EX-27 | `console.time*`, `console.assert`, `console.clear`, `console.table` | CL 1.10–2.3 | All console methods incl. `group*`, `trace`, `count`, `dir` | §5.6, §5.10 | M1 | U, I | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/output.test.ts` |
+| EX-28 | stdout/stderr output | #273 | `stdout`/`stderr` events | §5.6 | M1 | I | ✅ `packages/runner-bun/test/bootstrap.test.ts`, `packages/runner-bun/test/event-buffer.test.ts` |
+| EX-29 | Loading spinner while running | CL 1.12.0 | Run state indicators | §5.7 | M1 | E | ✅ `apps/ui/test/logic.test.ts`, `apps/ui/test/app.test.tsx` |
 | EX-30 | Working directory: Set Working Directory…, relative import/require/fs | Docs, CL 1.3.0, 1.5.1 | Per tab; relative imports and local `.ts` run natively | §5.3, §12.2 | M3 | I, E | ⬜ |
 | EX-31 | `__dirname` / `__filename` / `module` scoped to the WD | CL 2.7.5, #519 | Same | §5.3 | M3 | I | ⬜ |
 | EX-32 | `.env` files in the WD load | Docs, CL 3.2.0 | Same; Bun auto-load disabled | §5.3 | M3 | I | ⬜ |
 | EX-33 | Tab label shows the WD name | #99 | Suffix "· dirname" | §12.2 | M3 | E | ⬜ |
 | EX-34 | `fetch` works without CORS blocking | CL 2.7.5, #513 | `bun`: native; `browser-node`: proxied; `browser`: real CORS | §5.12 | M4 | I | 📝 `browser` runtime enforces CORS (true browser semantics) |
 | EX-35 | Audio indicator + mute toggle | CL 1.9.0, Strings | Speaker icon on tab, click to mute | §5.12 | M4 | M | ⬜ |
-| EX-36 | Safe recovery from hanging code on launch (Edit → Clear workaround) | #252, #548, #6 | Restored tabs never auto-run; crash-loop Safe Mode; Clear Editor | §5.14 | M1 | E | ⬜ |
+| EX-36 | Safe recovery from hanging code on launch (Edit → Clear workaround) | #252, #548, #6 | Restored tabs never auto-run; crash-loop Safe Mode; Clear Editor | §5.14 | M1 | E | ✅ `apps/desktop/test/services/services.test.ts`, `apps/ui/test/app.test.tsx`, `apps/ui/test/logic.test.ts` |
 | EX-37 | Show transpiled output | CL 1.3.0, 2.0.0 | Actions → Show Transpiled Output | §7.4 | M5 | E | ⬜ |
 
 ## 2. Languages & build
@@ -108,23 +108,23 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
-| OU-01 | Console output with warn/error styling | Docs | Same | §7.2 | M1 | E | ⬜ |
-| OU-02 | Expandable trees for objects, arrays, Maps, Sets | Docs, CL 1.10.0 | Value tree + lazy handles | §5.9, §7.2 | M1 | U, E | ⬜ |
-| OU-03 | Expand everything | Docs | Entry menu → Expand All | §7.2 | M1 | E | ⬜ |
-| OU-04 | Functions, classes, Promises identifiable without expanding | Docs | Encoded kinds; Promise updates in place | §5.9 | M1 | U | ⬜ |
-| OU-05 | Strings verbatim at top level, quoted when nested | Docs | Same | §7.2 | M1 | U | ⬜ |
-| OU-06 | Nested objects and `__proto__` auto-folded | CL 2.7.5, 2.9.0 | Same | §7.2 | M1 | M | ⬜ |
-| OU-07 | Side-effect-free getter values | CL 4.0.5 | Native getter allowlist eager; user getters on expand | §5.9 | M1 | U | 📝 user-defined getters evaluate on click |
-| OU-08 | Line number per entry; click → caret | Docs | `L<n>` badge | §7.2 | M1 | E | ⬜ |
-| OU-09 | Hover entry highlights editor line | Docs | Same | §7.2 | M1 | E | ⬜ |
+| OU-01 | Console output with warn/error styling | Docs | Same | §7.2 | M1 | E | ✅ `apps/ui/test/output.test.ts` |
+| OU-02 | Expandable trees for objects, arrays, Maps, Sets | Docs, CL 1.10.0 | Value tree + lazy handles | §5.9, §7.2 | M1 | U, E | ✅ `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx` |
+| OU-03 | Expand everything | Docs | Entry menu → Expand All | §7.2 | M1 | E | 🚧 pending M1 manual QA (M2 E2E) |
+| OU-04 | Functions, classes, Promises identifiable without expanding | Docs | Encoded kinds; Promise updates in place | §5.9 | M1 | U | ✅ `packages/serializer/test/encode.test.ts` |
+| OU-05 | Strings verbatim at top level, quoted when nested | Docs | Same | §7.2 | M1 | U | ✅ `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx` |
+| OU-06 | Nested objects and `__proto__` auto-folded | CL 2.7.5, 2.9.0 | Same | §7.2 | M1 | M | 🚧 pending M1 manual QA (M2 E2E) |
+| OU-07 | Side-effect-free getter values | CL 4.0.5 | Native getter allowlist eager; user getters on expand | §5.9 | M1 | U | ✅ `packages/serializer/test/encode.test.ts` (📝 user-defined getters evaluate on click) |
+| OU-08 | Line number per entry; click → caret | Docs | `L<n>` badge | §7.2 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/logic.test.ts` |
+| OU-09 | Hover entry highlights editor line | Docs | Same | §7.2 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx` |
 | OU-10 | Entry menu: Copy, Explain Result | Docs | Same + Copy as JSON | §7.2 | M1/M5 | E | ⬜ |
-| OU-11 | Right-click: Copy, Copy All, Clear | Strings, CL 2.11.0 | Same | §7.2 | M1 | E | ⬜ |
-| OU-12 | Clear output shortcut / Edit → Clear | Strings | Edit → Clear Output (`Cmd+K`) | §6.5 | M1 | E | ⬜ |
-| OU-13 | Cmd/Ctrl-click URLs in output | CL 2.3.0 | Same | §7.2 | M1 | M | ⬜ |
-| OU-14 | Uncaught errors with message and stack | Docs | Source-mapped, clickable frames (#722) | §5.11 | M1 | E | ⬜ |
-| OU-15 | Large output handled | CL 2.2.2, 4.0.5, #567 | Virtualized list, 10k cap (configurable), truncation marker | §5.10 | M1 | I | ⬜ |
+| OU-11 | Right-click: Copy, Copy All, Clear | Strings, CL 2.11.0 | Same | §7.2 | M1 | E | ✅ `apps/ui/test/copy.test.ts` |
+| OU-12 | Clear output shortcut / Edit → Clear | Strings | Edit → Clear Output (`Cmd+K`) | §6.5 | M1 | E | ✅ `apps/ui/test/store.test.ts`, `apps/ui/test/logic.test.ts` |
+| OU-13 | Cmd/Ctrl-click URLs in output | CL 2.3.0 | Same | §7.2 | M1 | M | 🚧 pending M1 manual QA (M2 E2E) |
+| OU-14 | Uncaught errors with message and stack | Docs | Source-mapped, clickable frames (#722) | §5.11 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/output.test.ts` |
+| OU-15 | Large output handled | CL 2.2.2, 4.0.5, #567 | Virtualized list, 10k cap (configurable), truncation marker | §5.10 | M1 | I | ✅ `apps/ui/test/output.test.ts`, `apps/ui/test/logic.test.ts` |
 | OU-16 | Output syntax highlighting toggle (v3) | Docs (v3, archived), CL 2.12.0 | `output.highlighting` | §8 | M2 | M | ⬜ |
-| OU-17 | Map/Set, Proxy, async/generator display | CL 1.15.0 | Encoded types | §5.9 | M1 | U | ⬜ |
+| OU-17 | Map/Set, Proxy, async/generator display | CL 1.15.0 | Encoded types | §5.9 | M1 | U | ✅ `packages/serializer/test/encode.test.ts` |
 
 ## 5. Web view
 
@@ -153,8 +153,8 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | TF-10 | Open / Save / Save As | Docs | Open dialog + `saveDialog` adapter | §10.2 | M2 | E | ⬜ |
 | TF-11 | Drag and drop files opens new tabs | CL 2.7.1, 3.2.0 | Same + folder sets WD | §7.3 | M2 | M | ⬜ |
 | TF-12 | Large file open guard | CL 2.6.0 | 5 MB confirmation | §10.2 | M2 | M | ⬜ |
-| TF-13 | Auto-save tab contents on change; restore on restart | CL 2.11.0, #590 | Buffers + session | §10.1 | M1/M2 | I | ⬜ |
-| TF-14 | Window size/position remembered | CL 1.6.0 | Same | §10.1 | M1 | M | ⬜ |
+| TF-13 | Auto-save tab contents on change; restore on restart | CL 2.11.0, #590 | Buffers + session | §10.1 | M1/M2 | I | ✅ `apps/desktop/test/persistence/persistence.test.ts`, `packages/shared/test/session.test.ts` |
+| TF-14 | Window size/position remembered | CL 1.6.0 | Same | §10.1 | M1 | M | ✅ `apps/desktop/test/services/services.test.ts` ("persists the window frame and ignores invalid frames"), `packages/shared/test/session.test.ts` |
 | TF-15 | Tab tooltip shows file path | #644 | Same + Reveal in Finder | §7.3 | M2 | M | ⬜ |
 | TF-16 | Horizontal/vertical layout; draggable divider | Docs, CL 2.1.0 | Same, per tab | §7.1 | M2 | E | ⬜ |
 | TF-17 | Toggle Output, Side Bar, Activity Bar, Status Bar, Full Screen | Docs, Strings | View menu | §7.4 | M2 | E | ⬜ |
@@ -228,10 +228,10 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | XT-03 | `jslab` CLI (open, stdin, `--run`, `--runtime`, `--cwd`) | #23, #747, #594 | §16 | M5 | E | ⬜ |
 | XT-04 | GitHub Gist publish/update/open | #115 | §15 | M5 | I, E | ⬜ |
 | XT-05 | Format on save | #742 | §6.4 | M2 | E | ⬜ |
-| XT-06 | Loop protection covers `for…of`/`for…in`/`for await` | #744 | §5.5 | M1 | U | ⬜ |
-| XT-07 | Clickable, source-mapped stack frames | #722 | §5.11 | M1 | E | ⬜ |
+| XT-06 | Loop protection covers `for…of`/`for…in`/`for await` | #744 | §5.5 | M1 | U | ✅ `packages/transform/test/transform.test.ts`, `packages/transform/test/semantics.test.ts` |
+| XT-07 | Clickable, source-mapped stack frames | #722 | §5.11 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx` |
 | XT-08 | Keychain-stored secrets | — | §18 | M5 | I | ⬜ |
-| XT-09 | Safe Mode + crash-loop detection | #6, #178, #416 | §5.14 | M1 | E | ⬜ |
+| XT-09 | Safe Mode + crash-loop detection | #6, #178, #416 | §5.14 | M1 | E | ✅ `apps/desktop/test/services/services.test.ts`, `apps/ui/test/app.test.tsx` |
 | XT-10 | Configurable Auto Run delay, loop limit, output cap, hover delay | #419, #683, #567, #705 | §8 | M1–M3 | U | ⬜ |
 | XT-11 | Formatting preserves folds, scroll, cursor | #639, #654 | §6.4 | M2 | E | ⬜ |
 | XT-12 | Auto-install `@types` option | #629 | §11.4 | M3 | I | ⬜ |

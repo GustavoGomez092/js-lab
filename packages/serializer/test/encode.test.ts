@@ -217,6 +217,67 @@ describe("special objects", () => {
   });
 });
 
+describe("per-event size budget", () => {
+  const CAP = 256 * 1024;
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+  const bigRows = () =>
+    Array.from({ length: 1000 }, () =>
+      Object.fromEntries(
+        Array.from({ length: 100 }, (_, i) => [
+          `k${i}`,
+          Object.fromEntries(Array.from({ length: 20 }, (_, j) => [`j${j}`, j])),
+        ]),
+      ),
+    );
+
+  test("an oversized root value becomes a handle with a bounded preview", () => {
+    const registry = new HandleRegistry();
+    const e = new Encoder(registry);
+    const encoded = e.encode(bigRows());
+    expect(encoded).toMatchObject({ t: "handle", preview: "Array(1000)" });
+    expect(bytes(encoded)).toBeLessThan(1000);
+    // Handles registered while encoding the abandoned attempt are released; only the root handle remains.
+    expect(registry.size).toBe(1);
+  });
+
+  test("large strings and error messages count toward the budget", () => {
+    const strings = make().encode(Array.from({ length: 1000 }, () => "x".repeat(10_000)));
+    expect(strings).toMatchObject({ t: "handle", preview: "Array(1000)" });
+    const error = make().encode(new Error("m".repeat(1_000_000)));
+    expect(error).toMatchObject({ t: "handle", preview: "Error {…}" });
+  });
+
+  test("values under the budget are encoded normally and stay under the cap", () => {
+    const rows = Array.from({ length: 100 }, (_, i) => ({ id: i, name: `row ${i}`, tags: ["a", "b"] }));
+    const encoded = make().encode(rows);
+    expect(encoded).toMatchObject({ t: "array", length: 100 });
+    expect(bytes(encoded)).toBeLessThanOrEqual(CAP);
+    const nearCap = make().encode(Array.from({ length: 1000 }, () => "y".repeat(240)));
+    expect(bytes(nearCap)).toBeLessThanOrEqual(CAP);
+  });
+
+  test("an oversized root handle still expands within the expand limits", () => {
+    const e = make();
+    const encoded = e.encode(bigRows()) as { t: string; handle: string };
+    const expanded = e.expand(encoded.handle);
+    expect(expanded).toMatchObject({ t: "array", length: 1000 });
+    const items = (expanded as { items: [number, { t: string; handle: string }][] }).items;
+    expect(items).toHaveLength(1000);
+    expect(items[0]?.[1]).toMatchObject({ t: "handle" });
+    expect(e.expand(items[0]?.[1].handle ?? "")).toMatchObject({ t: "object", props: expect.any(Array) });
+  });
+
+  test("encodeMany shares one budget across the values of one event", () => {
+    const e = make();
+    const half = Array.from({ length: 600 }, () => "z".repeat(240));
+    const [first, second, small] = e.encodeMany([half, half, 1]);
+    expect(first).toMatchObject({ t: "array" });
+    expect(second).toMatchObject({ t: "handle", preview: "Array(600)" });
+    expect(small).toEqual({ t: "number", v: "1" });
+    expect(bytes([first, second, small])).toBeLessThanOrEqual(CAP);
+  });
+});
+
 describe("parseStack", () => {
   test("parses named and anonymous frames", () => {
     const frames = parseStack(

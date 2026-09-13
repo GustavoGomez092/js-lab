@@ -13,6 +13,7 @@ import Electrobun, {
 } from "electrobun/main";
 import { resolveAppPaths, runnerEnvironment } from "./app-paths";
 import { buildMenu, commandForMenuAction, type MenuItem } from "./menu";
+import { externalLinkFrom, navigationRulesFor } from "./navigation";
 import { RunLock } from "./persistence/run-lock";
 import { createRpcHandlers } from "./rpc-handlers";
 import { BunRunnerProcess } from "./runs/bun-runner-process";
@@ -155,6 +156,14 @@ async function start(): Promise<void> {
     url,
     frame: session.session.window ?? { x: 120, y: 80, width: 1280, height: 820 },
     rpc,
+  });
+
+  // Spec §18: the RPC-bridged view never navigates away from views:// (a dropped URL or a clicked link would otherwise
+  // replace the UI); blocked web and mail links open in the default browser instead.
+  window.webview.setNavigationRules(navigationRulesFor(url));
+  window.webview.on("will-navigate", (event: unknown) => {
+    const link = externalLinkFrom((event as { data?: { detail?: unknown } }).data?.detail);
+    if (link) Utils.openExternal(link);
   });
 
   const saveFrame = () => session.setWindow(window.getFrame());

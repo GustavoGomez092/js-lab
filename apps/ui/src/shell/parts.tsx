@@ -1,6 +1,6 @@
 import type { RunState } from "@jslab/rpc-schema";
 import { LANGUAGES, type Language } from "@jslab/shared";
-import { type ReactNode, type PointerEvent as ReactPointerEvent, useRef } from "react";
+import { type ReactNode, type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
 import { useStore } from "zustand";
 import type { AppStore } from "../state/store";
 import { BUSY_STATES, LANGUAGE_LABELS, runStateLabel } from "./labels";
@@ -22,11 +22,15 @@ export function ActivityBar(props: { runState: RunState | null; onRun(): void; o
 
 export function StatusBar({ store }: { store: AppStore }) {
   const tab = useStore(store, (s) => s.tab);
-  const output = useStore(store, (s) => s.output);
+  // Primitive selectors only: `s.output` is a new object on every `run.events` batch (~60/s), and returning it
+  // from a selector would re-render StatusBar that often. Selecting the two fields it actually renders keeps
+  // re-renders limited to when one of them actually changes value.
+  const runState = useStore(store, (s) => s.output.runState);
+  const activeHandles = useStore(store, (s) => s.output.activeHandles);
   const safeMode = useStore(store, (s) => s.safeMode.active);
   const autoRunArmed = useStore(store, (s) => s.autoRunArmed);
   if (!tab) return null;
-  const label = runStateLabel({ state: output.runState, activeHandles: output.activeHandles, autoRunArmed, safeMode });
+  const label = runStateLabel({ state: runState, activeHandles, autoRunArmed, safeMode });
   return (
     <footer className="status-bar">
       <span className="status-item">Bun</span>
@@ -59,6 +63,19 @@ export function SplitPane(props: {
 }) {
   const container = useRef<HTMLDivElement>(null);
   const horizontal = props.orientation === "horizontal";
+  // Tracks the currently-attached drag listeners so an unmount mid-drag (before the user releases the pointer)
+  // can remove them too -- `up()` alone only runs on pointerup, which never fires if the component unmounts first.
+  const activeDrag = useRef<{ move: (e: PointerEvent) => void; up: () => void } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (activeDrag.current) {
+        window.removeEventListener("pointermove", activeDrag.current.move);
+        window.removeEventListener("pointerup", activeDrag.current.up);
+        activeDrag.current = null;
+      }
+    };
+  }, []);
 
   const startDrag = (event: ReactPointerEvent) => {
     event.preventDefault();
@@ -71,7 +88,9 @@ export function SplitPane(props: {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      activeDrag.current = null;
     };
+    activeDrag.current = { move, up };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };

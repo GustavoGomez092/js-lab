@@ -105,15 +105,20 @@ test("a child process that fails to spawn is no longer tracked", async () => {
   installHandleTracking(tracker, g);
 
   let errorFired = false;
+  // biome-ignore lint/suspicious/noExplicitAny: test variable
+  let child: any;
   const errorPromise = new Promise<void>((resolve) => {
     // Accessing child_process through require like handles.ts does
     const cp = require("node:child_process");
-    const child = cp.spawn("jslab-definitely-missing-binary-xyz", []);
+    child = cp.spawn("jslab-definitely-missing-binary-xyz", []);
     child.once("error", () => {
       errorFired = true;
       resolve();
     });
   });
+
+  // Verify the wrapper doesn't add an error listener (only user's listener)
+  expect(child.listenerCount("error")).toBe(1);
 
   await errorPromise;
   expect(errorFired).toBe(true);

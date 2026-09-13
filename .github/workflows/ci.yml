@@ -13,6 +13,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
+      - name: Install Hutch 0.24.3
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o "$RUNNER_TEMP/hutch-install.sh"
+          sh "$RUNNER_TEMP/hutch-install.sh" --version 0.24.3
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+      - run: hutch --version
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck

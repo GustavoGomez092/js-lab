@@ -1,4 +1,4 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": ["./.hutch/devkit/tsconfig.json", "../../tsconfig.base.json"],
   "include": ["src", "test"]
 }

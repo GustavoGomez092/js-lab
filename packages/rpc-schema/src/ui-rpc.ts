@@ -5,7 +5,13 @@ import type { EncodedValue } from "./values";
 
 // Inbound payloads (UI → Main) are validated with these schemas before use (spec §18).
 
-const tabId = z.string().min(1).max(100);
+// Tab ids are created with crypto.randomUUID(). Main joins them into paths (runs/<tabId>/…), so only letters,
+// digits, "_" and "-" are accepted: no separators, dots, whitespace or control characters (spec §18).
+const tabId = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[A-Za-z0-9_-]+$/);
 
 export const runStartParamsSchema = z.object({
   tabId,

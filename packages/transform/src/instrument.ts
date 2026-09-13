@@ -97,10 +97,30 @@ export function createInstrumentPlugin(options: TransformOptions, source: string
       visitor: {
         Program: {
           enter(program: Any, state: Any) {
-            if (program.scope.hasBinding("__jl")) {
+            // Check for __jl binding in program scope first
+            let jlBinding: Any = null;
+            const programBinding = program.scope.getOwnBinding("__jl");
+            if (programBinding) {
+              jlBinding = programBinding;
+            }
+
+            // Check for __jl binding in any nested scope
+            if (!jlBinding) {
+              program.traverse({
+                Scopable(path: Any) {
+                  if (jlBinding) return;
+                  const binding = path.scope.getOwnBinding("__jl");
+                  if (binding) {
+                    jlBinding = binding;
+                    path.stop();
+                  }
+                },
+              });
+            }
+
+            if (jlBinding) {
               const error = new Error("`__jl` is reserved by JSLab") as Error & Any;
-              const binding = program.scope.getBinding("__jl");
-              error.loc = binding?.identifier?.loc?.start ?? { line: 1, column: 0 };
+              error.loc = jlBinding.identifier?.loc?.start ?? { line: 1, column: 0 };
               error.jslabCode = "reserved-identifier";
               throw error;
             }

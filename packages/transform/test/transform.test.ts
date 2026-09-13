@@ -42,6 +42,11 @@ describe("pipeline", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.diagnostics[0]).toMatchObject({ code: "reserved-identifier", line: 1 });
+
+    const r2 = transform("function f() {\n  const __jl = 1;\n  return 1;\n}", baseOptions);
+    expect(r2.ok).toBe(false);
+    if (r2.ok) return;
+    expect(r2.diagnostics[0]).toMatchObject({ code: "reserved-identifier", line: 2 });
   });
 });
 

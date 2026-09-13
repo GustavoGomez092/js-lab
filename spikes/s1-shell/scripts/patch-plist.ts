@@ -14,9 +14,11 @@
 //    tar.zst update/install payload ("compressing update bundle...") BEFORE
 //    `postWrap` fires. `postWrap`'s `ELECTROBUN_WRAPPER_BUNDLE_PATH` points
 //    at a small self-extracting installer *stub* (CFBundleIdentifier
-//    "extractor") whose own Info.plist is irrelevant to the app macOS ends
-//    up registering after install/extraction — patching only that plist
-//    leaves the real, installed .app's Info.plist unpatched.
+//    "extractor") whose own Info.plist has no CFBundleDocumentTypes once
+//    extracted, in a postWrap-only build, observed during the S5 spike
+//    (see docs/spikes/2026-09-m0-report.md, S5 "Deviations from the brief"
+//    item 2, for the raw `plutil -p` output) — patching only that stub's
+//    plist leaves the real, installed .app's Info.plist unpatched.
 //
 //    So this script is also wired to the `postBuild` hook, which fires
 //    *before* that compression step. `postBuild` has no documented app-path

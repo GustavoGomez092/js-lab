@@ -16,7 +16,11 @@ export type SpikeRPC = {
     messages: {
       saveDialogResult: { path: string | null; error?: string; ms: number };
       throughputBatch: { sentAt: number; events: { seq: number; text: string }[] };
-      throughputDone: { sent: number };
+      // batchSize added beyond the brief's snippet (Deviation) so the S7 report
+      // line self-identifies which run (200 vs 1000/batch) it belongs to,
+      // per controller ruling R1 ("each writing its own S7 line, include
+      // batchSize in the data").
+      throughputDone: { sent: number; batchSize: number };
     };
   }>;
 };

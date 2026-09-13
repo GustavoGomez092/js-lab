@@ -3,6 +3,7 @@ import { probeLib } from "@spike/probe-lib";
 import { rpc } from "./rpc";
 import { MonacoProbe } from "./MonacoProbe";
 import { WebviewProbe } from "./WebviewProbe";
+import { ThroughputProbe } from "./ThroughputProbe";
 
 export default function App() {
   const [probes, setProbes] = useState<Record<string, unknown> | null>(null);
@@ -47,6 +48,7 @@ export default function App() {
       <pre>{JSON.stringify(probes, null, 2)}</pre>
       <MonacoProbe />
       <WebviewProbe />
+      <ThroughputProbe autoRun={!!probes?.s7Enabled} />
     </main>
   );
 }

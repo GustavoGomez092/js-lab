@@ -56,7 +56,15 @@ const rpc = BrowserView.defineRPC<SpikeRPC>({
     // to writeReport("S1", s1) above); it gates the S6 automated probe (see
     // App.tsx) behind JSLAB_SPIKE_S6=1 so S7/S8 runs and normal launches don't
     // pop a Save dialog on screen.
-    requests: { probes: () => ({ ...s1, s6Enabled: process.env.JSLAB_SPIKE_S6 === "1" }) },
+    requests: {
+      probes: () => ({
+        ...s1,
+        s6Enabled: process.env.JSLAB_SPIKE_S6 === "1",
+        // S7 automated sequence (ruling R1), relayed to the view the same way
+        // s6Enabled is: read here in main, opt-in only, no dialogs involved.
+        s7Enabled: process.env.JSLAB_SPIKE_S7 === "1",
+      }),
+    },
     messages: {
       viewReport: ({ section, data }) => writeReport(section, data),
       saveDialog: ({ defaultName }) => {
@@ -65,7 +73,23 @@ const rpc = BrowserView.defineRPC<SpikeRPC>({
           .then((path) => rpc.send.saveDialogResult({ path, ms: Math.round(performance.now() - started) }))
           .catch((error) => rpc.send.saveDialogResult({ path: null, error: String(error), ms: Math.round(performance.now() - started) }));
       },
-      startThroughput: () => {},
+      // S7 brief Step 1 sender, verbatim except `batchSize` is threaded through
+      // to `throughputDone` (Deviation, see shared/rpc.ts comment) so each
+      // completion line self-identifies its run.
+      startThroughput: ({ seconds, batchSize }) => {
+        let seq = 0;
+        const text = "x".repeat(180);
+        const endAt = Date.now() + seconds * 1000;
+        const timer = setInterval(() => {
+          if (Date.now() >= endAt) {
+            clearInterval(timer);
+            rpc.send.throughputDone({ sent: seq, batchSize });
+            return;
+          }
+          const events = Array.from({ length: batchSize }, () => ({ seq: ++seq, text }));
+          rpc.send.throughputBatch({ sentAt: Date.now(), events });
+        }, 16);
+      },
     },
   },
 });

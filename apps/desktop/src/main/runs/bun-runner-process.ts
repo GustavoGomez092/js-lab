@@ -10,6 +10,15 @@ export interface RunnerSpawnConfig {
 
 const STDERR_TAIL_BYTES = 4096;
 
+/** Signals the runner's whole process group (it is spawned detached, as the group leader), else just the pid. */
+function killProcessGroup(proc: Subprocess): void {
+  try {
+    process.kill(-proc.pid, "SIGKILL");
+  } catch {
+    proc.kill("SIGKILL");
+  }
+}
+
 export class BunRunnerProcess {
   readonly #listeners = new Set<(message: RunnerToMain) => void>();
   readonly #proc: Subprocess;
@@ -39,11 +48,14 @@ export class BunRunnerProcess {
         // M0-S3: the default "advanced" IPC serializer breaks across Bun versions. Values survive JSON because the
         // serializer sends NaN, ±Infinity, -0 and bigints as strings, typed-array items included (Task 4).
         serialization: "json",
+        // setsid(): the runner leads its own process group, so killing the group also kills any process user code
+        // spawned (I3). IPC and exit-on-disconnect still work (verified on Bun 1.3.13 and the bundled 1.4.0).
+        detached: true,
       });
       runner = new BunRunnerProcess(proc);
       const started = runner;
       const timer = setTimeout(() => {
-        proc.kill("SIGKILL");
+        killProcessGroup(proc);
         reject(new Error(`Runner did not start within ${timeoutMs}ms`));
       }, timeoutMs);
       const off = started.onMessage((message) => {
@@ -81,8 +93,9 @@ export class BunRunnerProcess {
     }
   }
 
+  /** SIGKILLs the runner and everything in its process group (supersede, Kill, idle expiry, stop escalation, quit). */
   kill(): void {
-    this.#proc.kill("SIGKILL");
+    killProcessGroup(this.#proc);
   }
 
   #dispatch(message: RunnerToMain): void {

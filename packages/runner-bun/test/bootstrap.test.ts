@@ -105,15 +105,10 @@ test("reports errors thrown while evaluating the module", async () => {
 
 test("stop does not report errors from work it aborted", async () => {
   let requests = 0;
-  const notify = { resolve: () => {} };
-  const _waiter = new Promise<void>((resolve) => {
-    notify.resolve = resolve;
-  });
   const server = Bun.serve({
     port: 0,
     fetch: (_req) => {
       requests++;
-      notify.resolve();
       return new Promise(() => {});
     },
   });
@@ -155,8 +150,7 @@ test("the runner exits when its parent dies", async () => {
 
   try {
     // Read stdout until we get the runner PID
-    const stdout = parent.stdout!;
-    const reader = stdout.getReader();
+    const reader = parent.stdout.getReader();
     let data = "";
     const started = Date.now();
     while (!runnerPid) {
@@ -166,7 +160,7 @@ test("the runner exits when its parent dies", async () => {
       data += new TextDecoder().decode(value);
       const match = /RUNNER (\d+)/.exec(data);
       if (match) {
-        runnerPid = parseInt(match[1]!, 10);
+        runnerPid = Number(match[1]);
       }
     }
     reader.releaseLock();

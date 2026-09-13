@@ -52,7 +52,11 @@ Electrobun.events.on("open-url", (event) => {
 const rpc = BrowserView.defineRPC<SpikeRPC>({
   maxRequestTime: 10_000,
   handlers: {
-    requests: { probes: () => s1 },
+    // s6Enabled is not part of the S1 probe data itself (s1 is written verbatim
+    // to writeReport("S1", s1) above); it gates the S6 automated probe (see
+    // App.tsx) behind JSLAB_SPIKE_S6=1 so S7/S8 runs and normal launches don't
+    // pop a Save dialog on screen.
+    requests: { probes: () => ({ ...s1, s6Enabled: process.env.JSLAB_SPIKE_S6 === "1" }) },
     messages: {
       viewReport: ({ section, data }) => writeReport(section, data),
       saveDialog: ({ defaultName }) => {

@@ -12,12 +12,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // S6 automated probe (ruling R1): trigger the osascript Save dialog once on
-    // launch, with no human click, and keep sending RPC messages while it is
-    // open, so an external observer can confirm from the committed report that
-    // the app stayed responsive rather than blocking on the dialog. A separate
+    // S6 automated probe (ruling R1), gated behind JSLAB_SPIKE_S6=1 (follow-up
+    // controller ruling): trigger the osascript Save dialog once on launch,
+    // with no human click, and keep sending RPC messages while it is open, so
+    // an external observer can confirm from the committed report that the app
+    // stayed responsive rather than blocking on the dialog. Without the env
+    // var (normal launches, S7/S8 runs), `probes.s6Enabled` is false and this
+    // effect does nothing — no dialog pops up on screen. A separate
     // "Save As..." button below covers the manual pass-criteria checks (choose
-    // a path / cancel / a name with quotes) that still need a human click.
+    // a path / cancel / a name with quotes) that still need a human click, and
+    // is unaffected by this gate.
+    if (!probes?.s6Enabled) return;
+
     const openedAt = Date.now();
     rpc.send.viewReport({ section: "S6-dialog-opened", data: { at: openedAt } });
     rpc.send.saveDialog({ defaultName: "scratch.ts" });
@@ -32,7 +38,7 @@ export default function App() {
       clearInterval(heartbeat);
       clearTimeout(stopHeartbeat);
     };
-  }, []);
+  }, [probes]);
 
   return (
     <main style={{ fontFamily: "monospace", padding: 16 }}>

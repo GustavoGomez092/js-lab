@@ -60,21 +60,43 @@ export function WebviewProbe() {
       rafTicks: (b?.rafTicks ?? 0) - (a?.rafTicks ?? 0),
     });
 
+    // Ticks-per-second, normalized by the *embedded page's own* elapsed clock
+    // (end.at - start.at) rather than the nominal WINDOW_MS, since the host-side
+    // wall clock includes executeJavascript()/host-message round-trip latency
+    // that the embedded page's timestamps do not.
+    const rates = (start: Ticks | null, end: Ticks | null) => {
+      const elapsedMs = (end?.at ?? 0) - (start?.at ?? 0);
+      const d = delta(start, end);
+      return {
+        elapsedMs,
+        intervalTicks: d.intervalTicks,
+        rafTicks: d.rafTicks,
+        intervalRatePerSec: elapsedMs > 0 ? (d.intervalTicks / elapsedMs) * 1000 : 0,
+        rafRatePerSec: elapsedMs > 0 ? (d.rafTicks / elapsedMs) * 1000 : 0,
+      };
+    };
+
     const measureWindow = async (variant: "zero-size" | "1x1-offscreen", collapse: () => void, restore: () => void) => {
       const start = await forceRead();
       collapse();
       rpc.send.viewReport({ section: "S4-collapse", data: { startedAt: Date.now(), variant } });
-      // Leave 1s of headroom before/after the window for a mid-collapse diagnostic
-      // read and a settle delay after restoring, so the 10s collapse itself is clean.
-      await wait(WINDOW_MS - 1000);
-      let duringCollapseAttempt: Ticks | null = null;
-      if (!cancelled) duringCollapseAttempt = await forceRead();
-      await wait(1000);
-      restore();
-      await wait(500);
+      // Mid-window diagnostic read only (not used for the metric below) to show
+      // ticks progressing smoothly throughout the collapse, not just catching up
+      // once restored.
+      await wait(WINDOW_MS / 2);
+      let midCollapseAttempt: Ticks | null = null;
+      if (!cancelled) midCollapseAttempt = await forceRead();
+      await wait(WINDOW_MS / 2);
+      if (cancelled) return null;
+      // `end` is read WHILE STILL COLLAPSED, immediately before restore() runs, so
+      // the delta never includes post-restore full-rate ticks (fix round 1: the
+      // previous version read `end` after restore + settle + round-trip, which
+      // folded ~500-600ms of full-rate ticks into the "during collapse" count and
+      // let intervalKeptPct exceed 100%).
       const end = await forceRead();
-      const d = delta(start, end);
-      return { start, end, duringCollapseAttempt, intervalTicks: d.intervalTicks, rafTicks: d.rafTicks };
+      restore();
+      await wait(500); // settle before the webview is used again (dialogs probe, or the fallback window)
+      return { start, end, midCollapseAttempt, ...rates(start, end) };
     };
 
     const run = async () => {
@@ -86,7 +108,7 @@ export function WebviewProbe() {
       await wait(WINDOW_MS);
       if (cancelled) return;
       const baselineEnd = await forceRead();
-      const baseline = delta(baselineStart, baselineEnd);
+      const baseline = rates(baselineStart, baselineEnd);
 
       if (cancelled) return;
       const zero = await measureWindow(
@@ -100,21 +122,30 @@ export function WebviewProbe() {
           webview.style.height = "200px";
         },
       );
-      const intervalKeptPct = Math.round((zero.intervalTicks / EXPECTED_INTERVAL) * 100);
+      if (!zero) return;
+      const pctOfBaselineIntervalRate =
+        baseline.intervalRatePerSec > 0 ? Math.round((zero.intervalRatePerSec / baseline.intervalRatePerSec) * 100) : 0;
+      const pctOfBaselineRafRate =
+        baseline.rafRatePerSec > 0 ? Math.round((zero.rafRatePerSec / baseline.rafRatePerSec) * 100) : 0;
       rpc.send.viewReport({
         section: "S4-timers",
         data: {
           variant: "zero-size",
-          baselineWindowMs: WINDOW_MS,
-          collapseWindowMs: WINDOW_MS,
-          baselineIntervalTicks: baseline.intervalTicks,
-          baselineRafTicks: baseline.rafTicks,
-          intervalTicksDuringCollapse: zero.intervalTicks,
-          rafTicksDuringCollapse: zero.rafTicks,
           expectedInterval: EXPECTED_INTERVAL,
           expectedRaf: EXPECTED_RAF,
-          intervalKeptPct,
-          duringCollapseAttempt: zero.duringCollapseAttempt,
+          baselineElapsedMs: baseline.elapsedMs,
+          baselineIntervalTicks: baseline.intervalTicks,
+          baselineRafTicks: baseline.rafTicks,
+          baselineIntervalRatePerSec: baseline.intervalRatePerSec,
+          baselineRafRatePerSec: baseline.rafRatePerSec,
+          collapseElapsedMs: zero.elapsedMs,
+          intervalTicksDuringCollapse: zero.intervalTicks,
+          rafTicksDuringCollapse: zero.rafTicks,
+          intervalRatePerSecDuringCollapse: zero.intervalRatePerSec,
+          rafRatePerSecDuringCollapse: zero.rafRatePerSec,
+          pctOfBaselineIntervalRate,
+          pctOfBaselineRafRate,
+          midCollapseAttempt: zero.midCollapseAttempt,
           collapseStart: zero.start,
           collapseEnd: zero.end,
         },
@@ -122,9 +153,10 @@ export function WebviewProbe() {
 
       if (cancelled) return;
 
-      // Fallback per the brief's Step 5: only exercised if zero-size throttled
-      // the interval below the 80% pass threshold.
-      if (intervalKeptPct < 80) {
+      // Fallback per the brief's Step 5: only exercised if zero-size throttled the
+      // interval below the 80% pass threshold, now measured against the baseline's
+      // own elapsed-time-normalized rate rather than a nominal ~100 constant.
+      if (pctOfBaselineIntervalRate < 80) {
         const offscreen = await measureWindow(
           "1x1-offscreen",
           () => {
@@ -142,21 +174,33 @@ export function WebviewProbe() {
             webview.style.height = "200px";
           },
         );
-        rpc.send.viewReport({
-          section: "S4-timers-1x1",
-          data: {
-            variant: "1x1-offscreen",
-            windowMs: WINDOW_MS,
-            intervalTicksDuringCollapse: offscreen.intervalTicks,
-            rafTicksDuringCollapse: offscreen.rafTicks,
-            expectedInterval: EXPECTED_INTERVAL,
-            expectedRaf: EXPECTED_RAF,
-            intervalKeptPct: Math.round((offscreen.intervalTicks / EXPECTED_INTERVAL) * 100),
-            duringCollapseAttempt: offscreen.duringCollapseAttempt,
-            collapseStart: offscreen.start,
-            collapseEnd: offscreen.end,
-          },
-        });
+        if (offscreen) {
+          const offscreenPctOfBaselineIntervalRate =
+            baseline.intervalRatePerSec > 0 ? Math.round((offscreen.intervalRatePerSec / baseline.intervalRatePerSec) * 100) : 0;
+          const offscreenPctOfBaselineRafRate =
+            baseline.rafRatePerSec > 0 ? Math.round((offscreen.rafRatePerSec / baseline.rafRatePerSec) * 100) : 0;
+          rpc.send.viewReport({
+            section: "S4-timers-1x1",
+            data: {
+              variant: "1x1-offscreen",
+              expectedInterval: EXPECTED_INTERVAL,
+              expectedRaf: EXPECTED_RAF,
+              baselineElapsedMs: baseline.elapsedMs,
+              baselineIntervalRatePerSec: baseline.intervalRatePerSec,
+              baselineRafRatePerSec: baseline.rafRatePerSec,
+              collapseElapsedMs: offscreen.elapsedMs,
+              intervalTicksDuringCollapse: offscreen.intervalTicks,
+              rafTicksDuringCollapse: offscreen.rafTicks,
+              intervalRatePerSecDuringCollapse: offscreen.intervalRatePerSec,
+              rafRatePerSecDuringCollapse: offscreen.rafRatePerSec,
+              pctOfBaselineIntervalRate: offscreenPctOfBaselineIntervalRate,
+              pctOfBaselineRafRate: offscreenPctOfBaselineRafRate,
+              midCollapseAttempt: offscreen.midCollapseAttempt,
+              collapseStart: offscreen.start,
+              collapseEnd: offscreen.end,
+            },
+          });
+        }
       }
 
       if (cancelled) return;

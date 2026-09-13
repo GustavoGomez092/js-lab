@@ -117,7 +117,8 @@ Object.defineProperty(globalThis, "__jl", {
 installConsole({
   push: (body) => run?.buffer.push(body) ?? null,
   // A stopped run's buffer is closed, so don't spend time encoding values that would be dropped.
-  encode: (value) => (run && run.state !== "stopped" ? run.encoder.encode(value) : { t: "undefined" }),
+  encodeMany: (values) =>
+    run && run.state !== "stopped" ? run.encoder.encodeMany(values) : values.map(() => ({ t: "undefined" })),
   entryBase: () => run?.entryBase ?? null,
 });
 installStdio((kind, text) => {

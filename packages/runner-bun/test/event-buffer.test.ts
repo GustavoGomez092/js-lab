@@ -70,6 +70,37 @@ test("flush sends immediately and cancels the pending timer", () => {
   expect(clock.isScheduled()).toBe(false);
 });
 
+test("a synchronous burst is sent in batches of at most 200 events, in order", () => {
+  const { sent, clock, buffer } = setup(10_000);
+  for (let i = 0; i < 1000; i++) buffer.push({ kind: "stdout", text: String(i) });
+  // The 16 ms timer can't fire during synchronous code, so the count threshold must flush on its own.
+  expect(sent.length).toBeGreaterThanOrEqual(5);
+  clock.fire();
+  expect(Math.max(...sent.map((batch) => batch.length))).toBeLessThanOrEqual(200);
+  expect(sent.flat().map((e) => e.seq)).toEqual(Array.from({ length: 1000 }, (_, i) => i + 1));
+});
+
+test("flushes once the pending batch reaches about 256 KB", () => {
+  const { sent, buffer } = setup(10_000);
+  const text = "x".repeat(100_000);
+  buffer.push({ kind: "stdout", text });
+  buffer.push({ kind: "stdout", text });
+  expect(sent).toEqual([]);
+  buffer.push({ kind: "stdout", text });
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toHaveLength(3);
+});
+
+test("early flushes keep the output cap and its truncation marker", () => {
+  const { sent, clock, buffer } = setup(300);
+  for (let i = 0; i < 500; i++) buffer.push({ kind: "stdout", text: String(i) });
+  clock.fire();
+  const events = sent.flat();
+  expect(events.filter((e) => e.kind === "stdout")).toHaveLength(300);
+  expect(events.at(-1)).toMatchObject({ kind: "truncated", dropped: 200 });
+  expect(Math.max(...sent.map((batch) => batch.length))).toBeLessThanOrEqual(200);
+});
+
 test("never sends empty batches", () => {
   const { sent, buffer } = setup(10);
   buffer.flush();

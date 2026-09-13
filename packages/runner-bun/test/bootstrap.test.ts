@@ -106,6 +106,15 @@ test("handles created after stop are disposed", async () => {
   expect(await size()).toBe(before);
 });
 
+test("console arguments share one per-event size budget", async () => {
+  const runner = startRunner();
+  await runner.run('const a = Array.from({ length: 600 }, () => "z".repeat(240));\nconsole.log(a, a);\nexport {};\n');
+  await runner.until((m) => m.type === "state" && m.state === "idle");
+  const event = runner.events().find((e) => e.kind === "console");
+  expect(event).toMatchObject({ args: [{ t: "array" }, { t: "handle", preview: "Array(600)" }] });
+  expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThanOrEqual(256 * 1024 + 1024);
+});
+
 test("answers expand requests for deep values", async () => {
   const runner = startRunner();
   await runner.run("__jl.log(1, { a: { b: { c: { d: 1 } } } });\n");

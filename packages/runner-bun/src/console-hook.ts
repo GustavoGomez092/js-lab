@@ -3,7 +3,8 @@ import { parseStack } from "@jslab/serializer";
 
 export interface ConsoleSink {
   push(body: RawRunEventBody): number | null;
-  encode(value: unknown): EncodedValue;
+  /** Encodes one call's arguments against a shared per-event size budget (spec §5.9). */
+  encodeMany(values: unknown[]): EncodedValue[];
   entryBase(): string | null;
 }
 
@@ -25,7 +26,7 @@ export function installConsole(sink: ConsoleSink, target: Console = console): vo
       level,
       at: callSite(stack, sink.entryBase()),
       groupDepth: depth,
-      args: args.map((a) => sink.encode(a)),
+      args: sink.encodeMany(args),
       ...(extra.label !== undefined ? { label: extra.label } : {}),
       ...(extra.withStack
         ? { stack: parseStack(stack ?? "").filter((f) => f.file?.endsWith(sink.entryBase() ?? "\0")) }

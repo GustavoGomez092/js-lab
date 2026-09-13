@@ -14,12 +14,19 @@ export class EventBuffer {
   #reportedDropped = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #closed = false;
+  #pendingBytes = 0;
 
+  /**
+   * Flushes every `intervalMs`, and early once the pending batch reaches `maxBatchEvents` events or about
+   * `maxBatchBytes` of JSON: a synchronous burst never gives the timer a chance to fire (spec §4.2, §5.9).
+   */
   constructor(
     private readonly send: (events: RawRunEvent[]) => void,
     private readonly maxEntries: number,
     private readonly timers: TimerFns,
     private readonly intervalMs = 16,
+    private readonly maxBatchEvents = 200,
+    private readonly maxBatchBytes = 256 * 1024,
   ) {}
 
   /** Returns the event's sequence number, or null when the event was dropped by the cap. */
@@ -34,8 +41,11 @@ export class EventBuffer {
       this.#counted++;
     }
     const seq = ++this.#seq;
-    this.#queue.push({ ...body, seq, t: Date.now() } as RawRunEvent);
-    this.#schedule();
+    const event = { ...body, seq, t: Date.now() } as RawRunEvent;
+    this.#queue.push(event);
+    this.#pendingBytes += JSON.stringify(event).length;
+    if (this.#queue.length >= this.maxBatchEvents || this.#pendingBytes >= this.maxBatchBytes) this.flush();
+    else this.#schedule();
     return seq;
   }
 
@@ -51,7 +61,9 @@ export class EventBuffer {
     if (this.#queue.length === 0) return;
     const events = this.#queue;
     this.#queue = [];
-    this.send(events);
+    this.#pendingBytes = 0;
+    // The truncation marker can take a full batch one past the limit, so send in chunks.
+    for (let i = 0; i < events.length; i += this.maxBatchEvents) this.send(events.slice(i, i + this.maxBatchEvents));
   }
 
   /** Sends whatever is pending, then drops every later push (the run was stopped). */

@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { BootstrapPayload, EncodedValue, RunEvent } from "@jslab/rpc-schema";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
 import { markersFor } from "../src/editor/markers";
+import { keyLabel } from "../src/output/format";
 import { entryToText, valueToText } from "../src/output/text";
 import { commandForKey } from "../src/shell/keys";
 import { startAutoRun, type TimerApi } from "../src/state/auto-run";
@@ -98,6 +99,36 @@ describe("startAutoRun", () => {
     stop();
     clock.fireAll();
     expect(run).not.toHaveBeenCalled();
+  });
+
+  test("a pending auto-run does not fire once the guard no longer holds", () => {
+    // Case A: Safe Mode engages during the debounce window.
+    const store = hydratedStore();
+    const run = mock(() => {});
+    const clock = manualTimers();
+    startAutoRun(store, run, clock.timers);
+    store.getState().editCode("1 + 2");
+    expect(clock.pending.size).toBe(1);
+    store.setState({ safeMode: { active: true, reason: "crashLoop" } });
+    clock.fireAll();
+    expect(run).not.toHaveBeenCalled();
+
+    // Case B: hydrate() disarms auto-run during the debounce window.
+    const store2 = hydratedStore();
+    const run2 = mock(() => {});
+    const clock2 = manualTimers();
+    startAutoRun(store2, run2, clock2.timers);
+    store2.getState().editCode("1 + 2");
+    expect(clock2.pending.size).toBe(1);
+    store2.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "1" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0.0.1", bun: "1.3.13" },
+    });
+    clock2.fireAll();
+    expect(run2).not.toHaveBeenCalled();
   });
 });
 
@@ -231,5 +262,16 @@ describe("text rendering", () => {
         t: 0,
       }),
     ).toBe("Error: boom\n    at f (L3:2)");
+  });
+});
+
+describe("keyLabel", () => {
+  test("quotes keys that are not identifiers", () => {
+    expect(keyLabel({ k: "name" })).toBe("name");
+    expect(keyLabel({ k: "foo bar" })).toBe('"foo bar"');
+    expect(keyLabel({ k: "foo-bar" })).toBe('"foo-bar"');
+    expect(keyLabel({ k: "" })).toBe('""');
+    expect(keyLabel({ k: "_$ok1" })).toBe("_$ok1");
+    expect(keyLabel({ k: "1abc" })).toBe('"1abc"');
   });
 });

@@ -67,8 +67,11 @@ export function summarize(value: EncodedValue): string {
   }
 }
 
+const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
 export function keyLabel(key: PropKey): string {
-  return "k" in key ? key.k : `[Symbol(${key.sym})]`;
+  if (!("k" in key)) return `[Symbol(${key.sym})]`;
+  return IDENTIFIER.test(key.k) ? key.k : JSON.stringify(key.k);
 }
 
 export type Child = { label: string; value: EncodedValue } | { label: string; value: null };

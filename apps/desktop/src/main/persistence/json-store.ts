@@ -56,7 +56,6 @@ export function createDebouncedWriter(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pending: string | null = null;
   let inflight: Promise<void> = Promise.resolve();
-  let lastFlushPromise: Promise<void> = Promise.resolve();
 
   const run = (): Promise<void> => {
     clearTimeout(timer);
@@ -67,9 +66,10 @@ export function createDebouncedWriter(
       // Chain from settled promise so past failures don't block future writes
       const next = inflight.catch(() => {}).then(() => write(data));
       inflight = next;
-      lastFlushPromise = next;
+      return next;
     }
-    return lastFlushPromise;
+    // No pending data: wait for any in-flight write to settle, then resolve
+    return inflight.catch(() => {});
   };
 
   return {

@@ -142,6 +142,8 @@ describe("createDebouncedWriter", () => {
     expect(errors.length).toBe(1);
     expect(writes).toEqual([]);
 
+    await expect(writer.flush()).resolves.toBeUndefined();
+
     writer.schedule("b");
     await writer.flush();
     expect(writes).toEqual(["b"]);

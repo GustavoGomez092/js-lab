@@ -18,6 +18,14 @@
         "zod": "4.6.4",
       },
     },
+    "packages/runner-bun": {
+      "name": "@jslab/runner-bun",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jslab/rpc-schema": "workspace:*",
+        "@jslab/serializer": "workspace:*",
+      },
+    },
     "packages/serializer": {
       "name": "@jslab/serializer",
       "version": "0.0.0",
@@ -99,6 +107,8 @@
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
     "@jslab/rpc-schema": ["@jslab/rpc-schema@workspace:packages/rpc-schema"],
+
+    "@jslab/runner-bun": ["@jslab/runner-bun@workspace:packages/runner-bun"],
 
     "@jslab/serializer": ["@jslab/serializer@workspace:packages/serializer"],
 

@@ -1,0 +1,18 @@
+{
+  "name": "@jslab/runner-bun",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./bootstrap": "./src/bootstrap.ts"
+  },
+  "dependencies": {
+    "@jslab/rpc-schema": "workspace:*",
+    "@jslab/serializer": "workspace:*"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

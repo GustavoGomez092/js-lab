@@ -10,7 +10,7 @@
 - **Mapping and UI:** Main maps generated positions to source lines and forwards events over Electrobun RPC. The React + Monaco UI in WKWebView renders them.
 
 **Tech Stack:**
-- Bun 1.3.13 for development, running the Bun that Electrobun bundles
+- Bun: develop locally with Bun ≥1.3.13; CI and the packaged app use Bun 1.4.0 (the Bun Electrobun 2.0.1 bundles). Runner IPC uses `serialization: "json"`, so parent/child version skew is safe.
 - Electrobun 2.0.1 + Hutch
 - TypeScript 7.0.2, Biome 2.5.13
 - `@babel/standalone` 8.0.5, `source-map-js` 1.2.1, zod 4.6.4
@@ -25,6 +25,7 @@
 
 - Clean room: never read RunJS binaries, `app.asar` or bundled JS (spec §0).
 - MIT license. No GPL-family dependencies.
+- Develop locally with Bun ≥1.3.13; CI and the packaged app use Bun 1.4.0. Runner IPC uses `serialization: "json"`, so parent/child version skew is safe.
 - Pin every dependency to the exact version listed under Tech Stack. Never use `^` or `~`.
 - User code never runs in the Main process (spec §4.1).
 - Every UI → Main payload is validated with the zod schemas in `@jslab/rpc-schema` before use (spec §18).
@@ -214,7 +215,7 @@ JSLab is MIT licensed and under active development. See `docs/superpowers/specs/
 
 ## Development
 
-Requirements: macOS (arm64), [Bun](https://bun.sh) 1.3.13 or newer.
+Requirements: macOS (arm64), [Bun](https://bun.sh) 1.3.13 or newer. CI and the packaged app use Bun 1.4.0.
 
 ```bash
 bun install
@@ -246,7 +247,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.13
+          bun-version: 1.4.0
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
@@ -1231,6 +1232,19 @@ describe("collections", () => {
     });
     expect(make().encode(new Uint8Array([1, 2]).buffer)).toEqual({ t: "arrayBuffer", byteLength: 2, preview: [1, 2] });
   });
+
+  test("keeps special numbers in typed arrays exact through JSON", () => {
+    const encoded = make().encode(
+      new Float64Array([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0, 1.5]),
+    );
+    expect(encoded).toEqual({
+      t: "typedArray",
+      ctor: "Float64Array",
+      length: 5,
+      items: ["NaN", "Infinity", "-Infinity", "-0", 1.5],
+    });
+    expect(JSON.parse(JSON.stringify(encoded))).toEqual(encoded);
+  });
 });
 
 describe("special objects", () => {
@@ -1599,7 +1613,11 @@ export class Encoder {
     const items: (number | string)[] = [];
     for (let i = 0; i < limit; i++) {
       const x = view[i] as number | bigint;
-      items.push(typeof x === "bigint" ? x.toString() : x);
+      // JSON has no NaN, ±Infinity or -0, so those items are strings, like scalar numbers. The UI reads the
+      // item type from `ctor` (Big* arrays hold bigints), never from typeof.
+      if (typeof x === "bigint") items.push(x.toString());
+      else if (Number.isFinite(x) && !Object.is(x, -0)) items.push(x);
+      else items.push(Object.is(x, -0) ? "-0" : String(x));
     }
     return {
       t: "typedArray",
@@ -1723,7 +1741,7 @@ export * from "./encode";
 - [ ] **Step 5: Run the tests and typecheck**
 
 Run: `cd packages/serializer && bun test && bun run typecheck`
-Expected: `19 pass`, `0 fail` (the property test runs 300 random values), then typecheck exits 0.
+Expected: `20 pass`, `0 fail` (the property test runs 300 random values), then typecheck exits 0.
 
 - [ ] **Step 6: Commit**
 
@@ -3200,6 +3218,8 @@ function startRunner() {
     stdout: "ignore",
     stderr: "inherit",
     ipc: (message) => messages.push(message as RunnerToMain),
+    // Same wire format as production (Task 9), so values that don't survive JSON fail here.
+    serialization: "json",
   });
   procs.push(proc);
   const until = async (predicate: (message: RunnerToMain) => boolean, timeoutMs = 5000) => {
@@ -3956,7 +3976,8 @@ export class BunRunnerProcess {
         ipc: (message) => {
           if (runner) runner.#dispatch(message as RunnerToMain);
         },
-        // M0-S3: the default "advanced" IPC serializer breaks across Bun versions; runner messages are JSON-safe.
+        // M0-S3: the default "advanced" IPC serializer breaks across Bun versions. Values survive JSON because the
+        // serializer sends NaN, ±Infinity, -0 and bigints as strings, typed-array items included (Task 4).
         serialization: "json",
       });
       runner = new BunRunnerProcess(proc);
@@ -7167,11 +7188,14 @@ export function childrenOf(value: EncodedValue): Child[] | null {
         ...(value.stack.length > 0 ? [{ label: "stack", value: text(value.stack.map(formatFrame).join("\n")) }] : []),
         ...(value.cause ? [{ label: "[cause]", value: value.cause }] : []),
       ];
-    case "typedArray":
+    case "typedArray": {
+      // Items are numbers, or strings for bigints and for NaN, ±Infinity and -0; the constructor decides the type.
+      const bigint = value.ctor.startsWith("Big");
       return value.items.map((v, i) => ({
         label: String(i),
-        value: typeof v === "string" ? { t: "bigint", v } : { t: "number", v: String(v) },
+        value: bigint ? { t: "bigint", v: String(v) } : { t: "number", v: String(v) },
       }));
+    }
     case "arrayBuffer":
       return [{ label: "[[Bytes]]", value: text(value.preview.join(" ")) }];
     case "headers":
@@ -7308,7 +7332,7 @@ git commit -m "feat(ui): output reducer, app store, safe auto-run, shortcuts, ma
 import { describe, expect, mock, test } from "bun:test";
 import type { EncodedValue } from "@jslab/rpc-schema";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { tableModel } from "../src/output/format";
+import { childrenOf, tableModel } from "../src/output/format";
 import { ValueView } from "../src/output/ValueView";
 
 const noExpand = async () => null;
@@ -7332,6 +7356,25 @@ describe("ValueView", () => {
   test("renders special numbers exactly", () => {
     render(<ValueView value={num("-0")} expand={noExpand} />);
     expect(screen.getByText("-0")).toBeTruthy();
+  });
+
+  test("renders typed array items by constructor, keeping NaN and -0 exact", () => {
+    const { container } = render(
+      <ValueView
+        value={{ t: "typedArray", ctor: "Float64Array", length: 3, items: ["NaN", "-0", 1.5] }}
+        expand={noExpand}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Float64Array\(3\)/ }));
+    const rows = [...container.querySelectorAll(".v-children > .v")].map((row) => [row.className, row.textContent]);
+    expect(rows).toEqual([
+      ["v v-number", "0: NaN"],
+      ["v v-number", "1: -0"],
+      ["v v-number", "2: 1.5"],
+    ]);
+    expect(childrenOf({ t: "typedArray", ctor: "BigInt64Array", length: 1, items: ["1"] })).toEqual([
+      { label: "0", value: { t: "bigint", v: "1" } },
+    ]);
   });
 
   test("objects start collapsed and expand on click", () => {
@@ -7752,7 +7795,7 @@ function ErrorBody({ event, onReveal }: { event: ErrorEvent; onReveal(line: numb
 - [ ] **Step 4: Run the tests and lint**
 
 Run: `cd apps/ui && bun test test/value-view.test.tsx test/entry-row.test.tsx && cd ../.. && bun run lint`
-Expected: `15 pass`, `0 fail`, then lint exits 0.
+Expected: `16 pass`, `0 fail`, then lint exits 0.
 
 - [ ] **Step 5: Commit**
 
@@ -8158,7 +8201,7 @@ export function createRpcApi(): MainApi {
 - [ ] **Step 6: Typecheck, test and lint**
 
 Run: `cd apps/ui && bun run typecheck && bun test && cd ../.. && bun run lint`
-Expected: typecheck exits 0, `40 pass`, `0 fail`, lint exits 0.
+Expected: typecheck exits 0, `41 pass`, `0 fail`, lint exits 0.
 
 If `rpc.ts` fails to typecheck because Electrobun's handler or `request`/`send` signatures differ, adapt the calls to the devkit types. Keep the `MainApi` surface unchanged.
 
@@ -8659,7 +8702,7 @@ export function App({ store, api }: { store: AppStore; api: MainApi }) {
 - [ ] **Step 5: Run the tests**
 
 Run: `cd apps/ui && bun test`
-Expected: `47 pass`, `0 fail`.
+Expected: `48 pass`, `0 fail`.
 
 - [ ] **Step 6: Add the entry point, page, styles and Vite config**
 
@@ -9099,9 +9142,10 @@ Run against a packaged canary build (`cd apps/desktop && hutch run build`), on m
 - Copy it to internal disk first. Launched from an external volume (`/Volumes/...`), it stalls on a hidden removable-volume permission prompt.
 - Set `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1`, so the installer panel closes without a click.
 
-From the repository root:
+From the repository root (the build step above leaves the shell in `apps/desktop`, so return first):
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
 rm -rf ~/Library/Application\ Support/dev.jslab.app/canary
 QA_DIR="$(mktemp -d)"
 cp -R "apps/desktop/build/canary-macos-arm64/JSLab-canary.app" "$QA_DIR/"
@@ -9174,13 +9218,13 @@ Expected:
   |---|---|
   | `@jslab/shared` | 12 |
   | `@jslab/rpc-schema` | 5 |
-  | `@jslab/serializer` | 19 |
+  | `@jslab/serializer` | 20 |
   | `@jslab/transform` | 51 |
   | `@jslab/runner-bun` | 17 |
   | `@jslab/desktop` | 52 |
-  | `@jslab/ui` | 47 |
+  | `@jslab/ui` | 48 |
 
-- 203 tests in total, 0 fail
+- 205 tests in total, 0 fail
 
 - [ ] **Step 3: Build a packaged canary app and run the checklist**
 

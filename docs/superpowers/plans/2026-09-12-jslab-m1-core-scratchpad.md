@@ -3956,6 +3956,8 @@ export class BunRunnerProcess {
         ipc: (message) => {
           if (runner) runner.#dispatch(message as RunnerToMain);
         },
+        // M0-S3: the default "advanced" IPC serializer breaks across Bun versions; runner messages are JSON-safe.
+        serialization: "json",
       });
       runner = new BunRunnerProcess(proc);
       const started = runner;
@@ -5583,7 +5585,7 @@ git commit -m "feat(desktop): settings/session stores, safe mode detection and v
 **Files:**
 - Create: `apps/desktop/electrobun.config.ts`, `apps/desktop/hutch.config.ts`
 - Create: `apps/desktop/src/main/app-paths.ts`, `apps/desktop/src/main/menu.ts`
-- Modify: `apps/desktop/tsconfig.json`
+- Modify: `apps/desktop/tsconfig.json`, `apps/desktop/package.json`, `.github/workflows/ci.yml`
 - Test: `apps/desktop/test/shell.test.ts`
 
 **Interfaces:**
@@ -5598,9 +5600,15 @@ git commit -m "feat(desktop): settings/session stores, safe mode detection and v
   - `dist/runner/bootstrap.js`: the runner
   - `dist/workers/transform-worker.js`: the transform worker
 
-**Before starting:** open `docs/spikes/2026-09-m0-report.md`.
-- Use the Hutch install and init commands recorded under S1.
-- Use the copy-destination formula recorded under S3. If it differs from `Resources/app/<dir>`, change only `resolveAppPaths` and its test.
+**Before starting:** M0 results (`docs/spikes/2026-09-m0-report.md`) are already applied to this task:
+- **Toolchain (S1).** Hutch must be exactly 0.24.3, because `electrobun@2.0.1` rejects any other Hutch. Install it with `curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o install.sh && sh install.sh --version 0.24.3`.
+  - The installer adds `~/.hutch/bin` to `PATH` in `~/.zshrc`.
+  - `~/.hutch` must be absent or already a Hutch home.
+  - Never run `hutch upgrade`.
+  - `hutch.config.ts` pins `electrobun: { version: "2.0.1" }`.
+  - With `packageManager: "bun"`, `hutch pm exec -- <bin>` fails (`bun: command not found`). Use `hutch pm x --no-install <bin>` or a `bun run` script, as the scripts below do.
+- **Bundling (S1).** Hutch bundles only `build.bun.entrypoint` (`src/main/index.ts`), so the runner bootstrap and the transform worker ship as separate `bun build` outputs through `build.copy`. Every `build.copy` source must exist before `hutch electrobun dev`/`build`, or it fails with `CopySourceMissing`.
+- **Copy destination (S1, S3).** Confirmed as `join(PATHS.RESOURCES_FOLDER, "app", <dir>)` (flat files, no ASAR). This matches `resolveAppPaths` and its test as written.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5852,6 +5860,8 @@ const bundles = [
 
 export default {
   packageManager: "bun",
+  // M0-S1: pin Electrobun exactly; without this, `hutch electrobun sync` floats on the stable channel.
+  electrobun: { version: "2.0.1" },
   scripts: {
     "build:ui": "bun run --cwd ../ui build",
     "build:bundles": bundles,
@@ -5880,15 +5890,36 @@ Replace `apps/desktop/tsconfig.json` with:
 
 The order matters. Later entries override earlier ones, so JSLab's base options (for example `types: ["bun"]`) win, while the devkit's `compilerOptions.paths` for `electrobun/*` still apply. If `electrobun/main` still doesn't resolve, open `.hutch/devkit/tsconfig.json` and confirm it defines those `paths`.
 
-Add `"postinstall": "hutch electrobun sync"` to the `scripts` in `apps/desktop/package.json`, so CI and fresh clones generate the devkit before `typecheck`.
+Add a `postinstall` script to the `scripts` in `apps/desktop/package.json`, so CI and fresh clones generate the devkit before `typecheck`. It must fail loudly when Hutch is missing and never skip silently:
+
+```json
+"postinstall": "command -v hutch >/dev/null 2>&1 || { echo 'postinstall: hutch not found. Install Hutch 0.24.3: curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o install.sh && sh install.sh --version 0.24.3' >&2; exit 1; }; hutch electrobun sync"
+```
 
 Run: `cd apps/desktop && bun run typecheck`
 Expected: exit 0.
 
+- [ ] **Step 7b: Install Hutch in CI**
+
+CI runners have no Hutch, so `bun install` would fail at the `postinstall` above. In `.github/workflows/ci.yml` (from Task 1), insert these two steps between `oven-sh/setup-bun@v2` and `bun install --frozen-lockfile`.
+- The install command is the one recorded under S1 in the M0 report.
+- The installer only writes its `PATH` line to `~/.zshrc`, so the step adds `~/.hutch/bin` to `$GITHUB_PATH` itself.
+
+```yaml
+      - name: Install Hutch 0.24.3
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o "$RUNNER_TEMP/hutch-install.sh"
+          sh "$RUNNER_TEMP/hutch-install.sh" --version 0.24.3
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+      - run: hutch --version
+```
+
+The `check` job's steps are now, in order: checkout, setup-bun, Install Hutch 0.24.3, `hutch --version`, `bun install --frozen-lockfile`, lint, typecheck, test.
+
 - [ ] **Step 8: Commit**
 
 ```bash
-git add apps/desktop/electrobun.config.ts apps/desktop/hutch.config.ts apps/desktop/tsconfig.json apps/desktop/package.json apps/desktop/src/main/app-paths.ts apps/desktop/src/main/menu.ts apps/desktop/test/shell.test.ts
+git add apps/desktop/electrobun.config.ts apps/desktop/hutch.config.ts apps/desktop/tsconfig.json apps/desktop/package.json apps/desktop/src/main/app-paths.ts apps/desktop/src/main/menu.ts apps/desktop/test/shell.test.ts .github/workflows/ci.yml
 git commit -m "feat(desktop): electrobun project config, app paths and menu model"
 ```
 
@@ -6085,7 +6116,9 @@ Keep the behavior described above.
 
 The UI does not exist yet, so the window will be blank or show a load error. That is expected.
 
-Run: `cd apps/desktop && hutch run build:bundles && JSLAB_RUNNER_BOOTSTRAP="$PWD/dist/runner/bootstrap.js" JSLAB_TRANSFORM_WORKER="$PWD/dist/workers/transform-worker.js" hutch electrobun dev`
+`dist/mainview` must still exist: Electrobun fails with `CopySourceMissing` when a `build.copy` source is absent (M0-S1), so the command creates an empty one. This step runs a dev build from the repository, so the packaged-canary launch procedure (Task 19) does not apply here.
+
+Run: `cd apps/desktop && mkdir -p dist/mainview && hutch run build:bundles && JSLAB_RUNNER_BOOTSTRAP="$PWD/dist/runner/bootstrap.js" JSLAB_TRANSFORM_WORKER="$PWD/dist/workers/transform-worker.js" hutch electrobun dev`
 
 Expected in the terminal:
 - no uncaught exceptions
@@ -7760,7 +7793,11 @@ git commit -m "feat(ui): expandable value tree and output entry rows with line l
 
 These components need a real WKWebView layout: Monaco workers and virtualization sizes don't work in happy-dom. They are verified by typecheck here, and by the running app in Task 18 and the QA checklist in Task 19.
 
-**Before starting:** copy the worker import lines recorded under S2 in `docs/spikes/2026-09-m0-report.md` into `monaco-setup.ts`. The code below uses the non-inline variant that S2 tests first.
+**Before starting:** the worker imports in `monaco-setup.ts` below are the ones M0-S2 verified in the packaged app (`docs/spikes/2026-09-m0-report.md`).
+- They are plain, non-inline `?worker` imports; no `&inline` or Blob-URL fallback is needed.
+- The subpath specifiers are `monaco-editor/editor/editor.worker` and `monaco-editor/languages/features/typescript/ts.worker`.
+- Don't use the on-disk `monaco-editor/esm/vs/...` paths. `monaco-editor@0.56.0`'s `exports` map (`"./*": "./esm/vs/*.js"`) already adds `esm/vs/`, so those resolve to a doubled, nonexistent path and the Vite build fails.
+- If the `monaco-editor` version changes, re-derive the specifiers from its `exports` map.
 
 - [ ] **Step 1: Point the UI typecheck at the Electrobun devkit**
 
@@ -7791,8 +7828,8 @@ Expected: exit 0. This shows the devkit resolves; no source files use it yet.
 ```ts
 import type { Language } from "@jslab/shared";
 import * as monaco from "monaco-editor";
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import TsWorker from "monaco-editor/esm/vs/languages/features/typescript/ts.worker?worker";
+import EditorWorker from "monaco-editor/editor/editor.worker?worker";
+import TsWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
 
 let configured = false;
 
@@ -9057,11 +9094,23 @@ git commit -m "feat(ui): app shell with safe auto-run, shortcuts, unresponsive d
 ````markdown
 # M1 Manual QA Checklist
 
-Run against a packaged canary build (`cd apps/desktop && hutch run build`), on macOS arm64, starting from a clean data folder:
+Run against a packaged canary build (`cd apps/desktop && hutch run build`), on macOS arm64, starting from a clean data folder. Launch it the way M0-S1 recorded:
+- The canary `.app` is a self-extracting installer. On first launch it extracts into the data folder below.
+- Copy it to internal disk first. Launched from an external volume (`/Volumes/...`), it stalls on a hidden removable-volume permission prompt.
+- Set `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1`, so the installer panel closes without a click.
+
+From the repository root:
 
 ```bash
 rm -rf ~/Library/Application\ Support/dev.jslab.app/canary
+QA_DIR="$(mktemp -d)"
+cp -R "apps/desktop/build/canary-macos-arm64/JSLab-canary.app" "$QA_DIR/"
+ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "$QA_DIR/JSLab-canary.app/Contents/MacOS/launcher" &
 ```
+
+- Use this explicit path. `find build -name '*.app' | head -1` can pick the dev app instead of the canary.
+- Relaunch with the same `launcher` command.
+- To quit from a script, kill by PID (`pkill -f "$QA_DIR/JSLab-canary.app"`), because `osascript -e 'quit app …'` does not quit the app. Items that test a clean quit (Q14) still use ⌘Q.
 
 Each item passes only if the result matches exactly. Record failures as issues and link them in the M1 PR.
 
@@ -9137,7 +9186,7 @@ Expected:
 
 Run: `cd apps/desktop && hutch run build`
 
-Open the built `.app` and work through Q1–Q16 in `docs/qa/m1-checklist.md`, ticking each item that passes. Any failing item blocks M1. Fix the failure with a test first where the behavior is unit-testable, then re-run Steps 2–3.
+Launch it with the procedure at the top of `docs/qa/m1-checklist.md`: an internal-disk copy of `build/canary-macos-arm64/JSLab-canary.app`, started with `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1` and quit by PID when scripted (M0-S1). Work through Q1–Q16, ticking each item that passes. Any failing item blocks M1. Fix the failure with a test first where the behavior is unit-testable, then re-run Steps 2–3.
 
 - [ ] **Step 4: Update parity statuses**
 
@@ -9157,7 +9206,7 @@ git commit -m "docs(qa): M1 checklist and parity status"
 git push
 ```
 
-Expected: the CI workflow from Task 1 passes on `macos-14`. If `bun run typecheck` fails in CI because `.hutch/devkit` is missing, confirm that the `postinstall` script added in Task 13 ran. CI must run `bun install` without `--ignore-scripts`.
+Expected: the CI workflow from Task 1 passes on `macos-14`. CI needs the "Install Hutch 0.24.3" step that Task 13 Step 7b added before `bun install`. Without it, the `postinstall` from Task 13 exits with `postinstall: hutch not found`. If `bun run typecheck` fails in CI because `.hutch/devkit` is missing, confirm that both the Hutch step and the `postinstall` ran. CI must run `bun install` without `--ignore-scripts`.
 
 ---
 

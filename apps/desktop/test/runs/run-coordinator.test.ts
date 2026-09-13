@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunEvent, RunState } from "@jslab/rpc-schema";
+import type { TransformOptions, TransformResult } from "@jslab/transform";
 import { transform } from "@jslab/transform";
 import { BunRunnerProcess } from "../../src/main/runs/bun-runner-process";
 import { RunCoordinator, type RunnerSettings } from "../../src/main/runs/run-coordinator";
@@ -20,9 +21,17 @@ interface Harness {
   dir: string;
 }
 
+/** Injection points used by the race/fault tests below to make timing-sensitive bugs deterministic. */
+interface HarnessHooks {
+  onLockAdd?: (runId: string) => void;
+  onDiagnostics?: (tabId: string, runId: string) => void;
+  onRunnerStart?: (runner: BunRunnerProcess) => void;
+  transform?: (source: string, options: TransformOptions) => Promise<TransformResult>;
+}
+
 const harnesses: Harness[] = [];
 
-async function createHarness(overrides: Partial<RunnerSettings> = {}): Promise<Harness> {
+async function createHarness(overrides: Partial<RunnerSettings> = {}, hooks: HarnessHooks = {}): Promise<Harness> {
   const dir = await mkdtemp(join(tmpdir(), "jslab-coord-"));
   const settings: RunnerSettings = {
     autoLog: true,
@@ -36,7 +45,11 @@ async function createHarness(overrides: Partial<RunnerSettings> = {}): Promise<H
   const states: Harness["states"] = [];
   const locks = new Set<string>();
   const spares = new SparePool(
-    (config) => BunRunnerProcess.start(config),
+    async (config) => {
+      const runner = await BunRunnerProcess.start(config);
+      hooks.onRunnerStart?.(runner);
+      return runner;
+    },
     () => ({
       bunPath: process.execPath,
       bootstrapPath: BOOTSTRAP,
@@ -45,14 +58,20 @@ async function createHarness(overrides: Partial<RunnerSettings> = {}): Promise<H
     }),
   );
   const coordinator = new RunCoordinator({
-    transform: async (source, options) => transform(source, options),
+    transform: hooks.transform ?? (async (source, options) => transform(source, options)),
     spares,
     runsDir: join(dir, "runs"),
     settings: () => settings,
     onEvents: (_tab, _run, batch) => events.push(...batch),
     onState: (_tab, runId, state, activeHandles) => states.push({ runId, state, activeHandles }),
-    onDiagnostics: () => {},
-    runLock: { add: (id) => locks.add(id), remove: (id) => locks.delete(id) },
+    onDiagnostics: (tabId, runId) => hooks.onDiagnostics?.(tabId, runId),
+    runLock: {
+      add: (id) => {
+        locks.add(id);
+        hooks.onLockAdd?.(id);
+      },
+      remove: (id) => locks.delete(id),
+    },
     watchdogIntervalMs: 50,
     stopGraceMs: 300,
   });
@@ -112,6 +131,23 @@ describe("RunCoordinator", () => {
     expect(h.events[0]).toMatchObject({ kind: "error", phase: "transpile", line: 1, column: 11 });
   }, 15_000);
 
+  test("a transform failure fails the run instead of hanging", async () => {
+    const h = await createHarness(
+      {},
+      {
+        transform: async () => {
+          throw new Error("boom-transform");
+        },
+      },
+    );
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
+    await h.waitForState("failed", runId);
+    const errorEvents = h.events.filter((e) => e.kind === "error");
+    expect(errorEvents).toHaveLength(1);
+    expect(errorEvents[0]).toMatchObject({ phase: "runner", message: "boom-transform" });
+    expect(h.locks.size).toBe(0);
+  }, 15_000);
+
   test("maps runtime errors to the original line", async () => {
     const h = await createHarness();
     const { runId } = h.coordinator.start({
@@ -126,7 +162,8 @@ describe("RunCoordinator", () => {
   }, 15_000);
 
   test("supersedes a running run and kills its runner", async () => {
-    const h = await createHarness();
+    const runners: BunRunnerProcess[] = [];
+    const h = await createHarness({}, { onRunnerStart: (runner) => runners.push(runner) });
     const first = h.coordinator.start({
       tabId: "t1",
       code: "await new Promise((r) => setTimeout(r, 10_000))",
@@ -138,6 +175,86 @@ describe("RunCoordinator", () => {
     await h.waitForState("idle", second.runId);
     expect(h.states.filter((s) => s.runId === first.runId).map((s) => s.state)).toEqual(["transpiling", "evaluating"]);
     expect(h.locks.size).toBe(0);
+    expect(runners.length).toBeGreaterThanOrEqual(1);
+    await runners[0]?.exited;
+  }, 15_000);
+
+  test("a run superseded after transpiling does not disturb the newer run", async () => {
+    // Racy by nature (a stale run's fs writes/cleanup interleave with the newer run's): repeat a few times so a
+    // regression is reliably caught even though a single iteration isn't guaranteed to hit the bad interleaving.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const ctx: { coordinator?: RunCoordinator } = {};
+      let firstRunId = "";
+      let superseded = false;
+      const h = await createHarness(
+        {},
+        {
+          onDiagnostics: (_tabId, runId) => {
+            if (runId === firstRunId && !superseded) {
+              superseded = true;
+              ctx.coordinator?.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
+            }
+          },
+        },
+      );
+      ctx.coordinator = h.coordinator;
+      const first = h.coordinator.start({
+        tabId: "t1",
+        code: "const a: number = 1;\nconst b: number = 2;\na + b",
+        language: "typescript",
+        logpoints: [],
+      });
+      firstRunId = first.runId;
+      await h.waitForState("idle");
+      expect(h.events.filter((e) => e.kind === "error")).toEqual([]);
+      h.coordinator.dispose();
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("disposing during a run does not leave runners behind", async () => {
+    const runners: BunRunnerProcess[] = [];
+    const h = await createHarness({}, { onRunnerStart: (runner) => runners.push(runner) });
+    h.coordinator.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
+    await Bun.sleep(5);
+    h.coordinator.dispose();
+    await Bun.sleep(1500);
+    expect(runners.length).toBeGreaterThan(0);
+    for (const runner of runners) {
+      const outcome = await Promise.race([runner.exited.then(() => "exited"), Bun.sleep(500).then(() => "timeout")]);
+      expect(outcome).toBe("exited");
+    }
+  }, 15_000);
+
+  test("stop right after the runner is assigned stops the runner and releases the lock", async () => {
+    const ctx: { coordinator?: RunCoordinator } = {};
+    let capturedRunner: BunRunnerProcess | undefined;
+    const h = await createHarness(
+      {},
+      {
+        onLockAdd: () => ctx.coordinator?.stop("t1"),
+        // Capture only the first runner: SparePool.take() prepares a fresh background spare for the *next* run
+        // right after handing this one over, and that unrelated spare is expected to stay alive.
+        onRunnerStart: (runner) => {
+          capturedRunner ??= runner;
+        },
+      },
+    );
+    ctx.coordinator = h.coordinator;
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
+    const started = Date.now();
+    while (!h.states.some((s) => s.runId === runId && (s.state === "stopped" || s.state === "killed"))) {
+      if (Date.now() - started > 8000)
+        throw new Error(`timed out waiting for stopped/killed; saw ${JSON.stringify(h.states)}`);
+      await Bun.sleep(10);
+    }
+    expect(h.locks.size).toBe(0);
+    expect(capturedRunner).toBeDefined();
+    const exited = await Promise.race([
+      capturedRunner?.exited.then(() => "exited"),
+      Bun.sleep(1000).then(() => "timeout"),
+    ]);
+    expect(exited).toBe("exited");
   }, 15_000);
 
   test("stops async work gracefully", async () => {
@@ -152,6 +269,7 @@ describe("RunCoordinator", () => {
     expect(h.states.find((s) => s.state === "settled")?.activeHandles).toBe(1);
     h.coordinator.stop("t1");
     await h.waitForState("stopped", runId);
+    await Bun.sleep(400); // longer than the harness's stopGraceMs (300ms): the grace timer must not still fire.
     expect(h.states.some((s) => s.state === "killed")).toBe(false);
   }, 15_000);
 
@@ -166,6 +284,31 @@ describe("RunCoordinator", () => {
     await h.waitForState("unresponsive", runId);
     h.coordinator.stop("t1");
     await h.waitForState("killed", runId);
+  }, 15_000);
+
+  test("recovering from unresponsive restores the settled state", async () => {
+    // loopProtection must be off: it counts iterations, not wall-clock time, and would throw almost immediately
+    // on this wall-clock-bounded busy loop instead of letting it actually block the runner for ~900ms.
+    const h = await createHarness({ loopProtection: false });
+    const { runId } = h.coordinator.start({
+      tabId: "t1",
+      code: [
+        "setInterval(() => {}, 1000);",
+        "setTimeout(() => {",
+        "  const end = Date.now() + 900;",
+        "  while (Date.now() < end) {}",
+        "}, 0);",
+      ].join("\n"),
+      language: "typescript",
+      logpoints: [],
+    });
+    await h.waitForState("unresponsive", runId);
+    // The busy loop blocks the runner's event loop for ~900ms; give it time to finish and resume heartbeats.
+    await Bun.sleep(1200);
+    const runStates = h.states.filter((s) => s.runId === runId).map((s) => s.state);
+    expect(runStates).toContain("settled");
+    expect(runStates).toContain("unresponsive");
+    expect(runStates.at(-1)).toBe("settled");
   }, 15_000);
 
   test("enforces the output cap in the runner", async () => {

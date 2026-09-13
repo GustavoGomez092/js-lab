@@ -45,9 +45,16 @@ interface ActiveRun {
   stopTimer?: ReturnType<typeof setTimeout>;
   idleTimer?: ReturnType<typeof setTimeout>;
   unsubscribe?: () => void;
+  // Last known activeHandles, and the state to restore when recovering from "unresponsive" (I5): the run may have
+  // gone unresponsive from "settled", not just "evaluating".
+  activeHandles?: number;
+  resumeState?: RunState;
 }
 
-const LIVE_STATES: ReadonlySet<RunState> = new Set(["evaluating", "settled", "unresponsive"]);
+// "transpiling" is included because a runner can already be assigned (and the "run" message already sent) while
+// the coordinator's own state is still "transpiling" -- the "evaluating" state event needs an IPC round trip to
+// arrive. Stop must still work during that window (I1).
+const STOPPABLE_STATES: ReadonlySet<RunState> = new Set(["transpiling", "evaluating", "settled", "unresponsive"]);
 
 export class RunCoordinator {
   readonly #runs = new Map<string, ActiveRun>();
@@ -78,12 +85,16 @@ export class RunCoordinator {
   stop(tabId: string): void {
     const run = this.#runs.get(tabId);
     if (!run) return;
-    if (run.state === "transpiling") {
-      run.cancelled = true;
-      this.#setState(run, "stopped");
+    if (!run.runner) {
+      // No runner has been taken yet: cancel outright so #execute bails out (and kills whatever runner
+      // spares.take() returns later) instead of starting anything.
+      if (run.state === "transpiling") {
+        run.cancelled = true;
+        this.#setState(run, "stopped");
+      }
       return;
     }
-    if (!run.runner || !LIVE_STATES.has(run.state)) return;
+    if (!STOPPABLE_STATES.has(run.state)) return;
     this.#setState(run, "stopping");
     run.runner.send({ type: "stop" });
     run.stopTimer = setTimeout(() => this.kill(tabId), this.deps.stopGraceMs ?? 500);
@@ -104,7 +115,7 @@ export class RunCoordinator {
     const run = this.#runs.get(tabId);
     if (!run?.runner || run.state !== "unresponsive") return;
     run.runner.lastHeartbeat = Date.now();
-    this.#setState(run, "evaluating");
+    this.#setState(run, run.resumeState ?? "evaluating", run.activeHandles);
   }
 
   expand(tabId: string, runId: string, handleId: string): Promise<EncodedValue | null> {
@@ -138,63 +149,78 @@ export class RunCoordinator {
   }
 
   async #execute(run: ActiveRun, request: RunStartRequest): Promise<void> {
-    const settings = this.deps.settings();
-    const result = await this.deps.transform(request.code, {
-      language: request.language,
-      autoLog: settings.autoLog,
-      loopProtection: settings.loopProtection,
-      loopProtectionMaxIterations: settings.loopProtectionMaxIterations,
-      logpoints: request.logpoints,
-    });
-    if (!this.#isCurrent(run)) return;
-    this.deps.onDiagnostics(run.tabId, run.runId, result.diagnostics);
-
-    if (!result.ok) {
-      const d = result.diagnostics[0];
-      this.deps.onEvents(run.tabId, run.runId, [
-        {
-          kind: "error",
-          phase: "transpile",
-          name: "SyntaxError",
-          message: d?.message ?? "Unable to compile",
-          line: d?.line,
-          column: d?.column,
-          ...(d?.codeFrame ? { codeFrame: d.codeFrame } : {}),
-          stack: [],
-          seq: 1,
-          t: Date.now(),
-        },
-      ]);
-      this.#setState(run, "failed");
-      return;
-    }
-
-    const dir = join(this.deps.runsDir, run.tabId);
-    await mkdir(dir, { recursive: true });
-    const entryPath = join(dir, `entry-${run.runId}.mjs`);
-    await Bun.write(entryPath, result.code);
-    void this.#cleanupEntries(dir, basename(entryPath));
-
-    let runner: BunRunnerProcess;
     try {
-      runner = await this.deps.spares.take(run.tabId);
-    } catch (error) {
+      const settings = this.deps.settings();
+      const result = await this.deps.transform(request.code, {
+        language: request.language,
+        autoLog: settings.autoLog,
+        loopProtection: settings.loopProtection,
+        loopProtectionMaxIterations: settings.loopProtectionMaxIterations,
+        logpoints: request.logpoints,
+      });
       if (!this.#isCurrent(run)) return;
-      this.#runnerError(run, `Runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
-      return;
-    }
-    if (!this.#isCurrent(run)) {
-      runner.kill();
-      return;
-    }
+      this.deps.onDiagnostics(run.tabId, run.runId, result.diagnostics);
 
-    run.runner = runner;
-    const mapper = createEventMapper(result.map, basename(entryPath), new Set(request.logpoints));
-    run.unsubscribe = runner.onMessage((message) => this.#onRunnerMessage(run, message, mapper));
-    void runner.exited.then((code) => this.#onRunnerExit(run, code));
-    this.deps.runLock.add(run.runId);
-    runner.lastHeartbeat = Date.now();
-    runner.send({ type: "run", runId: run.runId, entry: entryPath, settings: { maxEntries: settings.maxEntries } });
+      if (!result.ok) {
+        const d = result.diagnostics[0];
+        this.deps.onEvents(run.tabId, run.runId, [
+          {
+            kind: "error",
+            phase: "transpile",
+            name: "SyntaxError",
+            message: d?.message ?? "Unable to compile",
+            line: d?.line,
+            column: d?.column,
+            ...(d?.codeFrame ? { codeFrame: d.codeFrame } : {}),
+            stack: [],
+            seq: 1,
+            t: Date.now(),
+          },
+        ]);
+        this.#setState(run, "failed");
+        return;
+      }
+
+      const dir = join(this.deps.runsDir, run.tabId);
+      await mkdir(dir, { recursive: true });
+      if (!this.#isCurrent(run)) return;
+      const entryPath = join(dir, `entry-${run.runId}.mjs`);
+      await Bun.write(entryPath, result.code);
+      if (!this.#isCurrent(run)) return;
+      void this.#cleanupEntries(dir, basename(entryPath));
+
+      let runner: BunRunnerProcess;
+      try {
+        runner = await this.deps.spares.take(run.tabId);
+      } catch (error) {
+        if (!this.#isCurrent(run)) return;
+        this.#runnerError(run, `Runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      if (!this.#isCurrent(run)) {
+        runner.kill();
+        return;
+      }
+
+      run.runner = runner;
+      const mapper = createEventMapper(result.map, basename(entryPath), new Set(request.logpoints));
+      run.unsubscribe = runner.onMessage((message) => this.#onRunnerMessage(run, message, mapper));
+      void runner.exited.then((code) => this.#onRunnerExit(run, code));
+      this.deps.runLock.add(run.runId);
+      runner.lastHeartbeat = Date.now();
+      // stop() may have run synchronously inside runLock.add above (I1): it already sent "stop" and armed the kill
+      // timer, so sending "run" now would start user code the caller just asked to stop.
+      if (run.state !== "transpiling") return;
+      runner.send({ type: "run", runId: run.runId, entry: entryPath, settings: { maxEntries: settings.maxEntries } });
+    } catch (error) {
+      // A rejecting transform, or a failing mkdir/write/createEventMapper, must not leave the run stuck in
+      // "transpiling" forever with an unhandled rejection (I3).
+      if (!this.#isCurrent(run)) return;
+      run.expectedExit = true;
+      run.runner?.kill();
+      this.deps.runLock.remove(run.runId);
+      this.#runnerError(run, error instanceof Error ? error.message : String(error));
+    }
   }
 
   #onRunnerMessage(run: ActiveRun, message: RunnerToMain, mapper: ReturnType<typeof createEventMapper>): void {
@@ -206,7 +232,7 @@ export class RunCoordinator {
     if (!this.#isCurrent(run)) return;
     switch (message.type) {
       case "heartbeat":
-        if (run.state === "unresponsive") this.#setState(run, "evaluating");
+        if (run.state === "unresponsive") this.#setState(run, run.resumeState ?? "evaluating", run.activeHandles);
         return;
       case "events":
         this.deps.onEvents(run.tabId, run.runId, message.events.map(mapper));
@@ -266,7 +292,12 @@ export class RunCoordinator {
     const now = Date.now();
     for (const run of this.#runs.values()) {
       if (!run.runner || (run.state !== "evaluating" && run.state !== "settled")) continue;
-      if (now - run.runner.lastHeartbeat > timeout) this.#setState(run, "unresponsive");
+      if (now - run.runner.lastHeartbeat > timeout) {
+        // Remember what to restore on recovery (I5): the run may have gone unresponsive from "settled", not just
+        // "evaluating".
+        run.resumeState = run.state;
+        this.#setState(run, "unresponsive");
+      }
     }
   }
 
@@ -288,6 +319,7 @@ export class RunCoordinator {
 
   #setState(run: ActiveRun, state: RunState, activeHandles?: number): void {
     run.state = state;
+    if (activeHandles !== undefined) run.activeHandles = activeHandles;
     this.deps.onState(run.tabId, run.runId, state, activeHandles);
   }
 

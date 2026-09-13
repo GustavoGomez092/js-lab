@@ -1,2 +1,9 @@
 .worktrees/
 .superpowers/
+node_modules/
+dist/
+build/
+artifacts/
+.hutch/
+*.tsbuildinfo
+.DS_Store

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+  "files": {
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/build", "!**/artifacts", "!**/.hutch", "!spikes"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120
+  },
+  "javascript": {
+    "formatter": { "quoteStyle": "double" }
+  },
+  "linter": {
+    "rules": {
+      "preset": "recommended"
+    }
+  }
+}

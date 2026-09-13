@@ -24,6 +24,9 @@ export interface RpcHandlerDeps {
 
 export class InvalidPayloadError extends Error {}
 
+/** A valid request that Main declines to act on (for example an automatic run while Safe Mode is active). */
+export class RunRefusedError extends Error {}
+
 interface SafeParser<T> {
   safeParse(input: unknown): { success: true; data: T } | { success: false; error: { message: string } };
 }
@@ -60,7 +63,13 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         versions: deps.versions,
       }),
       "run.start": (input: unknown): { runId: string } => {
-        const { tabId, code, language, logpoints } = parse(runStartParamsSchema, "run.start", input);
+        const { tabId, code, language, logpoints, reason } = parse(runStartParamsSchema, "run.start", input);
+        // Defence in depth (spec §5.14): Main never starts an automatic run in Safe Mode, whatever the UI sends.
+        // Manual runs stay allowed.
+        if (reason === "auto" && deps.safeMode.active) {
+          deps.log("Refused an automatic run while Safe Mode is active", { tabId });
+          throw new RunRefusedError("Automatic runs are disabled in Safe Mode");
+        }
         return deps.coordinator.start({ tabId, code, language, logpoints });
       },
       "run.expand": (input: unknown): Promise<EncodedValue | null> => {

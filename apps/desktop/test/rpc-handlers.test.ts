@@ -1,8 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
-import { createRpcHandlers, InvalidPayloadError, type RpcHandlerDeps } from "../src/main/rpc-handlers";
+import { createRpcHandlers, InvalidPayloadError, type RpcHandlerDeps, RunRefusedError } from "../src/main/rpc-handlers";
 
-function setup() {
+function setup(safeMode: RpcHandlerDeps["safeMode"] = { active: false, reason: null }) {
   const session = defaultSession(() => createTab({ id: "t1" }));
   const deps = {
     coordinator: {
@@ -19,7 +19,7 @@ function setup() {
       setBuffer: mock(() => {}),
       patchTab: mock(async () => {}),
     },
-    safeMode: { active: false, reason: null },
+    safeMode,
     versions: { app: "0.0.1", bun: "1.3.13" },
     log: mock(() => {}),
     onUiHeartbeat: mock(() => {}),
@@ -57,6 +57,15 @@ describe("requests", () => {
     expect(() => handlers.requests["run.start"]({ ...validStart, language: "python" })).toThrow(InvalidPayloadError);
     expect(deps.coordinator.start).not.toHaveBeenCalled();
     expect(deps.log).toHaveBeenCalled();
+  });
+
+  test("run.start refuses automatic runs while Safe Mode is active but allows manual runs", () => {
+    const { handlers, deps } = setup({ active: true, reason: "crashLoop" });
+    expect(() => handlers.requests["run.start"](validStart)).toThrow(RunRefusedError);
+    expect(deps.coordinator.start).not.toHaveBeenCalled();
+    expect(deps.log).toHaveBeenCalled();
+    expect(handlers.requests["run.start"]({ ...validStart, reason: "manual" })).toEqual({ runId: "run-1" });
+    expect(deps.coordinator.start).toHaveBeenCalledTimes(1);
   });
 
   test("run.expand forwards validated handles", async () => {

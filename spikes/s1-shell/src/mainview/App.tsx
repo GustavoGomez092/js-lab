@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { probeLib } from "@spike/probe-lib";
 import { rpc } from "./rpc";
 import { MonacoProbe } from "./MonacoProbe";
+import { WebviewProbe } from "./WebviewProbe";
 
 export default function App() {
   const [probes, setProbes] = useState<Record<string, unknown> | null>(null);
@@ -14,6 +15,7 @@ export default function App() {
       <h1>JSLab spikes</h1>
       <pre>{JSON.stringify(probes, null, 2)}</pre>
       <MonacoProbe />
+      <WebviewProbe />
     </main>
   );
 }

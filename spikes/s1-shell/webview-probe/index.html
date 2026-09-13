@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+  <body style="font-family: monospace">
+    <button id="dialogs">alert / confirm / prompt</button>
+    <pre id="out"></pre>
+    <script>
+      const out = document.getElementById("out");
+      const log = (line) => (out.textContent += line + "\n");
+
+      let intervalTicks = 0;
+      let rafTicks = 0;
+      setInterval(() => intervalTicks++, 100);
+      const raf = () => {
+        rafTicks++;
+        requestAnimationFrame(raf);
+      };
+      requestAnimationFrame(raf);
+
+      // Kept for a human running Web Inspector manually (brief Step 4).
+      window.spikeTicks = () => ({ intervalTicks, rafTicks, at: Date.now() });
+
+      // Automated substitute for Web Inspector (ruling R1): push cumulative
+      // counters to the host via the documented host-message bridge
+      // (window.__electrobunSendToHost -> <electrobun-webview> "host-message"
+      // event) every 200ms, and also on demand when the host calls
+      // sendTicksNow() through executeJavascript(). The host diffs two
+      // snapshots rather than trusting continuous delivery, since delivery
+      // itself may be what's throttled while the view is collapsed.
+      function sendTicksNow() {
+        window.__electrobunSendToHost({ type: "ticks", intervalTicks, rafTicks, at: Date.now() });
+      }
+      window.sendTicksNow = sendTicksNow;
+      setInterval(sendTicksNow, 200);
+
+      // Automated substitute for the manual button click (ruling R1): the
+      // host triggers this via executeJavascript() once the timer probe is
+      // done, so the dialog probe doesn't corrupt the timer measurement
+      // window. The button remains for a human to trigger the same sequence
+      // manually.
+      function runDialogsTest() {
+        window.__electrobunSendToHost({ type: "dialog-start", at: Date.now() });
+        const t0 = performance.now();
+        const alertReturn = alert("alert from embedded webview");
+        const alertBlockedMs = Math.round(performance.now() - t0);
+        const confirmed = confirm("confirm?");
+        const prompted = prompt("prompt?", "default");
+        const result = { type: "dialog-result", alertReturn, alertBlockedMs, confirmed, prompted, at: Date.now() };
+        log(JSON.stringify(result));
+        window.__electrobunSendToHost(result);
+      }
+      window.runDialogsTest = runDialogsTest;
+      document.getElementById("dialogs").onclick = runDialogsTest;
+    </script>
+  </body>
+</html>

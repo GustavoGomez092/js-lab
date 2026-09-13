@@ -1,0 +1,17 @@
+{
+  "name": "@jslab/serializer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@jslab/rpc-schema": "workspace:*",
+    "fast-check": "4.10.0"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

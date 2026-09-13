@@ -433,6 +433,19 @@ describe("RunCoordinator", () => {
     expect(h.events).toHaveLength(forwarded);
   }, 15_000);
 
+  test("a pending expand resolves to null as soon as the runner exits", async () => {
+    const h = await createHarness({}, { bootstrapPath: join(import.meta.dir, "fixtures/expand-exit-runner.ts") });
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1", language: "typescript", logpoints: [] });
+    await h.waitForState("idle", runId);
+    const started = Date.now();
+    const outcome = await Promise.race([
+      h.coordinator.expand("t1", runId, "h1").then((value) => ({ value })),
+      Bun.sleep(2000).then(() => "timeout" as const),
+    ]);
+    expect(outcome).toEqual({ value: null });
+    expect(Date.now() - started).toBeLessThan(1000);
+  }, 15_000);
+
   test("labels logpoint results and captures stdout writes", async () => {
     const h = await createHarness({ autoLog: false });
     const { runId } = h.coordinator.start({

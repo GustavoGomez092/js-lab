@@ -21,6 +21,8 @@ export class SessionStore {
   #session: Session;
   readonly #sessionWriter: DebouncedWriter;
   readonly #bufferWriters = new Map<string, DebouncedWriter>();
+  // Tabs whose buffer file exists but couldn't be read: never write over it, or an edit would replace real code.
+  readonly #unreadableBuffers = new Set<string>();
 
   private constructor(
     private readonly dataDir: string,
@@ -67,13 +69,25 @@ export class SessionStore {
     for (const id of this.#session.tabOrder) {
       const tab = this.#session.tabs[id];
       if (!tab) continue;
-      buffers[id] = await readFile(this.#bufferPath(tab), "utf8").catch(() => "");
+      try {
+        buffers[id] = await readFile(this.#bufferPath(tab), "utf8");
+        this.#unreadableBuffers.delete(id);
+      } catch (error) {
+        // No file yet is an empty buffer; anything else (EACCES, EISDIR, EIO) must never look like empty content.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          buffers[id] = "";
+          continue;
+        }
+        this.#unreadableBuffers.add(id);
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`Couldn't read the buffer for tab ${id}: ${reason}`, { cause: error });
+      }
     }
     return buffers;
   }
 
   setBuffer(tabId: string, content: string): void {
-    if (!this.#session.tabs[tabId]) return;
+    if (!this.#session.tabs[tabId] || this.#unreadableBuffers.has(tabId)) return;
     let writer = this.#bufferWriters.get(tabId);
     if (!writer) {
       writer = createDebouncedWriter(async (data) => {

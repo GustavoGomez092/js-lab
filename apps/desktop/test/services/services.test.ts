@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTab, defaultSession, defaultSettings, sessionSchema, settingsSchema } from "@jslab/shared";
@@ -71,6 +71,32 @@ describe("SessionStore", () => {
     store.setWindow({ x: 0, y: 0, width: 5, height: 5 });
     expect(store.session.window).toBeNull();
   });
+
+  test("an unreadable buffer is surfaced instead of read as empty", async () => {
+    const store = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }) });
+    // A directory where the buffer file should be: reading it fails with EISDIR, not ENOENT.
+    await mkdir(join(dir, "buffers", "t1.ts"), { recursive: true });
+    await expect(store.readBuffers()).rejects.toThrow("t1");
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a buffer that could not be read is never overwritten",
+    async () => {
+      const store = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }), delayMs: 5 });
+      const path = join(dir, "buffers", "t1.ts");
+      await mkdir(join(dir, "buffers"), { recursive: true });
+      await writeFile(path, "precious");
+      await chmod(path, 0o000);
+      try {
+        await expect(store.readBuffers()).rejects.toThrow();
+        store.setBuffer("t1", "");
+        await store.flush();
+      } finally {
+        await chmod(path, 0o600);
+      }
+      expect(await readFile(path, "utf8")).toBe("precious");
+    },
+  );
 
   test("session recovery rewrites a valid session file", async () => {
     await writeFile(join(dir, "session.json"), "{oops");

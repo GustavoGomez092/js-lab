@@ -30,7 +30,8 @@ export class BunRunnerProcess {
   private constructor(proc: Subprocess) {
     this.#proc = proc;
     this.exited = proc.exited.then(() => proc.exitCode);
-    void this.#collectStderr(proc.stderr as ReadableStream<Uint8Array>);
+    // The stderr tail is best-effort diagnostics: a stream error must not become an unhandled rejection.
+    this.#collectStderr(proc.stderr as ReadableStream<Uint8Array>).catch(() => {});
   }
 
   static start(config: RunnerSpawnConfig, timeoutMs = 5000): Promise<BunRunnerProcess> {

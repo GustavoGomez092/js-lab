@@ -61,7 +61,11 @@ const UI_BATCH_EVENTS = 200;
 
 export class RunCoordinator {
   readonly #runs = new Map<string, ActiveRun>();
-  readonly #pendingExpands = new Map<number, (value: EncodedValue | null) => void>();
+  // Each pending expand remembers the runner it was sent to, so it can settle as soon as that runner exits.
+  readonly #pendingExpands = new Map<
+    number,
+    { runner: BunRunnerProcess; settle: (value: EncodedValue | null) => void }
+  >();
   readonly #watchdog: ReturnType<typeof setInterval>;
   #nextReqId = 1;
 
@@ -131,9 +135,13 @@ export class RunCoordinator {
         this.#pendingExpands.delete(reqId);
         resolve(null);
       }, this.deps.expandTimeoutMs ?? 5000);
-      this.#pendingExpands.set(reqId, (value) => {
-        clearTimeout(timer);
-        resolve(value);
+      this.#pendingExpands.set(reqId, {
+        runner,
+        settle: (value) => {
+          clearTimeout(timer);
+          this.#pendingExpands.delete(reqId);
+          resolve(value);
+        },
       });
       runner.send({ type: "expand", reqId, handleId });
     });
@@ -228,8 +236,7 @@ export class RunCoordinator {
 
   #onRunnerMessage(run: ActiveRun, message: RunnerToMain, mapper: ReturnType<typeof createEventMapper>): void {
     if (message.type === "expanded") {
-      this.#pendingExpands.get(message.reqId)?.(message.value);
-      this.#pendingExpands.delete(message.reqId);
+      this.#pendingExpands.get(message.reqId)?.settle(message.value);
       return;
     }
     if (!this.#isCurrent(run)) return;
@@ -261,6 +268,10 @@ export class RunCoordinator {
   #onRunnerExit(run: ActiveRun, code: number | null): void {
     clearTimeout(run.stopTimer);
     clearTimeout(run.idleTimer);
+    // A dead runner can't answer: settle its pending expands now instead of after the expand timeout.
+    for (const pending of [...this.#pendingExpands.values()]) {
+      if (pending.runner === run.runner) pending.settle(null);
+    }
     run.unsubscribe?.();
     this.deps.runLock.remove(run.runId);
     if (run.expectedExit || !this.#isCurrent(run)) return;

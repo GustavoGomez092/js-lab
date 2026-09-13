@@ -79,6 +79,59 @@ test("recreates the worker after it exits", async () => {
   expect(result.ok).toBe(true);
 });
 
+/** A controllable stand-in for Bun's Worker, installed on globalThis for one test. */
+class FakeWorker {
+  static instances: FakeWorker[] = [];
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  readonly posted: { id: number }[] = [];
+  readonly #listeners = new Map<string, (() => void)[]>();
+
+  constructor() {
+    FakeWorker.instances.push(this);
+  }
+  postMessage(message: { id: number }): void {
+    this.posted.push(message);
+  }
+  addEventListener(type: string, listener: () => void): void {
+    this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), listener]);
+  }
+  terminate(): void {}
+  crash(message: string): void {
+    this.onerror?.({ message } as ErrorEvent);
+  }
+  close(): void {
+    for (const listener of this.#listeners.get("close") ?? []) listener();
+  }
+  reply(id: number, result: TransformResult): void {
+    this.onmessage?.({ data: { id, result } } as MessageEvent);
+  }
+}
+
+test("late events from a replaced worker don't reject the new worker's requests", async () => {
+  const original = globalThis.Worker;
+  FakeWorker.instances = [];
+  globalThis.Worker = FakeWorker as unknown as typeof Worker;
+  try {
+    const host = new WorkerTransformHost("fake://transform-worker");
+    const first = host.transform("1", options);
+    FakeWorker.instances[0]?.crash("boom");
+    await expect(first).rejects.toThrow("Transform worker crashed");
+
+    const second = host.transform("2", options);
+    const [stale, current] = FakeWorker.instances;
+    expect(current).toBeDefined();
+    // The crashed worker's trailing events arrive after the host has already replaced it.
+    stale?.crash("late");
+    stale?.close();
+    const result = transform("2", options);
+    current?.reply(current.posted[0]?.id ?? -1, result);
+    expect(await second).toEqual(result);
+  } finally {
+    globalThis.Worker = original;
+  }
+});
+
 test("rejects transforms after dispose", async () => {
   const host = new WorkerTransformHost();
   hosts.push(host);

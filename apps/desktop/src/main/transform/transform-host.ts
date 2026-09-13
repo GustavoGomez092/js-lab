@@ -51,13 +51,16 @@ export class WorkerTransformHost implements TransformHost {
       if ("error" in event.data) pending.reject(new Error(event.data.error));
       else pending.resolve(event.data.result);
     };
+    // Late events from a worker that was already replaced must not reject the newer worker's pending requests.
     worker.onerror = (event) => {
+      if (this.#worker !== worker) return;
+      this.#worker = undefined;
       this.#rejectAll(new Error(`Transform worker crashed: ${event.message}`));
-      if (this.#worker === worker) this.#worker = undefined;
     };
     worker.addEventListener("close", () => {
+      if (this.#worker !== worker) return;
+      this.#worker = undefined;
       this.#rejectAll(new Error("Transform worker exited"));
-      if (this.#worker === worker) this.#worker = undefined;
     });
     return worker;
   }

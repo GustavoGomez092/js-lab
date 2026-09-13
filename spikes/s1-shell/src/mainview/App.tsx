@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { probeLib } from "@spike/probe-lib";
 import { rpc } from "./rpc";
+import { MonacoProbe } from "./MonacoProbe";
 
 export default function App() {
   const [probes, setProbes] = useState<Record<string, unknown> | null>(null);
@@ -12,6 +13,7 @@ export default function App() {
     <main style={{ fontFamily: "monospace", padding: 16 }}>
       <h1>JSLab spikes</h1>
       <pre>{JSON.stringify(probes, null, 2)}</pre>
+      <MonacoProbe />
     </main>
   );
 }

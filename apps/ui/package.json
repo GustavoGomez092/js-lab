@@ -16,7 +16,7 @@
     "build": "vite build",
     "dev": "vite",
     "test": "bun test",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "bun ../desktop/scripts/devkit-tsconfig.ts && tsc --noEmit -p ."
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "20.14.5",

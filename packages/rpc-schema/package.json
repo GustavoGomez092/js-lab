@@ -1,0 +1,17 @@
+{
+  "name": "@jslab/rpc-schema",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@jslab/shared": "workspace:*",
+    "zod": "4.6.4"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

@@ -10,6 +10,14 @@
         "typescript": "7.0.2",
       },
     },
+    "packages/rpc-schema": {
+      "name": "@jslab/rpc-schema",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jslab/shared": "workspace:*",
+        "zod": "4.6.4",
+      },
+    },
     "packages/shared": {
       "name": "@jslab/shared",
       "version": "0.0.0",
@@ -36,6 +44,8 @@
     "@biomejs/cli-win32-arm64": ["@biomejs/cli-win32-arm64@2.5.13", "", { "os": "win32", "cpu": "arm64" }, "sha512-+WD13qshXrr0Icv4BfsAdzm8Fs3TL+nZ59zEQxsYNd8lcgZJ0A5+OrlwsL1PipVCmWeRpxgIPD6DAcEd7smkCQ=="],
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.13", "", { "os": "win32", "cpu": "x64" }, "sha512-VOofU/nW761XWzUeUNE8zzYNyPrxuMuNFMizL0qz7J75yeV8N7WFheUlk1/K6dOkaFpH9wJ+lDKlwjAbw0346w=="],
+
+    "@jslab/rpc-schema": ["@jslab/rpc-schema@workspace:packages/rpc-schema"],
 
     "@jslab/shared": ["@jslab/shared@workspace:packages/shared"],
 

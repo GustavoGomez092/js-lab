@@ -1,0 +1,17 @@
+{
+  "name": "@jslab/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jslab/rpc-schema": "workspace:*",
+    "@jslab/runner-bun": "workspace:*",
+    "@jslab/shared": "workspace:*",
+    "@jslab/transform": "workspace:*",
+    "source-map-js": "1.2.1"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

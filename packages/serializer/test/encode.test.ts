@@ -118,6 +118,16 @@ describe("objects", () => {
     );
     expect(make().encode(proxy)).toMatchObject({ t: "object", ctor: "Proxy", proxy: true });
     expect(trapped).toBe(false);
+
+    let dateTrapInvoked = false;
+    const dateProxy = new Proxy(new Date(0), {
+      get: () => {
+        dateTrapInvoked = true;
+        return undefined;
+      },
+    });
+    expect(make().encode(dateProxy)).toMatchObject({ t: "object", ctor: "Proxy", proxy: true });
+    expect(dateTrapInvoked).toBe(false);
   });
 });
 

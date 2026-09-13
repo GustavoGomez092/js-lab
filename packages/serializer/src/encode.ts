@@ -202,13 +202,13 @@ export class Encoder {
   }
 
   #object(obj: object, depth: number, ancestors: Set<object>): EncodedValue {
+    if (this.hooks.isProxy?.(obj)) return { t: "object", id: this.#id(obj), ctor: "Proxy", props: [], proxy: true };
     if (obj instanceof Date) return { t: "date", iso: Number.isNaN(obj.getTime()) ? null : obj.toISOString() };
     if (obj instanceof RegExp) return { t: "regexp", source: obj.source, flags: obj.flags };
     if (typeof URL !== "undefined" && obj instanceof URL) return { t: "url", href: obj.href };
     if (obj instanceof WeakMap) return { t: "weak", kind: "WeakMap" };
     if (obj instanceof WeakSet) return { t: "weak", kind: "WeakSet" };
     if (typeof WeakRef !== "undefined" && obj instanceof WeakRef) return { t: "weak", kind: "WeakRef" };
-    if (this.hooks.isProxy?.(obj)) return { t: "object", id: this.#id(obj), ctor: "Proxy", props: [], proxy: true };
     if (obj instanceof Error) {
       const cause = "cause" in obj ? { cause: this.#encode(obj.cause, depth + 1, ancestors) } : {};
       return { t: "error", name: obj.name, message: obj.message, stack: parseStack(obj.stack ?? ""), ...cause };

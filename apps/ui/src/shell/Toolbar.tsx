@@ -5,6 +5,9 @@ import { strings } from "../strings";
 export function Toolbar(props: {
   autoRun: boolean;
   busy: boolean;
+  /** Keycap text from the effective keybindings, or null when the command is unbound (FB-m3). */
+  runKeys: string | null;
+  stopKeys: string | null;
   onToggleAutoRun(): void;
   onRun(): void;
   onStop(): void;
@@ -20,11 +23,11 @@ export function Toolbar(props: {
         </button>
         {props.busy ? (
           <button type="button" className="tb-btn run" onClick={props.onStop}>
-            ■ {strings.shell.stop} <span className="kbd">⇧⌘R</span>
+            ■ {strings.shell.stop} {props.stopKeys && <span className="kbd">{props.stopKeys}</span>}
           </button>
         ) : (
           <button type="button" className="tb-btn run" onClick={props.onRun}>
-            ▶ {strings.shell.run} <span className="kbd">⌘R</span>
+            ▶ {strings.shell.run} {props.runKeys && <span className="kbd">{props.runKeys}</span>}
           </button>
         )}
       </div>

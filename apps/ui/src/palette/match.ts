@@ -1,4 +1,5 @@
 import { COMMAND_CATEGORY_ORDER, type CommandCategory, type CommandContext, type CommandId } from "@jslab/shared";
+import { strings } from "../strings";
 
 export interface MatchResult {
   score: number;
@@ -33,19 +34,7 @@ export function matchTitle(query: string, title: string): MatchResult | null {
   return { score: 10, ranges };
 }
 
-export const CATEGORY_LABELS: Record<CommandCategory, string> = {
-  run: "Run",
-  file: "File",
-  tab: "Tabs",
-  edit: "Edit",
-  format: "Format",
-  view: "View",
-  runtime: "Runtime",
-  language: "Language",
-  theme: "Theme",
-  help: "Help",
-  app: "JSLab",
-};
+export const CATEGORY_LABELS: Record<CommandCategory, string> = strings.palette.categories;
 
 export interface PaletteItem {
   id: CommandId;
@@ -90,8 +79,9 @@ export function buildSections(
         return byCategory !== 0 ? byCategory : a.index - b.index;
       }
       return b.score - a.score || a.index - b.index;
-    })
-    .slice(0, limit);
+    });
+  // FB-m1: browsing with an empty query lists every section (about 105 rows); only a query's ranking is capped.
+  if (hasQuery) ranked.splice(limit);
 
   const sections: PaletteSection[] = [];
   for (const { item } of ranked) {

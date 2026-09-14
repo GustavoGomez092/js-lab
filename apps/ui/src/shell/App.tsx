@@ -1,5 +1,5 @@
 import { appNoticeSchema, MAX_TEXT_CHARS } from "@jslab/rpc-schema";
-import { commandMeta, DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
+import { commandMeta, DEFAULT_KEYBINDINGS, formatChord, resolveKeybindings, shortcutFor } from "@jslab/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
@@ -203,6 +203,14 @@ export function App({
 
   const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
   const resolver = useMemo(() => new KeybindingResolver(bindings), [bindings]);
+  // FB-m3: chrome keycaps follow the effective bindings, as the palette and the menu do.
+  const keycaps = useMemo(() => {
+    const keysFor = (command: string) => {
+      const chord = shortcutFor(bindings, command);
+      return chord ? formatChord(chord) : null;
+    };
+    return { run: keysFor("run.start"), stop: keysFor("run.stop"), settings: keysFor("app.settings") };
+  }, [bindings]);
 
   useEffect(() => {
     const stop = startAutoRun(store, () => run("auto"));
@@ -389,6 +397,8 @@ export function App({
       <Toolbar
         autoRun={settings.run.autoRun}
         busy={busy}
+        runKeys={keycaps.run}
+        stopKeys={keycaps.stop}
         onToggleAutoRun={() => registry.execute("run.toggleAutoRun")}
         onRun={() => registry.execute("run.start")}
         onStop={() => registry.execute("run.stop")}
@@ -408,6 +418,9 @@ export function App({
             sideBarOpen={settings.view.sideBar}
             panel={sideBarPanel}
             canOpenSettings={registry.isEnabled("app.settings")}
+            runKeys={keycaps.run}
+            stopKeys={keycaps.stop}
+            settingsKeys={keycaps.settings}
             onRun={() => registry.execute("run.start")}
             onStop={() => registry.execute("run.stop")}
             onPanel={togglePanel}
@@ -422,7 +435,7 @@ export function App({
           onResize={(size) => store.getState().setEditorSize(size)}
           onReset={() => store.getState().resetEditorSize()}
           first={<Editor store={store} api={api} onLargePaste={flows.confirmLargePaste} />}
-          second={<OutputPanel store={store} api={api} />}
+          second={<OutputPanel store={store} api={api} runKeys={keycaps.run} />}
         />
       </div>
       {settings.view.statusBar && (

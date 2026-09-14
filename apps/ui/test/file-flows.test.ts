@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { contentHash, createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
 import { act, fireEvent, render } from "@testing-library/react";
 import { createElement } from "react";
+import { type EditorHandle, setEditorHandle } from "../src/editor/editor-handle";
 import { createFileFlows, formatSize } from "../src/files/file-flows";
 import { ConfirmDialog } from "../src/shell/ConfirmDialog";
 import { createDialogs } from "../src/shell/dialogs";
@@ -36,6 +37,67 @@ function setup(settings = defaultSettings()) {
   };
   return { store, api, dialogs, tabs, flows, answer };
 }
+
+describe("confirm dialog focus (FB-m2)", () => {
+  const buttons = [
+    { id: "discard", label: "Don't Save" },
+    { id: "cancel", label: "Cancel", role: "cancel" as const },
+    { id: "save", label: "Save", role: "primary" as const },
+  ];
+
+  test("closing returns focus to the opener, or to the editor when the opener is gone", async () => {
+    const { store, dialogs } = setup();
+    render(createElement(ConfirmDialog, { store, dialogs }));
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    try {
+      opener.focus();
+      let choice: Promise<string> = Promise.resolve("");
+      act(() => {
+        choice = dialogs.confirm({ title: "Save changes?", message: "M", buttons });
+      });
+      expect(document.activeElement?.textContent).toBe("Save");
+      act(() => {
+        fireEvent.keyDown(document.body, { key: "Escape" });
+      });
+      expect([await choice, document.activeElement]).toEqual(["cancel", opener]);
+
+      const editorFocus = mock(() => {});
+      setEditorHandle({ focus: editorFocus } as unknown as EditorHandle);
+      act(() => {
+        choice = dialogs.confirm({ title: "Again?", message: "M", buttons });
+      });
+      opener.remove();
+      act(() => {
+        fireEvent.keyDown(document.body, { key: "Escape" });
+      });
+      expect([await choice, editorFocus.mock.calls.length]).toEqual(["cancel", 1]);
+    } finally {
+      setEditorHandle(null);
+      opener.remove();
+    }
+  });
+
+  test("Tab and Shift+Tab cycle through the dialog's buttons and never leave the dialog", () => {
+    const { store, dialogs } = setup();
+    render(createElement(ConfirmDialog, { store, dialogs }));
+    act(() => {
+      void dialogs.confirm({ title: "Save changes?", message: "M", buttons });
+    });
+    const focused = () => document.activeElement?.textContent;
+    expect(focused()).toBe("Save");
+    expect(fireEvent.keyDown(document.activeElement as Element, { key: "Tab" })).toBe(false);
+    expect(focused()).toBe("Don't Save");
+    fireEvent.keyDown(document.activeElement as Element, { key: "Tab" });
+    expect(focused()).toBe("Cancel");
+    fireEvent.keyDown(document.activeElement as Element, { key: "Tab", shiftKey: true });
+    fireEvent.keyDown(document.activeElement as Element, { key: "Tab", shiftKey: true });
+    expect(focused()).toBe("Save");
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    expect(focused()).toBe("Don't Save");
+  });
+});
 
 describe("file flows", () => {
   test("sizes format like Finder, and confirm dialogs resolve by button", async () => {

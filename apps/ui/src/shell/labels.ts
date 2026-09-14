@@ -1,12 +1,8 @@
 import type { RunState } from "@jslab/rpc-schema";
 import type { Language, Runtime } from "@jslab/shared";
+import { strings } from "../strings";
 
-export const LANGUAGE_LABELS: Record<Language, string> = {
-  typescript: "TypeScript",
-  javascript: "JavaScript",
-  tsx: "TSX",
-  jsx: "JSX",
-};
+export const LANGUAGE_LABELS: Record<Language, string> = strings.settings.options.language;
 
 export const BUSY_STATES: ReadonlySet<RunState> = new Set([
   "transpiling",
@@ -22,36 +18,33 @@ export function runStateLabel(input: {
   autoRunArmed: boolean;
   safeMode: boolean;
 }): string {
+  const labels = strings.shell.runState;
   if (input.state === null) {
-    if (input.safeMode) return "Safe Mode: press ⌘R to run";
-    return input.autoRunArmed ? "" : "Paused: press ⌘R to run";
+    if (input.safeMode) return labels.safeModePaused;
+    return input.autoRunArmed ? "" : labels.paused;
   }
   switch (input.state) {
     case "transpiling":
     case "evaluating":
-      return "Running…";
+      return labels.running;
     case "settled":
-      return `Running: ${input.activeHandles} active ${input.activeHandles === 1 ? "handle" : "handles"}`;
+      return labels.settled(input.activeHandles);
     case "stopping":
-      return "Stopping…";
+      return labels.stopping;
     case "stopped":
-      return "Stopped";
+      return labels.stopped;
     case "killed":
-      return "Run killed";
+      return labels.killed;
     case "failed":
-      return "Failed";
+      return labels.failed;
     case "unresponsive":
-      return "Not responding";
+      return labels.unresponsive;
     case "idle":
       return "";
   }
 }
 
-export const RUNTIME_LABELS: Record<Runtime, string> = {
-  "browser-node": "Browser & Node APIs",
-  bun: "Bun",
-  browser: "Browser",
-};
+export const RUNTIME_LABELS: Record<Runtime, string> = strings.settings.options.runtime;
 
 export type RunStateKind = "idle" | "running" | "settled" | "failed" | "warn";
 

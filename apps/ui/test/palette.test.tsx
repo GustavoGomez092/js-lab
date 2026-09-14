@@ -6,6 +6,7 @@ import { type EditorHandle, setEditorHandle } from "../src/editor/editor-handle"
 import { CommandPalette } from "../src/palette/CommandPalette";
 import { buildSections, matchTitle, type PaletteItem } from "../src/palette/match";
 import { createAppStore } from "../src/state/store";
+import { strings } from "../src/strings";
 
 function hydratedStore() {
   const store = createAppStore();
@@ -72,6 +73,37 @@ describe("palette matching", () => {
     );
     // "Clear Output" matches at index 6 and "Toggle Output Panel" at 7, so Edit's best match ranks first.
     expect(buildSections(items, "output", "editor").map((s) => s.label)).toEqual(["Edit", "View"]);
+  });
+
+  // FB-m1: the unfiltered list was capped at 60 rows in category order, so Runtime, Language, Theme, Help and JSLab
+  // were unreachable without typing.
+  test("an empty query lists every section, including Theme and Help; a query keeps the cap (FB-m1)", () => {
+    const item = (index: number, category: PaletteItem["category"]): PaletteItem => ({
+      id: "edit.duplicateLine" as PaletteItem["id"],
+      args: { index },
+      title: `Command ${index}`,
+      category,
+      context: "any",
+      description: null,
+      keys: [],
+      enabled: true,
+    });
+    const items = [
+      ...Array.from({ length: 90 }, (_, index) => item(index, "edit")),
+      item(90, "theme"),
+      item(91, "help"),
+      item(92, "app"),
+    ];
+    const empty = buildSections(items, "", "editor");
+    expect(empty.map((section) => section.category)).toEqual(["edit", "theme", "help", "app"]);
+    expect(empty.flatMap((section) => section.items)).toHaveLength(93);
+    expect(empty.map((section) => section.label)).toEqual([
+      strings.palette.categories.edit,
+      strings.palette.categories.theme,
+      strings.palette.categories.help,
+      strings.palette.categories.app,
+    ]);
+    expect(buildSections(items, "command", "editor").flatMap((section) => section.items)).toHaveLength(60);
   });
 
   // Fix round 1 (I-2): without the context bonus, both items tie on score and the earlier index (run.stop,

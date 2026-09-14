@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { STARTUP_FAILURE_HEARTBEAT_MS, showStartupFailure } from "../src/shell/startup-failure";
+import { strings } from "../src/strings";
 
 describe("startup failure (R-M1-18 N4)", () => {
   test("shows the error with Try Again and keeps Main's watchdog fed", () => {
@@ -15,8 +16,9 @@ describe("startup failure (R-M1-18 N4)", () => {
       },
     });
     expect(root.querySelector('[role="alert"]')?.textContent).toContain(
-      "JSLab failed to start: Couldn't read the buffer for tab t1: EACCES",
+      strings.startup.failed("Couldn't read the buffer for tab t1: EACCES"),
     );
+    expect(root.querySelector("button")?.textContent).toBe(strings.startup.retry);
     expect(heartbeat).toHaveBeenCalledTimes(1);
     expect(ticks.map(([, ms]) => ms)).toEqual([STARTUP_FAILURE_HEARTBEAT_MS]);
     ticks[0]?.[0]();

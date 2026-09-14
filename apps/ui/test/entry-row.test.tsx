@@ -3,6 +3,7 @@ import type { RunEvent } from "@jslab/rpc-schema";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { EntryRow } from "../src/output/EntryRow";
 import type { DisplayEvent } from "../src/state/output";
+import { strings } from "../src/strings";
 
 const noExpand = async () => null;
 
@@ -75,7 +76,7 @@ describe("EntryRow", () => {
     expect(screen.getByText(/Uncaught \(in promise\) Error: nope/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "at load (L4:9)" }));
     expect(onReveal).toHaveBeenCalledWith(4);
-    expect(screen.getByText("1 internal frames")).toBeTruthy();
+    expect(screen.getByText(strings.output.internalFrames(1))).toBeTruthy();
   });
 
   test("renders console.table as a table", () => {

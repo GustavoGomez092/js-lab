@@ -1,17 +1,18 @@
 import type { StartupNotice } from "@jslab/rpc-schema";
+import { strings } from "../strings";
 
 export function UnresponsiveDialog(props: { onKill(): void; onWait(): void }) {
   return (
     <div className="dialog-backdrop">
       <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="unresponsive-title">
-        <h2 id="unresponsive-title">This tab isn't responding</h2>
-        <p>Your code has been busy for a few seconds without responding. You can kill it, or keep waiting.</p>
+        <h2 id="unresponsive-title">{strings.shell.unresponsive.title}</h2>
+        <p>{strings.shell.unresponsive.body}</p>
         <div className="dialog-actions">
           <button type="button" onClick={props.onWait}>
-            Wait
+            {strings.shell.unresponsive.wait}
           </button>
           <button type="button" className="danger" onClick={props.onKill}>
-            Kill
+            {strings.shell.unresponsive.kill}
           </button>
         </div>
       </div>
@@ -19,17 +20,11 @@ export function UnresponsiveDialog(props: { onKill(): void; onWait(): void }) {
   );
 }
 
-const SAFE_MODE_MESSAGES = {
-  crashLoop: "JSLab didn't shut down cleanly while running code. Auto Run is paused for this session.",
-  manual: "Safe Mode: restarted from Help → Restart in Safe Mode. Auto Run is paused for this session.",
-  shift: "Safe Mode: Shift was held at launch. Auto Run is paused for this session.",
-} as const;
-
 export function SafeModeBanner({ reason }: { reason: "crashLoop" | "manual" | "shift" | null }) {
   if (!reason) return null;
   return (
     <output className="banner banner-warning" data-testid="safe-mode-banner">
-      {SAFE_MODE_MESSAGES[reason]}
+      {strings.shell.safeModeBanner[reason]}
     </output>
   );
 }
@@ -45,7 +40,7 @@ export function StartupNotices(props: { notices: readonly StartupNotice[]; onDis
           <button
             type="button"
             className="banner-dismiss"
-            aria-label={`Dismiss: ${notice.message}`}
+            aria-label={strings.shell.dismiss(notice.message)}
             onClick={() => props.onDismiss(notice.id)}
           >
             ×

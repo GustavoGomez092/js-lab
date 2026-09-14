@@ -31,6 +31,10 @@ export function ActivityBar(props: {
   sideBarOpen: boolean;
   panel: "snippets" | "ai";
   canOpenSettings: boolean;
+  /** Keycap text from the effective keybindings, or null when the command is unbound (FB-m3). */
+  runKeys: string | null;
+  stopKeys: string | null;
+  settingsKeys: string | null;
   onRun(): void;
   onStop(): void;
   onPanel(panel: "snippets" | "ai"): void;
@@ -42,14 +46,19 @@ export function ActivityBar(props: {
       {props.busy ? (
         <button
           type="button"
-          title={`${strings.shell.stop} (⇧⌘R)`}
+          title={strings.shell.withKeys(strings.shell.stop, props.stopKeys)}
           aria-label={strings.shell.stop}
           onClick={props.onStop}
         >
           <Icon path={ICONS.stop} />
         </button>
       ) : (
-        <button type="button" title={`${strings.shell.run} (⌘R)`} aria-label={strings.shell.run} onClick={props.onRun}>
+        <button
+          type="button"
+          title={strings.shell.withKeys(strings.shell.run, props.runKeys)}
+          aria-label={strings.shell.run}
+          onClick={props.onRun}
+        >
           <Icon path={ICONS.run} />
         </button>
       )}
@@ -78,7 +87,11 @@ export function ActivityBar(props: {
       <div className="activity-spacer" />
       <button
         type="button"
-        title={props.canOpenSettings ? `${strings.shell.settings} (⌘,)` : strings.shell.laterMilestone}
+        title={
+          props.canOpenSettings
+            ? strings.shell.withKeys(strings.shell.settings, props.settingsKeys)
+            : strings.shell.laterMilestone
+        }
         aria-label={strings.shell.settings}
         disabled={!props.canOpenSettings}
         onClick={props.onSettings}

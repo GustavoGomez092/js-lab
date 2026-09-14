@@ -17,9 +17,11 @@ const COPY_STATUS_DURATION_MS = 2000;
 interface OutputPanelProps {
   store: AppStore;
   api: MainApi;
+  /** The Run keycap from the effective keybindings, for the empty state (review rec 2). */
+  runKeys?: string | null;
 }
 
-export function OutputPanel({ store, api }: OutputPanelProps) {
+export function OutputPanel({ store, api, runKeys = null }: OutputPanelProps) {
   const output = useStore(store, (s) => s.output);
   const showUndefined = useStore(store, (s) => s.settings?.run.showUndefined ?? false);
   const highlighting = useStore(store, (s) => s.settings?.output.highlighting ?? true);
@@ -128,6 +130,20 @@ export function OutputPanel({ store, api }: OutputPanelProps) {
           })}
         </div>
         {output.truncated > 0 && <div className="output-truncated">{strings.output.truncated(output.truncated)}</div>}
+        {/* T19A-m3, review rec 2: quiet, centered empty states instead of a blank scroller. */}
+        {visible.length > 0 && entries.length === 0 && (
+          <div className="output-empty" data-testid="output-empty">
+            <span>{strings.output.noMatches}</span>
+            <button type="button" onClick={() => store.getState().setOutputFilter("all")}>
+              {strings.output.showAll}
+            </button>
+          </div>
+        )}
+        {visible.length === 0 && output.runId === null && output.truncated === 0 && (
+          <div className="output-empty" data-testid="output-empty">
+            {strings.output.noOutput(runKeys)}
+          </div>
+        )}
       </div>
     </section>
   );

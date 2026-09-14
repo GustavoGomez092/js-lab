@@ -368,6 +368,26 @@ button:disabled {
   color: var(--fg-warn);
 }
 
+/* Output empty states (T19A-m3, review rec 2): muted text on the canvas, centered, no icon. */
+.output-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 16px;
+  background: var(--bg-canvas);
+  color: var(--fg-muted);
+  font-family: var(--ui);
+  text-align: center;
+}
+
+.output-empty button {
+  padding: 2px 8px;
+  color: var(--fg-accent);
+}
+
 /* ---------- as-built M1 value and output states (T16/T17 fix rounds) ---------- */
 .v-more {
   margin-left: 6px;

@@ -63,7 +63,7 @@ function ConsoleBody({ event, expand }: { event: ConsoleEvent; expand: ExpandHan
       <table className="entry-table">
         <thead>
           <tr>
-            <th>(index)</th>
+            <th>{strings.output.tableIndex}</th>
             {table.columns.map((column) => (
               <th key={column}>{column}</th>
             ))}
@@ -99,7 +99,7 @@ function ErrorBody({ event, onReveal }: { event: ErrorEvent; onReveal(line: numb
   return (
     <div className="entry-error">
       <strong>
-        {event.phase === "unhandledRejection" ? "Uncaught (in promise) " : ""}
+        {event.phase === "unhandledRejection" ? strings.output.uncaughtInPromise : ""}
         {event.name}: {event.message}
       </strong>
       {event.codeFrame && <pre className="entry-codeframe">{event.codeFrame}</pre>}
@@ -114,7 +114,7 @@ function ErrorBody({ event, onReveal }: { event: ErrorEvent; onReveal(line: numb
           at {frame.fn ?? "<anonymous>"} (L{frame.line}:{frame.column})
         </button>
       ))}
-      {internal > 0 && <span className="entry-internal">{internal} internal frames</span>}
+      {internal > 0 && <span className="entry-internal">{strings.output.internalFrames(internal)}</span>}
     </div>
   );
 }

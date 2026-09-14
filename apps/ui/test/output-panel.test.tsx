@@ -4,6 +4,7 @@ import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { OutputPanel } from "../src/output/OutputPanel";
 import { createAppStore } from "../src/state/store";
+import { strings } from "../src/strings";
 import { createFakeApi } from "./fake-api";
 
 const result: RunEvent = { kind: "result", line: 1, source: "autolog", value: { t: "number", v: "2" }, seq: 1, t: 0 };
@@ -95,5 +96,41 @@ describe("OutputPanel", () => {
     act(() => store.getState().receiveEvents("r1", [log(4, 4)], "t1"));
     expect(rowLevels()).toEqual([]);
     expect([button("Copy All").disabled, button("Clear").disabled]).toEqual([true, false]);
+  });
+
+  // T19A-m3 / review rec 2: a filter that hides everything, and a tab that hasn't run, say so instead of a blank
+  // scroller.
+  test("a zero-match filter offers Show all, and a tab with no output yet says how to run (T19A-m3)", () => {
+    const store = setup();
+    expect(screen.queryByTestId("output-empty")).toBeNull();
+    act(() => {
+      store.getState().clearOutput("t1");
+      store.getState().receiveEvents("r1", [log(5, 5)], "t1");
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "Results" }));
+    expect(rowLevels()).toEqual([]);
+    expect(screen.getByTestId("output-empty").textContent).toContain(strings.output.noMatches);
+    fireEvent.click(screen.getByRole("button", { name: strings.output.showAll }));
+    expect([store.getState().outputFilter, rowLevels()]).toEqual(["all", ["log"]]);
+    expect(screen.queryByTestId("output-empty")).toBeNull();
+  });
+
+  test("a tab with no output yet says to press the Run chord", () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const { api } = createFakeApi();
+    render(<OutputPanel store={store} api={api} runKeys="⌃↩" />);
+    expect(screen.getByTestId("output-empty").textContent).toBe(strings.output.noOutput("⌃↩"));
+    act(() => {
+      store.getState().receiveState("r1", "transpiling", undefined, "t1");
+      store.getState().receiveEvents("r1", [log(1, 1)], "t1");
+    });
+    expect(screen.queryByTestId("output-empty")).toBeNull();
   });
 });

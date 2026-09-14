@@ -1,13 +1,18 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { type BootstrapPayload, MAX_TEXT_CHARS, type TabCloseResult } from "@jslab/rpc-schema";
 import {
+  parseChord as chordOf,
   createTab,
+  DEFAULT_KEYBINDINGS,
   defaultSession,
   defaultSettings,
+  formatChord,
   type KeybindingRule,
   MAX_CLOSED_TABS,
   mergeSettings,
+  resolveKeybindings,
   type Settings,
+  shortcutFor,
 } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { type ComponentType, Profiler } from "react";
@@ -236,16 +241,16 @@ describe("App shell", () => {
     const { api, emit } = renderApp();
     await emit("run.state", { tabId: "t1", runId: "r1", state: "transpiling" });
     await emit("run.state", { tabId: "t1", runId: "r1", state: "unresponsive" });
-    fireEvent.click(screen.getByRole("button", { name: "Wait" }));
-    fireEvent.click(screen.getByRole("button", { name: "Kill" }));
+    fireEvent.click(screen.getByRole("button", { name: strings.shell.unresponsive.wait }));
+    fireEvent.click(screen.getByRole("button", { name: strings.shell.unresponsive.kill }));
     expect(api.wait).toHaveBeenCalledWith("t1");
     expect(api.kill).toHaveBeenCalledWith("t1");
   });
 
   test("safe mode shows a banner and a paused status", () => {
     renderApp({ active: true, reason: "crashLoop" });
-    expect(screen.getByTestId("safe-mode-banner").textContent).toContain("didn't shut down cleanly");
-    expect(screen.getByTestId("run-status").textContent).toBe("Safe Mode: press ⌘R to run");
+    expect(screen.getByTestId("safe-mode-banner").textContent).toBe(strings.shell.safeModeBanner.crashLoop);
+    expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.safeModePaused);
   });
 
   test("edits and language changes are sent to Main for persistence", () => {
@@ -536,6 +541,24 @@ describe("App shell", () => {
     expect(commits).toBe(0);
   });
 
+  // FB-m3: the toolbar and activity bar keycaps follow keybindings.json, as the palette and menu do.
+  test("a rebound Run chord shows in the toolbar keycap and the activity bar title (FB-m3)", async () => {
+    const rules = [{ key: "cmd+enter", command: "run.start" }];
+    const run = formatChord(shortcutFor(resolveKeybindings(DEFAULT_KEYBINDINGS, rules), "run.start") ?? chordOf("x"));
+    expect(run).not.toBe("⌘R");
+    const { emit } = renderApp(undefined, rules);
+    expect(document.querySelector(".toolbar .tb-btn.run .kbd")?.textContent).toBe(run);
+    expect(screen.getByRole("button", { name: strings.shell.run, hidden: false }).getAttribute("title")).toBe(
+      `${strings.shell.run} (${run})`,
+    );
+    expect(screen.getByRole("button", { name: strings.shell.settings }).getAttribute("title")).toBe(
+      `${strings.shell.settings} (⌘,)`,
+    );
+    // A new run id is accepted only in `transpiling` (state/output.ts); that state is busy, so Stop shows.
+    await emit("run.state", { tabId: "t1", runId: "r1", state: "transpiling" });
+    expect(document.querySelector(".toolbar .tb-btn.run .kbd")?.textContent).toBe("⇧⌘R");
+  });
+
   test("⌘, asks Main to open the Settings window", () => {
     const { api } = renderApp();
     press("Comma");
@@ -547,11 +570,13 @@ describe("runStateLabel", () => {
   const base = { activeHandles: 0, autoRunArmed: true, safeMode: false };
 
   test("describes each state", () => {
-    expect(runStateLabel({ ...base, state: null, autoRunArmed: false })).toBe("Paused: press ⌘R to run");
-    expect(runStateLabel({ ...base, state: "evaluating" })).toBe("Running…");
-    expect(runStateLabel({ ...base, state: "settled", activeHandles: 1 })).toBe("Running: 1 active handle");
+    const labels = strings.shell.runState;
+    expect(runStateLabel({ ...base, state: null, autoRunArmed: false })).toBe(labels.paused);
+    expect(runStateLabel({ ...base, state: "evaluating" })).toBe(labels.running);
+    expect(labels.settled(1)).toBe("Running: 1 active handle");
+    expect(runStateLabel({ ...base, state: "settled", activeHandles: 1 })).toBe(labels.settled(1));
     expect(runStateLabel({ ...base, state: "settled", activeHandles: 2 })).toBe("Running: 2 active handles");
-    expect(runStateLabel({ ...base, state: "killed" })).toBe("Run killed");
+    expect(runStateLabel({ ...base, state: "killed" })).toBe(labels.killed);
     expect(runStateLabel({ ...base, state: "idle" })).toBe("");
   });
 });

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -89,6 +89,10 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
   const socketPath = join(userData, "jslab.sock");
   if (Buffer.byteLength(socketPath) > 103)
     throw new Error(`Socket path too long; set a shorter JSLAB_E2E_TMPDIR: ${socketPath}`);
+  // Main writes its PID here first under JSLAB_E2E=1 (FA-I2). A file left by an earlier launch in the same data folder
+  // (a relaunch scenario) must never name a PID for this launch.
+  const mainPidFile = join(userData, "e2e-main.pid");
+  rmSync(mainPidFile, { force: true });
 
   const proc = Bun.spawn([launcherPath(appPath)], {
     // R-M1-14: the launched app must not inherit a cwd on an external volume (this worktree may be on one), or Bun
@@ -116,116 +120,151 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
     track();
     return [...tracked].filter(isAlive);
   };
-
-  const readyTimeoutMs = options.readyTimeoutMs ?? 45_000;
-  const client = await waitFor(
-    async () => {
-      track();
-      return existsSync(socketPath) ? await JSLabClient.connect(socketPath) : null;
-    },
-    { timeoutMs: readyTimeoutMs, message: `jslab.sock did not appear in ${userData}` },
-  );
-
-  const app: LaunchedApp = {
-    client,
-    userData,
-    appPath,
-    state: () => client.call<E2EState>("e2e.state"),
-    output: async () => (await client.call<{ result: { entries: OutputEntry[] } }>("e2e.output")).result.entries,
-    type: async (text, replace = true) => {
-      await client.call("e2e.type", { text, replace });
-    },
-    key: async (spec) => {
-      await client.call("e2e.key", { key: spec });
-    },
-    command: async (id, args) => {
-      await client.call("e2e.command", args === undefined ? { id } : { id, args });
-    },
-    newTab: async (timeoutMs = 15_000) => {
-      const before = (await app.state()).ui.tabOrder;
-      await app.command("tab.new");
-      return waitFor(async () => newActiveTabId(before, await app.state()), {
-        timeoutMs,
-        message: "tab.new never produced a new active tab",
-      });
-    },
-    screenshot: async (name) => {
-      if (process.env.JSLAB_E2E_SKIP_SCREENSHOTS === "1") return null;
-      const reply = await client.call<{ path?: string; skipped?: string }>("e2e.screenshot", { name });
-      if (reply.skipped) {
-        console.warn(`[e2e] screenshot ${name} skipped: ${reply.skipped}`);
-        return null;
+  /**
+   * The PID Main reported in this launch's data folder, once its command line shows it runs from this app bundle or
+   * from this launch's data folder (where a canary may extract itself). It covers a Main that was reparented away from
+   * the launcher. One PID is checked; nothing is ever matched by name.
+   */
+  const reportedMainPid = (): number | null => {
+    let pid: number;
+    try {
+      pid = Number(readFileSync(mainPidFile, "utf8").trim());
+    } catch {
+      return null;
+    }
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid || !isAlive(pid)) return null;
+    const command = processCommand(pid);
+    return command.startsWith(appPath) || command.startsWith(`${userData}/`) ? pid : null;
+  };
+  /** SIGKILLs every live PID of this launch, deepest descendants first, and waits until they are gone. */
+  const killLaunch = async () => {
+    const mainPid = reportedMainPid();
+    if (mainPid !== null) tracked.add(mainPid);
+    for (const pid of livePids().reverse()) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
       }
-      return reply.path ?? null;
-    },
-    waitForRunState: (states, timeoutMs = 15_000) =>
-      waitFor(
-        async () => {
-          const runState = activeTab(await app.state()).runState;
-          return runState !== null && states.includes(runState) ? runState : null;
-        },
-        { timeoutMs, message: `Run state never became ${states.join(" or ")}` },
-      ),
-    waitForOutput: (predicate, timeoutMs = 15_000) =>
-      waitFor(
-        async () => {
-          const entries = await app.output();
-          return predicate(entries) ? entries : null;
-        },
-        { timeoutMs, message: "Expected output never appeared" },
-      ),
-    pids: () => livePids(),
-    alive: () => livePids().length > 0,
-    waitForExit: async (timeoutMs = 20_000) => {
-      await waitFor(() => livePids().length === 0, { timeoutMs, message: "JSLab processes did not exit" });
-    },
-    quit: async () => {
-      await client.call("e2e.quit").catch(() => {});
-      client.close();
-      await app.waitForExit(20_000).catch(async () => app.forceKill());
-    },
-    forceKill: async () => {
-      client.close();
-      // Deepest descendants first; each PID is one this launch spawned or the verified Main PID.
-      for (const pid of livePids().reverse()) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // Already gone.
-        }
-      }
-      await waitFor(() => livePids().length === 0, { timeoutMs: 10_000, message: "JSLab processes survived SIGKILL" });
-    },
-    relaunch: (next = {}) => launchApp({ ...next, channel: options.channel, userData }),
-    reopenWindow: async () => {
-      await client.call("e2e.reopen");
-      await waitFor(async () => (await client.call<{ ui: { ready: boolean } | null }>("e2e.state")).ui?.ready || null, {
-        timeoutMs: readyTimeoutMs,
-        message: "The reopened window never became ready",
-      });
-    },
-    settingsState: async () =>
-      (await client.call<{ ui: Record<string, unknown> | null }>("e2e.state", { window: "settings" })).ui,
-    settingsCommand: async (id, args) => {
-      await client.call("e2e.command", { id, window: "settings", ...(args === undefined ? {} : { args }) });
-    },
-    dispose: async () => {
-      if (app.alive()) await app.quit();
-      if (process.env.JSLAB_E2E_KEEP !== "1") await rm(userData, { recursive: true, force: true });
-    },
+    }
+    await waitFor(() => livePids().length === 0, { timeoutMs: 10_000, message: "JSLab processes survived SIGKILL" });
   };
 
-  const ready = await waitFor(
-    async () => {
-      const state = await app.state();
-      return state.ui.ready ? state : null;
-    },
-    { timeoutMs: readyTimeoutMs, message: "The JSLab UI never became ready" },
-  );
-  // Main reports its own PID. Track it only when that PID's command line is inside this app bundle, which guards
-  // against a stale or reused PID. This checks one PID; it never searches processes by path.
-  const mainPid = ready.main.pid;
-  if (typeof mainPid === "number" && processCommand(mainPid).startsWith(appPath)) tracked.add(mainPid);
-  track();
-  return app;
+  const readyTimeoutMs = options.readyTimeoutMs ?? 45_000;
+  let connected: JSLabClient | null = null;
+  // FA-I2: a launch that fails before it is returned (a readiness timeout, a failed connection) can't be reached by any
+  // teardown, so it kills its own processes before rethrowing.
+  try {
+    const client = await waitFor(
+      async () => {
+        track();
+        return existsSync(socketPath) ? await JSLabClient.connect(socketPath) : null;
+      },
+      { timeoutMs: readyTimeoutMs, message: `jslab.sock did not appear in ${userData}` },
+    );
+    connected = client;
+
+    const app: LaunchedApp = {
+      client,
+      userData,
+      appPath,
+      state: () => client.call<E2EState>("e2e.state"),
+      output: async () => (await client.call<{ result: { entries: OutputEntry[] } }>("e2e.output")).result.entries,
+      type: async (text, replace = true) => {
+        await client.call("e2e.type", { text, replace });
+      },
+      key: async (spec) => {
+        await client.call("e2e.key", { key: spec });
+      },
+      command: async (id, args) => {
+        await client.call("e2e.command", args === undefined ? { id } : { id, args });
+      },
+      newTab: async (timeoutMs = 15_000) => {
+        const before = (await app.state()).ui.tabOrder;
+        await app.command("tab.new");
+        return waitFor(async () => newActiveTabId(before, await app.state()), {
+          timeoutMs,
+          message: "tab.new never produced a new active tab",
+        });
+      },
+      screenshot: async (name) => {
+        if (process.env.JSLAB_E2E_SKIP_SCREENSHOTS === "1") return null;
+        const reply = await client.call<{ path?: string; skipped?: string }>("e2e.screenshot", { name });
+        if (reply.skipped) {
+          console.warn(`[e2e] screenshot ${name} skipped: ${reply.skipped}`);
+          return null;
+        }
+        return reply.path ?? null;
+      },
+      waitForRunState: (states, timeoutMs = 15_000) =>
+        waitFor(
+          async () => {
+            const runState = activeTab(await app.state()).runState;
+            return runState !== null && states.includes(runState) ? runState : null;
+          },
+          { timeoutMs, message: `Run state never became ${states.join(" or ")}` },
+        ),
+      waitForOutput: (predicate, timeoutMs = 15_000) =>
+        waitFor(
+          async () => {
+            const entries = await app.output();
+            return predicate(entries) ? entries : null;
+          },
+          { timeoutMs, message: "Expected output never appeared" },
+        ),
+      pids: () => livePids(),
+      alive: () => livePids().length > 0,
+      waitForExit: async (timeoutMs = 20_000) => {
+        await waitFor(() => livePids().length === 0, { timeoutMs, message: "JSLab processes did not exit" });
+      },
+      quit: async () => {
+        await client.call("e2e.quit").catch(() => {});
+        client.close();
+        await app.waitForExit(20_000).catch(async () => app.forceKill());
+      },
+      forceKill: async () => {
+        client.close();
+        // Deepest descendants first; each PID is one this launch spawned or a verified Main PID.
+        await killLaunch();
+      },
+      relaunch: (next = {}) => launchApp({ ...next, channel: options.channel, userData }),
+      reopenWindow: async () => {
+        await client.call("e2e.reopen");
+        await waitFor(
+          async () => (await client.call<{ ui: { ready: boolean } | null }>("e2e.state")).ui?.ready || null,
+          {
+            timeoutMs: readyTimeoutMs,
+            message: "The reopened window never became ready",
+          },
+        );
+      },
+      settingsState: async () =>
+        (await client.call<{ ui: Record<string, unknown> | null }>("e2e.state", { window: "settings" })).ui,
+      settingsCommand: async (id, args) => {
+        await client.call("e2e.command", { id, window: "settings", ...(args === undefined ? {} : { args }) });
+      },
+      dispose: async () => {
+        if (app.alive()) await app.quit();
+        if (process.env.JSLAB_E2E_KEEP !== "1") await rm(userData, { recursive: true, force: true });
+      },
+    };
+
+    const ready = await waitFor(
+      async () => {
+        const state = await app.state();
+        return state.ui.ready ? state : null;
+      },
+      { timeoutMs: readyTimeoutMs, message: "The JSLab UI never became ready" },
+    );
+    // Main reports its own PID. Track it only when that PID's command line is inside this app bundle, which guards
+    // against a stale or reused PID. This checks one PID; it never searches processes by path.
+    const mainPid = ready.main.pid;
+    if (typeof mainPid === "number" && processCommand(mainPid).startsWith(appPath)) tracked.add(mainPid);
+    track();
+    return app;
+  } catch (error) {
+    connected?.close();
+    await killLaunch().catch((killError: unknown) => console.warn(`[e2e] ${String(killError)}`));
+    throw error;
+  }
 }

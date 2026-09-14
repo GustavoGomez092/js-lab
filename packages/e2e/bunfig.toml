@@ -1,0 +1,4 @@
+# A bare `bun test` in this package runs only the unit tests. The E2E scenarios launch the built app, so they run
+# only through `bun run e2e`, which names ./scenarios explicitly (FA-m17).
+[test]
+root = "./test"

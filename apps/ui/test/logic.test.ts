@@ -5,7 +5,12 @@ import { createMarkerTracker, markersFor } from "../src/editor/markers";
 import { keyLabel } from "../src/output/format";
 import { entryToText, valueToText } from "../src/output/text";
 import { startAutoRun, type TimerApi } from "../src/state/auto-run";
-import { createEventCoalescer } from "../src/state/event-coalescer";
+import {
+  createEventCoalescer,
+  createFrameScheduler,
+  FLUSH_TIMEOUT_MS,
+  MAX_QUEUED_EVENTS,
+} from "../src/state/event-coalescer";
 import { applyRunEvents, applyRunState, initialOutput } from "../src/state/output";
 import { createAppStore } from "../src/state/store";
 
@@ -350,5 +355,54 @@ describe("event coalescer (final review M12, T15)", () => {
       ["a", "r1", 1],
       ["a", "r2", 1],
     ]);
+  });
+
+  // FB-I1: WebKit suspends rAF for a hidden window, so a frame may never come. A tab's queue must stay bounded and
+  // its entries must still reach the store.
+  test("with a scheduler that never fires, a tab's queue stays bounded and its entries still reach the store (FB-I1)", () => {
+    const applied: number[] = [];
+    const coalescer = createEventCoalescer(
+      (_tabId, _runId, events) => applied.push(events.length),
+      () => {},
+    );
+    let seq = 0;
+    for (let batch = 0; batch < 100; batch++) {
+      coalescer.push(
+        "a",
+        "r1",
+        Array.from({ length: 200 }, () => consoleLog(++seq)),
+      );
+    }
+    const delivered = applied.reduce((sum, count) => sum + count, 0);
+    expect(delivered).toBeGreaterThanOrEqual(20_000 - MAX_QUEUED_EVENTS);
+    expect(Math.max(...applied)).toBeLessThanOrEqual(MAX_QUEUED_EVENTS + 200);
+    coalescer.flush();
+    expect(applied.reduce((sum, count) => sum + count, 0)).toBe(20_000);
+  });
+
+  test("the frame scheduler runs its callback once: on the frame, or after the timeout when no frame comes (FB-I1)", () => {
+    const frames: (() => void)[] = [];
+    const timers = new Map<number, () => void>();
+    let nextTimer = 1;
+    const schedule = createFrameScheduler({
+      requestFrame: (callback) => frames.push(callback),
+      setTimeout: (callback, ms) => {
+        expect(ms).toBe(FLUSH_TIMEOUT_MS);
+        timers.set(nextTimer, callback);
+        return nextTimer++;
+      },
+      clearTimeout: (handle) => timers.delete(handle as number),
+    });
+    const runs = mock(() => {});
+
+    schedule(runs);
+    frames.shift()?.();
+    expect([runs.mock.calls.length, timers.size]).toEqual([1, 0]);
+
+    schedule(runs);
+    const [timer] = [...timers.values()];
+    timer?.();
+    frames.shift()?.();
+    expect(runs.mock.calls.length).toBe(2);
   });
 });

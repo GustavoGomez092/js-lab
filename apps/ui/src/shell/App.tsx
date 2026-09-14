@@ -19,7 +19,7 @@ import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { OutputPanel } from "../output/OutputPanel";
 import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
-import { createEventCoalescer } from "../state/event-coalescer";
+import { createEventCoalescer, createFrameScheduler } from "../state/event-coalescer";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { RenameDialog } from "../tabs/RenameDialog";
@@ -40,10 +40,15 @@ import { Toolbar } from "./Toolbar";
 
 const UI_HEARTBEAT_MS = 2000;
 
-/** Applies coalesced run events once per animation frame. Tests pass a synchronous scheduler. */
-const defaultScheduleFrame = (callback: () => void) => {
-  requestAnimationFrame(() => callback());
-};
+/**
+ * Applies coalesced run events once per animation frame, or after FLUSH_TIMEOUT_MS when the hidden window gets no
+ * frames (FB-I1). Tests pass a synchronous scheduler.
+ */
+const defaultScheduleFrame = createFrameScheduler({
+  requestFrame: (callback) => void requestAnimationFrame(() => callback()),
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+});
 
 export function App({
   store,

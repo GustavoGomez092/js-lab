@@ -58,6 +58,14 @@
       "name": "@jslab/e2e",
       "version": "0.0.0",
     },
+    "packages/npm": {
+      "name": "@jslab/npm",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jslab/rpc-schema": "workspace:*",
+        "@jslab/shared": "workspace:*",
+      },
+    },
     "packages/rpc-schema": {
       "name": "@jslab/rpc-schema",
       "version": "0.0.0",
@@ -178,6 +186,8 @@
     "@jslab/desktop": ["@jslab/desktop@workspace:apps/desktop"],
 
     "@jslab/e2e": ["@jslab/e2e@workspace:packages/e2e"],
+
+    "@jslab/npm": ["@jslab/npm@workspace:packages/npm"],
 
     "@jslab/rpc-schema": ["@jslab/rpc-schema@workspace:packages/rpc-schema"],
 

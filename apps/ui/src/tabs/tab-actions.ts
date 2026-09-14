@@ -2,7 +2,7 @@ import type { TabCreateParams } from "@jslab/rpc-schema";
 import { adjacentTabId, MAX_CLOSED_TABS } from "@jslab/shared";
 import type { MainApi } from "../api";
 import type { AppStore } from "../state/store";
-import { gotoTabIndex } from "../state/workspace";
+import { gotoTabIndex, isPermutation } from "../state/workspace";
 import { strings } from "../strings";
 
 export interface TabActions {
@@ -16,6 +16,7 @@ export interface TabActions {
   next(): void;
   previous(): void;
   goto(position: number): void;
+  reorder(order: string[]): void;
 }
 
 /**
@@ -128,6 +129,11 @@ export function createTabActions(store: AppStore, api: MainApi): TabActions {
     },
     goto(position) {
       activate(gotoTabIndex(s().tabOrder, position));
+    },
+    reorder(order) {
+      if (!isPermutation(s().tabOrder, order)) return;
+      s().reorderTabs(order);
+      api.reorderTabs(order);
     },
   };
 }

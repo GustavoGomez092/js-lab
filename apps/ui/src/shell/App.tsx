@@ -1,5 +1,5 @@
 import { MAX_TEXT_CHARS } from "@jslab/rpc-schema";
-import { commandMeta, DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
+import { commandMeta, DEFAULT_KEYBINDINGS, deriveTitle, resolveKeybindings } from "@jslab/shared";
 import { useCallback, useEffect, useMemo } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
@@ -15,6 +15,8 @@ import { OutputPanel } from "../output/OutputPanel";
 import { startAutoRun } from "../state/auto-run";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
+import { RenameDialog } from "../tabs/RenameDialog";
+import { TabBar } from "../tabs/TabBar";
 import { createTabActions } from "../tabs/tab-actions";
 import { startThemeSync } from "../themes/apply";
 import { startAppearanceSync } from "../themes/fonts";
@@ -36,6 +38,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
   const notices = useStore(store, (s) => s.notices);
   const settings = useStore(store, (s) => s.settings);
   const sideBarPanel = useStore(store, (s) => s.sideBarPanel);
+  const tabCount = useStore(store, (s) => s.tabOrder.length);
 
   const run = useCallback(
     (reason: "auto" | "manual") => {
@@ -220,7 +223,13 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
         onToggleAutoRun={() => registry.execute("run.toggleAutoRun")}
         onRun={() => registry.execute("run.start")}
         onStop={() => registry.execute("run.stop")}
-      />
+      >
+        {tabCount > 1 || settings.view.tabBarForSingleTab ? (
+          <TabBar store={store} tabs={tabs} api={api} />
+        ) : (
+          <span className="toolbar-title">{deriveTitle(tab, store.getState().code)}</span>
+        )}
+      </Toolbar>
       {safeMode.active && <SafeModeBanner reason={safeMode.reason} />}
       <StartupNotices notices={notices} onDismiss={(id) => store.getState().dismissNotice(id)} />
       <div className="app-main">
@@ -250,6 +259,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       {settings.view.statusBar && (
         <StatusBar store={store} onToggleLayout={() => registry.execute("view.toggleLayout")} />
       )}
+      <RenameDialog store={store} />
       {runState === "unresponsive" && (
         <UnresponsiveDialog onKill={() => registry.execute("run.kill")} onWait={() => api.wait(tabId)} />
       )}

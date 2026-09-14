@@ -16,6 +16,21 @@ export const strings = {
   tabs: {
     actionFailed: (error: unknown) =>
       `Couldn't complete that action: ${error instanceof Error ? error.message : String(error)}`,
+    list: "Tabs",
+    newTab: "New Tab",
+    close: (title: string) => `Close ${title}`,
+    unsaved: "Unsaved changes",
+    rename: "Rename…",
+    closeOne: "Close",
+    closeOthers: "Close Others",
+    closeToRight: "Close to the Right",
+    reveal: "Reveal in Finder",
+    copyPath: "Copy Path",
+    renameTitle: "Rename Tab",
+    renameLabel: "Tab name",
+    renameHelp: "Leave empty to use the first line of code as the title.",
+    cancel: "Cancel",
+    save: "Rename",
   },
   fonts: {
     fallback: (font: string) => `Font "${font}" isn't available; using JetBrains Mono.`,

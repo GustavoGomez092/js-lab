@@ -255,6 +255,11 @@ describe("App shell", () => {
     expect(document.querySelector(".toolbar-actions")?.classList.contains("electrobun-webkit-app-region-no-drag")).toBe(
       true,
     );
+    // Task 17: the tab bar lives in the toolbar's drag region as the requested `.toolbar-tabs` slot
+    // (Task 16), and opts itself out of dragging, or every click, middle-click and drag-reorder on a
+    // tab would instead drag the window.
+    expect(document.querySelector(".toolbar-tabs .tab-bar")).not.toBeNull();
+    expect(document.querySelector(".tab-bar")?.classList.contains("electrobun-webkit-app-region-no-drag")).toBe(true);
     await emit("settings.changed", {
       settings: mergeSettings(store.getState().settings ?? defaultSettings(), {
         view: { activityBar: false, statusBar: false },
@@ -265,6 +270,17 @@ describe("App shell", () => {
     act(() => store.getState().toggleOutputVisible());
     expect(screen.queryByTestId("output")).toBeNull();
     expect(screen.getByTestId("editor")).toBeTruthy();
+  });
+
+  test("the tab bar hides for a single tab when Tab Bar is off, and returns with a second tab", async () => {
+    const { store, emit } = renderApp();
+    expect(document.querySelector(".tab-bar")).not.toBeNull();
+    await emit("settings.changed", {
+      settings: mergeSettings(store.getState().settings ?? defaultSettings(), { view: { tabBarForSingleTab: false } }),
+    });
+    expect(document.querySelector(".tab-bar")).toBeNull();
+    act(() => store.getState().openTab(createTab({ id: "t2" }), "", false));
+    expect(document.querySelector(".tab-bar")).not.toBeNull();
   });
 });
 

@@ -61,11 +61,13 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
 
   const tabs = useMemo(() => createTabActions(store, api), [store, api]);
   const dialogs = useMemo(() => createDialogs(store), [store]);
-  const flows = useMemo(() => {
-    const created = createFileFlows({ store, api, tabs, dialogs });
-    tabs.setBeforeClose((tabId) => created.beforeClose(tabId));
-    return created;
-  }, [store, api, tabs, dialogs]);
+  const flows = useMemo(() => createFileFlows({ store, api, tabs, dialogs }), [store, api, tabs, dialogs]);
+
+  // The close guard is a side effect, so it lives in an effect and is cleared on unmount (fix round 1, m-6).
+  useEffect(() => {
+    tabs.setBeforeClose((tabId) => flows.beforeClose(tabId));
+    return () => tabs.setBeforeClose(null);
+  }, [tabs, flows]);
 
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>

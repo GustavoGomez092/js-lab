@@ -8,7 +8,8 @@ export const OPEN_EXTENSIONS = ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "
 export const LARGE_FILE_BYTES = 5 * 1024 * 1024;
 /** The same limit the UI applies to dropped files; tab text is capped at MAX_TEXT_CHARS, which is larger. */
 export const MAX_FILE_BYTES = MAX_OPEN_FILE_BYTES;
-const TOKEN_TTL_MS = 5 * 60_000;
+/** How long a large-file or Save As confirmation token stays valid. */
+export const TOKEN_TTL_MS = 5 * 60_000;
 
 export interface FileSystem {
   stat(path: string): Promise<{ size: number; isFile: boolean }>;

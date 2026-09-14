@@ -44,10 +44,19 @@ export function createSocketMethods(deps: SocketMethodDeps): Record<string, Sock
   methods["e2e.key"] = forward("key", keyParams);
   methods["e2e.command"] = forward("command", commandParams);
   methods["e2e.output"] = forward("output", outputParams);
-  methods["e2e.state"] = async () => ({
-    ui: deps.uiAvailable() ? await deps.bridge.request("state", {}) : null,
-    main: deps.mainState(),
-  });
+  methods["e2e.state"] = async () => {
+    let ui: unknown = null;
+    if (deps.uiAvailable()) {
+      try {
+        ui = await deps.bridge.request("state", {});
+      } catch (error) {
+        // The window closed while the request was in flight (the bridge rejects every pending request): report the
+        // closed window like any other state, rather than failing the call (m-7).
+        if (deps.uiAvailable()) throw error;
+      }
+    }
+    return { ui, main: deps.mainState() };
+  };
   methods["e2e.reopen"] = async () => {
     deps.reopenWindow();
     return {};

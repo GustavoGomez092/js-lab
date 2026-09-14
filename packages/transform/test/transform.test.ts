@@ -32,6 +32,20 @@ describe("pipeline", () => {
     expect(r.diagnostics[0]?.codeFrame).toContain("const x = ;");
   });
 
+  // Task 18 fix round 1 (I-1): Babel quotes the whole source line in its code frame, so a syntax error on a
+  // 1,000,000-character line produced a multi-megabyte frame that reached the UI twice (diagnostics and run.events).
+  test("bounds the code frame and message of a syntax error on a very long line", () => {
+    const r = transform(`const x = ${"a".repeat(1_000_000)} +;`, plain);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    const diagnostic = r.diagnostics[0];
+    const frame = diagnostic?.codeFrame ?? "";
+    expect(frame.length).toBeGreaterThan(0);
+    expect(frame.length).toBeLessThanOrEqual(10_001);
+    expect(Math.max(...frame.split("\n").map((line) => line.length))).toBeLessThanOrEqual(1_001);
+    expect(diagnostic?.message.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(10_001);
+  });
+
   test("produces a source map", () => {
     const r = transform("const a = 1;\na", baseOptions);
     expect(r.ok && r.map.mappings.length).toBeGreaterThan(0);

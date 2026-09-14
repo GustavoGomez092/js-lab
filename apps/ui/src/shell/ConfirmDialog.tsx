@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "zustand";
 import type { AppStore } from "../state/store";
-import type { Dialogs } from "./dialogs";
+import { cancelButtonId, type Dialogs } from "./dialogs";
 
 export function ConfirmDialog({ store, dialogs }: { store: AppStore; dialogs: Dialogs }) {
   const modal = useStore(store, (s) => s.modal);
@@ -9,12 +9,30 @@ export function ConfirmDialog({ store, dialogs }: { store: AppStore; dialogs: Di
   const confirm = modal?.kind === "confirm" ? modal : null;
 
   useEffect(() => {
-    if (confirm) primary.current?.focus();
-  }, [confirm]);
+    if (!confirm) return;
+    primary.current?.focus();
+    // Listens on the document, not the dialog element, so Enter, Escape and ⌘D keep working after a click on the
+    // backdrop moves focus off the dialog's buttons (fix round 1, m-5).
+    const onKeyDown = (event: KeyboardEvent) => {
+      const pick = (buttonId: string) => {
+        event.preventDefault();
+        dialogs.resolve(confirm.id, buttonId);
+      };
+      if (event.key === "Escape") {
+        pick(cancelButtonId(confirm.buttons));
+      } else if (event.key === "Enter") {
+        const main = confirm.buttons.find((b) => b.role === "primary");
+        if (main) pick(main.id);
+      } else if (event.metaKey && event.code === "KeyD" && confirm.buttons.some((b) => b.id === "discard")) {
+        pick("discard");
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [confirm, dialogs]);
 
   if (!confirm) return null;
   const pick = (buttonId: string) => dialogs.resolve(confirm.id, buttonId);
-  const fallback = confirm.buttons.find((b) => b.role === "cancel")?.id ?? confirm.buttons[0]?.id ?? "cancel";
 
   return (
     <div className="dialog-backdrop">
@@ -24,21 +42,6 @@ export function ConfirmDialog({ store, dialogs }: { store: AppStore; dialogs: Di
         aria-modal="true"
         aria-labelledby="confirm-title"
         aria-describedby="confirm-message"
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.preventDefault();
-            pick(fallback);
-          } else if (event.key === "Enter") {
-            const main = confirm.buttons.find((b) => b.role === "primary");
-            if (main) {
-              event.preventDefault();
-              pick(main.id);
-            }
-          } else if (event.metaKey && event.code === "KeyD" && confirm.buttons.some((b) => b.id === "discard")) {
-            event.preventDefault();
-            pick("discard");
-          }
-        }}
       >
         <h2 id="confirm-title">{confirm.title}</h2>
         <p id="confirm-message">{confirm.message}</p>

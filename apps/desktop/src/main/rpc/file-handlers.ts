@@ -11,7 +11,7 @@ import {
   tabParamsSchema,
 } from "@jslab/rpc-schema";
 import { baseName, contentHash, deriveTitle, extensionFor, languageForPath, type TabState } from "@jslab/shared";
-import type { FileService, ReadyFile } from "../files/file-service";
+import { type FileService, type ReadyFile, TOKEN_TTL_MS } from "../files/file-service";
 import type { SessionStore } from "../services/session-store";
 import { strings } from "../strings";
 import { createValidators, type Log } from "./validate";
@@ -58,11 +58,26 @@ async function firstExistingDir(candidates: (string | null)[], fallback: string)
   return fallback;
 }
 
+/**
+ * The comparable spelling of `folder/name`: the folder's real path when it exists, then NFC. Both sides of the
+ * default-path check go through it, so /var vs /private/var and NFD vs NFC spellings match (m-3, R-M2-T18-1).
+ */
+async function canonicalPath(folder: string, name: string): Promise<string> {
+  return join(await realpath(folder).catch(() => folder), name).normalize("NFC");
+}
+
 /** Open, Save, Save As, reveal and copy path (spec §7.3, §10.2). */
 export function createFileHandlers(deps: FileHandlerDeps) {
   const { parse, message } = createValidators(deps.log);
   // Save As confirmation tokens this handler issued, by tab, so an expired token still answers its tab (R-M2-T18-1).
-  const confirmTabs = new Map<string, string>();
+  // An entry outlives its token by one more TTL, so a late answer still gets file.saveFailed; then it is swept, so
+  // the map stays bounded (fix round 1, m-4).
+  const confirmTabs = new Map<string, { tabId: string; issuedAt: number }>();
+  const sweepConfirmTabs = (now: number) => {
+    for (const [token, entry] of confirmTabs) {
+      if (now - entry.issuedAt > 2 * TOKEN_TTL_MS) confirmTabs.delete(token);
+    }
+  };
 
   const openReady = async (ready: ReadyFile[], extra: Pick<FileOpened, "large" | "errors">) => {
     const tabs: TabWithContent[] = [];
@@ -171,16 +186,14 @@ export function createFileHandlers(deps: FileHandlerDeps) {
           deps.send.saveCancelled({ tabId });
           return;
         }
-        // Both sides are resolved the same way: the folder's real path when it exists, then NFC. So /var vs
-        // /private/var (either side) and NFD vs NFC spellings of the same path still count as "untouched"
-        // (m-3, R-M2-T18-1).
-        const resolve = async (folder: string, name: string) =>
-          join(await realpath(folder).catch(() => folder), name).normalize("NFC");
-        const defaultPath = await resolve(defaultDir, defaultName);
-        if ((await resolve(dirname(path), basename(path))) === defaultPath) {
+        // Both sides are spelled the same way, so an untouched dialog result still counts as the default path.
+        const defaultPath = await canonicalPath(defaultDir, defaultName);
+        if ((await canonicalPath(dirname(path), basename(path))) === defaultPath) {
           // M0-S6: an untouched dialog can resolve to the default path by itself. Never write without confirmation.
           const token = deps.files.issueSaveAsToken({ tabId, path, content });
-          confirmTabs.set(token, tabId);
+          const now = Date.now();
+          sweepConfirmTabs(now);
+          confirmTabs.set(token, { tabId, issuedAt: now });
           deps.send.saveAsConfirm({ token, tabId, path });
           return;
         }
@@ -190,10 +203,11 @@ export function createFileHandlers(deps: FileHandlerDeps) {
         const pending = deps.files.takeSaveAsToken(token);
         const issuedFor = confirmTabs.get(token);
         confirmTabs.delete(token);
+        sweepConfirmTabs(Date.now());
         if (!pending) {
           // Expired (5-minute TTL) or already used: answer the tab's pending Save As so the UI doesn't wait forever.
-          // A token this handler never issued has no tab to answer.
-          if (issuedFor) deps.send.saveFailed({ tabId: issuedFor, error: strings.files.confirmExpired });
+          // A token this handler never issued, or one swept long after expiry, has no tab to answer.
+          if (issuedFor) deps.send.saveFailed({ tabId: issuedFor.tabId, error: strings.files.confirmExpired });
           return;
         }
         if (!confirmed) {

@@ -53,12 +53,38 @@ interface BabelLikeError {
   jslabCode?: Diagnostic["code"];
 }
 
+/**
+ * Diagnostic text is bounded where it is created (Task 18 fix round 1, I-1): Babel quotes whole source lines in its
+ * code frame, so a syntax error on a very long line otherwise yields megabytes of text that freeze the UI.
+ */
+const MAX_MESSAGE_CHARS = 10_000;
+const MAX_FRAME_CHARS = 10_000;
+const MAX_FRAME_LINE_CHARS = 1_000;
+
+/** At most `max` UTF-16 units plus an ellipsis, never cutting between the halves of a surrogate pair. */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  return `${text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max)}…`;
+}
+
 export function toDiagnostic(error: unknown): Diagnostic {
   const e = error as BabelLikeError;
   const raw = String(e?.message ?? error);
   const [first = raw, ...rest] = raw.split("\n");
-  const message = first.replace(/^.*?entry\.(?:tsx?|jsx?): /, "").replace(/ \(\d+:\d+\)$/, "");
-  const codeFrame = rest.join("\n").trim();
+  const message = truncate(
+    first.replace(/^.*?entry\.(?:tsx?|jsx?): /, "").replace(/ \(\d+:\d+\)$/, ""),
+    MAX_MESSAGE_CHARS,
+  );
+  const codeFrame = truncate(
+    rest
+      .join("\n")
+      .trim()
+      .split("\n")
+      .map((line) => truncate(line, MAX_FRAME_LINE_CHARS))
+      .join("\n"),
+    MAX_FRAME_CHARS,
+  );
   return {
     severity: "error",
     code: e?.jslabCode ?? "syntax",

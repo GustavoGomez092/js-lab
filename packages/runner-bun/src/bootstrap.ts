@@ -20,8 +20,12 @@ const heartbeatMs = Number(process.env.JSLAB_HEARTBEAT_MS ?? 500);
  * exact-byte error-text budgets refine this.
  */
 const MAX_ERROR_TEXT_CHARS = 10_000;
-const capErrorText = (text: string) =>
-  text.length > MAX_ERROR_TEXT_CHARS ? `${text.slice(0, MAX_ERROR_TEXT_CHARS)}…` : text;
+const capErrorText = (text: string) => {
+  if (text.length <= MAX_ERROR_TEXT_CHARS) return text;
+  // Never cut between the halves of a surrogate pair (fix round 1, m-2).
+  const last = text.charCodeAt(MAX_ERROR_TEXT_CHARS - 1);
+  return `${text.slice(0, last >= 0xd800 && last <= 0xdbff ? MAX_ERROR_TEXT_CHARS - 1 : MAX_ERROR_TEXT_CHARS)}…`;
+};
 const send = (message: RunnerToMain) => process.send?.(message);
 const hooks = {
   peekPromise: (promise: Promise<unknown>) => {

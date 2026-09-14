@@ -17,6 +17,11 @@ export interface ShouldReloadViewInput {
  * load, etc.), so the first heartbeat gets a longer boot grace period; only once it has arrived does the
  * shorter steady-state deadline apply (I1).
  */
+export function shouldReloadView({ now, startedAt, lastHeartbeat, sawFirstHeartbeat }: ShouldReloadViewInput): boolean {
+  if (!sawFirstHeartbeat) return now - startedAt > UI_BOOT_TIMEOUT_MS;
+  return now - lastHeartbeat > UI_HEARTBEAT_TIMEOUT_MS;
+}
+
 export interface WatchdogState {
   sawFirstHeartbeat: boolean;
   bootWindowStartedAt: number;
@@ -30,9 +35,4 @@ export interface WatchdogState {
  */
 export function onReload(now: number): WatchdogState {
   return { sawFirstHeartbeat: false, bootWindowStartedAt: now, lastUiHeartbeat: now };
-}
-
-export function shouldReloadView({ now, startedAt, lastHeartbeat, sawFirstHeartbeat }: ShouldReloadViewInput): boolean {
-  if (!sawFirstHeartbeat) return now - startedAt > UI_BOOT_TIMEOUT_MS;
-  return now - lastHeartbeat > UI_HEARTBEAT_TIMEOUT_MS;
 }

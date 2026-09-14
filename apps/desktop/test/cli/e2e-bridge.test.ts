@@ -77,9 +77,9 @@ describe("createSocketMethods", () => {
 
   test("with the window closed, state reports ui null, UI methods fail fast and reopen restores it", async () => {
     let open = false;
-    const d = { ...deps(true), uiAvailable: () => open };
+    const d = { ...deps(true), uiAvailable: () => open, mainState: () => ({ windowOpen: open }) };
     const methods = createSocketMethods(d);
-    expect(await methods["e2e.state"]?.({})).toEqual({ ui: null, main: { windowOpen: true } });
+    expect(await methods["e2e.state"]?.({})).toEqual({ ui: null, main: { windowOpen: false } });
     await expect(methods["e2e.type"]?.({ text: "x" }) ?? Promise.resolve()).rejects.toThrow(
       "The JSLab window is closed",
     );
@@ -87,5 +87,15 @@ describe("createSocketMethods", () => {
     await methods["e2e.reopen"]?.({});
     open = true;
     expect(d.reopenWindow).toHaveBeenCalledTimes(1);
+    expect(await methods["e2e.state"]?.({})).toEqual({
+      ui: { method: "state", params: {} },
+      main: { windowOpen: true },
+    });
+    // m-7: the window closes while the state request is in flight, so the bridge rejects.
+    d.bridge.request.mockImplementationOnce(async () => {
+      open = false;
+      throw new Error("The JSLab window closed");
+    });
+    expect(await methods["e2e.state"]?.({})).toEqual({ ui: null, main: { windowOpen: false } });
   });
 });

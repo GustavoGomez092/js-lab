@@ -159,11 +159,16 @@ test("reports errors thrown while evaluating the module", async () => {
 // rendering that one output row froze the UI past the watchdog deadline. Error text is capped where it is created.
 test("an error's message is capped at 10,000 characters", async () => {
   const runner = startRunner();
-  await runner.run('throw new Error("m".repeat(1_000_000));\n');
+  // The name is over the cap too, with an emoji straddling the cut: no half surrogate pair may remain (m-2).
+  await runner.run(
+    'const e = new Error("m".repeat(1_000_000));\ne.name = "N".repeat(9_999) + "\\u{1F600}" + "N".repeat(20_000);\nthrow e;\n',
+  );
   await runner.until((m) => m.type === "state" && m.state === "idle");
   const error = runner.events().find((e) => e.kind === "error");
   const message = error?.kind === "error" ? error.message : "";
   expect([message.length, message.startsWith("mmm"), message.endsWith("…")]).toEqual([10_001, true, true]);
+  const name = error?.kind === "error" ? error.name : "";
+  expect([name.length, name.endsWith("N…"), /[\uD800-\uDFFF]/.test(name)]).toEqual([10_000, true, false]);
 });
 
 test("stop does not report errors from work it aborted", async () => {

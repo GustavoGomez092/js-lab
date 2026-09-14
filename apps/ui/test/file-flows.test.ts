@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { contentHash, createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
+import { act, fireEvent, render } from "@testing-library/react";
+import { createElement } from "react";
 import { createFileFlows, formatSize } from "../src/files/file-flows";
+import { ConfirmDialog } from "../src/shell/ConfirmDialog";
 import { createDialogs } from "../src/shell/dialogs";
 import { createAppStore } from "../src/state/store";
 import { createTabActions } from "../src/tabs/tab-actions";
@@ -51,6 +54,24 @@ describe("file flows", () => {
     expect(modal).toMatchObject({ kind: "confirm", title: "T" });
     dialogs.resolve(modal?.kind === "confirm" ? modal.id : "", "cancel");
     expect([await choice, store.getState().modal]).toEqual(["cancel", null]);
+
+    // m-5: Escape still cancels after a click on the backdrop moved focus off the dialog's buttons.
+    render(createElement(ConfirmDialog, { store, dialogs }));
+    let escaped: Promise<string> = Promise.resolve("not asked");
+    act(() => {
+      escaped = dialogs.confirm({
+        title: "T2",
+        message: "M",
+        buttons: [
+          { id: "cancel", label: "Cancel", role: "cancel" },
+          { id: "ok", label: "OK", role: "primary" },
+        ],
+      });
+    });
+    fireEvent.mouseDown(document.querySelector(".dialog-backdrop") as Element);
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect([await escaped, store.getState().modal]).toEqual(["cancel", null]);
   });
 
   test("Save writes saved files in place; scratch tabs go through Save As until Main answers", async () => {
@@ -138,6 +159,38 @@ describe("file flows", () => {
       [token, true],
       [token, false],
     ]);
+  });
+
+  // Task 18 fix round 1 (I-2): menu commands and Main messages can open a modal while a confirm is showing.
+  test("a confirm replaced by another modal settles as cancelled, so closes and Save As confirmations never hang", async () => {
+    const { tabs, flows, api, dialogs, store } = setup();
+    const confirmShown = async () => {
+      for (let i = 0; i < 50 && store.getState().modal?.kind !== "confirm"; i++) await Bun.sleep(1);
+    };
+    store.getState().editCode("changed", "saved");
+    const closing = tabs.close("saved");
+    await confirmShown();
+    const second = dialogs.confirm({
+      title: "Second",
+      message: "M",
+      buttons: [
+        { id: "no", label: "No", role: "cancel" },
+        { id: "yes", label: "Yes", role: "primary" },
+      ],
+    });
+    expect([await closing, "saved" in store.getState().tabs]).toEqual([false, true]);
+    expect(api.closeTab).not.toHaveBeenCalled();
+    expect(store.getState().modal).toMatchObject({ kind: "confirm", title: "Second" });
+    store.getState().openModal({ kind: "rename", tabId: "saved" });
+    expect(await second).toBe("no");
+
+    const token = "33333333-3333-4333-8333-333333333333";
+    store.getState().closeModal();
+    const asked = flows.handleSaveAsConfirm({ token, tabId: "scratch", path: "/w/Untitled.ts" });
+    await confirmShown();
+    store.getState().openModal({ kind: "palette", context: "editor" });
+    await asked;
+    expect(api.confirmSaveAs.mock.calls).toEqual([[token, false]]);
   });
 
   test("dropped text files open as tabs; binaries, folders and files over 50 MB are refused; big files ask first", async () => {

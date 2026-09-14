@@ -17,7 +17,8 @@ export interface TabActions {
   previous(): void;
   goto(position: number): void;
   reorder(order: string[]): void;
-  setBeforeClose(guard: (tabId: string) => Promise<boolean>): void;
+  /** Installs the close guard (Task 18's prompts), or removes it with null. */
+  setBeforeClose(guard: ((tabId: string) => Promise<boolean>) | null): void;
 }
 
 /**

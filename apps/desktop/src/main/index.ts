@@ -29,6 +29,7 @@ import { externalLinkFrom, navigationRulesFor } from "./navigation";
 import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
 import { relaunchApp } from "./platform/relaunch";
 import { saveDialog } from "./platform/save-dialog";
+import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
 import { createAppHandlers } from "./rpc/app-handlers";
@@ -165,6 +166,15 @@ async function start(): Promise<void> {
   let lastUiHeartbeat = Date.now();
 
   const e2eEnabled = process.env.JSLAB_E2E === "1";
+
+  const systemFonts = new SystemFontsService({
+    cacheFile: join(paths.dataDir, "cache", "system-fonts.json"),
+    run: () => runSystemProfiler(),
+    log,
+  });
+  // Warm the cache early so the Settings window's font picker has the list (spec §9.4). E2E runs seed the cache.
+  if (!e2eEnabled) void systemFonts.list();
+
   // The bridge sends through `rpc`, which is defined next; send runs only after startup.
   const e2eBridge = new E2EBridge((request) => rpc.send["e2e.request"](request));
   let socketServer: SocketServer | null = null;

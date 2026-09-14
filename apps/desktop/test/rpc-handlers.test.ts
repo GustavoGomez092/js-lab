@@ -123,4 +123,14 @@ describe("messages", () => {
     await Bun.sleep(0);
     expect(deps.log).toHaveBeenCalledWith("Handler for tab.patch failed", "Error: disk full");
   });
+
+  test("e2e.response is validated before reaching the bridge", () => {
+    const { deps } = setup();
+    const onE2EResponse = mock(() => {});
+    const handlers = createRpcHandlers({ ...deps, e2e: true, onE2EResponse });
+    handlers.messages["e2e.response"]({ reqId: 3, ok: true, result: 1 });
+    handlers.messages["e2e.response"]({ reqId: "3", ok: true });
+    expect(onE2EResponse).toHaveBeenCalledTimes(1);
+    expect(onE2EResponse).toHaveBeenCalledWith({ reqId: 3, ok: true, result: 1 });
+  });
 });

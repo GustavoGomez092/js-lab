@@ -2,7 +2,9 @@ import type { CommandId } from "@jslab/rpc-schema";
 import { useCallback, useEffect } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
+import { createE2EAgent } from "../e2e/agent";
 import { Editor } from "../editor/Editor";
+import { getEditorHandle } from "../editor/editor-handle";
 import { OutputPanel } from "../output/OutputPanel";
 import { startAutoRun } from "../state/auto-run";
 import type { AppStore } from "../state/store";
@@ -11,7 +13,9 @@ import { ActivityBar, SafeModeBanner, SplitPane, StatusBar, UnresponsiveDialog }
 
 const UI_HEARTBEAT_MS = 2000;
 
-export function App({ store, api }: { store: AppStore; api: MainApi }) {
+const M1_COMMANDS: ReadonlySet<string> = new Set(["run.start", "run.stop", "run.kill", "output.clear", "editor.clear"]);
+
+export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi; e2e?: boolean }) {
   const tab = useStore(store, (s) => s.tab);
   const runState = useStore(store, (s) => s.output.runState);
   const safeMode = useStore(store, (s) => s.safeMode);
@@ -65,6 +69,28 @@ export function App({ store, api }: { store: AppStore; api: MainApi }) {
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
   }, [store, api, execute]);
+
+  useEffect(() => {
+    const respond = api.e2eRespond;
+    if (!e2e || !respond) return;
+    const agent = createE2EAgent({
+      store,
+      editor: getEditorHandle,
+      target: () => document.activeElement ?? document.body,
+      executeCommand: (id) => {
+        if (!M1_COMMANDS.has(id)) return false;
+        execute(id as CommandId);
+        return true;
+      },
+    });
+    return api.on("e2e.request", ({ reqId, method, params }) => {
+      agent(method, params).then(
+        (result) => respond({ reqId, ok: true, result }),
+        (error: unknown) =>
+          respond({ reqId, ok: false, error: error instanceof Error ? error.message : String(error) }),
+      );
+    });
+  }, [e2e, store, api, execute]);
 
   useEffect(
     () =>

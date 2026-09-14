@@ -8,7 +8,8 @@
     "@jslab/runner-bun": "workspace:*",
     "@jslab/shared": "workspace:*",
     "@jslab/transform": "workspace:*",
-    "source-map-js": "1.2.1"
+    "source-map-js": "1.2.1",
+    "zod": "4.6.4"
   },
   "scripts": {
     "test": "bun test",

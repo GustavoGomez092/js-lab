@@ -16,6 +16,8 @@ describe("resolveAppPaths", () => {
       runsDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/runs",
       runLock: "/Users/me/Library/Application Support/dev.jslab.app/stable/run.lock",
       packagesNodeModules: "/Users/me/Library/Application Support/dev.jslab.app/stable/packages/node_modules",
+      socketPath: "/Users/me/Library/Application Support/dev.jslab.app/stable/jslab.sock",
+      screenshotsDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/e2e-screenshots",
       runnerBootstrap: "/Applications/JSLab.app/Contents/Resources/app/runner/bootstrap.js",
       transformWorker: "/Applications/JSLab.app/Contents/Resources/app/workers/transform-worker.js",
       bunBinary: "/Applications/JSLab.app/Contents/MacOS/bun",
@@ -34,6 +36,15 @@ describe("resolveAppPaths", () => {
     expect(paths.runnerBootstrap).toBe("/src/bootstrap.ts");
     expect(paths.transformWorker).toBe("/src/worker.ts");
     expect(paths.bunBinary).toBe("/bin/bun");
+  });
+
+  test("JSLAB_USER_DATA relocates every data path", () => {
+    const paths = resolveAppPaths({ ...input, env: { JSLAB_USER_DATA: "/tmp-e2e/u1" } });
+    expect([paths.dataDir, paths.runLock, paths.socketPath]).toEqual([
+      "/tmp-e2e/u1",
+      "/tmp-e2e/u1/run.lock",
+      "/tmp-e2e/u1/jslab.sock",
+    ]);
   });
 });
 

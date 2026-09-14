@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { MainMessages, MainRequests, ViewMessages } from "@jslab/rpc-schema";
-import { runnerSettings } from "@jslab/shared";
 import Electrobun, {
   ApplicationMenu,
   type ApplicationMenuItemConfig,
@@ -11,18 +12,17 @@ import Electrobun, {
   Updater,
   Utils,
 } from "electrobun/main";
-import { resolveAppPaths, runnerEnvironment } from "./app-paths";
+import { resolveAppPaths } from "./app-paths";
+import { E2EBridge } from "./cli/e2e-bridge";
+import { createSocketMethods } from "./cli/socket-methods";
+import { type SocketServer, startSocketServer } from "./cli/socket-server";
+import { createMainServices } from "./main-services";
+import { resolveMainViewUrl } from "./main-view-url";
 import { buildMenu, commandForMenuAction, type MenuItem } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
-import { RunLock } from "./persistence/run-lock";
+import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { createRpcHandlers } from "./rpc-handlers";
-import { BunRunnerProcess } from "./runs/bun-runner-process";
-import { RunCoordinator } from "./runs/run-coordinator";
-import { SparePool } from "./runs/spare-pool";
-import { detectSafeMode, isShiftHeld } from "./services/safe-mode";
-import { SessionStore } from "./services/session-store";
-import { SettingsStore } from "./services/settings-store";
-import { CachingTransformHost, WorkerTransformHost } from "./transform/transform-host";
+import { isShiftHeld } from "./services/safe-mode";
 import { shouldReloadView } from "./ui-watchdog";
 
 // `.hutch/devkit`'s `api/sdks/main/proc/native.ts` references the WebWorker global `self` in a carrot/Bunny Ears
@@ -45,7 +45,6 @@ type JSLabRPC = {
 };
 
 const APP_VERSION = "0.0.1";
-const DEV_SERVER_URL = "http://localhost:5173";
 
 const log = (message: string, detail?: unknown) => console.error(`[jslab] ${message}`, detail ?? "");
 
@@ -84,12 +83,17 @@ async function start(): Promise<void> {
 
   // Read the modifier keys as early as possible: the user may release Shift while stores load.
   const shiftHeld = isShiftHeld();
-  const runLock = new RunLock(paths.runLock);
-  const [settings, session] = await Promise.all([SettingsStore.open(paths.dataDir), SessionStore.open(paths.dataDir)]);
-  const safeMode = await detectSafeMode({
-    uncleanPreviousExit: runLock.uncleanPreviousExit,
-    shiftHeld: () => shiftHeld,
+  // The composition root builds everything that doesn't need Electrobun (main-services.ts, tested without it).
+  const services = await createMainServices({
+    paths,
+    env: process.env,
+    shiftHeld,
+    onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
+    onState: (tabId, runId, state, activeHandles) =>
+      rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
+    onDiagnostics: (tabId, runId, diagnostics) => rpc.send["run.diagnostics"]({ tabId, runId, diagnostics }),
   });
+  const { settings, session, runLock, safeMode, transform, spares, coordinator } = services;
   if (settings.recovered !== "none") log(`settings.json recovered from ${settings.recovered}`);
   if (session.recovered !== "none") log(`session.json recovered from ${session.recovered}`);
   if (safeMode.active) log(`starting in Safe Mode (${safeMode.reason})`);
@@ -99,28 +103,11 @@ async function start(): Promise<void> {
   let sawFirstHeartbeat = false;
   let bootWindowStartedAt = Date.now();
   let lastUiHeartbeat = Date.now();
-  const transform = new CachingTransformHost(new WorkerTransformHost(paths.transformWorker));
-  const spares = new SparePool(
-    (config) => BunRunnerProcess.start(config),
-    () => ({
-      bunPath: paths.bunBinary,
-      bootstrapPath: paths.runnerBootstrap,
-      cwd: paths.dataDir,
-      env: runnerEnvironment(paths, process.env),
-    }),
-  );
 
-  const coordinator: RunCoordinator = new RunCoordinator({
-    transform: (source, options) => transform.transform(source, options),
-    spares,
-    runsDir: paths.runsDir,
-    settings: () => runnerSettings(settings.current),
-    onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
-    onState: (tabId, runId, state, activeHandles) =>
-      rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
-    onDiagnostics: (tabId, runId, diagnostics) => rpc.send["run.diagnostics"]({ tabId, runId, diagnostics }),
-    runLock,
-  });
+  const e2eEnabled = process.env.JSLAB_E2E === "1";
+  // The bridge sends through `rpc`, which is defined next; send runs only after startup.
+  const e2eBridge = new E2EBridge((request) => rpc.send["e2e.request"](request));
+  let socketServer: SocketServer | null = null;
 
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
@@ -135,22 +122,16 @@ async function start(): Promise<void> {
         sawFirstHeartbeat = true;
         lastUiHeartbeat = Date.now();
       },
+      e2e: e2eEnabled,
+      onE2EResponse: (response) => e2eBridge.receive(response),
     }),
   });
 
-  async function mainViewUrl(): Promise<string> {
-    if ((await Updater.localInfo.channel()) === "dev") {
-      try {
-        await fetch(DEV_SERVER_URL, { method: "HEAD" });
-        return DEV_SERVER_URL;
-      } catch {
-        // No Vite dev server; use the built view.
-      }
-    }
-    return "views://mainview/index.html";
-  }
-
-  const url = await mainViewUrl();
+  const url = await resolveMainViewUrl({
+    channel: await Updater.localInfo.channel(),
+    env: process.env,
+    probe: (target, signal) => fetch(target, { method: "HEAD", signal }),
+  });
   const window = new BrowserWindow({
     title: "JSLab",
     url,
@@ -196,6 +177,26 @@ async function start(): Promise<void> {
   }
 
   ApplicationMenu.setApplicationMenu(toApplicationMenuItems(buildMenu()));
+  if (e2eEnabled) {
+    socketServer = await startSocketServer({
+      path: paths.socketPath,
+      log,
+      methods: createSocketMethods({
+        e2eEnabled,
+        bridge: e2eBridge,
+        mainState: () => ({ safeMode, dataDir: paths.dataDir, windowOpen: true, pid: process.pid }),
+        screenshot: async (name) => {
+          await mkdir(paths.screenshotsDir, { recursive: true });
+          const out = join(paths.screenshotsDir, `${name}.png`);
+          const result = await captureWindow(windowNumberOf(window.ptr), out, () => Utils.screenCapture.hasAccess());
+          if ("skipped" in result) log(`Screenshot ${name} skipped: ${result.skipped}`);
+          return result;
+        },
+        quit: () => Utils.quit(),
+      }),
+    });
+    log(`E2E automation enabled on ${socketServer.path}`);
+  }
   ApplicationMenu.on("application-menu-clicked", (event: unknown) => {
     const action = (event as { data?: { action?: string } }).data?.action;
     const command = action ? commandForMenuAction(action) : null;
@@ -226,6 +227,8 @@ async function start(): Promise<void> {
     // before-quit does not await promises: cancel, flush state, then quit for real.
     event.response = { allow: false };
     quitting = true;
+    e2eBridge.rejectAll("JSLab is quitting");
+    socketServer?.close();
     coordinator.dispose();
     transform.dispose();
     runLock.releaseAll();

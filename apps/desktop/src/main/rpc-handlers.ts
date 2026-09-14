@@ -1,7 +1,9 @@
 import {
   type BootstrapPayload,
   bufferChangedSchema,
+  type E2EResponse,
   type EncodedValue,
+  e2eResponseSchema,
   runExpandParamsSchema,
   runStartParamsSchema,
   tabParamsSchema,
@@ -20,6 +22,9 @@ export interface RpcHandlerDeps {
   versions: { app: string; bun: string };
   log(message: string, detail?: unknown): void;
   onUiHeartbeat(): void;
+  /** True for JSLAB_E2E=1 launches. */
+  e2e?: boolean;
+  onE2EResponse?(response: E2EResponse): void;
 }
 
 export class InvalidPayloadError extends Error {}
@@ -61,6 +66,7 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         buffers: await deps.session.readBuffers(),
         safeMode: deps.safeMode,
         versions: deps.versions,
+        ...(deps.e2e ? { e2e: true } : {}),
       }),
       "run.start": (input: unknown): { runId: string } => {
         const { tabId, code, language, logpoints, reason } = parse(runStartParamsSchema, "run.start", input);
@@ -92,6 +98,7 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
           .catch((error) => deps.log("Handler for tab.patch failed", String(error)));
       }),
       "ui.heartbeat": () => deps.onUiHeartbeat(),
+      "e2e.response": message(e2eResponseSchema, "e2e.response", (response) => deps.onE2EResponse?.(response)),
     },
   };
 }

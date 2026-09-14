@@ -1,6 +1,7 @@
 import type * as Monaco from "monaco-editor";
 import { useEffect, useRef } from "react";
 import type { AppStore } from "../state/store";
+import { setEditorHandle } from "./editor-handle";
 import { markersFor } from "./markers";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
 
@@ -32,6 +33,16 @@ export function Editor({ store }: EditorProps) {
       glyphMargin: true,
       fixedOverflowWidgets: true,
       scrollBeyondLastLine: false,
+    });
+
+    setEditorHandle({
+      typeText: (text, replace) => {
+        editor.focus();
+        const current = editor.getModel();
+        if (replace && current) editor.setSelection(current.getFullModelRange());
+        editor.trigger("e2e", "type", { text });
+      },
+      focus: () => editor.focus(),
     });
 
     let applyingExternal = false;
@@ -109,6 +120,7 @@ export function Editor({ store }: EditorProps) {
     });
 
     return () => {
+      setEditorHandle(null);
       unsubscribe();
       contentSubscription.dispose();
       editor.dispose();

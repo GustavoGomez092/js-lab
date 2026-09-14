@@ -1,5 +1,6 @@
 import type {
   BootstrapPayload,
+  E2EResponse,
   EncodedValue,
   RunExpandParams,
   RunStartParams,
@@ -22,4 +23,5 @@ export interface MainApi {
   patchTab(tabId: string, patch: TabPatch["patch"]): void;
   heartbeat(): void;
   on<K extends keyof ViewMessages>(name: K, listener: (payload: ViewMessages[K]) => void): () => void;
+  e2eRespond?(response: E2EResponse): void;
 }

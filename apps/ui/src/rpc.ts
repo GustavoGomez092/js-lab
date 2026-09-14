@@ -27,6 +27,7 @@ export function createRpcApi(): MainApi {
         "run.state": dispatch("run.state"),
         "run.diagnostics": dispatch("run.diagnostics"),
         "menu.command": dispatch("menu.command"),
+        "e2e.request": dispatch("e2e.request"),
       },
     },
   });
@@ -42,6 +43,7 @@ export function createRpcApi(): MainApi {
     bufferChanged: (tabId, content) => rpc.send["buffer.changed"]({ tabId, content }),
     patchTab: (tabId, patch) => rpc.send["tab.patch"]({ tabId, patch }),
     heartbeat: () => rpc.send["ui.heartbeat"]({}),
+    e2eRespond: (response) => rpc.send["e2e.response"](response),
     on(name, listener) {
       const set = listeners.get(name) ?? new Set<AnyListener>();
       listeners.set(name, set);

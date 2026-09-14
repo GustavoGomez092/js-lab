@@ -14,7 +14,7 @@ api
   .bootstrap()
   .then((payload) => {
     store.getState().hydrate(payload);
-    createRoot(root).render(<App store={store} api={api} />);
+    createRoot(root).render(<App store={store} api={api} e2e={payload.e2e === true} />);
   })
   .catch((error: unknown) => {
     root.textContent = `JSLab failed to start: ${error instanceof Error ? error.message : String(error)}`;

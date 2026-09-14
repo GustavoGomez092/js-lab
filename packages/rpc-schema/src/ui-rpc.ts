@@ -42,6 +42,24 @@ export const tabPatchSchema = z.object({
     .partial(),
 });
 
+export const E2E_UI_METHODS = ["type", "key", "command", "state", "output"] as const;
+export type E2EUiMethod = (typeof E2E_UI_METHODS)[number];
+
+/** Main → UI: one E2E automation call, answered with an `e2e.response` message (spec §22.3). */
+export interface E2ERequest {
+  reqId: number;
+  method: E2EUiMethod;
+  params: unknown;
+}
+
+export const e2eResponseSchema = z.object({
+  reqId: z.number().int().positive(),
+  ok: z.boolean(),
+  result: z.unknown().optional(),
+  error: z.string().max(10_000).optional(),
+});
+export type E2EResponse = z.infer<typeof e2eResponseSchema>;
+
 export type RunStartParams = z.infer<typeof runStartParamsSchema>;
 export type TabParams = z.infer<typeof tabParamsSchema>;
 export type RunExpandParams = z.infer<typeof runExpandParamsSchema>;
@@ -64,6 +82,8 @@ export interface BootstrapPayload {
   buffers: Record<string, string>;
   safeMode: { active: boolean; reason: "crashLoop" | "shift" | null };
   versions: { app: string; bun: string };
+  /** True only when the app was launched with JSLAB_E2E=1; the UI then installs the automation agent. */
+  e2e?: boolean;
 }
 
 /** Requests handled by Main, called by the UI. */
@@ -81,6 +101,7 @@ export type MainMessages = {
   "buffer.changed": BufferChanged;
   "tab.patch": TabPatch;
   "ui.heartbeat": Record<string, never>;
+  "e2e.response": E2EResponse;
 };
 
 /** Messages received by the UI, sent by Main. */
@@ -89,4 +110,5 @@ export type ViewMessages = {
   "run.state": { tabId: string; runId: string; state: RunState; activeHandles?: number };
   "run.diagnostics": { tabId: string; runId: string; diagnostics: DiagnosticPayload[] };
   "menu.command": { command: CommandId };
+  "e2e.request": E2ERequest;
 };

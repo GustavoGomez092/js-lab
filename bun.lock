@@ -19,6 +19,7 @@
         "@jslab/shared": "workspace:*",
         "@jslab/transform": "workspace:*",
         "source-map-js": "1.2.1",
+        "zod": "4.6.4",
       },
     },
     "apps/ui": {

@@ -15,6 +15,8 @@ export interface AppPaths {
   runsDir: string;
   runLock: string;
   packagesNodeModules: string;
+  socketPath: string;
+  screenshotsDir: string;
   runnerBootstrap: string;
   transformWorker: string;
   bunBinary: string;
@@ -27,11 +29,16 @@ export interface AppPaths {
  */
 export function resolveAppPaths(input: AppPathsInput): AppPaths {
   const appDir = join(input.resourcesFolder, "app");
+  // JSLAB_USER_DATA points a launch at a separate data folder (E2E runs, manual QA). Runners never see it,
+  // because runnerEnvironment drops every JSLAB_* variable.
+  const dataDir = input.env.JSLAB_USER_DATA ?? input.userData;
   return {
-    dataDir: input.userData,
-    runsDir: join(input.userData, "runs"),
-    runLock: join(input.userData, "run.lock"),
-    packagesNodeModules: join(input.userData, "packages", "node_modules"),
+    dataDir,
+    runsDir: join(dataDir, "runs"),
+    runLock: join(dataDir, "run.lock"),
+    packagesNodeModules: join(dataDir, "packages", "node_modules"),
+    socketPath: join(dataDir, "jslab.sock"),
+    screenshotsDir: join(dataDir, "e2e-screenshots"),
     runnerBootstrap: input.env.JSLAB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "bootstrap.js"),
     transformWorker: input.env.JSLAB_TRANSFORM_WORKER ?? join(appDir, "workers", "transform-worker.js"),
     bunBinary: input.env.JSLAB_BUN_PATH ?? input.execPath,

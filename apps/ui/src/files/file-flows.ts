@@ -34,6 +34,7 @@ export function createFileFlows(deps: {
   api: MainApi;
   tabs: TabActions;
   dialogs: Dialogs;
+  beforeSave?(tabId: string): Promise<void>;
 }): FileFlows {
   const { store, api, tabs, dialogs } = deps;
   const s = () => store.getState();
@@ -48,19 +49,33 @@ export function createFileFlows(deps: {
     done?.(saved);
   };
 
+  const formatForSave = async (tabId: string) => {
+    if (s().settings?.editor.formatOnSave && deps.beforeSave) await deps.beforeSave(tabId);
+  };
+
   const saveAs = (tabId = s().activeTabId ?? undefined): Promise<boolean> => {
     if (!tabId || !s().tabs[tabId]) return Promise.resolve(false);
     finishSave(tabId, false);
-    return new Promise((resolve) => {
-      waiters.set(tabId, resolve);
-      api.saveAsDialog(tabId, s().buffers[tabId] ?? "");
-    });
+    return formatForSave(tabId).then(
+      () =>
+        new Promise<boolean>((resolve) => {
+          waiters.set(tabId, resolve);
+          api.saveAsDialog(tabId, s().buffers[tabId] ?? "");
+        }),
+    );
   };
 
   const save = async (tabId = s().activeTabId ?? undefined): Promise<boolean> => {
     if (!tabId || !s().tabs[tabId]) return false;
+    await formatForSave(tabId);
     const result = await api.saveFile(tabId, s().buffers[tabId] ?? "");
-    if ("needsSaveAs" in result) return saveAs(tabId);
+    if ("needsSaveAs" in result) {
+      finishSave(tabId, false);
+      return new Promise<boolean>((resolve) => {
+        waiters.set(tabId, resolve);
+        api.saveAsDialog(tabId, s().buffers[tabId] ?? "");
+      });
+    }
     if (!result.ok) {
       s().setStatusMessage(strings.files.saveFailed(result.error));
       return false;

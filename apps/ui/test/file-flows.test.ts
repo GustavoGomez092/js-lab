@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import { contentHash, createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
 import { act, fireEvent, render } from "@testing-library/react";
 import { createElement } from "react";
@@ -213,5 +213,29 @@ describe("file flows", () => {
     expect(store.getState().statusMessage).toBe(
       "pic.png isn't a text file. · huge.js is larger than 50 MB and can't be opened. · Dropping a folder sets the working directory, which arrives with working directories.",
     );
+  });
+
+  test("format on save runs before the content is saved", async () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: mergeSettings(defaultSettings(), { editor: { formatOnSave: true } }),
+      session: defaultSession(() => createTab({ id: "f", filePath: "/w/f.ts", lastSavedHash: "old" })),
+      buffers: { f: "let x=1" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const { api } = createFakeApi();
+    api.saveFile.mockImplementation(async (_id: string, content: string) => ({
+      ok: true as const,
+      tab: createTab({ id: "f", filePath: "/w/f.ts", lastSavedHash: contentHash(content) }),
+    }));
+    const tabs = createTabActions(store, api);
+    const beforeSave = mock(async (tabId: string) => {
+      store.getState().editCode("let x = 1;\n", tabId);
+    });
+    const flows = createFileFlows({ store, api, tabs, dialogs: createDialogs(store), beforeSave });
+    expect(await flows.save("f")).toBe(true);
+    expect(beforeSave).toHaveBeenCalledWith("f");
+    expect(api.saveFile).toHaveBeenCalledWith("f", "let x = 1;\n");
   });
 });

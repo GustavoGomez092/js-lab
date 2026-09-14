@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
-import type { BootstrapPayload, TabCloseResult } from "@jslab/rpc-schema";
+import { type BootstrapPayload, MAX_TEXT_CHARS, type TabCloseResult } from "@jslab/rpc-schema";
 import {
   createTab,
   defaultSession,
@@ -14,6 +14,7 @@ import type { MainApi } from "../src/api";
 import * as OutputPanelModule from "../src/output/OutputPanel";
 import { runStateLabel } from "../src/shell/labels";
 import { type AppStore, createAppStore } from "../src/state/store";
+import { strings } from "../src/strings";
 import { createFakeApi } from "./fake-api";
 
 // Monaco and the virtualized list need a real browser layout; the shell behavior under test does not.
@@ -64,6 +65,16 @@ describe("App shell", () => {
       logpoints: [],
       reason: "manual",
     });
+  });
+
+  // R-M2-T21-2: Main would reject a run.start whose code exceeds MAX_TEXT_CHARS; the UI must say so instead
+  // of failing silently or sending the oversized payload.
+  test("Cmd+R on a tab larger than MAX_TEXT_CHARS reports the limit instead of starting a run", () => {
+    const { store, api } = renderApp();
+    act(() => store.getState().editCode("a".repeat(MAX_TEXT_CHARS + 1)));
+    press("KeyR");
+    expect(api.startRun).not.toHaveBeenCalled();
+    expect(store.getState().statusMessage).toBe(strings.limits.tooLarge);
   });
 
   test("Cmd+Shift+R stops and Cmd+Alt+R kills", () => {

@@ -1,6 +1,6 @@
 import { MAX_TEXT_CHARS } from "@jslab/rpc-schema";
 import { commandMeta, DEFAULT_KEYBINDINGS, deriveTitle, resolveKeybindings } from "@jslab/shared";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { createAppCommands } from "../commands/app-commands";
@@ -13,6 +13,8 @@ import { Editor } from "../editor/Editor";
 import { getEditorHandle } from "../editor/editor-handle";
 import { createFileCommands } from "../files/file-commands";
 import { createFileFlows } from "../files/file-flows";
+import { createFormatActions } from "../format/format-actions";
+import { type Formatter, shouldFormatBeforeRun } from "../format/formatter";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { OutputPanel } from "../output/OutputPanel";
 import { CommandPalette } from "../palette/CommandPalette";
@@ -48,11 +50,13 @@ export function App({
   api,
   e2e = false,
   scheduleFrame = defaultScheduleFrame,
+  formatter,
 }: {
   store: AppStore;
   api: MainApi;
   e2e?: boolean;
   scheduleFrame?: (callback: () => void) => void;
+  formatter?: Formatter;
 }) {
   const tab = useStore(store, (s) => s.tab);
   const runState = useStore(store, (s) => s.output.runState);
@@ -62,19 +66,45 @@ export function App({
   const sideBarPanel = useStore(store, (s) => s.sideBarPanel);
   const tabCount = useStore(store, (s) => s.tabOrder.length);
 
+  const lastTypedAt = useRef(0);
+  const format = useMemo(
+    () => (formatter ? createFormatActions({ store, formatter, editor: getEditorHandle }) : null),
+    [store, formatter],
+  );
+
   const run = useCallback(
     (reason: "auto" | "manual") => {
       const state = store.getState();
       if (!state.tab) return;
       if (reason === "manual") state.armAutoRun();
-      if (state.code.length > MAX_TEXT_CHARS) {
-        // Main would reject a run.start this large (MAX_TEXT_CHARS); say so instead of failing silently.
-        state.setStatusMessage(strings.limits.tooLarge);
-        return;
-      }
-      void api.startRun({ tabId: state.tab.id, code: state.code, language: state.tab.language, logpoints: [], reason });
+      const start = () => {
+        const fresh = store.getState();
+        if (!fresh.tab) return;
+        if (fresh.code.length > MAX_TEXT_CHARS) {
+          // Main would reject a run.start this large (MAX_TEXT_CHARS, Task 13); say so instead of failing silently.
+          fresh.setStatusMessage(strings.limits.tooLarge);
+          return;
+        }
+        void api.startRun({
+          tabId: fresh.tab.id,
+          code: fresh.code,
+          language: fresh.tab.language,
+          logpoints: [],
+          reason,
+        });
+      };
+      const wantsFormat =
+        format !== null &&
+        shouldFormatBeforeRun({
+          formatOnRun: Boolean(state.settings?.run.formatOnRun),
+          editorFocused: getEditorHandle()?.hasFocus() ?? false,
+          lastTypedAt: lastTypedAt.current,
+          now: Date.now(),
+        });
+      if (wantsFormat && format) void format.formatTab().then(start);
+      else start();
     },
-    [store, api],
+    [store, api, format],
   );
 
   const tabs = useMemo(() => createTabActions(store, api), [store, api]);
@@ -87,7 +117,17 @@ export function App({
     [store, scheduleFrame],
   );
   const dialogs = useMemo(() => createDialogs(store), [store]);
-  const flows = useMemo(() => createFileFlows({ store, api, tabs, dialogs }), [store, api, tabs, dialogs]);
+  const flows = useMemo(
+    () =>
+      createFileFlows({
+        store,
+        api,
+        tabs,
+        dialogs,
+        ...(format ? { beforeSave: async (tabId: string) => void (await format.formatTab(tabId)) } : {}),
+      }),
+    [store, api, tabs, dialogs, format],
+  );
 
   // The close guard is a side effect, so it lives in an effect and is cleared on unmount (fix round 1, m-6).
   useEffect(() => {
@@ -130,9 +170,14 @@ export function App({
           state.openModal({ kind: "palette", context });
         },
       },
+      {
+        id: "format.document",
+        isEnabled: () => format !== null,
+        run: async () => void (await format?.formatTab()),
+      },
     );
     return created;
-  }, [store, api, tabs, run, flows]);
+  }, [store, api, tabs, run, flows, format]);
 
   const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
   const resolver = useMemo(() => new KeybindingResolver(bindings), [bindings]);
@@ -219,6 +264,7 @@ export function App({
             // Main rejects buffer.changed above MAX_TEXT_CHARS. Tell the user rather than dropping the edit silently.
             if (content.length > MAX_TEXT_CHARS) store.getState().setStatusMessage(strings.limits.tooLarge);
             else api.bufferChanged(id, content);
+            if (id === state.activeTabId) lastTypedAt.current = Date.now();
           }
           // updateLayout (state/store.ts) always replaces the layout object, even when the clamped
           // fields end up the same (a divider drag past 10/90, or a reset to the current split), so

@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { createPrettierWorkerFormatter } from "./format/worker-client";
 import { createRpcApi } from "./rpc";
 import { App } from "./shell/App";
 import { showStartupFailure } from "./shell/startup-failure";
@@ -17,7 +18,9 @@ api
   .bootstrap()
   .then((payload) => {
     store.getState().hydrate(payload);
-    createRoot(root).render(<App store={store} api={api} e2e={payload.e2e === true} />);
+    createRoot(root).render(
+      <App store={store} api={api} e2e={payload.e2e === true} formatter={createPrettierWorkerFormatter()} />,
+    );
   })
   .catch((error: unknown) => {
     showStartupFailure(root, error, { heartbeat: () => api.heartbeat(), reload: () => window.location.reload() });

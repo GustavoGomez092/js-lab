@@ -11,6 +11,9 @@ export const strings = {
   limits: {
     tooLarge: "This tab is larger than 64 MB. JSLab stops saving and running it until it's smaller.",
   },
+  format: {
+    failed: (message: string) => `Couldn't format: ${message}`,
+  },
   // Carried item T11-m4: a tab action (create/close/reopen/...) that Main rejects reports a status message
   // instead of leaving an unhandled rejection.
   tabs: {

@@ -1,6 +1,7 @@
-import { unlink } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { transform } from "../src/transform";
 import type { TransformOptions } from "../src/types";
 
@@ -32,12 +33,15 @@ export async function runInstrumented(source: string, options: Partial<Transform
       return value;
     },
   };
-  const file = join(tmpdir(), `jslab-transform-${crypto.randomUUID()}.mjs`);
+  // Bun 1.4.0 can't import a module created directly in the (symlinked) macOS temp directory, even by URL.
+  // A fresh directory per module works on every Bun version.
+  const dir = await mkdtemp(join(tmpdir(), "jslab-transform-"));
+  const file = join(dir, "module.mjs");
   await Bun.write(file, result.code);
   try {
-    await import(file);
+    await import(pathToFileURL(file).href);
   } finally {
-    await unlink(file);
+    await rm(dir, { recursive: true, force: true });
   }
   return { calls, result };
 }

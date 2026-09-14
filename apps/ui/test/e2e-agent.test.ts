@@ -89,6 +89,19 @@ describe("E2E agent", () => {
     expect(await agent("state", {})).toMatchObject({ missingEditorActions: ["editor.action.nope"] });
   });
 
+  test("type writes into a focused plain input outside Monaco", async () => {
+    const store = createAppStore();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    const seen: string[] = [];
+    input.addEventListener("input", () => seen.push(input.value));
+    const agent = createE2EAgent({ store, executeCommand: () => "unknown", editor: () => null, target: () => input });
+    await agent("type", { text: "tog", replace: true });
+    await agent("type", { text: "gle", replace: false });
+    expect([input.value, seen]).toEqual(["toggle", ["tog", "toggle"]]);
+    input.remove();
+  });
+
   test("the e2e.openLink command clicks a temporary web link in the page (R-M1-17(e))", async () => {
     const { agent, executeCommand } = setup();
     const clicked: string[] = [];

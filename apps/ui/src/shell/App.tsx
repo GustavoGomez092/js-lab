@@ -15,6 +15,7 @@ import { createFileCommands } from "../files/file-commands";
 import { createFileFlows } from "../files/file-flows";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { OutputPanel } from "../output/OutputPanel";
+import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
 import { createEventCoalescer } from "../state/event-coalescer";
 import type { AppStore } from "../state/store";
@@ -105,14 +106,20 @@ export function App({
       ...createViewCommands(store, api),
       ...createFileCommands(flows, api),
       ...createOutputCommands(store),
+      {
+        id: "view.commandPalette",
+        run: () => {
+          const state = store.getState();
+          if (state.modal?.kind === "palette") state.closeModal();
+          else state.openModal({ kind: "palette", context: state.focus === "output" ? "output" : "editor" });
+        },
+      },
     );
     return created;
   }, [store, api, tabs, run, flows]);
 
-  const resolver = useMemo(
-    () => new KeybindingResolver(resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings)),
-    [store],
-  );
+  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
+  const resolver = useMemo(() => new KeybindingResolver(bindings), [bindings]);
 
   useEffect(() => startAutoRun(store, () => run("auto")), [store, run]);
 
@@ -327,6 +334,7 @@ export function App({
       )}
       <RenameDialog store={store} />
       <ConfirmDialog store={store} dialogs={dialogs} />
+      <CommandPalette store={store} registry={registry} bindings={bindings} />
       {runState === "unresponsive" && (
         <UnresponsiveDialog onKill={() => registry.execute("run.kill")} onWait={() => api.wait(tabId)} />
       )}

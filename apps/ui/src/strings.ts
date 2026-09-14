@@ -81,6 +81,14 @@ export const strings = {
     runtime: "Runtime",
     language: "Language",
   },
+  palette: {
+    label: "Command palette",
+    placeholder: "Type a command",
+    context: { editor: "Editor", output: "Output" },
+    themeItem: (name: string) => `Theme: ${name}`,
+    empty: "No matching commands",
+    footer: { run: "run", move: "move", close: "close" },
+  },
   output: {
     filters: { all: "All", results: "Results", logs: "Logs", errors: "Errors" },
     filterLabel: "Output filter",

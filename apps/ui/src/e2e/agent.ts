@@ -46,6 +46,19 @@ export function createE2EAgent(deps: E2EAgentDeps) {
     switch (method) {
       case "type": {
         const { text, replace } = params as { text: string; replace?: boolean };
+        const target = deps.target();
+        const plainField =
+          target instanceof HTMLInputElement ||
+          (target instanceof HTMLTextAreaElement && !target.closest(".monaco-editor"));
+        if (plainField) {
+          const field = target as HTMLInputElement | HTMLTextAreaElement;
+          const prototype =
+            field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          // React tracks the value through the native setter; assigning `.value` directly would skip onChange.
+          Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(field, replace ? text : field.value + text);
+          field.dispatchEvent(new Event("input", { bubbles: true }));
+          return { typed: text.length };
+        }
         const editor = deps.editor();
         if (!editor) throw new Error("No editor is mounted");
         editor.typeText(text, replace === true);

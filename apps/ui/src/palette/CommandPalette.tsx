@@ -1,0 +1,167 @@
+import type { ResolvedBinding } from "@jslab/shared";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { useStore } from "zustand";
+import type { CommandRegistry } from "../commands/registry";
+import type { AppStore } from "../state/store";
+import { strings } from "../strings";
+import { paletteItems } from "./items";
+import { buildSections, type RankedItem } from "./match";
+
+export function CommandPalette(props: {
+  store: AppStore;
+  registry: CommandRegistry;
+  bindings: readonly ResolvedBinding[];
+}) {
+  const modal = useStore(props.store, (s) => s.modal);
+  if (modal?.kind !== "palette") return null;
+  return <PaletteBody {...props} context={modal.context} />;
+}
+
+function highlight(title: string, ranges: [number, number][]): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    if (start > cursor) nodes.push(title.slice(cursor, start));
+    nodes.push(<mark key={start}>{title.slice(start, end)}</mark>);
+    cursor = end;
+  }
+  if (cursor < title.length) nodes.push(title.slice(cursor));
+  return nodes;
+}
+
+function PaletteBody(props: {
+  store: AppStore;
+  registry: CommandRegistry;
+  bindings: readonly ResolvedBinding[];
+  context: "editor" | "output";
+}) {
+  const { store, registry, bindings, context } = props;
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null);
+
+  const items = useMemo(() => paletteItems(registry, bindings, store.getState().themeId), [registry, bindings, store]);
+  const sections = useMemo(() => buildSections(items, query, context), [items, query, context]);
+  const flat = useMemo(() => sections.flatMap((section) => section.items), [sections]);
+
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-scrolls whenever the selected index changes, even though `active` isn't read directly (the DOM query finds the element by its aria-selected attribute).
+  useEffect(() => {
+    list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [active]);
+
+  const close = () => {
+    store.getState().closeModal();
+    previousFocus.current?.focus?.();
+  };
+
+  const run = (item: RankedItem | undefined) => {
+    if (!item) return;
+    close();
+    registry.execute(item.id, item.args);
+  };
+
+  const optionId = (index: number) => `palette-option-${index}`;
+  let index = -1;
+
+  return (
+    <>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: clicking the scrim is a pointer shortcut for Escape */}
+      <div className="palette-scrim" onMouseDown={close} />
+      <div className="palette" role="dialog" aria-modal="true" aria-label={strings.palette.label}>
+        <div className="palette-input">
+          <input
+            ref={input}
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="palette-list"
+            aria-activedescendant={flat.length > 0 ? optionId(active) : undefined}
+            aria-label={strings.palette.label}
+            placeholder={strings.palette.placeholder}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setActive(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setActive((current) => Math.min(flat.length - 1, current + 1));
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setActive((current) => Math.max(0, current - 1));
+              } else if (event.key === "Enter") {
+                event.preventDefault();
+                run(flat[active]);
+              } else if (event.key === "Escape" || (event.metaKey && event.shiftKey && event.code === "KeyP")) {
+                event.preventDefault();
+                close();
+              }
+            }}
+          />
+          <span className="palette-context" data-testid="palette-context">
+            {strings.palette.context[context]}
+          </span>
+        </div>
+        <div className="palette-list" id="palette-list" role="listbox" ref={list}>
+          {flat.length === 0 && <div className="palette-empty">{strings.palette.empty}</div>}
+          {sections.map((section) => (
+            <div className="palette-group" key={section.category} role="presentation">
+              <div className="palette-label" role="presentation">
+                {section.label}
+              </div>
+              {section.items.map((item) => {
+                index += 1;
+                const position = index;
+                return (
+                  <div
+                    key={`${item.id}:${JSON.stringify(item.args ?? null)}`}
+                    id={optionId(position)}
+                    role="option"
+                    tabIndex={-1}
+                    aria-selected={position === active}
+                    className="palette-item"
+                    onMouseMove={() => setActive(position)}
+                    onClick={() => run(item)}
+                    onKeyDown={() => {}}
+                  >
+                    <span className="palette-title">{highlight(item.title, item.ranges)}</span>
+                    {item.description && <span className="palette-desc">{item.description}</span>}
+                    {item.keys.length > 0 && (
+                      <span className="palette-keys">
+                        {item.keys.map((key) => (
+                          <Fragment key={key}>
+                            <b>{key}</b>
+                          </Fragment>
+                        ))}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+        <div className="palette-foot">
+          <span>
+            <b>↵</b>
+            {strings.palette.footer.run}
+          </span>
+          <span>
+            <b>↑↓</b>
+            {strings.palette.footer.move}
+          </span>
+          <span>
+            <b>esc</b>
+            {strings.palette.footer.close}
+          </span>
+        </div>
+      </div>
+    </>
+  );
+}

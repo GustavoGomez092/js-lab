@@ -176,7 +176,12 @@ test("an error's name and message are capped in bytes and marked as cut", async 
 
 test("stop does not report errors from work it aborted", async () => {
   let requests = 0;
+  // H3 hardening (flake-2-analysis.md): bind loopback explicitly. `port: 0` with no hostname binds an
+  // IPv6 dual-stack wildcard; an IPv4-only listener elsewhere could then shadow it. Binding 127.0.0.1
+  // explicitly matches the entry's connect address and fails loudly at startup if the port is taken,
+  // instead of silently handing this server's traffic to another listener.
   const server = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch: (_req) => {
       requests++;
@@ -186,12 +191,27 @@ test("stop does not report errors from work it aborted", async () => {
   try {
     const port = server.port;
     const runner = startRunner();
-    const source = `fetch("http://127.0.0.1:${port}/a").then(() => {});\nawait fetch("http://127.0.0.1:${port}/b");\nexport {};\n`;
+    // The marker fires before either fetch call. Its presence in runner.messages on a failure separates
+    // "the run never started" (H2, marker absent) from "the fetch stalled" (H1, marker present, no error).
+    const source = `console.log("jslab-flake2-before-fetch");\nfetch("http://127.0.0.1:${port}/a").then(() => {});\nawait fetch("http://127.0.0.1:${port}/b");\nexport {};\n`;
     await runner.run(source);
-    // Wait until the server has received 2 requests
+    // Wait until the server has received 2 requests. Stop early with a diagnostic, instead of waiting out
+    // the full budget, if the run reports an error or reaches a terminal state first (H4): the original
+    // poll only checked `requests`, so a fetch that failed immediately still read as a 5s hang.
     const started = Date.now();
     while (requests < 2) {
-      if (Date.now() - started > 5000) throw new Error(`timed out; requests=${requests}`);
+      const errors = runner.events().filter((e) => e.kind === "error");
+      const settledEarly = runner.messages.some(
+        (m) => m.type === "state" && (m.state === "idle" || m.state === "stopped"),
+      );
+      if (errors.length > 0 || settledEarly) {
+        throw new Error(
+          `run settled before 2 requests arrived; requests=${requests}; messages=${JSON.stringify(runner.messages)}`,
+        );
+      }
+      if (Date.now() - started > 5000) {
+        throw new Error(`timed out; requests=${requests}; messages=${JSON.stringify(runner.messages)}`);
+      }
       await Bun.sleep(10);
     }
     runner.proc.send({ type: "stop" });
@@ -201,7 +221,7 @@ test("stop does not report errors from work it aborted", async () => {
   } finally {
     server.stop(true);
   }
-});
+}, 15000);
 
 test("the runner exits when its parent dies", async () => {
   const bootstrapPath = JSON.stringify(BOOTSTRAP);

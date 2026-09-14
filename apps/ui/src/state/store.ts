@@ -52,6 +52,8 @@ export interface AppState {
   themeId: string;
   /** True when `appearance.font` failed to load and JetBrains Mono is in use instead (spec §9.4). */
   fontFallback: boolean;
+  /** Which panel the side bar shows when open (Task 16). Snippets and AI Chat arrive in M5. */
+  sideBarPanel: "snippets" | "ai";
 
   // Mirrors of the active tab, so M1 components keep reading a single tab.
   tab: TabState | null;
@@ -102,6 +104,7 @@ export interface AppState {
   setVimMode(mode: string | null): void;
   setThemeId(themeId: string): void;
   setFontFallback(value: boolean): void;
+  setSideBarPanel(panel: "snippets" | "ai"): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -175,6 +178,7 @@ export function createAppStore() {
       vimMode: null,
       themeId: "graphite",
       fontFallback: false,
+      sideBarPanel: "snippets",
       tab: null,
       code: "",
       autoRunArmed: false,
@@ -397,6 +401,10 @@ export function createAppStore() {
 
       setFontFallback(fontFallback) {
         if (fontFallback !== get().fontFallback) set({ fontFallback });
+      },
+
+      setSideBarPanel(sideBarPanel) {
+        set({ sideBarPanel });
       },
     };
   });

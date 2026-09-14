@@ -1,5 +1,5 @@
 import type { RunState } from "@jslab/rpc-schema";
-import type { Language } from "@jslab/shared";
+import type { Language, Runtime } from "@jslab/shared";
 
 export const LANGUAGE_LABELS: Record<Language, string> = {
   typescript: "TypeScript",
@@ -44,5 +44,30 @@ export function runStateLabel(input: {
       return "Not responding";
     case "idle":
       return "";
+  }
+}
+
+export const RUNTIME_LABELS: Record<Runtime, string> = {
+  "browser-node": "Browser & Node APIs",
+  bun: "Bun",
+  browser: "Browser",
+};
+
+export type RunStateKind = "idle" | "running" | "settled" | "failed" | "warn";
+
+export function runStateKind(state: RunState | null): RunStateKind {
+  switch (state) {
+    case "transpiling":
+    case "evaluating":
+    case "stopping":
+      return "running";
+    case "settled":
+      return "settled";
+    case "failed":
+      return "failed";
+    case "unresponsive":
+      return "warn";
+    default:
+      return "idle";
   }
 }

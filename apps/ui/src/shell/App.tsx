@@ -19,7 +19,13 @@ import { createTabActions } from "../tabs/tab-actions";
 import { startThemeSync } from "../themes/apply";
 import { startAppearanceSync } from "../themes/fonts";
 import { createThemeCommands } from "../themes/theme-commands";
-import { ActivityBar, SafeModeBanner, SplitPane, StartupNotices, StatusBar, UnresponsiveDialog } from "./parts";
+import { ActivityBar } from "./ActivityBar";
+import { BUSY_STATES } from "./labels";
+import { SafeModeBanner, StartupNotices, UnresponsiveDialog } from "./parts";
+import { SideBar } from "./SideBar";
+import { SplitPane } from "./SplitPane";
+import { StatusBar } from "./StatusBar";
+import { Toolbar } from "./Toolbar";
 
 const UI_HEARTBEAT_MS = 2000;
 
@@ -28,6 +34,8 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
   const runState = useStore(store, (s) => s.output.runState);
   const safeMode = useStore(store, (s) => s.safeMode);
   const notices = useStore(store, (s) => s.notices);
+  const settings = useStore(store, (s) => s.settings);
+  const sideBarPanel = useStore(store, (s) => s.sideBarPanel);
 
   const run = useCallback(
     (reason: "auto" | "manual") => {
@@ -105,6 +113,14 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       executeCommand: (id, args) => registry.execute(id, args),
       missingEditorActions: () => getEditorHandle()?.missingActions(Object.values(EDITOR_ACTIONS)) ?? [],
       editorOptions: () => getEditorHandle()?.getOptions() ?? null,
+      regions: () => ({
+        toolbar: document.querySelector(".toolbar") !== null,
+        activityBar: document.querySelector(".activity-bar") !== null,
+        sideBar: document.querySelector(".side-bar") !== null,
+        statusBar: document.querySelector(".status-bar") !== null,
+        output: document.querySelector(".output") !== null,
+        tabBar: document.querySelector(".tab-bar") !== null,
+      }),
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {
       agent(method, params).then(
@@ -178,28 +194,62 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [store, resolver, registry]);
 
-  if (!tab) return null;
+  const togglePanel = useCallback(
+    (panel: "snippets" | "ai") => {
+      const state = store.getState();
+      const open = Boolean(state.settings?.view.sideBar);
+      if (open && state.sideBarPanel === panel) {
+        registry.execute("view.toggleSideBar");
+        return;
+      }
+      state.setSideBarPanel(panel);
+      if (!open) registry.execute("view.toggleSideBar");
+    },
+    [store, registry],
+  );
+
+  if (!tab || !settings) return null;
   const tabId = tab.id;
+  const busy = runState !== null && BUSY_STATES.has(runState);
 
   return (
     <div className="app">
+      <Toolbar
+        autoRun={settings.run.autoRun}
+        busy={busy}
+        onToggleAutoRun={() => registry.execute("run.toggleAutoRun")}
+        onRun={() => registry.execute("run.start")}
+        onStop={() => registry.execute("run.stop")}
+      />
       {safeMode.active && <SafeModeBanner reason={safeMode.reason} />}
       <StartupNotices notices={notices} onDismiss={(id) => store.getState().dismissNotice(id)} />
       <div className="app-main">
-        <ActivityBar
-          runState={runState}
-          onRun={() => registry.execute("run.start")}
-          onStop={() => registry.execute("run.stop")}
-        />
+        {settings.view.activityBar && (
+          <ActivityBar
+            busy={busy}
+            sideBarOpen={settings.view.sideBar}
+            panel={sideBarPanel}
+            canOpenSettings={registry.isEnabled("app.settings")}
+            onRun={() => registry.execute("run.start")}
+            onStop={() => registry.execute("run.stop")}
+            onPanel={togglePanel}
+            onSettings={() => registry.execute("app.settings")}
+          />
+        )}
+        {settings.view.sideBar && <SideBar panel={sideBarPanel} />}
         <SplitPane
           orientation={tab.layout.orientation}
           size={tab.layout.editorSize}
+          secondVisible={tab.layout.outputVisible}
           onResize={(size) => store.getState().setEditorSize(size)}
+          onReset={() => store.getState().resetEditorSize()}
           first={<Editor store={store} api={api} />}
           second={<OutputPanel store={store} api={api} />}
         />
       </div>
-      <StatusBar store={store} />
+      {settings.view.statusBar && (
+        <StatusBar store={store} onToggleLayout={() => registry.execute("view.toggleLayout")} />
+      )}
       {runState === "unresponsive" && (
         <UnresponsiveDialog onKill={() => registry.execute("run.kill")} onWait={() => api.wait(tabId)} />
       )}

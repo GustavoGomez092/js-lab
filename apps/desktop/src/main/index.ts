@@ -261,6 +261,7 @@ async function start(): Promise<void> {
     title: "JSLab",
     url,
     frame: session.session.window ?? { x: 120, y: 80, width: 1280, height: 820 },
+    titleBarStyle: "hiddenInset",
     rpc,
   });
 

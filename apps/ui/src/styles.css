@@ -9,6 +9,11 @@
   --statusbar-height: calc(28px * var(--ui-scale));
   --activity-width: 48px;
   --radius: 6px;
+  /* R-M2-USER-1: hiddenInset leaves the native traffic lights floating over the toolbar row. 78px clears the
+     stoplight cluster (macOS's own inset is ~20px from the left edge, the three 12px dots plus their gaps run
+     to about 58px, and a few px of breathing room brings it to 78px) so the first toolbar control never
+     overlaps them. Not scaled by --ui-scale: the traffic lights themselves are a fixed native size. */
+  --toolbar-traffic-inset: 78px;
 
   --bg-canvas: #1b1e23;
   --bg-chrome: #16191d;
@@ -522,4 +527,177 @@ button:disabled {
 .startup-failure button {
   padding: 6px 16px;
   border: 1px solid var(--border-default);
+}
+
+/* ---------- unified toolbar ---------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--toolbar-height);
+  padding-right: 10px;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border-default);
+  -webkit-app-region: drag;
+  app-region: drag;
+  user-select: none;
+}
+
+.toolbar-traffic {
+  flex: 0 0 var(--toolbar-traffic-inset);
+  height: 100%;
+}
+
+.toolbar-tabs {
+  display: flex;
+  flex: 1;
+  align-items: stretch;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.toolbar-actions,
+.toolbar button,
+.toolbar input,
+.toolbar [role="tab"] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.tb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  background: var(--bg-elevated);
+  border-color: var(--border-default);
+  color: var(--fg-default);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tb-btn.run {
+  background: var(--bg-accentMuted);
+  border-color: var(--border-accent);
+  color: var(--fg-onAccent);
+}
+
+.kbd {
+  font: 500 11px / 1 var(--mono);
+  color: var(--fg-muted);
+}
+
+.tb-btn.run .kbd {
+  color: var(--fg-onAccent);
+}
+
+.activity-spacer {
+  flex: 1;
+}
+
+.activity-bar > button:last-child {
+  margin-bottom: 10px;
+}
+
+/* ---------- side bar ---------- */
+.side-bar {
+  width: 280px;
+  min-width: 240px;
+  max-width: 600px;
+  padding: 12px;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border-default);
+  color: var(--fg-muted);
+}
+
+.side-bar h2 {
+  margin: 0 0 8px;
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ---------- status bar parts ---------- */
+.status-left,
+.status-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.status-right {
+  margin-left: auto;
+}
+
+.status-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+
+.state-running .status-dot {
+  background: var(--fg-accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.state-settled .status-dot {
+  background: var(--fg-success);
+}
+
+.state-failed .status-dot {
+  background: var(--fg-error);
+}
+
+.state-warn .status-dot {
+  background: var(--fg-warn);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state-running .status-dot {
+    animation: none;
+  }
+}
+
+.status-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--fg-warn);
+}
+
+.status-message {
+  overflow: hidden;
+  color: var(--fg-default);
+  text-overflow: ellipsis;
+}
+
+.status-vim {
+  color: var(--fg-accent);
+  font-family: var(--mono);
+}
+
+.status-item {
+  padding: 0 4px;
 }

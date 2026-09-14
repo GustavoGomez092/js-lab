@@ -1,6 +1,13 @@
 import { beforeAll, describe, expect, mock, test } from "bun:test";
 import type { BootstrapPayload, TabCloseResult } from "@jslab/rpc-schema";
-import { createTab, defaultSession, defaultSettings, type KeybindingRule, MAX_CLOSED_TABS } from "@jslab/shared";
+import {
+  createTab,
+  defaultSession,
+  defaultSettings,
+  type KeybindingRule,
+  MAX_CLOSED_TABS,
+  mergeSettings,
+} from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentType } from "react";
 import type { MainApi } from "../src/api";
@@ -85,7 +92,7 @@ describe("App shell", () => {
     const { store, api } = renderApp();
     act(() => store.getState().editCode("2 + 2"));
     expect(api.bufferChanged).toHaveBeenCalledWith("t1", "2 + 2");
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "javascript" } });
+    fireEvent.change(screen.getByLabelText("Language"), { target: { value: "javascript" } });
     expect(api.patchTab).toHaveBeenCalledWith("t1", expect.objectContaining({ language: "javascript" }));
   });
 
@@ -237,6 +244,27 @@ describe("App shell", () => {
     act(() => store.getState().setEditorSize(95));
     act(() => store.getState().setEditorSize(95));
     expect(api.patchTab).toHaveBeenCalledTimes(1);
+  });
+
+  test("view settings hide the activity bar and status bar, and hidden output leaves only the editor", async () => {
+    const { store, emit } = renderApp();
+    expect(document.querySelector(".activity-bar")).not.toBeNull();
+    // R-M2-USER-1: the toolbar row is the window drag region; its action buttons opt back out, or every
+    // click on Run/Auto Run would instead start dragging the (hiddenInset) window.
+    expect(document.querySelector(".toolbar")?.classList.contains("electrobun-webkit-app-region-drag")).toBe(true);
+    expect(document.querySelector(".toolbar-actions")?.classList.contains("electrobun-webkit-app-region-no-drag")).toBe(
+      true,
+    );
+    await emit("settings.changed", {
+      settings: mergeSettings(store.getState().settings ?? defaultSettings(), {
+        view: { activityBar: false, statusBar: false },
+      }),
+    });
+    expect(document.querySelector(".activity-bar")).toBeNull();
+    expect(document.querySelector(".status-bar")).toBeNull();
+    act(() => store.getState().toggleOutputVisible());
+    expect(screen.queryByTestId("output")).toBeNull();
+    expect(screen.getByTestId("editor")).toBeTruthy();
   });
 });
 

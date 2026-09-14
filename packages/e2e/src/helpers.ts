@@ -10,6 +10,7 @@ export interface TabSnapshot {
   entryCount: number;
   stale: boolean;
   truncated: number;
+  layout: { orientation: string; outputVisible: boolean; editorSize?: number; [key: string]: unknown };
   [key: string]: unknown;
 }
 

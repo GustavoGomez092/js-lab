@@ -15,6 +15,8 @@ export interface E2EAgentDeps {
   /** Monaco action ids from EDITOR_ACTIONS that don't exist in this Monaco build (verification step). */
   missingEditorActions?(): string[];
   editorOptions?(): Record<string, unknown> | null;
+  /** Which layout regions are currently mounted, keyed by name (verification step, Task 16). */
+  regions?(): Record<string, boolean>;
 }
 
 /**
@@ -50,6 +52,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
           ...snapshotState(deps.store.getState()),
           missingEditorActions: deps.missingEditorActions?.() ?? [],
           editorOptions: deps.editorOptions?.() ?? null,
+          regions: deps.regions?.() ?? {},
         };
       case "output":
         return { entries: snapshotOutput(deps.store.getState(), (params as { tabId?: string }).tabId) };

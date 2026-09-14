@@ -1,13 +1,21 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { SplitPane } from "../src/shell/parts";
+import { SplitPane } from "../src/shell/SplitPane";
 
 describe("SplitPane", () => {
   test("removes drag listeners when unmounted mid-drag", () => {
     const removeEventListener = spyOn(window, "removeEventListener");
     try {
       const { unmount } = render(
-        <SplitPane orientation="horizontal" size={50} onResize={() => {}} first={<div />} second={<div />} />,
+        <SplitPane
+          orientation="horizontal"
+          size={50}
+          secondVisible
+          onResize={() => {}}
+          onReset={() => {}}
+          first={<div />}
+          second={<div />}
+        />,
       );
 
       // Start a drag: this registers window-level pointermove/pointerup listeners that only `up()` used to remove.

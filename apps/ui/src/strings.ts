@@ -23,4 +23,22 @@ export const strings = {
     // JetBrains Mono" from JetBrains Mono.
     bundledUnavailable: "The bundled code font couldn't load; using the system monospace font.",
   },
+  shell: {
+    run: "Run",
+    stop: "Stop",
+    autoRun: "Auto Run",
+    on: "on",
+    off: "off",
+    snippets: "Snippets",
+    npm: "NPM Packages",
+    aiChat: "AI Chat",
+    settings: "Settings",
+    laterMilestone: "Arrives in a later version",
+    safeMode: "Safe Mode",
+    sideBarPlaceholder: "This panel arrives in a later version.",
+    split: { horizontal: "Side by side", vertical: "Stacked" },
+    cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
+    runtime: "Runtime",
+    language: "Language",
+  },
 } as const;

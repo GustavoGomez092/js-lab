@@ -23645,13 +23645,16 @@ Run against the packaged canary build on macOS arm64, from a clean data folder, 
 - Launch it with `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1`, from a shell whose working directory is on internal disk (R-M1-14). Bun opens its cwd at startup, and a cwd on an external volume (such as a worktree checkout) blocks forever on a hidden removable-volume consent prompt.
 - Quit from the app menu. When a script must stop it, use the scoped, zsh-safe teardown below (R-M1-13) and nothing broader.
 
+Note: R-M2-T25-1 / final review FB-I3 superseded the `rm -rf` step below with the guarded move used in the QA checklists.
+
 ```bash
 export PATH="$HOME/.hutch/bin:$PATH"
 REPO="$(git rev-parse --show-toplevel)"
 builtin cd "$REPO/apps/desktop" && hutch run build && builtin cd "$REPO"
 : "${JSLAB_QA_DIR:?set JSLAB_QA_DIR to a folder under the session scratchpad (internal disk, R-M1-8)}"
 APP="$(ls -d apps/desktop/build/canary-macos-arm64/*.app)"
-rm -rf "$HOME/Library/Application Support/dev.jslab.app/canary"
+# Move an existing canary data folder into the QA folder instead of deleting it (R-M2-T25-1 / FB-I3).
+[ -d "$HOME/Library/Application Support/dev.jslab.app/canary" ] && mv "$HOME/Library/Application Support/dev.jslab.app/canary" "$JSLAB_QA_DIR/canary-data-backup-$(date +%Y%m%d-%H%M%S)"
 cp -R "$APP" "$JSLAB_QA_DIR/"
 builtin cd "$JSLAB_QA_DIR"  # R-M1-14: internal-disk cwd before exec'ing the launcher
 ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "$JSLAB_QA_DIR/$(basename "$APP")/Contents/MacOS/launcher" &

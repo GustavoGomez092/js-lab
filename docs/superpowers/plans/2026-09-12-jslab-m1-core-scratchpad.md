@@ -9144,10 +9144,13 @@ Run against a packaged canary build (`cd apps/desktop && hutch run build`), on m
 
 From the repository root (the build step above leaves the shell in `apps/desktop`, so return first):
 
+Note: R-M2-T25-1 / final review FB-I3 superseded the `rm -rf` step below with the guarded move used in the QA checklists.
+
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-rm -rf ~/Library/Application\ Support/dev.jslab.app/canary
 QA_DIR="$(mktemp -d)"
+# Move an existing canary data folder into the QA folder instead of deleting it (R-M2-T25-1 / FB-I3).
+[ -d "$HOME/Library/Application Support/dev.jslab.app/canary" ] && mv "$HOME/Library/Application Support/dev.jslab.app/canary" "$QA_DIR/canary-data-backup-$(date +%Y%m%d-%H%M%S)"
 cp -R "apps/desktop/build/canary-macos-arm64/JSLab-canary.app" "$QA_DIR/"
 ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "$QA_DIR/JSLab-canary.app/Contents/MacOS/launcher" &
 ```

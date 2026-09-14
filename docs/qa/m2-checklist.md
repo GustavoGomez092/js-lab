@@ -30,6 +30,8 @@ survivors=( $(pgrep -f "$JSLAB_QA_DIR/") $(pgrep -f "Library/Application Support
 for p in "${survivors[@]}"; do kill -KILL "$p"; done
 ```
 
+**Warm-up before `bun run e2e` (R-M2-FINAL-8 A).** A freshly copied canary hasn't self-extracted yet — it is only a launcher plus `.tar.zst` until it is launched once. `launchApp` now refuses to spawn such a copy (it would otherwise relaunch outside the harness's process tree, untracked, and possibly against the real canary data folder), so warm the copy first using the launch procedure above: launch it, wait for the window, then quit from the app menu (or the scoped teardown below). Only after that warm-up does `JSLAB_E2E_APP="$JSLAB_QA_DIR/$(basename "$APP")" bun run e2e` (Q33) have a self-extracted bundle to run against.
+
 **Screenshots and permissions:**
 - Scenario screenshots need Screen Recording access for the launched JSLab. JSLab checks it with `Utils.screenCapture.hasAccess()`, which never prompts. Without access, each capture is skipped and logged as `skipped: no screen-recording permission`, and the scenarios still pass.
 - Nothing in this checklist or in the harness requests the permission. Granting it is optional and manual (System Settings → Privacy & Security → Screen Recording). `JSLAB_E2E_SKIP_SCREENSHOTS=1` skips captures without asking the app.
@@ -219,6 +221,8 @@ Each item passes only if the result matches exactly. Items marked **(E)** are al
   - **Packaged canary** (`JSLab-canary.app` copied to `$JSLAB_QA_DIR`): 48 pass, 0 fail, 17 files, 487 s.
     - The first run of that copy was 47 pass, 1 fail. Its first launch (`themes.test.ts`) self-extracted the app, and the extracted app never opened `jslab.sock` in the scenario's data folder before the 45 s wait ran out, which is the first-launch case in the M2 plan (Task 25, Step 4).
     - That launch's launcher and Main were still running after the run. They were stopped with the scoped R-M1-13 teardown. The copy was already extracted, so the suite was rerun without a separate warm-up.
-  - **Unit and integration suite** (`bun run lint && bun run typecheck && bun run test`): lint and typecheck exit 0. 615 tests pass, 0 fail: shared 42, rpc-schema 14, serializer 31, transform 54, runner-bun 35, desktop 206, ui 215, themes 8, e2e 10. That is 347 more than the M1 final of 268 (`bae17c4`).
+    - **R-M2-FINAL-8 A residual fix:** `launchApp` now refuses to spawn a canary copy that hasn't self-extracted yet, instead of letting its self-extractor relaunch the real app untracked (see the Warm-up note above). Warm a freshly copied canary once with the launch procedure above before pointing `bun run e2e` at it with `JSLAB_E2E_APP`.
+  - **M2 residual fix rerun** (2026-09-14, `hutch run build:dev` then `bun run e2e` against the dev build): 48 pass, 0 fail, 17 files, 575.07 s. Post-run `ps -axo pid,etime,command | grep -F -e 'dev-macos-arm64' -e 'JSLab-canary' | grep -v grep` found no survivors. Canary was not rerun for this residual fix (not required); its recorded result above (48/48) stands.
+  - **Unit and integration suite** (`bun run lint && bun run typecheck && bun run test`): lint and typecheck exit 0. 628 tests pass, 0 fail: shared 42, rpc-schema 14, serializer 31, transform 54, runner-bun 35, desktop 207, ui 226, themes 8, e2e 11. That is 13 more than the pre-residual-fix total of 615 (desktop +1 RR1-m3, ui +11, e2e +1 R-M2-FINAL-8 A), and 360 more than the M1 final of 268 (`bae17c4`).
   - Review fix rounds added tests beyond the plan's count of 497: R-M2-T2-1, then each task's fix rounds.
-  - The final review fix waves added more: Wave 1 took the suite from 561 to 586 tests (and 47 to 48 scenarios), and Wave 2 took it to 615.
+  - The final review fix waves added more: Wave 1 took the suite from 561 to 586 tests (and 47 to 48 scenarios), Wave 2 took it to 615, and the M2 residual fix (this pass) took it to 628.

@@ -29,9 +29,9 @@ These apply to every milestone plan:
 
 | Milestone | Plan | Status |
 |---|---|---|
-| M0 Spikes | `2026-09-12-jslab-m0-spikes.md` | Ready |
-| M1 Core scratchpad | `2026-09-12-jslab-m1-core-scratchpad.md` | Ready (after M0 report) |
-| M2 Workspace | to be written at M1 completion | Not started |
+| M0 Spikes | `2026-09-12-jslab-m0-spikes.md` | Done (report: `docs/spikes/2026-09-m0-report.md`) |
+| M1 Core scratchpad | `2026-09-12-jslab-m1-core-scratchpad.md` (rulings: `2026-09-12-jslab-m1-rulings.md`) | Done: 268 tests, lint/typecheck clean, dev and packaged canary boot verified by script; manual QA Q1–Q16 pending (`docs/qa/m1-checklist.md`) |
+| M2 Workspace | `2026-09-13-jslab-m2-workspace.md` | In progress |
 | M3 Language & packages | to be written at M2 completion | Not started |
 | M4 Browser runtimes | to be written at M3 completion | Not started |
 | M5 Productivity & extras | to be written at M4 completion | Not started |

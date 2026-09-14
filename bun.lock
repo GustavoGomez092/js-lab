@@ -81,6 +81,13 @@
         "zod": "4.6.4",
       },
     },
+    "packages/themes": {
+      "name": "@jslab/themes",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jslab/shared": "workspace:*",
+      },
+    },
     "packages/transform": {
       "name": "@jslab/transform",
       "version": "0.0.0",
@@ -161,6 +168,8 @@
     "@jslab/serializer": ["@jslab/serializer@workspace:packages/serializer"],
 
     "@jslab/shared": ["@jslab/shared@workspace:packages/shared"],
+
+    "@jslab/themes": ["@jslab/themes@workspace:packages/themes"],
 
     "@jslab/transform": ["@jslab/transform@workspace:packages/transform"],
 

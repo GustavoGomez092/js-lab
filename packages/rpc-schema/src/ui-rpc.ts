@@ -1,5 +1,13 @@
 import type { CommandId, KeybindingRule, TabState } from "@jslab/shared";
-import { LANGUAGES, RUNTIMES, SETTINGS_SECTIONS, type Session, type Settings } from "@jslab/shared";
+import {
+  type EnvVars,
+  envVarsSchema,
+  LANGUAGES,
+  RUNTIMES,
+  SETTINGS_SECTIONS,
+  type Session,
+  type Settings,
+} from "@jslab/shared";
 import { z } from "zod";
 import type { RunEvent, RunState } from "./events";
 import type { EncodedValue } from "./values";
@@ -110,6 +118,128 @@ export const settingsAppCommandSchema = z.object({ action: z.enum(SETTINGS_APP_A
 export const fileSaveParamsSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });
 export const fileConfirmLargeSchema = z.object({ tokens: z.array(z.uuid()).min(1).max(100) });
 export const fileConfirmSaveAsSchema = z.object({ token: z.uuid(), confirmed: z.boolean() });
+
+// ---------- M3: npm, environment variables, working directory, types and .npmrc (spec §6.2, §11, §12) ----------
+
+/** npm package names: an optional @scope, lowercase URL-safe characters, at most 214 characters. */
+export const npmNameSchema = z
+  .string()
+  .min(1)
+  .max(214)
+  .regex(/^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/);
+
+/** One `bun add` argument: name@range, a git URL or a tarball URL. Never whitespace, never a leading "-" (spec §18). */
+export const npmSpecSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .regex(/^[^\s-]\S*$/);
+
+export const MAX_NPMRC_CHARS = 65_536;
+
+export const npmInstallParamsSchema = z.object({ spec: npmSpecSchema });
+export const npmNameParamsSchema = z.object({ name: npmNameSchema });
+export const npmSearchParamsSchema = z.object({ query: z.string().trim().min(1).max(214) });
+export const npmListParamsSchema = z.object({ refreshOutdated: z.boolean() });
+export const npmrcSaveParamsSchema = z.object({ content: z.string().max(MAX_NPMRC_CHARS) });
+export const envSaveParamsSchema = z.object({ variables: envVarsSchema });
+export const packageTypesParamsSchema = z.object({ tabId, packages: z.array(npmNameSchema).min(1).max(50) });
+export const localTypesParamsSchema = z.object({
+  tabId,
+  specifiers: z
+    .array(
+      z
+        .string()
+        .min(2)
+        .max(1024)
+        .regex(/^\.\.?\//),
+    )
+    .min(1)
+    .max(200),
+});
+
+export type NpmOpKind = "install" | "remove" | "update" | "updateAll";
+export type NpmErrorKind =
+  | "network"
+  | "notFound"
+  | "noMatchingVersion"
+  | "peerConflict"
+  | "scriptBlocked"
+  | "nativeBuild"
+  | "disk"
+  | "timeout"
+  | "unknown";
+
+/** A classified npm failure (spec §11.3): the UI maps `kind` to a one-line hint and shows `log` in the log drawer. */
+export interface NpmOpError {
+  kind: NpmErrorKind;
+  log: string;
+}
+
+export interface NpmOperation {
+  id: string;
+  kind: NpmOpKind;
+  /** The spec or package name the operation acts on; "" for updateAll. */
+  target: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  error: NpmOpError | null;
+  /** A non-fatal condition on success, such as "scriptBlocked". */
+  notice: NpmErrorKind | null;
+}
+
+export interface InstalledPackage {
+  name: string;
+  /** The version in node_modules, or null when it isn't installed there. */
+  version: string | null;
+  /** The newest version from the last `bun outdated`, or null when current or unknown. */
+  latest: string | null;
+}
+
+export interface NpmListResult {
+  installed: InstalledPackage[];
+  outdatedCheckedAt: number | null;
+  outdatedError: NpmOpError | null;
+}
+
+export interface NpmSearchResult {
+  name: string;
+  version: string;
+  description: string;
+  weeklyDownloads: number | null;
+}
+
+export interface NpmSearchResponse {
+  results: NpmSearchResult[];
+  error: NpmOpError | null;
+}
+
+/** One declaration file registered with Monaco, at a `file:///` path. */
+export interface TypeFile {
+  path: string;
+  content: string;
+}
+
+export interface PackageTypesResult {
+  name: string;
+  files: TypeFile[];
+  /** Other packages the declarations import (requested separately). */
+  dependencies: string[];
+  /** `@types/<name>` when the package has no types and that package is installed or available. */
+  typesPackage: string | null;
+  hasTypes: boolean;
+  truncated: boolean;
+}
+
+export interface LocalTypesResult {
+  files: TypeFile[];
+  /** Bare packages the local files import (requested separately). */
+  packages: string[];
+  truncated: boolean;
+}
+
+export type SaveResult = { ok: true } | { ok: false; error: string };
+
+export type { EnvVars };
 
 export type FileSaveParams = z.infer<typeof fileSaveParamsSchema>;
 export type LargeFile = { token: string; path: string; size: number };

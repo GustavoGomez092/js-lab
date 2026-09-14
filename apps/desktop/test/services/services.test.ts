@@ -34,6 +34,38 @@ describe("SettingsStore", () => {
     expect(store.recovered).toBe("defaults");
     expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).run.autoRun).toBe(true);
   });
+
+  test("migrates an M1 settings file on open and rewrites it at version 2", async () => {
+    await writeFile(
+      join(dir, "settings.json"),
+      JSON.stringify({ version: 1, run: { autoRun: false }, appearance: { theme: "dracula", fontSize: 16 } }),
+    );
+    const store = await SettingsStore.open(dir);
+    expect(store.recovered).toBe("none");
+    expect(store.current.appearance).toMatchObject({ theme: "graphite", fontSize: 16 });
+    expect(store.current.run.autoRun).toBe(false);
+    expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).version).toBe(2);
+  });
+
+  test("reset restores defaults, persists them and notifies listeners", async () => {
+    const store = await SettingsStore.open(dir);
+    await store.update({ editor: { lineWrap: false } });
+    const seen: boolean[] = [];
+    store.onChange((s) => seen.push(s.editor.lineWrap));
+    await store.reset();
+    expect(seen).toEqual([true]);
+    expect((await SettingsStore.open(dir)).current.editor.lineWrap).toBe(true);
+  });
+
+  test("a settings file from a newer JSLab is used but never overwritten (final review I4)", async () => {
+    const text = JSON.stringify({ version: 99, editor: { lineWrap: false }, future: { flag: true } });
+    await writeFile(join(dir, "settings.json"), text);
+    const store = await SettingsStore.open(dir);
+    expect([store.newerVersion, store.current.editor.lineWrap]).toEqual([99, false]);
+    await store.update({ view: { statusBar: false } });
+    expect(store.current.view.statusBar).toBe(false);
+    expect(await readFile(join(dir, "settings.json"), "utf8")).toBe(text);
+  });
 });
 
 describe("SessionStore", () => {

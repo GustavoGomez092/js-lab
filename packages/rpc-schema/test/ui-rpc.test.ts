@@ -4,6 +4,7 @@ import {
   e2eResponseSchema,
   runExpandParamsSchema,
   runStartParamsSchema,
+  settingsUpdateParamsSchema,
   tabParamsSchema,
   tabPatchSchema,
 } from "../src/ui-rpc";
@@ -65,5 +66,16 @@ describe("inbound validators", () => {
     expect(e2eResponseSchema.safeParse({ reqId: 1, ok: true, result: { any: "thing" } }).success).toBe(true);
     expect(e2eResponseSchema.safeParse({ reqId: 0, ok: true }).success).toBe(false);
     expect(e2eResponseSchema.safeParse({ reqId: 2, ok: false, error: "x".repeat(10_001) }).success).toBe(false);
+  });
+
+  test("settings.update accepts scalar patches to known sections only", () => {
+    expect(
+      settingsUpdateParamsSchema.safeParse({ patch: { editor: { lineWrap: false }, view: { layout: "vertical" } } })
+        .success,
+    ).toBe(true);
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { ai: { provider: "openai" } } }).success).toBe(false);
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { editor: { lineWrap: { nested: true } } } }).success).toBe(
+      false,
+    );
   });
 });

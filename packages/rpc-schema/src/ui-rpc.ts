@@ -1,4 +1,4 @@
-import type { Session, Settings } from "@jslab/shared";
+import { SETTINGS_SECTIONS, type Session, type Settings } from "@jslab/shared";
 import { z } from "zod";
 import type { RunEvent, RunState } from "./events";
 import type { EncodedValue } from "./values";
@@ -41,6 +41,17 @@ export const tabPatchSchema = z.object({
     })
     .partial(),
 });
+
+const settingValue = z.union([z.boolean(), z.number().finite(), z.string().max(200)]);
+
+/**
+ * `settings.update` patch: known sections only, scalar values only. Out-of-range values are repaired by
+ * mergeSettings, never rejected.
+ */
+export const settingsUpdateParamsSchema = z.object({
+  patch: z.partialRecord(z.enum(SETTINGS_SECTIONS), z.record(z.string().min(1).max(64), settingValue)),
+});
+export type SettingsUpdateParams = z.infer<typeof settingsUpdateParamsSchema>;
 
 export const E2E_UI_METHODS = ["type", "key", "command", "state", "output"] as const;
 export type E2EUiMethod = (typeof E2E_UI_METHODS)[number];

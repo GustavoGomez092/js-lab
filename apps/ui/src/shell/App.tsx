@@ -9,16 +9,26 @@ import { OutputPanel } from "../output/OutputPanel";
 import { startAutoRun } from "../state/auto-run";
 import type { AppStore } from "../state/store";
 import { commandForKey } from "./keys";
-import { ActivityBar, SafeModeBanner, SplitPane, StatusBar, UnresponsiveDialog } from "./parts";
+import { ActivityBar, SafeModeBanner, SplitPane, StartupNotices, StatusBar, UnresponsiveDialog } from "./parts";
 
 const UI_HEARTBEAT_MS = 2000;
 
-const M1_COMMANDS: ReadonlySet<string> = new Set(["run.start", "run.stop", "run.kill", "output.clear", "editor.clear"]);
+const M1_COMMANDS: ReadonlySet<string> = new Set([
+  "run.start",
+  "run.stop",
+  "run.kill",
+  "output.clear",
+  "editor.clear",
+  "help.copyDebugLog",
+  "help.openLogsFolder",
+  "help.restartSafeMode",
+]);
 
 export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi; e2e?: boolean }) {
   const tab = useStore(store, (s) => s.tab);
   const runState = useStore(store, (s) => s.output.runState);
   const safeMode = useStore(store, (s) => s.safeMode);
+  const notices = useStore(store, (s) => s.notices);
 
   const run = useCallback(
     (reason: "auto" | "manual") => {
@@ -48,6 +58,15 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
           return;
         case "editor.clear":
           store.getState().editCode("");
+          return;
+        case "help.copyDebugLog":
+          api.appCommand?.("copyDebugLog");
+          return;
+        case "help.openLogsFolder":
+          api.appCommand?.("openLogsFolder");
+          return;
+        case "help.restartSafeMode":
+          api.appCommand?.("restartSafeMode");
           return;
       }
     },
@@ -131,6 +150,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
   return (
     <div className="app">
       {safeMode.active && <SafeModeBanner reason={safeMode.reason} />}
+      <StartupNotices notices={notices} onDismiss={(id) => store.getState().dismissNotice(id)} />
       <div className="app-main">
         <ActivityBar runState={runState} onRun={() => execute("run.start")} onStop={() => execute("run.stop")} />
         <SplitPane

@@ -30,6 +30,7 @@ function fakeApi() {
     bufferChanged: mock((_tabId: string, _content: string) => {}),
     patchTab: mock((_tabId: string, _patch: unknown) => {}),
     heartbeat: mock(() => {}),
+    appCommand: mock((_action: string) => {}),
     on(name: string, listener: (payload: never) => void) {
       const set = listeners.get(name) ?? new Set();
       listeners.set(name, set);
@@ -110,6 +111,30 @@ describe("App shell", () => {
     expect(api.bufferChanged).toHaveBeenCalledWith("t1", "2 + 2");
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "javascript" } });
     expect(api.patchTab).toHaveBeenCalledWith("t1", expect.objectContaining({ language: "javascript" }));
+  });
+
+  test("Help menu commands are forwarded to Main", async () => {
+    const { api, emit } = renderApp();
+    await emit("menu.command", { command: "help.copyDebugLog" });
+    await emit("menu.command", { command: "help.restartSafeMode" });
+    expect(api.appCommand.mock.calls).toEqual([["copyDebugLog"], ["restartSafeMode"]]);
+  });
+
+  test("startup notices from Main show until dismissed (spec §20)", () => {
+    const { store } = renderApp();
+    act(() =>
+      store.setState({
+        notices: [
+          {
+            id: "settingsRecovered",
+            message: "Settings were reset because the file was unreadable. A copy was saved as settings.corrupt-1.json",
+          },
+        ],
+      }),
+    );
+    expect(screen.getByTestId("startup-notices").textContent).toContain("settings.corrupt-1.json");
+    fireEvent.click(screen.getByRole("button", { name: /^Dismiss:/ }));
+    expect(screen.queryByTestId("startup-notices")).toBeNull();
   });
 });
 

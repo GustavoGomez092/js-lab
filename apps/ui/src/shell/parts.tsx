@@ -1,4 +1,4 @@
-import type { RunState } from "@jslab/rpc-schema";
+import type { RunState, StartupNotice } from "@jslab/rpc-schema";
 import { LANGUAGES, type Language } from "@jslab/shared";
 import { type ReactNode, type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
 import { useStore } from "zustand";
@@ -141,14 +141,37 @@ export function UnresponsiveDialog(props: { onKill(): void; onWait(): void }) {
 
 const SAFE_MODE_MESSAGES = {
   crashLoop: "JSLab didn't shut down cleanly while running code. Auto Run is paused for this session.",
+  manual: "Safe Mode: restarted from Help → Restart in Safe Mode. Auto Run is paused for this session.",
   shift: "Safe Mode: Shift was held at launch. Auto Run is paused for this session.",
 } as const;
 
-export function SafeModeBanner({ reason }: { reason: "crashLoop" | "shift" | null }) {
+export function SafeModeBanner({ reason }: { reason: "crashLoop" | "manual" | "shift" | null }) {
   if (!reason) return null;
   return (
     <output className="banner banner-warning" data-testid="safe-mode-banner">
       {SAFE_MODE_MESSAGES[reason]}
     </output>
+  );
+}
+
+/** Startup notices from Main (spec §20): recovered files, newer files, skipped tabs. Each can be dismissed. */
+export function StartupNotices(props: { notices: readonly StartupNotice[]; onDismiss(id: StartupNotice["id"]): void }) {
+  if (props.notices.length === 0) return null;
+  return (
+    <div className="notices" data-testid="startup-notices">
+      {props.notices.map((notice) => (
+        <output key={notice.id} className="banner banner-warning">
+          {notice.message}
+          <button
+            type="button"
+            className="banner-dismiss"
+            aria-label={`Dismiss: ${notice.message}`}
+            onClick={() => props.onDismiss(notice.id)}
+          >
+            ×
+          </button>
+        </output>
+      ))}
+    </div>
   );
 }

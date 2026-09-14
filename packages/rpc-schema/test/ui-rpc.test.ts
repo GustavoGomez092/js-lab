@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  appCommandSchema,
   bufferChangedSchema,
   e2eResponseSchema,
   MAX_OPEN_FILE_BYTES,
@@ -108,5 +109,10 @@ describe("inbound validators", () => {
     expect(tabReorderSchema.safeParse({ tabOrder: [] }).success).toBe(false);
     expect(tabViewStateSchema.safeParse({ tabId: "t", viewState: { a: 1 } }).success).toBe(true);
     expect(tabViewStateSchema.safeParse({ tabId: "t", viewState: "x".repeat(200_001) }).success).toBe(false);
+  });
+
+  test("app.command accepts only known actions", () => {
+    expect(appCommandSchema.safeParse({ action: "copyDebugLog" }).success).toBe(true);
+    expect(appCommandSchema.safeParse({ action: "exec" }).success).toBe(false);
   });
 });

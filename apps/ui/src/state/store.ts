@@ -1,4 +1,4 @@
-import type { BootstrapPayload, DiagnosticPayload, RunEvent, RunState } from "@jslab/rpc-schema";
+import type { BootstrapPayload, DiagnosticPayload, RunEvent, RunState, StartupNotice } from "@jslab/rpc-schema";
 import type { Language, Settings, TabState } from "@jslab/shared";
 import { createStore } from "zustand/vanilla";
 import { applyRunEvents, applyRunState, initialOutput, type OutputState } from "./output";
@@ -16,6 +16,7 @@ export interface AppState {
   diagnostics: DiagnosticPayload[];
   hoveredLine: number | null;
   revealRequest: { line: number; nonce: number } | null;
+  notices: StartupNotice[];
 
   hydrate(payload: BootstrapPayload): void;
   editCode(code: string): void;
@@ -29,6 +30,7 @@ export interface AppState {
   clearOutput(): void;
   setHoveredLine(line: number | null): void;
   reveal(line: number): void;
+  dismissNotice(id: StartupNotice["id"]): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -48,6 +50,7 @@ export function createAppStore() {
     diagnostics: [],
     hoveredLine: null,
     revealRequest: null,
+    notices: [],
 
     hydrate(payload) {
       const tab = payload.session.tabs[payload.session.activeTabId] ?? null;
@@ -59,6 +62,7 @@ export function createAppStore() {
         tab,
         code: tab ? (payload.buffers[tab.id] ?? "") : "",
         autoRunArmed: false,
+        notices: payload.notices ?? [],
       });
     },
 
@@ -111,6 +115,10 @@ export function createAppStore() {
 
     reveal(line) {
       set({ revealRequest: { line, nonce: (get().revealRequest?.nonce ?? 0) + 1 } });
+    },
+
+    dismissNotice(id) {
+      set({ notices: get().notices.filter((notice) => notice.id !== id) });
     },
   }));
 }

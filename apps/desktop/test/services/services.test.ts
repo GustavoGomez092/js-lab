@@ -4,7 +4,13 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTab, defaultSession, defaultSettings, sessionSchema, settingsSchema } from "@jslab/shared";
-import { detectSafeMode, isShiftHeld, SHIFT_MASK } from "../../src/main/services/safe-mode";
+import {
+  consumeSafeModeFlag,
+  detectSafeMode,
+  isShiftHeld,
+  requestSafeModeOnNextLaunch,
+  SHIFT_MASK,
+} from "../../src/main/services/safe-mode";
 import { SessionStore } from "../../src/main/services/session-store";
 import { SettingsStore } from "../../src/main/services/settings-store";
 
@@ -272,5 +278,20 @@ describe("safe mode", () => {
 
   test.skipIf(process.platform !== "darwin")("reads real modifier flags on macOS", async () => {
     expect(typeof (await isShiftHeld())).toBe("boolean");
+  });
+
+  test("a manual restart request is consumed once and ranks between crash loop and shift", async () => {
+    requestSafeModeOnNextLaunch(dir);
+    expect(consumeSafeModeFlag(dir)).toBe(true);
+    expect(consumeSafeModeFlag(dir)).toBe(false);
+    const shift = async () => true;
+    expect(await detectSafeMode({ uncleanPreviousExit: false, manualRequested: true, shiftHeld: shift })).toEqual({
+      active: true,
+      reason: "manual",
+    });
+    expect(await detectSafeMode({ uncleanPreviousExit: true, manualRequested: true, shiftHeld: shift })).toEqual({
+      active: true,
+      reason: "crashLoop",
+    });
   });
 });

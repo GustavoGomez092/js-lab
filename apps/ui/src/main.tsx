@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { createRpcApi } from "./rpc";
 import { App } from "./shell/App";
+import { showStartupFailure } from "./shell/startup-failure";
 import { createAppStore } from "./state/store";
 import "./styles.css";
 
@@ -17,5 +18,5 @@ api
     createRoot(root).render(<App store={store} api={api} e2e={payload.e2e === true} />);
   })
   .catch((error: unknown) => {
-    root.textContent = `JSLab failed to start: ${error instanceof Error ? error.message : String(error)}`;
+    showStartupFailure(root, error, { heartbeat: () => api.heartbeat(), reload: () => window.location.reload() });
   });

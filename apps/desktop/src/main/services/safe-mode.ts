@@ -1,4 +1,7 @@
-export type SafeModeReason = "crashLoop" | "shift" | null;
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+export type SafeModeReason = "crashLoop" | "manual" | "shift" | null;
 
 export interface SafeModeState {
   active: boolean;
@@ -44,8 +47,24 @@ export async function isShiftHeld(
 export async function detectSafeMode(input: {
   uncleanPreviousExit: boolean;
   shiftHeld: () => Promise<boolean>;
+  manualRequested?: boolean;
 }): Promise<SafeModeState> {
   if (input.uncleanPreviousExit) return { active: true, reason: "crashLoop" };
+  if (input.manualRequested) return { active: true, reason: "manual" };
   if (await input.shiftHeld()) return { active: true, reason: "shift" };
   return { active: false, reason: null };
+}
+
+/** Help → Restart in Safe Mode leaves this flag for the next launch (spec §5.14). */
+export const SAFE_MODE_FLAG = "safe-mode.next";
+
+export function requestSafeModeOnNextLaunch(dataDir: string): void {
+  writeFileSync(join(dataDir, SAFE_MODE_FLAG), String(Date.now()));
+}
+
+export function consumeSafeModeFlag(dataDir: string): boolean {
+  const path = join(dataDir, SAFE_MODE_FLAG);
+  if (!existsSync(path)) return false;
+  rmSync(path, { force: true });
+  return true;
 }

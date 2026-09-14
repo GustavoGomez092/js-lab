@@ -1,5 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { arch } from "node:os";
 import { join } from "node:path";
 import type { MainMessages, MainRequests, ViewMessages } from "@jslab/rpc-schema";
 import Electrobun, {
@@ -16,15 +17,22 @@ import { resolveAppPaths } from "./app-paths";
 import { E2EBridge } from "./cli/e2e-bridge";
 import { createSocketMethods } from "./cli/socket-methods";
 import { type SocketServer, startSocketServer } from "./cli/socket-server";
+import { createRedactor } from "./logging/redact";
+import { RotatingLog } from "./logging/rotating-log";
 import { createMainServices } from "./main-services";
 import { resolveMainViewUrl } from "./main-view-url";
 import { buildMenu, commandForMenuAction, type MenuItem } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
+import { relaunchApp } from "./platform/relaunch";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
+import { flushBeforeQuit } from "./quit";
+import { createAppHandlers } from "./rpc/app-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
-import { isShiftHeld } from "./services/safe-mode";
+import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
+import { latestCorruptCopy, startupNotices } from "./startup-notices";
+import { strings } from "./strings";
 import { shouldReloadView } from "./ui-watchdog";
 
 // `.hutch/devkit`'s `api/sdks/main/proc/native.ts` references the WebWorker global `self` in a carrot/Bunny Ears
@@ -48,7 +56,9 @@ type JSLabRPC = {
 
 const APP_VERSION = "0.0.1";
 
-const log = (message: string, detail?: unknown) => console.error(`[jslab] ${message}`, detail ?? "");
+// Console until start() creates the rotating log, which then replaces it; fail() always logs through `log`.
+let log: (message: string, detail?: unknown) => void = (message, detail) =>
+  console.error(`[jslab] ${message}`, detail ?? "");
 
 /**
  * A rejection anywhere in `start()` -- a failing store recovery rewrite, for example -- must not crash Main
@@ -77,6 +87,15 @@ async function start(): Promise<void> {
     execPath: process.execPath,
     env: process.env,
   });
+
+  const redact = createRedactor();
+  const logsDir = join(paths.dataDir, "logs");
+  const logger = new RotatingLog({ dir: logsDir, debug: process.env.JSLAB_DEBUG === "1", redact });
+  log = (message, detail) => logger.warn(message, detail);
+  process.on("uncaughtException", (error) => logger.error("Uncaught exception", error));
+  process.on("unhandledRejection", (reason) => logger.error("Unhandled rejection", reason));
+  const ELECTROBUN_VERSION = "2.0.1";
+  const macOSVersion = Bun.spawnSync(["sw_vers", "-productVersion"]).stdout.toString().trim() || "unknown";
 
   // A fresh install has no userData directory yet: settings/session recovery tolerates that (it treats a missing
   // primary file as "none", never writing until an update or a real recovery), but SparePool's pre-warmed runner
@@ -108,8 +127,8 @@ async function start(): Promise<void> {
     log(`session.json: skipped ${session.droppedTabs.length} unreadable tab entries`, session.droppedTabs);
   }
   const keybindings = await KeybindingsStore.open(paths.dataDir);
-  if (keybindings.invalid) log(`keybindings.json at ${keybindings.path} is not valid JSON; using the default keymap`);
-  if (safeMode.active) log(`starting in Safe Mode (${safeMode.reason})`);
+  if (keybindings.invalid) log(strings.log.keybindingsInvalid(keybindings.path));
+  if (safeMode.active) logger.info(strings.log.safeMode(String(safeMode.reason)));
 
   // The UI gets a longer boot grace period for its first heartbeat (cold WKWebView init, bundle load, etc.);
   // only once it has sent one does the shorter steady-state deadline apply (I1).
@@ -141,8 +160,36 @@ async function start(): Promise<void> {
           sawFirstHeartbeat = true;
           lastUiHeartbeat = Date.now();
         },
+        notices: startupNotices({
+          settings,
+          session,
+          corruptCopies: {
+            settings: latestCorruptCopy(paths.dataDir, "settings"),
+            session: latestCorruptCopy(paths.dataDir, "session"),
+          },
+        }),
       }),
       createWorkspaceHandlers({ session, settings, coordinator, spares, log }),
+      createAppHandlers({
+        logTail: (lines) => logger.tail(lines),
+        settings,
+        paths: { dataDir: paths.dataDir, logsDir },
+        versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
+        os: { macOS: macOSVersion, arch: arch() },
+        redact,
+        log,
+        clipboard: (text) =>
+          e2eEnabled ? writeFileSync(join(paths.dataDir, "e2e-clipboard.txt"), text) : Utils.clipboardWriteText(text),
+        openPath: (target) =>
+          e2eEnabled ? appendFileSync(join(paths.dataDir, "e2e-opened.txt"), `${target}\n`) : Utils.openPath(target),
+        restartInSafeMode: () => {
+          logger.info(strings.log.restartRequested);
+          requestSafeModeOnNextLaunch(paths.dataDir);
+          if (!e2eEnabled) relaunchApp(PATHS.RESOURCES_FOLDER);
+          Utils.quit();
+        },
+        toggleFullScreen: () => window.setFullScreen(!window.isFullScreen()),
+      }),
     ),
   });
 
@@ -216,7 +263,7 @@ async function start(): Promise<void> {
         quit: () => Utils.quit(),
       }),
     });
-    log(`E2E automation enabled on ${socketServer.path}`);
+    logger.info(strings.log.e2eEnabled(socketServer.path));
   }
   ApplicationMenu.on("application-menu-clicked", (event: unknown) => {
     const action = (event as { data?: { action?: string } }).data?.action;
@@ -253,10 +300,8 @@ async function start(): Promise<void> {
     coordinator.dispose();
     transform.dispose();
     runLock.releaseAll();
-    void session
-      .flush()
-      .catch((error) => log("session flush failed at quit", error))
-      .finally(() => Utils.quit());
+    // Final review T14: a hung flush must not keep JSLab from quitting.
+    void flushBeforeQuit(() => session.flush(), log).finally(() => Utils.quit());
   });
 }
 

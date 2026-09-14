@@ -4,7 +4,7 @@ import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
 import { RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
 import { SparePool } from "./runs/spare-pool";
-import { detectSafeMode, type SafeModeState } from "./services/safe-mode";
+import { consumeSafeModeFlag, detectSafeMode, type SafeModeState } from "./services/safe-mode";
 import { SessionStore } from "./services/session-store";
 import { SettingsStore } from "./services/settings-store";
 import { CachingTransformHost, type TransformHost, WorkerTransformHost } from "./transform/transform-host";
@@ -52,6 +52,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   });
   const safeMode = await detectSafeMode({
     uncleanPreviousExit: runLock.uncleanPreviousExit,
+    manualRequested: consumeSafeModeFlag(paths.dataDir),
     shiftHeld: () => options.shiftHeld,
   });
   const transform = options.transformHost ?? new CachingTransformHost(new WorkerTransformHost(paths.transformWorker));

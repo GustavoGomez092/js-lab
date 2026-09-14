@@ -1,4 +1,5 @@
 import type {
+  AppAction,
   BootstrapPayload,
   E2EResponse,
   EncodedValue,
@@ -24,4 +25,5 @@ export interface MainApi {
   heartbeat(): void;
   on<K extends keyof ViewMessages>(name: K, listener: (payload: ViewMessages[K]) => void): () => void;
   e2eRespond?(response: E2EResponse): void;
+  appCommand?(action: AppAction): void;
 }

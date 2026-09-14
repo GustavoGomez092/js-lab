@@ -44,6 +44,7 @@ export function createRpcApi(): MainApi {
     patchTab: (tabId, patch) => rpc.send["tab.patch"]({ tabId, patch }),
     heartbeat: () => rpc.send["ui.heartbeat"]({}),
     e2eRespond: (response) => rpc.send["e2e.response"](response),
+    appCommand: (action) => rpc.send["app.command"]({ action }),
     on(name, listener) {
       const set = listeners.get(name) ?? new Set<AnyListener>();
       listeners.set(name, set);

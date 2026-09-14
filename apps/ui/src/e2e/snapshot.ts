@@ -26,6 +26,7 @@ export interface UiSnapshot {
   tabs: TabSnapshot[];
   settings: Settings | null;
   diagnostics: number;
+  notices: AppState["notices"];
 }
 
 export interface OutputSnapshotEntry {
@@ -62,6 +63,7 @@ export function snapshotState(state: AppState): UiSnapshot {
       : [],
     settings: state.settings,
     diagnostics: state.diagnostics.length,
+    notices: state.notices,
   };
 }
 

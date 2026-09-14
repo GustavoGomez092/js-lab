@@ -6,6 +6,7 @@ import {
   e2eResponseSchema,
   runExpandParamsSchema,
   runStartParamsSchema,
+  type StartupNotice,
   tabParamsSchema,
   tabPatchSchema,
 } from "@jslab/rpc-schema";
@@ -30,6 +31,7 @@ export interface RpcHandlerDeps {
   e2e?: boolean;
   onE2EResponse?(response: E2EResponse): void;
   keybindings?: { rules: KeybindingRule[] };
+  notices?: StartupNotice[];
 }
 
 /** A valid request that Main declines to act on (for example an automatic run while Safe Mode is active). */
@@ -49,6 +51,7 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         versions: deps.versions,
         ...(deps.e2e ? { e2e: true } : {}),
         ...(deps.keybindings ? { keybindings: deps.keybindings.rules } : {}),
+        ...(deps.notices && deps.notices.length > 0 ? { notices: deps.notices } : {}),
       }),
       "run.start": (input: unknown): { runId: string } => {
         const { tabId, code, language, logpoints, reason } = parse(runStartParamsSchema, "run.start", input);

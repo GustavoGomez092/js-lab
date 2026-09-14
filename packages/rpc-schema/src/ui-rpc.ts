@@ -84,6 +84,31 @@ export const tabViewStateSchema = z
     message: "viewState is too large",
   });
 
+export const APP_ACTIONS = [
+  "copyDebugLog",
+  "openLogsFolder",
+  "restartSafeMode",
+  "openDataFolder",
+  "resetSettings",
+  "toggleFullScreen",
+] as const;
+export type AppAction = (typeof APP_ACTIONS)[number];
+export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });
+
+export const STARTUP_NOTICE_IDS = [
+  "settingsRecovered",
+  "sessionRecovered",
+  "settingsNewer",
+  "sessionNewer",
+  "tabsDropped",
+] as const;
+
+/** Something Main wants the user to know at startup (spec §20): recovered files, newer files, skipped tabs. */
+export interface StartupNotice {
+  id: (typeof STARTUP_NOTICE_IDS)[number];
+  message: string;
+}
+
 const settingValue = z.union([z.boolean(), z.number().finite(), z.string().max(200)]);
 
 /**
@@ -138,11 +163,12 @@ export interface BootstrapPayload {
   settings: Settings;
   session: Session;
   buffers: Record<string, string>;
-  safeMode: { active: boolean; reason: "crashLoop" | "shift" | null };
+  safeMode: { active: boolean; reason: "crashLoop" | "manual" | "shift" | null };
   versions: { app: string; bun: string };
   /** True only when the app was launched with JSLAB_E2E=1; the UI then installs the automation agent. */
   e2e?: boolean;
   keybindings?: KeybindingRule[];
+  notices?: StartupNotice[];
 }
 
 /** Requests handled by Main, called by the UI. */
@@ -168,6 +194,7 @@ export type MainMessages = {
   "tab.activate": TabParams;
   "tab.reorder": TabReorder;
   "tab.viewState": TabViewState;
+  "app.command": { action: AppAction };
 };
 
 /** Messages received by the UI, sent by Main. */

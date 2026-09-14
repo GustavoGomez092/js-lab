@@ -191,7 +191,8 @@ export const sessionParser = {
   },
 };
 
-const EXTENSIONS: Record<Language, string> = { typescript: "ts", tsx: "tsx", javascript: "js", jsx: "jsx" };
+/** The one literal file extension table; tabs.ts's `LANGUAGE_EXTENSIONS` re-exports this instead of duplicating it. */
+export const EXTENSIONS: Record<Language, string> = { typescript: "ts", tsx: "tsx", javascript: "js", jsx: "jsx" };
 
 export function bufferFileName(tab: Pick<TabState, "id" | "language">): string {
   return `${tab.id}.${EXTENSIONS[tab.language]}`;

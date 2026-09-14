@@ -192,6 +192,38 @@ describe("recovery preserves backups", () => {
     expect(existsSync(join(dir, "buffers", "my tab.ts"))).toBe(false);
     expect(JSON.parse(await readFile(join(dir, "session.json"), "utf8")).tabOrder).toEqual([id]);
   });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a repaired tab's buffer move failure (not ENOENT) is surfaced, not silently read as empty (fix round 1)",
+    async () => {
+      await mkdir(join(dir, "buffers"), { recursive: true });
+      await writeFile(join(dir, "buffers", "my tab.ts"), "kept");
+      await writeFile(
+        join(dir, "session.json"),
+        JSON.stringify({
+          version: 2,
+          tabOrder: ["my tab"],
+          activeTabId: "my tab",
+          tabs: { "my tab": { id: "my tab" } },
+        }),
+      );
+      // No write permission on buffers/: the repair rename fails with EACCES, not ENOENT, and nothing is moved.
+      await chmod(join(dir, "buffers"), 0o500);
+      let store: SessionStore;
+      try {
+        store = await SessionStore.open(dir, { delayMs: 10 });
+      } finally {
+        await chmod(join(dir, "buffers"), 0o700);
+      }
+      const [id = ""] = store.session.tabOrder;
+      expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+      await expect(store.readBuffers()).rejects.toThrow(`Couldn't read the buffer for tab ${id}`);
+      expect(await readFile(join(dir, "buffers", "my tab.ts"), "utf8")).toBe("kept");
+      store.setBuffer(id, "x");
+      await store.flush();
+      expect(existsSync(join(dir, "buffers", `${id}.ts`))).toBe(false);
+    },
+  );
 });
 
 describe("safe mode", () => {

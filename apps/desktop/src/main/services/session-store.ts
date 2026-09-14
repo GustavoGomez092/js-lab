@@ -27,6 +27,9 @@ export class SessionStore {
   readonly #bufferWriters = new Map<string, DebouncedWriter>();
   // Tabs whose buffer file exists but couldn't be read: never write over it, or an edit would replace real code.
   readonly #unreadableBuffers = new Set<string>();
+  // Repaired tab ids (R-M1-18) whose old buffer failed to move for a reason other than "nothing to move" (ENOENT):
+  // the old file is left in place, and readBuffers surfaces this the same way as any other unreadable buffer.
+  readonly #repairErrors = new Map<string, unknown>();
 
   private constructor(
     private readonly dataDir: string,
@@ -82,7 +85,13 @@ export class SessionStore {
       const tab = session.tabs[to];
       if (!tab || !isPlainFileName(from)) continue;
       const oldPath = join(dataDir, "buffers", bufferFileName({ id: from, language: tab.language }));
-      await rename(oldPath, join(dataDir, "buffers", bufferFileName(tab))).catch(() => {});
+      try {
+        await rename(oldPath, join(dataDir, "buffers", bufferFileName(tab)));
+      } catch (error) {
+        // No old buffer to move is fine (the tab had no unsaved content yet); anything else means the repaired
+        // tab's content is stuck at the old path and must not look like an empty buffer.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") store.#repairErrors.set(to, error);
+      }
     }
     // No backup after a recovery: `session.json` still holds the corrupt/stale primary, and backing it up would clobber
     // a good `.bak` that recovery just read from (ruling I1). A repair of a valid file keeps its backup. A newer file
@@ -104,6 +113,7 @@ export class SessionStore {
     for (const id of this.#session.tabOrder) {
       const tab = this.#session.tabs[id];
       if (!tab) continue;
+      if (this.#repairErrors.has(id)) this.#failUnreadable(id, this.#repairErrors.get(id));
       try {
         buffers[id] = await readFile(this.#bufferPath(tab), "utf8");
         this.#unreadableBuffers.delete(id);
@@ -113,12 +123,17 @@ export class SessionStore {
           buffers[id] = "";
           continue;
         }
-        this.#unreadableBuffers.add(id);
-        const reason = error instanceof Error ? error.message : String(error);
-        throw new Error(`Couldn't read the buffer for tab ${id}: ${reason}`, { cause: error });
+        this.#failUnreadable(id, error);
       }
     }
     return buffers;
+  }
+
+  /** Marks a tab's buffer unreadable so `setBuffer` never overwrites it, and reports why (shared by both callers). */
+  #failUnreadable(id: string, error: unknown): never {
+    this.#unreadableBuffers.add(id);
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Couldn't read the buffer for tab ${id}: ${reason}`, { cause: error });
   }
 
   setBuffer(tabId: string, content: string): void {

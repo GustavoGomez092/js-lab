@@ -1,12 +1,8 @@
-import { type ClosedTab, MAX_CLOSED_TABS, type TabState } from "./session";
+import { type ClosedTab, EXTENSIONS, MAX_CLOSED_TABS, type TabState } from "./session";
 import type { Language } from "./settings";
 
-export const LANGUAGE_EXTENSIONS: Record<Language, string> = {
-  typescript: "ts",
-  tsx: "tsx",
-  javascript: "js",
-  jsx: "jsx",
-};
+/** session.ts owns the one literal extension table; this re-exports it under the tab-helpers name. */
+export const LANGUAGE_EXTENSIONS: Record<Language, string> = EXTENSIONS;
 
 export function extensionFor(language: Language): string {
   return LANGUAGE_EXTENSIONS[language];

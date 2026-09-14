@@ -1,3 +1,4 @@
+import { realpath, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   emptyParamsSchema,
@@ -9,7 +10,7 @@ import {
   type TabWithContent,
   tabParamsSchema,
 } from "@jslab/rpc-schema";
-import { contentHash, deriveTitle, extensionFor, languageForPath, type TabState } from "@jslab/shared";
+import { baseName, contentHash, deriveTitle, extensionFor, languageForPath, type TabState } from "@jslab/shared";
 import type { FileService, ReadyFile } from "../files/file-service";
 import type { SessionStore } from "../services/session-store";
 import { strings } from "../strings";
@@ -40,6 +41,23 @@ const safeName = (name: string) =>
     .replace(/…$/, "")
     .trim() || "Untitled";
 
+/** js/jsx/ts/tsx/mjs/cjs/mts/cts: the extensions a Save As should re-derive the tab's language from (m-7b).
+ * json/txt keep the tab's existing language. */
+const SOURCE_EXTENSION = /\.(?:[mc]?[jt]sx?)$/i;
+
+/** The first candidate folder that still exists on disk, or `fallback` (Documents) when none do (m-7c). */
+async function firstExistingDir(candidates: (string | null)[], fallback: string): Promise<string> {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      if ((await stat(candidate)).isDirectory()) return candidate;
+    } catch {
+      // Missing or inaccessible: fall through to the next candidate.
+    }
+  }
+  return fallback;
+}
+
 /** Open, Save, Save As, reveal and copy path (spec §7.3, §10.2). */
 export function createFileHandlers(deps: FileHandlerDeps) {
   const { parse, message } = createValidators(deps.log);
@@ -67,9 +85,26 @@ export function createFileHandlers(deps: FileHandlerDeps) {
   };
 
   const completeSaveAs = async (tabId: string, path: string, content: string) => {
+    // The tab may have closed while a dialog (or a pending confirmation) was in flight (m-2): never write for a
+    // tab that's no longer open.
+    if (!deps.session.session.tabs[tabId]) {
+      deps.send.saveFailed({ tabId, error: strings.files.tabGone });
+      return;
+    }
+    // Never silently overwrite a path a different tab already has open (m-6).
+    const owner = deps.session.findTabByPath(path);
+    if (owner && owner.id !== tabId) {
+      deps.send.saveFailed({ tabId, error: strings.files.openInAnotherTab(baseName(path)) });
+      return;
+    }
     try {
       const hash = await deps.files.write(path, content);
-      await deps.session.patchTab(tabId, { filePath: path, lastSavedHash: hash });
+      await deps.session.patchTab(tabId, {
+        filePath: path,
+        lastSavedHash: hash,
+        // Only a source extension re-derives the language; json/txt keep the tab's own (m-7b).
+        ...(SOURCE_EXTENSION.test(path) ? { language: languageForPath(path) } : {}),
+      });
       deps.session.setLastDirectory(dirname(path));
       const tab = deps.session.session.tabs[tabId];
       if (tab) deps.send.saved({ tabId, tab });
@@ -110,11 +145,19 @@ export function createFileHandlers(deps: FileHandlerDeps) {
       }),
       "file.saveAsDialog": message(fileSaveParamsSchema, "file.saveAsDialog", async ({ tabId, content }) => {
         const tab = deps.session.session.tabs[tabId];
-        if (!tab) return;
-        const defaultName = `${safeName(deriveTitle(tab, content)).replace(/\.(?:[mc]?[jt]sx?|json|txt)$/i, "")}.${extensionFor(tab.language)}`;
-        const defaultDir = tab.filePath
-          ? dirname(tab.filePath)
-          : (deps.session.session.lastDirectory ?? deps.documentsDir);
+        if (!tab) {
+          // The tab may have closed between the UI sending this message and Main handling it (m-2).
+          deps.send.saveFailed({ tabId, error: strings.files.tabGone });
+          return;
+        }
+        // The file's own name when it has one; otherwise the derived title plus the language extension (m-7a).
+        const defaultName = tab.filePath
+          ? baseName(tab.filePath)
+          : `${safeName(deriveTitle(tab, content)).replace(/\.(?:[mc]?[jt]sx?|json|txt)$/i, "")}.${extensionFor(tab.language)}`;
+        const defaultDir = await firstExistingDir(
+          [tab.filePath ? dirname(tab.filePath) : null, deps.session.session.lastDirectory],
+          deps.documentsDir,
+        );
         let path: string | null;
         try {
           path = await deps.saveDialog({ defaultName, defaultDir });
@@ -126,7 +169,11 @@ export function createFileHandlers(deps: FileHandlerDeps) {
           deps.send.saveCancelled({ tabId });
           return;
         }
-        if (path === join(defaultDir, defaultName)) {
+        // Compared as NFC, against the folder's real path when it exists, so /tmp vs /private/tmp and NFD vs
+        // NFC spellings of the same path still count as "untouched" (m-3).
+        const resolvedDir = await realpath(defaultDir).catch(() => defaultDir);
+        const defaultPath = join(resolvedDir, defaultName).normalize("NFC");
+        if (path.normalize("NFC") === defaultPath) {
           // M0-S6: an untouched dialog can resolve to the default path by itself. Never write without confirmation.
           const token = deps.files.issueSaveAsToken({ tabId, path, content });
           deps.send.saveAsConfirm({ token, tabId, path });

@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { FileOpened } from "@jslab/rpc-schema";
 import { contentHash, createTab, type TabState } from "@jslab/shared";
 import { createFileHandlers, type FileHandlerDeps } from "../../src/main/rpc/file-handlers";
@@ -7,7 +10,14 @@ import { createFileHandlers, type FileHandlerDeps } from "../../src/main/rpc/fil
 const LARGE_TOKEN = "11111111-1111-4111-8111-111111111111";
 const SAVE_TOKEN = "22222222-2222-4222-8222-222222222222";
 
-function setup(options: { saveResult?: string | null | Error; openPaths?: string[] } = {}) {
+function setup(
+  options: {
+    saveResult?: string | null | Error;
+    openPaths?: string[];
+    documentsDir?: string;
+    lastDirectory?: string | null;
+  } = {},
+) {
   const tabs: Record<string, TabState> = {
     scratch: createTab({ id: "scratch", language: "tsx" }),
     saved: createTab({ id: "saved", filePath: "/w/a.ts", lastSavedHash: "old" }),
@@ -30,7 +40,7 @@ function setup(options: { saveResult?: string | null | Error; openPaths?: string
     },
     session: {
       get session() {
-        return { tabs, lastDirectory: null } as never;
+        return { tabs, lastDirectory: options.lastDirectory ?? null } as never;
       },
       createTab: mock(
         async (o: { filePath?: string | null; language?: TabState["language"]; lastSavedHash?: string | null }) =>
@@ -52,7 +62,7 @@ function setup(options: { saveResult?: string | null | Error; openPaths?: string
       if (options.saveResult instanceof Error) throw options.saveResult;
       return options.saveResult === undefined ? "/Other/picked.tsx" : options.saveResult;
     }),
-    documentsDir: "/Docs",
+    documentsDir: options.documentsDir ?? "/Docs",
     revealInFinder: mock((_path: string) => {}),
     clipboard: mock((_text: string) => {}),
     send: {
@@ -152,5 +162,128 @@ describe("file handlers", () => {
     expect(deps.revealInFinder).toHaveBeenCalledWith("/w/a.ts");
     expect(deps.clipboard.mock.calls).toEqual([["/w/a.ts"]]);
     expect(deps.log).toHaveBeenCalledTimes(2);
+  });
+
+  // Test 3 (m-2): a closed tab must never be written to, whether it was already gone when the dialog opened, or
+  // closed while the (async) dialog was still pending.
+  test("Save As fails without writing when the tab is gone", async () => {
+    const missing = setup();
+    missing.handlers.messages["file.saveAsDialog"]({ tabId: "ghost", content: "x" });
+    await flush();
+    expect(missing.sent).toEqual([
+      { name: "file.saveFailed", payload: { tabId: "ghost", error: "That tab is no longer open." } },
+    ]);
+    expect(missing.deps.files.write).not.toHaveBeenCalled();
+
+    const closedMidDialog = setup();
+    closedMidDialog.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "<a/>" });
+    delete closedMidDialog.tabs.scratch;
+    await flush();
+    expect(closedMidDialog.sent).toEqual([
+      { name: "file.saveFailed", payload: { tabId: "scratch", error: "That tab is no longer open." } },
+    ]);
+    expect(closedMidDialog.deps.files.write).not.toHaveBeenCalled();
+  });
+
+  // Test 4 (m-3): the default-path comparison normalizes both sides to NFC and resolves the default folder's
+  // real path first, so a dialog result under the folder's realpath (e.g. /private/var vs /var on macOS) in NFD
+  // form still counts as the untouched default and triggers confirmation instead of a silent write.
+  test("Save As treats an NFD-normalized dialog result as the untouched default path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jslab-nfd-"));
+    try {
+      const realDir = await realpath(dir);
+      const composedName = "café.ts";
+      const nfdPath = join(realDir, composedName).normalize("NFD");
+      const s = setup({ documentsDir: dir, saveResult: nfdPath });
+      s.tabs.accent = createTab({ id: "accent", title: "café", titleIsCustom: true, language: "typescript" });
+      s.handlers.messages["file.saveAsDialog"]({ tabId: "accent", content: "" });
+      await flush();
+      expect(s.deps.files.write).not.toHaveBeenCalled();
+      expect(s.sent).toEqual([
+        { name: "file.saveAsConfirm", payload: { token: SAVE_TOKEN, tabId: "accent", path: nfdPath } },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Test 7 (m-6): Save As must not silently overwrite a path a different tab already has open.
+  test("Save As refuses to overwrite a path another tab already has open", async () => {
+    const { handlers, sent, deps } = setup({ saveResult: "/w/a.ts" });
+    handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "<a/>" });
+    await flush();
+    expect(deps.files.write).not.toHaveBeenCalled();
+    expect(sent).toEqual([
+      { name: "file.saveFailed", payload: { tabId: "scratch", error: "a.ts is already open in another tab." } },
+    ]);
+  });
+
+  // Test 8 (m-7 a, b): the default name reuses the tab's own file name verbatim when it has one; after a
+  // successful save, the language is re-derived only for source extensions, never for json/txt.
+  test("Save As uses the file's own name as default and updates language only for source extensions", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jslab-saveas-name-"));
+    try {
+      const ts = setup({ documentsDir: dir, saveResult: join(dir, "renamed.tsx") });
+      ts.tabs.tsTab = createTab({
+        id: "tsTab",
+        filePath: join(dir, "original.ts"),
+        language: "typescript",
+        lastSavedHash: "h",
+      });
+      ts.handlers.messages["file.saveAsDialog"]({ tabId: "tsTab", content: "x" });
+      await flush();
+      expect(ts.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "original.ts", defaultDir: dir });
+      expect(ts.tabs.tsTab).toMatchObject({ filePath: join(dir, "renamed.tsx"), language: "tsx" });
+
+      const json = setup({ documentsDir: dir, saveResult: join(dir, "data.json") });
+      json.tabs.jsonTab = createTab({
+        id: "jsonTab",
+        filePath: join(dir, "data.json"),
+        language: "typescript",
+        lastSavedHash: "h",
+      });
+      json.handlers.messages["file.saveAsDialog"]({ tabId: "jsonTab", content: "{}" });
+      await flush();
+      expect(json.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "data.json", defaultDir: dir });
+      expect(json.tabs.jsonTab).toMatchObject({ filePath: join(dir, "data.json"), language: "typescript" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Test 9 (m-7 c): the default folder falls back through candidates that no longer exist on disk, ending at
+  // Documents.
+  test("Save As falls back through missing default folders to Documents", async () => {
+    const docs = await mkdtemp(join(tmpdir(), "jslab-docs-"));
+    const lastDir = await mkdtemp(join(tmpdir(), "jslab-last-"));
+    try {
+      const missingLast = join(lastDir, "gone");
+      const noFilePath = setup({ documentsDir: docs, lastDirectory: missingLast });
+      noFilePath.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "" });
+      await flush();
+      expect(noFilePath.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "Untitled.tsx", defaultDir: docs });
+
+      const missingOwnFolder = setup({ documentsDir: docs, lastDirectory: lastDir });
+      missingOwnFolder.tabs.ghost = createTab({
+        id: "ghost",
+        filePath: join(docs, "missing-subdir", "a.ts"),
+        language: "typescript",
+      });
+      missingOwnFolder.handlers.messages["file.saveAsDialog"]({ tabId: "ghost", content: "" });
+      await flush();
+      expect(missingOwnFolder.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "a.ts", defaultDir: lastDir });
+    } finally {
+      await rm(docs, { recursive: true, force: true });
+      await rm(lastDir, { recursive: true, force: true });
+    }
+  });
+
+  // Test 10 (m-9): a declined Save As confirmation must cancel, not write.
+  test("confirmSaveAs cancellation writes nothing", async () => {
+    const { handlers, sent, deps } = setup();
+    handlers.messages["file.confirmSaveAs"]({ token: SAVE_TOKEN, confirmed: false });
+    await flush();
+    expect(deps.files.write).not.toHaveBeenCalled();
+    expect(sent).toEqual([{ name: "file.saveCancelled", payload: { tabId: "scratch" } }]);
   });
 });

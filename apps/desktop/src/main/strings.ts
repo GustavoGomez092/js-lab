@@ -14,6 +14,7 @@ export const strings = {
     unreadable: (name: string) => `${name} couldn't be read.`,
     expired: "That file request expired. Open the file again.",
     tabGone: "That tab is no longer open.",
+    openInAnotherTab: (name: string) => `${name} is already open in another tab.`,
   },
   notices: {
     copySaved: (file: string) => ` A copy was saved as ${file}`,

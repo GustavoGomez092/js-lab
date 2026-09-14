@@ -98,6 +98,8 @@ export function App({
       // the user can switch tabs while it runs; start() must still act on this tab, not whatever is active
       // once the format settles.
       const tabId = state.tab.id;
+      // FB-m5: a run clears a transient status message first, so a format-on-run failure below still shows.
+      state.clearTransientStatus();
       if (reason === "manual") state.armAutoRun();
       const start = () => {
         cancelPendingAutoRun.current();

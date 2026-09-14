@@ -1,12 +1,41 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
 import type { EditorHandle, OffsetEdit } from "../src/editor/editor-handle";
-import { createFormatActions } from "../src/format/format-actions";
-import { formatCode } from "../src/format/format-core";
-import { createWorkerFormatter, shouldFormatBeforeRun, type WorkerLike } from "../src/format/formatter";
+import { createFormatActions, FORMAT_BUSY_DELAY_MS } from "../src/format/format-actions";
+import { type FormatOutcome, formatCode } from "../src/format/format-core";
+import {
+  createWorkerFormatter,
+  formatTimeoutMs,
+  shouldFormatBeforeRun,
+  type WorkerLike,
+} from "../src/format/formatter";
 import { applyEdits, computeEdits } from "../src/format/line-diff";
 import { prettierOptions } from "../src/format/prettier-options";
+import type { TimerApi } from "../src/state/auto-run";
 import { createAppStore } from "../src/state/store";
+import { strings } from "../src/strings";
+
+function manualTimers() {
+  let next = 1;
+  const pending = new Map<number, { callback: () => void; ms: number }>();
+  const timers: TimerApi = {
+    setTimeout: (callback, ms) => {
+      const id = next++;
+      pending.set(id, {
+        callback: () => {
+          pending.delete(id);
+          callback();
+        },
+        ms,
+      });
+      return id;
+    },
+    clearTimeout: (id) => {
+      pending.delete(id as number);
+    },
+  };
+  return { timers, pending };
+}
 
 describe("prettier options", () => {
   test("map every setting and pick the parser by language", () => {
@@ -152,6 +181,100 @@ describe("formatter", () => {
     void formatter.format("d", options, 0);
     expect([workers.length, w?.terminated]).toEqual([2, true]);
     formatter.dispose();
+  });
+
+  // T21-m1-timeout: a hung worker must not leave format-before-run (and every later ⌘R) waiting forever.
+  test("a request that times out fails, frees the queue and restarts the worker (T21-m1-timeout)", async () => {
+    expect([formatTimeoutMs(0), formatTimeoutMs(1024 * 1024), formatTimeoutMs(3 * 1024 * 1024)]).toEqual([
+      10_000, 15_000, 25_000,
+    ]);
+    expect(formatTimeoutMs(50 * 1024 * 1024)).toBe(60_000);
+
+    const workers: SilentWorker[] = [];
+    class SilentWorker implements WorkerLike {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: ErrorEvent) => void) | null = null;
+      sent: { id: number }[] = [];
+      terminated = false;
+      postMessage(message: { id: number }) {
+        this.sent.push(message);
+      }
+      terminate() {
+        this.terminated = true;
+      }
+    }
+    const { timers, pending } = manualTimers();
+    const formatter = createWorkerFormatter(
+      () => {
+        const worker = new SilentWorker();
+        workers.push(worker);
+        return worker;
+      },
+      { timers },
+    );
+    const options = prettierOptions(defaultSettings(), "javascript");
+    const first = formatter.format("a", options, 0);
+    const second = formatter.format("b", options, 0);
+    expect([...pending.values()].map((timer) => timer.ms)).toEqual([10_000, 10_000]);
+    const [firstTimer] = [...pending.values()];
+    firstTimer?.callback();
+    expect(await first).toEqual({ ok: false, error: strings.format.timedOut });
+    expect(await second).toEqual({ ok: false, error: strings.format.restarted });
+    expect([workers[0]?.terminated, pending.size]).toEqual([true, 0]);
+
+    const third = formatter.format("c", options, 0);
+    expect(workers).toHaveLength(2);
+    const [fresh] = workers.slice(1);
+    fresh?.onmessage?.({
+      data: { id: fresh.sent[0]?.id, ok: true, formatted: "c;\n", cursorOffset: 0 },
+    } as MessageEvent);
+    expect(await third).toEqual({ ok: true, formatted: "c;\n", cursorOffset: 0 });
+    expect(pending.size).toBe(0);
+  });
+
+  // Review rec 1: a format that takes a noticeable time says so, so ⌘R and ⌘S never look dead.
+  test("a format pending past the busy delay shows Formatting…, which clears when it settles", async () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1", language: "javascript" })),
+      buffers: { t1: "a" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    let release: (outcome: FormatOutcome) => void = () => {};
+    const { timers, pending } = manualTimers();
+    const actions = createFormatActions({
+      store,
+      editor: () => null,
+      formatter: {
+        format: () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+        dispose: () => {},
+      },
+      timers,
+    });
+
+    const quick = actions.formatTab("t1");
+    expect([...pending.values()].map((timer) => timer.ms)).toEqual([FORMAT_BUSY_DELAY_MS]);
+    release({ ok: true, formatted: "a", cursorOffset: 0 });
+    expect(await quick).toBe(true);
+    expect([pending.size, store.getState().statusMessage]).toEqual([0, null]);
+
+    const slow = actions.formatTab("t1");
+    for (const timer of [...pending.values()]) timer.callback();
+    expect(store.getState().statusMessage).toBe(strings.format.busy);
+    release({ ok: true, formatted: "a;\n", cursorOffset: 0 });
+    expect(await slow).toBe(true);
+    expect(store.getState().statusMessage).toBeNull();
+
+    const failing = actions.formatTab("t1");
+    for (const timer of [...pending.values()]) timer.callback();
+    release({ ok: false, error: strings.format.timedOut });
+    expect(await failing).toBe(false);
+    expect(store.getState().statusMessage).toBe(strings.format.failed(strings.format.timedOut));
   });
 
   test("formatTab applies minimal edits, reports failures and drops stale results", async () => {

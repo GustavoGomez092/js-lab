@@ -8,7 +8,7 @@ import {
   normalizeSession,
   sessionSchema,
 } from "@jslab/shared";
-import { createAppStore, shouldAutoRun } from "../src/state/store";
+import { createAppStore, STATUS_MESSAGE_MS, shouldAutoRun } from "../src/state/store";
 
 function payload(overrides: Partial<BootstrapPayload> = {}): BootstrapPayload {
   return {
@@ -178,6 +178,50 @@ describe("app store", () => {
     ]);
     store.getState().closeModal();
     expect(store.getState().modal).toBeNull();
+  });
+
+  // FB-m5: "Saved foo.ts" and "Couldn't format: …" used to stay in the status bar forever.
+  test("non-sticky status messages clear after the delay or on the next edit; sticky ones stay (FB-m5)", () => {
+    let next = 1;
+    const pending = new Map<number, { callback: () => void; ms: number }>();
+    const store = createAppStore({
+      timers: {
+        setTimeout: (callback, ms) => {
+          pending.set(next, { callback, ms });
+          return next++;
+        },
+        clearTimeout: (id) => void pending.delete(id as number),
+      },
+    });
+    store.getState().hydrate(payload());
+    const fire = () => {
+      for (const [id, timer] of [...pending]) {
+        pending.delete(id);
+        timer.callback();
+      }
+    };
+
+    store.getState().setStatusMessage("Saved a.ts");
+    expect([...pending.values()].map((timer) => timer.ms)).toEqual([STATUS_MESSAGE_MS]);
+    fire();
+    expect(store.getState().statusMessage).toBeNull();
+
+    store.getState().setStatusMessage("Couldn't save");
+    store.getState().setStatusMessage("Saved b.ts");
+    expect(pending.size).toBe(1);
+    store.getState().editCode("2 + 2");
+    expect([store.getState().statusMessage, pending.size]).toEqual([null, 0]);
+
+    store.getState().setStatusMessage("Formatting…", { sticky: true });
+    expect(pending.size).toBe(0);
+    store.getState().editCode("3 + 3");
+    fire();
+    expect(store.getState().statusMessage).toBe("Formatting…");
+    store.getState().clearTransientStatus();
+    expect(store.getState().statusMessage).toBe("Formatting…");
+    store.getState().setStatusMessage("Saved c.ts");
+    store.getState().clearTransientStatus();
+    expect(store.getState().statusMessage).toBeNull();
   });
 
   test("run messages for an unknown tabId leave the store unchanged (m-6)", () => {

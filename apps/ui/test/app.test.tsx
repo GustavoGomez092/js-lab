@@ -207,6 +207,17 @@ describe("App shell", () => {
     }
   });
 
+  // FB-m5: a run clears a transient status message, before any format-on-run can report its own.
+  test("a manual run clears a transient status message but not a sticky one (FB-m5)", () => {
+    const { store } = renderApp();
+    act(() => store.getState().setStatusMessage("Saved a.ts"));
+    press("KeyR");
+    expect(store.getState().statusMessage).toBeNull();
+    act(() => store.getState().setStatusMessage("Formatting…", { sticky: true }));
+    press("KeyR");
+    expect(store.getState().statusMessage).toBe("Formatting…");
+  });
+
   test("Cmd+Shift+R stops and Cmd+Alt+R kills", () => {
     const { api } = renderApp();
     press("KeyR", { shiftKey: true });

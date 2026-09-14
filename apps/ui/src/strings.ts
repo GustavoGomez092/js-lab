@@ -13,6 +13,11 @@ export const strings = {
   },
   format: {
     failed: (message: string) => `Couldn't format: ${message}`,
+    busy: "Formatting…",
+    timedOut: "formatting took too long, so the formatter was restarted",
+    restarted: "the formatter was restarted",
+    crashed: "the formatter stopped unexpectedly",
+    disposed: "the formatter was closed",
   },
   // Carried item T11-m4: a tab action (create/close/reopen/...) that Main rejects reports a status message
   // instead of leaving an unhandled rejection.

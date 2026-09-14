@@ -86,7 +86,8 @@ export function startAppearanceSync(
       if (!available) {
         // m-2 (fix round 1): the default font can itself fail its check; don't claim to fall back to itself.
         notice = font === DEFAULT_FONT ? strings.fonts.bundledUnavailable : strings.fonts.fallback(font);
-        store.getState().setStatusMessage(notice);
+        // Sticky (FB-m5): the fallback lasts as long as the font is missing, and a later successful check clears it.
+        store.getState().setStatusMessage(notice, { sticky: true });
       } else if (notice && store.getState().statusMessage === notice) {
         // m-1 (fix round 1): a later successful check clears its own stale fallback notice, but never an
         // unrelated status message that happens to be showing.

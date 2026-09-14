@@ -1,3 +1,5 @@
+import type { TimerApi } from "../state/auto-run";
+import { strings } from "../strings";
 import type { FormatOutcome } from "./format-core";
 import type { PrettierFormatOptions } from "./prettier-options";
 
@@ -13,17 +15,48 @@ export interface Formatter {
   dispose(): void;
 }
 
-/** A lazily started Prettier worker. A worker error fails pending requests and the next call starts a new worker. */
-export function createWorkerFormatter(createWorker: () => WorkerLike): Formatter {
+const MB = 1024 * 1024;
+
+/** How long one format request may take: 10 s, plus 5 s per MB of code, at most 60 s (T21-m1-timeout). */
+export function formatTimeoutMs(codeLength: number): number {
+  return Math.min(60_000, 10_000 + Math.round((codeLength / MB) * 5_000));
+}
+
+const defaultTimers: TimerApi = {
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/**
+ * A lazily started Prettier worker. A worker error fails pending requests and the next call starts a new worker. A
+ * request that outlives its timeout fails, and the worker is terminated with every other pending request, so a hung
+ * worker never blocks later runs or saves (T21-m1-timeout).
+ */
+export function createWorkerFormatter(
+  createWorker: () => WorkerLike,
+  options: { timers?: TimerApi; timeoutMs?(codeLength: number): number } = {},
+): Formatter {
+  const timers = options.timers ?? defaultTimers;
+  const timeoutFor = options.timeoutMs ?? formatTimeoutMs;
   let worker: WorkerLike | null = null;
   let nextId = 1;
-  const pending = new Map<number, (outcome: FormatOutcome) => void>();
+  const pending = new Map<number, { resolve: (outcome: FormatOutcome) => void; timer: unknown }>();
+
+  const settle = (id: number, outcome: FormatOutcome) => {
+    const entry = pending.get(id);
+    if (!entry) return;
+    pending.delete(id);
+    timers.clearTimeout(entry.timer);
+    entry.resolve(outcome);
+  };
 
   const failAll = (error: string) => {
-    for (const [id, resolve] of pending) {
-      pending.delete(id);
-      resolve({ ok: false, error });
-    }
+    for (const id of [...pending.keys()]) settle(id, { ok: false, error });
+  };
+
+  const stop = (target: WorkerLike) => {
+    target.terminate();
+    if (worker === target) worker = null;
   };
 
   const ensure = (): WorkerLike => {
@@ -31,38 +64,39 @@ export function createWorkerFormatter(createWorker: () => WorkerLike): Formatter
     const created = createWorker();
     created.onmessage = (event) => {
       const { id, ...outcome } = event.data as { id: number } & FormatOutcome;
-      const resolve = pending.get(id);
-      pending.delete(id);
-      resolve?.(outcome as FormatOutcome);
+      settle(id, outcome as FormatOutcome);
     };
     created.onerror = (event) => {
-      created.terminate();
-      if (worker === created) worker = null;
-      failAll(event.message || "The formatter stopped unexpectedly");
+      stop(created);
+      failAll(event.message || strings.format.crashed);
     };
     worker = created;
     return created;
   };
 
   return {
-    format(code, options, cursorOffset) {
+    format(code, formatOptions, cursorOffset) {
       const id = nextId++;
       return new Promise((resolve) => {
-        pending.set(id, resolve);
+        const timer = timers.setTimeout(() => {
+          const current = worker;
+          settle(id, { ok: false, error: strings.format.timedOut });
+          if (current) stop(current);
+          failAll(strings.format.restarted);
+        }, timeoutFor(code.length));
+        pending.set(id, { resolve, timer });
         try {
-          ensure().postMessage({ id, code, options, cursorOffset });
+          ensure().postMessage({ id, code, options: formatOptions, cursorOffset });
         } catch (error) {
           // Fix round 1 (m-1): a worker that fails to start (a synchronous throw, e.g. from `new Worker(...)`)
           // must resolve this request instead of leaving it (and every later one) hanging forever.
-          pending.delete(id);
-          resolve({ ok: false, error: error instanceof Error ? error.message : String(error) });
+          settle(id, { ok: false, error: error instanceof Error ? error.message : String(error) });
         }
       });
     },
     dispose() {
-      worker?.terminate();
-      worker = null;
-      failAll("The formatter was disposed");
+      if (worker) stop(worker);
+      failAll(strings.format.disposed);
     },
   };
 }

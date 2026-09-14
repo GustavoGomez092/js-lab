@@ -8,6 +8,7 @@ import {
   tabAfterClose,
 } from "@jslab/shared";
 import { createStore } from "zustand/vanilla";
+import type { TimerApi } from "./auto-run";
 import { applyRunEvents, applyRunState, initialOutput, type OutputState } from "./output";
 import { clampEditorSize, EDITOR_SIZE_RESET, insertAfterActive, isPermutation, renamePatch } from "./workspace";
 
@@ -47,6 +48,7 @@ export interface AppState {
   modal: Modal | null;
   outputFilter: OutputFilter;
   statusMessage: string | null;
+  statusSticky: boolean;
   cursor: { line: number; column: number } | null;
   vimMode: string | null;
   themeId: string;
@@ -101,7 +103,13 @@ export interface AppState {
   openModal(modal: Modal): void;
   closeModal(): void;
   setOutputFilter(filter: OutputFilter): void;
-  setStatusMessage(message: string | null): void;
+  /**
+   * Shows a status-bar message (FB-m5). A non-sticky message clears after STATUS_MESSAGE_MS, on the next edit, or when
+   * a run starts; a sticky one (a busy indicator, a font fallback) stays until replaced or cleared.
+   */
+  setStatusMessage(message: string | null, options?: { sticky?: boolean }): void;
+  /** Clears the status message unless it is sticky. */
+  clearTransientStatus(): void;
   setCursor(cursor: { line: number; column: number } | null): void;
   setVimMode(mode: string | null): void;
   setThemeId(themeId: string): void;
@@ -118,6 +126,14 @@ const NO_DIAGNOSTICS: DiagnosticPayload[] = [];
 /** Most notices shown at once; the oldest is dropped first (FA-I3). */
 export const MAX_NOTICES = 5;
 
+/** How long a non-sticky status message stays (FB-m5). */
+export const STATUS_MESSAGE_MS = 5000;
+
+const defaultTimers: TimerApi = {
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 function mirrorOf(state: Pick<AppState, "tabs" | "activeTabId" | "buffers" | "runtimes">) {
   const id = state.activeTabId;
   const runtime = id ? state.runtimes[id] : undefined;
@@ -130,7 +146,14 @@ function mirrorOf(state: Pick<AppState, "tabs" | "activeTabId" | "buffers" | "ru
   };
 }
 
-export function createAppStore() {
+export function createAppStore(options: { timers?: TimerApi } = {}) {
+  const timers = options.timers ?? defaultTimers;
+  let statusTimer: unknown = null;
+  const cancelStatusTimer = () => {
+    if (statusTimer === null) return;
+    timers.clearTimeout(statusTimer);
+    statusTimer = null;
+  };
   return createStore<AppState>()((set, get) => {
     /** Applies a patch and recomputes the active-tab mirrors (unless there is no active tab: M1's legacy path). */
     const commit = (patch: Partial<AppState>) => {
@@ -179,6 +202,7 @@ export function createAppStore() {
       modal: null,
       outputFilter: "all",
       statusMessage: null,
+      statusSticky: false,
       cursor: null,
       vimMode: null,
       themeId: "graphite",
@@ -229,6 +253,7 @@ export function createAppStore() {
           set({ code, autoRunArmed: true });
           return;
         }
+        get().clearTransientStatus();
         commit({
           buffers: { ...get().buffers, [id]: code },
           runtimes: { ...get().runtimes, [id]: { ...(get().runtimes[id] ?? newRuntime()), autoRunArmed: true } },
@@ -394,8 +419,21 @@ export function createAppStore() {
         set({ outputFilter });
       },
 
-      setStatusMessage(statusMessage) {
-        set({ statusMessage });
+      setStatusMessage(statusMessage, options) {
+        cancelStatusTimer();
+        const sticky = statusMessage !== null && options?.sticky === true;
+        set({ statusMessage, statusSticky: sticky });
+        if (statusMessage === null || sticky) return;
+        statusTimer = timers.setTimeout(() => {
+          statusTimer = null;
+          if (get().statusMessage === statusMessage && !get().statusSticky) set({ statusMessage: null });
+        }, STATUS_MESSAGE_MS);
+      },
+
+      clearTransientStatus() {
+        if (get().statusMessage === null || get().statusSticky) return;
+        cancelStatusTimer();
+        set({ statusMessage: null });
       },
 
       setCursor(cursor) {

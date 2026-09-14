@@ -1,11 +1,42 @@
 import type { EditorHandle } from "../editor/editor-handle";
+import type { TimerApi } from "../state/auto-run";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import type { Formatter } from "./formatter";
 import { computeEdits } from "./line-diff";
 import { prettierOptions } from "./prettier-options";
 
-export function createFormatActions(deps: { store: AppStore; formatter: Formatter; editor(): EditorHandle | null }) {
+/** A format pending longer than this shows "Formatting…" in the status bar (review rec 1). */
+export const FORMAT_BUSY_DELAY_MS = 300;
+
+const defaultTimers: TimerApi = {
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+export function createFormatActions(deps: {
+  store: AppStore;
+  formatter: Formatter;
+  editor(): EditorHandle | null;
+  timers?: TimerApi;
+}) {
+  const timers = deps.timers ?? defaultTimers;
+
+  /** Shows "Formatting…" once a request has been pending for FORMAT_BUSY_DELAY_MS; the returned function ends it. */
+  const busyWhile = () => {
+    let shown = false;
+    const timer = timers.setTimeout(() => {
+      shown = true;
+      deps.store.getState().setStatusMessage(strings.format.busy, { sticky: true });
+    }, FORMAT_BUSY_DELAY_MS);
+    return () => {
+      timers.clearTimeout(timer);
+      if (shown && deps.store.getState().statusMessage === strings.format.busy) {
+        deps.store.getState().setStatusMessage(null);
+      }
+    };
+  };
+
   return {
     /** Formats a tab; the active tab through Monaco with minimal edits, others through their buffer. */
     async formatTab(tabId?: string): Promise<boolean> {
@@ -15,11 +46,17 @@ export function createFormatActions(deps: { store: AppStore; formatter: Formatte
       if (!id || !tab || !state.settings) return false;
       const editor = id === state.activeTabId ? deps.editor() : null;
       const code = editor ? editor.getValue() : (state.buffers[id] ?? "");
-      const outcome = await deps.formatter.format(
-        code,
-        prettierOptions(state.settings, tab.language),
-        editor?.getCursorOffset() ?? 0,
-      );
+      const done = busyWhile();
+      let outcome: Awaited<ReturnType<Formatter["format"]>>;
+      try {
+        outcome = await deps.formatter.format(
+          code,
+          prettierOptions(state.settings, tab.language),
+          editor?.getCursorOffset() ?? 0,
+        );
+      } finally {
+        done();
+      }
       // Fix round 1 (I-2): `editor` is the single global Monaco editor, captured before the await above. If
       // the active tab changed while Prettier ran, that handle now belongs to a different tab's model, so
       // never read or write through it.

@@ -128,12 +128,17 @@ export const npmNameSchema = z
   .max(214)
   .regex(/^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/);
 
-/** One `bun add` argument: name@range, a git URL or a tarball URL. Never whitespace, never a leading "-" (spec §18). */
+/** One `bun add` argument: a registry name with an optional range or tag, a git URL, or a tarball URL (spec §11.2, §18). */
 export const npmSpecSchema = z
   .string()
   .min(1)
   .max(2048)
-  .regex(/^[^\s-]\S*$/);
+  .refine(
+    (spec) =>
+      /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*(?:@[A-Za-z0-9._^~<>=*|+-]{1,256})?$/.test(spec) ||
+      /^(?:git\+(?:https|ssh)|git):\/\/\S+$/.test(spec) ||
+      /^https?:\/\/\S+$/.test(spec),
+  );
 
 export const MAX_NPMRC_CHARS = 65_536;
 
@@ -152,7 +157,7 @@ export const localTypesParamsSchema = z.object({
         .string()
         .min(2)
         .max(1024)
-        .regex(/^\.\.?\//),
+        .regex(/^\.\.?\/[^\0-\x20\\]*$/),
     )
     .min(1)
     .max(200),

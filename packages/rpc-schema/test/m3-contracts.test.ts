@@ -23,7 +23,22 @@ describe("M3 contracts", () => {
     ]) {
       expect(ok(npmInstallParamsSchema, { spec })).toBe(true);
     }
-    for (const spec of ["--registry=http://evil", "-g", "a b", "", "zod\n--x"]) {
+    for (const spec of [
+      "--registry=http://evil",
+      "-g",
+      "a b",
+      "",
+      "zod\n--x",
+      "/etc/passwd",
+      "file:///etc/passwd",
+      "file:../local",
+      "./x",
+      "../x",
+      "git+file:///x",
+      "javascript:alert(1)",
+      "zod$(id)",
+      "Zod",
+    ]) {
       expect(ok(npmInstallParamsSchema, { spec })).toBe(false);
     }
     expect(["zod", "@types/node", "lodash.merge"].map((name) => ok(npmNameSchema, name))).toEqual([true, true, true]);
@@ -50,6 +65,8 @@ describe("M3 contracts", () => {
     expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["zod"] })).toBe(false);
     expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["/etc/passwd"] })).toBe(false);
     expect(ok(localTypesParamsSchema, { tabId: "../x", specifiers: ["./a"] })).toBe(false);
+    expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["./a b"] })).toBe(false);
+    expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["./a\\b"] })).toBe(false);
   });
 
   test(".npmrc content is capped", () => {

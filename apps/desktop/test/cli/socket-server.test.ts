@@ -78,4 +78,54 @@ describe("startSocketServer", () => {
     local.close();
     expect(existsSync(path)).toBe(false);
   });
+
+  test("queues large replies until the socket drains, without truncating or interleaving them", async () => {
+    const path = join(dir, "jslab.sock");
+    const bigText = "x".repeat(4 * 1024 * 1024); // 4 MB, well over the ~8 KB default unix-socket send buffer
+    server = await startSocketServer({
+      path,
+      log,
+      methods: {
+        // Requested first but completes after "small" (which has no await), so a correct fix must deliver
+        // replies in completion order without corrupting the large one mid-write.
+        big: async () => {
+          await Bun.sleep(20);
+          return { text: bigText };
+        },
+        small: async () => ({ marker: "small" }),
+      },
+    });
+
+    const replies: Record<string, unknown>[] = [];
+    let pending = "";
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`timed out with ${replies.length} replies`)), 5000);
+      void Bun.connect({
+        unix: path,
+        socket: {
+          data(socket, data) {
+            pending += new TextDecoder().decode(data);
+            const lines = pending.split("\n");
+            pending = lines.pop() ?? "";
+            for (const line of lines) replies.push(JSON.parse(line));
+            if (replies.length >= 2) {
+              clearTimeout(timer);
+              socket.end();
+              resolve();
+            }
+          },
+          open(socket) {
+            socket.write('{"v":1,"id":"1","method":"big"}\n{"v":1,"id":"2","method":"small"}\n');
+          },
+        },
+      });
+    });
+
+    expect(replies).toHaveLength(2);
+    // "small" (id 2) completes first even though it was requested second.
+    expect(replies.map((reply) => reply.id)).toEqual(["2", "1"]);
+    expect(replies[0]).toEqual({ id: "2", ok: true, marker: "small" });
+    expect(replies[1]).toMatchObject({ id: "1", ok: true });
+    expect((replies[1] as { text: string }).text).toHaveLength(4 * 1024 * 1024);
+  }, 8000);
 });

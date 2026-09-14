@@ -10,6 +10,22 @@ export interface SocketServer {
 interface Connection {
   buffer: LineBuffer;
   decoder: TextDecoder;
+  /** Outgoing bytes not yet accepted by the kernel (macOS's default unix-socket send buffer is 8 KB). */
+  queue: Uint8Array[];
+}
+
+/**
+ * Writes `bytes`, queuing anything the kernel doesn't accept yet. Replies always send in the order this is
+ * called (never interleaved), and a reply larger than the socket's send buffer is delivered in full once
+ * `drain` fires, instead of the unwritten remainder being silently dropped.
+ */
+function send(socket: Socket<undefined>, connection: Connection, bytes: Uint8Array): void {
+  if (connection.queue.length > 0) {
+    connection.queue.push(bytes);
+    return;
+  }
+  const written = socket.write(bytes);
+  if (written < bytes.length) connection.queue.push(bytes.subarray(written));
 }
 
 async function isListening(path: string): Promise<boolean> {
@@ -45,7 +61,7 @@ export async function startSocketServer(options: {
       unix: options.path,
       socket: {
         open(socket) {
-          connections.set(socket, { buffer: new LineBuffer(), decoder: new TextDecoder() });
+          connections.set(socket, { buffer: new LineBuffer(), decoder: new TextDecoder(), queue: [] });
         },
         data(socket, data) {
           const connection = connections.get(socket);
@@ -60,8 +76,23 @@ export async function startSocketServer(options: {
           }
           for (const line of lines) {
             void handleLine(line, options.methods).then((response) => {
-              socket.write(encodeLine(response));
+              const current = connections.get(socket);
+              if (!current) return; // The socket closed while the handler was running.
+              send(socket, current, Buffer.from(encodeLine(response)));
             });
+          }
+        },
+        drain(socket) {
+          const connection = connections.get(socket);
+          if (!connection) return;
+          while (connection.queue.length > 0) {
+            const chunk = connection.queue[0] as Uint8Array;
+            const written = socket.write(chunk);
+            if (written < chunk.length) {
+              connection.queue[0] = chunk.subarray(written);
+              return;
+            }
+            connection.queue.shift();
           }
         },
         close(socket) {

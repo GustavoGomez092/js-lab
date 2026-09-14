@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@jslab/npm": "workspace:*",
     "@jslab/rpc-schema": "workspace:*",
     "@jslab/runner-bun": "workspace:*",
     "@jslab/shared": "workspace:*",
@@ -13,7 +14,7 @@
     "zod": "4.6.4"
   },
   "scripts": {
-    "test": "bun test",
+    "test": "bun test ./test",
     "typecheck": "bun scripts/devkit-tsconfig.ts && tsc --noEmit -p .",
     "postinstall": "command -v hutch >/dev/null 2>&1 || { echo 'postinstall: hutch not found. Install Hutch 0.24.3: curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o install.sh && sh install.sh --version 0.24.3' >&2; exit 1; }; hutch electrobun sync && bun scripts/devkit-tsconfig.ts"
   }

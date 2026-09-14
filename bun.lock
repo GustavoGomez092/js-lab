@@ -14,6 +14,7 @@
       "name": "@jslab/desktop",
       "version": "0.0.0",
       "dependencies": {
+        "@jslab/npm": "workspace:*",
         "@jslab/rpc-schema": "workspace:*",
         "@jslab/runner-bun": "workspace:*",
         "@jslab/shared": "workspace:*",

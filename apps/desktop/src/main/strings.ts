@@ -24,6 +24,7 @@ export const strings = {
     settingsWriteFailed: "Couldn't save settings.json",
     npmHomeNpmrcMoved: (path: string) =>
       `Moved an .npmrc found in npm-home to ${path}; npm operations never read one there`,
+    npmPostChangeFailed: "npm post-change step failed",
   },
   dialogs: {
     startupFailed: (message: string) => `JSLab couldn't start: ${message}`,

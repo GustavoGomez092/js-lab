@@ -9,12 +9,23 @@ import { SessionStore } from "../../src/main/services/session-store";
 import { SettingsStore } from "../../src/main/services/settings-store";
 
 let dir = "";
+// Tracks every SessionStore opened in a test so afterEach can flush its debounced writer before removing dir: an
+// unflushed schedule() timer that fires after rm() would recreate dir via writeFileAtomic's mkdir (R-M2-T3-1).
+let sessionStores: SessionStore[] = [];
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "jslab-services-"));
+  sessionStores = [];
 });
 afterEach(async () => {
+  await Promise.all(sessionStores.map((store) => store.flush()));
   await rm(dir, { recursive: true, force: true });
 });
+
+async function openSession(options?: Parameters<typeof SessionStore.open>[1]): Promise<SessionStore> {
+  const store = await SessionStore.open(dir, options);
+  sessionStores.push(store);
+  return store;
+}
 
 describe("SettingsStore", () => {
   test("starts from defaults and persists updates", async () => {
@@ -70,42 +81,42 @@ describe("SettingsStore", () => {
 
 describe("SessionStore", () => {
   test("creates a default session with one tab", async () => {
-    const store = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }) });
+    const store = await openSession({ newTab: () => createTab({ id: "t1" }) });
     expect(store.session.tabOrder).toEqual(["t1"]);
     expect(await store.readBuffers()).toEqual({ t1: "" });
   });
 
   test("debounces buffer writes and restores them", async () => {
-    const store = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }), delayMs: 20 });
+    const store = await openSession({ newTab: () => createTab({ id: "t1" }), delayMs: 20 });
     store.setBuffer("t1", "const a = 1");
     store.setBuffer("t1", "const a = 2");
     await store.flush();
     expect(await readFile(join(dir, "buffers", "t1.ts"), "utf8")).toBe("const a = 2");
-    const reopened = await SessionStore.open(dir);
+    const reopened = await openSession();
     expect(await reopened.readBuffers()).toEqual({ t1: "const a = 2" });
   });
 
   test("renames the buffer file when the language changes", async () => {
-    const store = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }), delayMs: 20 });
+    const store = await openSession({ newTab: () => createTab({ id: "t1" }), delayMs: 20 });
     store.setBuffer("t1", "<div />");
     await store.patchTab("t1", { language: "tsx" });
     await store.flush();
     expect(existsSync(join(dir, "buffers", "t1.ts"))).toBe(false);
     expect(await readFile(join(dir, "buffers", "t1.tsx"), "utf8")).toBe("<div />");
-    expect((await SessionStore.open(dir)).session.tabs.t1?.language).toBe("tsx");
+    expect((await openSession()).session.tabs.t1?.language).toBe("tsx");
   });
 
   test("persists the window frame and ignores invalid frames", async () => {
-    const store = await SessionStore.open(dir, { delayMs: 20 });
+    const store = await openSession({ delayMs: 20 });
     store.setWindow({ x: 10, y: 20, width: 1200, height: 800 });
     await store.flush();
-    expect((await SessionStore.open(dir)).session.window).toEqual({ x: 10, y: 20, width: 1200, height: 800 });
+    expect((await openSession()).session.window).toEqual({ x: 10, y: 20, width: 1200, height: 800 });
     store.setWindow({ x: 0, y: 0, width: 5, height: 5 });
     expect(store.session.window).toBeNull();
   });
 
   test("an unreadable buffer is surfaced instead of read as empty", async () => {
-    const store = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }) });
+    const store = await openSession({ newTab: () => createTab({ id: "t1" }) });
     // A directory where the buffer file should be: reading it fails with EISDIR, not ENOENT.
     await mkdir(join(dir, "buffers", "t1.ts"), { recursive: true });
     await expect(store.readBuffers()).rejects.toThrow("t1");
@@ -114,7 +125,7 @@ describe("SessionStore", () => {
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "a buffer that could not be read is never overwritten",
     async () => {
-      const store = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }), delayMs: 5 });
+      const store = await openSession({ newTab: () => createTab({ id: "t1" }), delayMs: 5 });
       const path = join(dir, "buffers", "t1.ts");
       await mkdir(join(dir, "buffers"), { recursive: true });
       await writeFile(path, "precious");
@@ -132,7 +143,7 @@ describe("SessionStore", () => {
 
   test("session recovery rewrites a valid session file", async () => {
     await writeFile(join(dir, "session.json"), "{oops");
-    const store = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }) });
+    const store = await openSession({ newTab: () => createTab({ id: "t1" }) });
     expect(store.recovered).not.toBe("none");
     const onDisk = JSON.parse(await readFile(join(dir, "session.json"), "utf8"));
     expect(sessionSchema.parse(onDisk)).toEqual(onDisk);
@@ -153,7 +164,7 @@ describe("recovery preserves backups", () => {
     const validSession = defaultSession(() => createTab({ id: "t1" }));
     await writeFile(join(dir, "session.json.bak"), JSON.stringify(validSession));
     await writeFile(join(dir, "session.json"), "{oops");
-    const sessionStore = await SessionStore.open(dir, { newTab: () => createTab({ id: "t1" }) });
+    const sessionStore = await openSession({ newTab: () => createTab({ id: "t1" }) });
     expect(sessionStore.recovered).toBe("backup");
     const sessionBackup = JSON.parse(await readFile(join(dir, "session.json.bak"), "utf8"));
     expect(sessionSchema.parse(sessionBackup)).toEqual(sessionBackup);
@@ -171,7 +182,7 @@ describe("recovery preserves backups", () => {
       workspaces: [{ id: "w1" }],
     });
     await writeFile(path, text);
-    const store = await SessionStore.open(dir, { delayMs: 10 });
+    const store = await openSession({ delayMs: 10 });
     expect([store.newerVersion, store.droppedTabs, store.session.tabOrder]).toEqual([99, ["bad"], ["a"]]);
     store.setWindow({ x: 1, y: 2, width: 800, height: 600 });
     await store.flush();
@@ -185,7 +196,7 @@ describe("recovery preserves backups", () => {
       join(dir, "session.json"),
       JSON.stringify({ version: 2, tabOrder: ["my tab"], activeTabId: "my tab", tabs: { "my tab": { id: "my tab" } } }),
     );
-    const store = await SessionStore.open(dir, { delayMs: 10 });
+    const store = await openSession({ delayMs: 10 });
     const [id = ""] = store.session.tabOrder;
     expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(await store.readBuffers()).toEqual({ [id]: "kept" });
@@ -211,7 +222,7 @@ describe("recovery preserves backups", () => {
       await chmod(join(dir, "buffers"), 0o500);
       let store: SessionStore;
       try {
-        store = await SessionStore.open(dir, { delayMs: 10 });
+        store = await openSession({ delayMs: 10 });
       } finally {
         await chmod(join(dir, "buffers"), 0o700);
       }

@@ -1,13 +1,20 @@
-import { readFile, rename } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rename, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
   bufferFileName,
+  closedBufferFileName,
+  createTab,
   defaultSession,
+  type Language,
   normalizeSession,
   parseSession,
+  pushClosed,
+  type Runtime,
   type Session,
   type SessionParseResult,
+  type TabLayout,
   type TabState,
+  tabAfterClose,
   tabStateSchema,
   type WindowState,
   windowStateSchema,
@@ -15,9 +22,32 @@ import {
 import { writeFileAtomic } from "../persistence/atomic-write";
 import { createDebouncedWriter, type DebouncedWriter, loadJson, type Recovery } from "../persistence/json-store";
 
-export type TabPatch = Partial<Pick<TabState, "title" | "language">> & { layout?: Partial<TabState["layout"]> };
+export type TabPatch = Partial<
+  Pick<TabState, "title" | "titleIsCustom" | "language" | "runtime" | "filePath" | "lastSavedHash">
+> & { layout?: Partial<TabLayout> };
 
-/** A repaired tab's old buffer is moved only when its old id can't escape the buffers folder. */
+export interface CreateTabOptions {
+  language?: Language;
+  runtime?: Runtime;
+  title?: string;
+  titleIsCustom?: boolean;
+  filePath?: string | null;
+  lastSavedHash?: string | null;
+  content?: string;
+  /** Defaults to true. */
+  activate?: boolean;
+}
+
+export interface SessionStoreOptions {
+  newTab?: () => TabState;
+  delayMs?: number;
+  /** Defaults for new tabs, read from settings at creation time (spec §8: defaultLanguage, defaultRuntime, view.layout). */
+  tabDefaults?: () => Partial<TabState>;
+  /** Timer-path write failures (as-built createDebouncedWriter onError). */
+  onWriteError?: (error: unknown) => void;
+}
+
+/** A repaired tab's old buffer is moved only when its old id can't escape the buffers folder (Task 4 Step 11). */
 const isPlainFileName = (name: string) => /^[^/\\\0]+$/.test(name) && name !== "." && name !== "..";
 
 /** Owns session.json and the per-tab buffer files (spec §10.1). */
@@ -25,20 +55,25 @@ export class SessionStore {
   #session: Session;
   readonly #sessionWriter: DebouncedWriter;
   readonly #bufferWriters = new Map<string, DebouncedWriter>();
-  // Tabs whose buffer file exists but couldn't be read: never write over it, or an edit would replace real code.
+  readonly #listeners = new Set<(session: Session) => void>();
+  // As built by the M1 fix wave: tabs whose buffer file exists but couldn't be read are never written over.
   readonly #unreadableBuffers = new Set<string>();
   // Repaired tab ids (R-M1-18) whose old buffer failed to move for a reason other than "nothing to move" (ENOENT):
-  // the old file is left in place, and readBuffers surfaces this the same way as any other unreadable buffer.
+  // the old file is left in place, and readBuffers surfaces this the same way as any other unreadable buffer
+  // (R-M2-T4-1, commit ed16be9).
   readonly #repairErrors = new Map<string, unknown>();
 
   private constructor(
     private readonly dataDir: string,
     session: Session,
     readonly recovered: Recovery,
-    delayMs: number,
-    /** The version stored in a session.json written by a newer JSLab, or null. While set, session.json is never written (I4). */
+    private readonly delayMs: number,
+    private readonly tabDefaults: () => Partial<TabState>,
+    private readonly onWriteError: (error: unknown) => void = (error) =>
+      console.error("[jslab] session write failed", error),
+    /** Task 4 (I4): the version of a session.json written by a newer JSLab; while set, session.json is never written. */
     readonly newerVersion: number | null = null,
-    /** Keys of tab entries that failed validation and were skipped; their buffer files are left untouched. */
+    /** Task 4 (I4): keys of tab entries skipped because they failed validation. */
     readonly droppedTabs: readonly string[] = [],
   ) {
     this.#session = session;
@@ -48,18 +83,14 @@ export class SessionStore {
           ? writeFileAtomic(join(dataDir, "session.json"), data, { backup: true })
           : Promise.resolve(),
       delayMs,
+      this.onWriteError,
     );
-    this.delayMs = delayMs;
   }
 
-  private readonly delayMs: number;
-
-  static async open(
-    dataDir: string,
-    options: { newTab?: () => TabState; delayMs?: number } = {},
-  ): Promise<SessionStore> {
-    const newTab = options.newTab ?? (() => tabStateSchema.parse({ id: crypto.randomUUID() }));
-    // loadJson retries the same parser on session.json.bak, so the report describes the file that was actually used.
+  static async open(dataDir: string, options: SessionStoreOptions = {}): Promise<SessionStore> {
+    const tabDefaults = options.tabDefaults ?? (() => ({}));
+    const newTab = options.newTab ?? (() => createTab(tabDefaults()));
+    // Task 4 (I4): loadJson retries the parser on session.json.bak, so the report describes the file actually used.
     const parsed: { report: SessionParseResult | null } = { report: null };
     const parser = {
       parse(input: unknown): Session {
@@ -68,18 +99,20 @@ export class SessionStore {
       },
     };
     const { value, recovered } = await loadJson(join(dataDir, "session.json"), parser, () => defaultSession(newTab));
-    const session = normalizeSession(value, newTab);
     const report = parsed.report;
     const newerVersion = report?.newerThanBuild ? report.fileVersion : null;
+    const session = normalizeSession(value, newTab);
     const store = new SessionStore(
       dataDir,
       session,
       recovered,
       options.delayMs ?? 500,
+      tabDefaults,
+      options.onWriteError,
       newerVersion,
       report?.droppedTabs ?? [],
     );
-    // R-M1-18: a repaired tab keeps its content when its old id is a plain file name.
+    // Task 4 Step 11 (R-M1-18): a repaired tab keeps its content when its old id is a plain file name.
     const repairedTabIds = report?.repairedTabIds ?? [];
     for (const [from, to] of repairedTabIds) {
       const tab = session.tabs[to];
@@ -89,15 +122,14 @@ export class SessionStore {
         await rename(oldPath, join(dataDir, "buffers", bufferFileName(tab)));
       } catch (error) {
         // No old buffer to move is fine (the tab had no unsaved content yet); anything else means the repaired
-        // tab's content is stuck at the old path and must not look like an empty buffer.
+        // tab's content is stuck at the old path and must not look like an empty buffer (R-M2-T4-1).
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") store.#repairErrors.set(to, error);
       }
     }
-    // No backup after a recovery: `session.json` still holds the corrupt/stale primary, and backing it up would clobber
-    // a good `.bak` that recovery just read from (ruling I1). A repair of a valid file keeps its backup. A newer file
-    // is never rewritten (I4).
+    // As built (M1 T12 ruling): persist a recovered session at once, without a backup, so the good .bak survives.
+    // A repair of a valid file keeps its backup. A session.json from a newer JSLab is never rewritten (I4).
     if ((recovered !== "none" || repairedTabIds.length > 0) && newerVersion === null) {
-      await writeFileAtomic(join(dataDir, "session.json"), `${JSON.stringify(session, null, 2)}\n`, {
+      await writeFileAtomic(join(dataDir, "session.json"), `${JSON.stringify(store.session, null, 2)}\n`, {
         backup: recovered === "none",
       });
     }
@@ -108,25 +140,31 @@ export class SessionStore {
     return this.#session;
   }
 
+  onChange(listener: (session: Session) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
   async readBuffers(): Promise<Record<string, string>> {
     const buffers: Record<string, string> = {};
-    for (const id of this.#session.tabOrder) {
-      const tab = this.#session.tabs[id];
-      if (!tab) continue;
-      if (this.#repairErrors.has(id)) this.#failUnreadable(id, this.#repairErrors.get(id));
-      try {
-        buffers[id] = await readFile(this.#bufferPath(tab), "utf8");
-        this.#unreadableBuffers.delete(id);
-      } catch (error) {
-        // No file yet is an empty buffer; anything else (EACCES, EISDIR, EIO) must never look like empty content.
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          buffers[id] = "";
-          continue;
-        }
-        this.#failUnreadable(id, error);
-      }
-    }
+    for (const id of this.#session.tabOrder) buffers[id] = await this.readBuffer(id);
     return buffers;
+  }
+
+  async readBuffer(tabId: string): Promise<string> {
+    const tab = this.#session.tabs[tabId];
+    if (!tab) return "";
+    if (this.#repairErrors.has(tabId)) this.#failUnreadable(tabId, this.#repairErrors.get(tabId));
+    try {
+      const content = await readFile(this.#bufferPath(tab), "utf8");
+      this.#unreadableBuffers.delete(tabId);
+      return content;
+    } catch (error) {
+      // As built by the M1 fix wave (final review T12): only a missing file is an empty buffer. Any other error
+      // (EACCES, EISDIR, EIO) is surfaced, and the tab's buffer is never written, so an edit can't replace real code.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      this.#failUnreadable(tabId, error);
+    }
   }
 
   /** Marks a tab's buffer unreadable so `setBuffer` never overwrites it, and reports why (shared by both callers). */
@@ -138,15 +176,97 @@ export class SessionStore {
 
   setBuffer(tabId: string, content: string): void {
     if (!this.#session.tabs[tabId] || this.#unreadableBuffers.has(tabId)) return;
-    let writer = this.#bufferWriters.get(tabId);
-    if (!writer) {
-      writer = createDebouncedWriter(async (data) => {
-        const tab = this.#session.tabs[tabId];
-        if (tab) await writeFileAtomic(this.#bufferPath(tab), data);
-      }, this.delayMs);
-      this.#bufferWriters.set(tabId, writer);
+    this.#writerFor(tabId).schedule(content);
+  }
+
+  async createTab(options: CreateTabOptions = {}): Promise<TabState> {
+    const { content = "", activate = true, ...fields } = options;
+    const defined = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
+    const tab = createTab({ ...this.tabDefaults(), ...defined });
+    await writeFileAtomic(this.#bufferPath(tab), content);
+    const order = [...this.#session.tabOrder];
+    const activeIndex = order.indexOf(this.#session.activeTabId);
+    order.splice(activeIndex < 0 ? order.length : activeIndex + 1, 0, tab.id);
+    this.#commit({
+      ...this.#session,
+      tabs: { ...this.#session.tabs, [tab.id]: tab },
+      tabOrder: order,
+      activeTabId: activate ? tab.id : this.#session.activeTabId,
+    });
+    return tab;
+  }
+
+  async closeTab(tabId: string): Promise<{ closed: boolean; replacement: TabState | null; activeTabId: string }> {
+    const tab = this.#session.tabs[tabId];
+    if (!tab) return { closed: false, replacement: null, activeTabId: this.#session.activeTabId };
+
+    await this.#bufferWriters.get(tabId)?.flush();
+    this.#bufferWriters.delete(tabId);
+    this.#unreadableBuffers.delete(tabId);
+    const closedPath = join(this.dataDir, "buffers", closedBufferFileName(tab));
+    await mkdir(dirname(closedPath), { recursive: true });
+    await rename(this.#bufferPath(tab), closedPath).catch(() => writeFileAtomic(closedPath, ""));
+    // Spec §10.1 keeps a .bak of every buffer write; a closed tab's backup has nothing left to protect.
+    await unlink(`${this.#bufferPath(tab)}.bak`).catch(() => {});
+
+    const { stack, evicted } = pushClosed(this.#session.closedStack, { tab, closedAt: Date.now() });
+    for (const entry of evicted) {
+      await unlink(join(this.dataDir, "buffers", closedBufferFileName(entry.tab))).catch(() => {});
     }
-    writer.schedule(content);
+
+    const nextActive = tabAfterClose(this.#session.tabOrder, tabId, this.#session.activeTabId);
+    const { [tabId]: _removed, ...tabs } = this.#session.tabs;
+    this.#commit({
+      ...this.#session,
+      tabs,
+      tabOrder: this.#session.tabOrder.filter((id) => id !== tabId),
+      activeTabId: nextActive ?? "",
+      closedStack: stack,
+    });
+
+    if (nextActive) return { closed: true, replacement: null, activeTabId: nextActive };
+    const replacement = await this.createTab();
+    return { closed: true, replacement, activeTabId: replacement.id };
+  }
+
+  async reopenClosed(): Promise<{ tab: TabState; content: string } | null> {
+    const [entry, ...rest] = this.#session.closedStack;
+    if (!entry) return null;
+    const { tab } = entry;
+    const closedPath = join(this.dataDir, "buffers", closedBufferFileName(tab));
+    // Same rule as readBuffer: a closed buffer that exists but can't be read is never replaced by an empty one.
+    const content = await readFile(closedPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return "";
+      throw error;
+    });
+    await writeFileAtomic(this.#bufferPath(tab), content);
+    await unlink(closedPath).catch(() => {});
+    const order = this.#session.tabOrder.filter((id) => id !== tab.id);
+    const activeIndex = order.indexOf(this.#session.activeTabId);
+    order.splice(activeIndex < 0 ? order.length : activeIndex + 1, 0, tab.id);
+    this.#commit({
+      ...this.#session,
+      tabs: { ...this.#session.tabs, [tab.id]: tab },
+      tabOrder: order,
+      activeTabId: tab.id,
+      closedStack: rest,
+    });
+    return { tab, content };
+  }
+
+  activateTab(tabId: string): void {
+    if (!this.#session.tabs[tabId] || this.#session.activeTabId === tabId) return;
+    this.#commit({ ...this.#session, activeTabId: tabId });
+  }
+
+  reorderTabs(order: string[]): void {
+    const current = this.#session.tabOrder;
+    const isPermutation =
+      order.length === current.length &&
+      new Set(order).size === order.length &&
+      order.every((id) => current.includes(id));
+    if (!isPermutation) return;
+    this.#commit({ ...this.#session, tabOrder: [...order] });
   }
 
   async patchTab(tabId: string, patch: TabPatch): Promise<void> {
@@ -156,14 +276,34 @@ export class SessionStore {
     if (next.language !== tab.language) {
       await this.#bufferWriters.get(tabId)?.flush();
       await rename(this.#bufferPath(tab), this.#bufferPath(next)).catch(() => {});
+      await rename(`${this.#bufferPath(tab)}.bak`, `${this.#bufferPath(next)}.bak`).catch(() => {});
     }
-    this.#session = { ...this.#session, tabs: { ...this.#session.tabs, [tabId]: next } };
-    this.#scheduleSave();
+    this.#commit({ ...this.#session, tabs: { ...this.#session.tabs, [tabId]: next } });
+  }
+
+  setViewState(tabId: string, viewState: unknown): void {
+    const tab = this.#session.tabs[tabId];
+    if (!tab) return;
+    this.#commit({
+      ...this.#session,
+      tabs: { ...this.#session.tabs, [tabId]: { ...tab, viewState: viewState ?? null } },
+    });
+  }
+
+  findTabByPath(path: string): TabState | null {
+    return Object.values(this.#session.tabs).find((tab) => tab.filePath === path) ?? null;
   }
 
   setWindow(frame: WindowState): void {
-    this.#session = { ...this.#session, window: windowStateSchema.parse(frame) };
-    this.#scheduleSave();
+    this.#commit({ ...this.#session, window: windowStateSchema.parse(frame) });
+  }
+
+  setSettingsWindow(frame: WindowState): void {
+    this.#commit({ ...this.#session, settingsWindow: windowStateSchema.parse(frame) });
+  }
+
+  setLastDirectory(directory: string): void {
+    this.#commit({ ...this.#session, lastDirectory: directory });
   }
 
   async flush(): Promise<void> {
@@ -172,8 +312,31 @@ export class SessionStore {
     await this.#sessionWriter.flush();
   }
 
+  #writerFor(tabId: string): DebouncedWriter {
+    let writer = this.#bufferWriters.get(tabId);
+    if (!writer) {
+      writer = createDebouncedWriter(
+        async (data) => {
+          const tab = this.#session.tabs[tabId];
+          // Spec §10.1: "Everything is written atomically … and the previous file is kept as .bak".
+          if (tab) await writeFileAtomic(this.#bufferPath(tab), data, { backup: true });
+        },
+        this.delayMs,
+        this.onWriteError,
+      );
+      this.#bufferWriters.set(tabId, writer);
+    }
+    return writer;
+  }
+
   #bufferPath(tab: Pick<TabState, "id" | "language">): string {
     return join(this.dataDir, "buffers", bufferFileName(tab));
+  }
+
+  #commit(session: Session): void {
+    this.#session = session;
+    this.#scheduleSave();
+    for (const listener of this.#listeners) listener(session);
   }
 
   #scheduleSave(): void {

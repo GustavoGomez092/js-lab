@@ -13,6 +13,8 @@ export class SparePool {
   // Bumped by invalidate()/dispose() so a take() awaiting a since-invalidated/disposed spare can tell (I4).
   readonly #generation = new Map<string, number>();
   #disposed = false;
+  // Only this tab keeps a pre-warmed spare (M1 final review, M2-readiness note 2). Null until Main sets it.
+  #activeTabId: string | null = null;
 
   constructor(
     private readonly startRunner: (config: RunnerSpawnConfig) => Promise<BunRunnerProcess>,
@@ -56,13 +58,31 @@ export class SparePool {
           runner.kill();
           throw new Error(`Runner configuration for tab ${tabId} changed while starting`);
         }
-        if (this.#generationFor(tabId) === generationAtEntry) this.prepare(tabId);
+        // Re-warm after a take only for the active tab; a background tab gets a runner when it runs again.
+        if (
+          this.#generationFor(tabId) === generationAtEntry &&
+          (this.#activeTabId === null || this.#activeTabId === tabId)
+        ) {
+          this.prepare(tabId);
+        }
         return runner;
       } catch (error) {
         lastError = error;
       }
     }
     throw lastError instanceof Error ? lastError : new Error("Runtime unavailable");
+  }
+
+  /** Keeps a warm spare for the active tab only: other tabs' idle spares are killed, and this tab gets one. */
+  setActiveTab(tabId: string): void {
+    if (this.#disposed) return;
+    this.#activeTabId = tabId;
+    for (const [other, spare] of [...this.#spares]) {
+      if (other === tabId) continue;
+      this.#discard(spare);
+      this.#spares.delete(other);
+    }
+    this.prepare(tabId);
   }
 
   invalidate(tabId: string): void {

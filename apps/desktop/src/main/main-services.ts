@@ -1,4 +1,4 @@
-import { runnerSettings } from "@jslab/shared";
+import { effectiveRuntime, runnerSettings } from "@jslab/shared";
 import { type AppPaths, runnerEnvironment } from "./app-paths";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
@@ -42,7 +42,14 @@ export interface MainServices {
 export async function createMainServices(options: MainServicesOptions): Promise<MainServices> {
   const { paths } = options;
   const runLock = new RunLock(paths.runLock);
-  const [settings, session] = await Promise.all([SettingsStore.open(paths.dataDir), SessionStore.open(paths.dataDir)]);
+  const settings = await SettingsStore.open(paths.dataDir);
+  const session = await SessionStore.open(paths.dataDir, {
+    tabDefaults: () => ({
+      language: settings.current.run.defaultLanguage,
+      runtime: effectiveRuntime(settings.current.run.defaultRuntime),
+      layout: { orientation: settings.current.view.layout, editorSize: 55, outputVisible: true },
+    }),
+  });
   const safeMode = await detectSafeMode({
     uncleanPreviousExit: runLock.uncleanPreviousExit,
     shiftHeld: () => options.shiftHeld,

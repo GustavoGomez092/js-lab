@@ -21,7 +21,9 @@ import { resolveMainViewUrl } from "./main-view-url";
 import { buildMenu, commandForMenuAction, type MenuItem } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
+import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
+import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld } from "./services/safe-mode";
 import { shouldReloadView } from "./ui-watchdog";
 
@@ -105,6 +107,8 @@ async function start(): Promise<void> {
   if (session.droppedTabs.length > 0) {
     log(`session.json: skipped ${session.droppedTabs.length} unreadable tab entries`, session.droppedTabs);
   }
+  const keybindings = await KeybindingsStore.open(paths.dataDir);
+  if (keybindings.invalid) log(`keybindings.json at ${keybindings.path} is not valid JSON; using the default keymap`);
   if (safeMode.active) log(`starting in Safe Mode (${safeMode.reason})`);
 
   // The UI gets a longer boot grace period for its first heartbeat (cold WKWebView init, bundle load, etc.);
@@ -120,21 +124,29 @@ async function start(): Promise<void> {
 
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
-    handlers: createRpcHandlers({
-      coordinator,
-      settings,
-      session,
-      safeMode,
-      versions: { app: APP_VERSION, bun: Bun.version },
-      log,
-      onUiHeartbeat: () => {
-        sawFirstHeartbeat = true;
-        lastUiHeartbeat = Date.now();
-      },
-      e2e: e2eEnabled,
-      onE2EResponse: (response) => e2eBridge.receive(response),
-    }),
+    handlers: mergeHandlers(
+      createRpcHandlers({
+        coordinator,
+        settings,
+        session,
+        safeMode,
+        keybindings,
+        versions: { app: APP_VERSION, bun: Bun.version },
+        log,
+        e2e: e2eEnabled,
+        onE2EResponse: (response) => e2eBridge.receive(response),
+        // The as-built body, unchanged: shouldReloadView (src/main/ui-watchdog.ts) leaves its 30 s boot grace only
+        // once sawFirstHeartbeat is true. Dropping that line would reload the view every 30 s (review I1).
+        onUiHeartbeat: () => {
+          sawFirstHeartbeat = true;
+          lastUiHeartbeat = Date.now();
+        },
+      }),
+      createWorkspaceHandlers({ session, settings, coordinator, spares, log }),
+    ),
   });
+
+  settings.onChange((next) => rpc.send["settings.changed"]({ settings: next }));
 
   const url = await resolveMainViewUrl({
     channel: await Updater.localInfo.channel(),
@@ -213,7 +225,7 @@ async function start(): Promise<void> {
   });
 
   // Warm the first runner so the first run is fast (spec §5.3).
-  spares.prepare(session.session.activeTabId);
+  spares.setActiveTab(session.session.activeTabId);
 
   // WKWebView can freeze after sleep (Electrobun #550): reload the view if UI heartbeats stop (spec §4.6),
   // giving the first heartbeat a longer boot grace period so a slow-but-healthy cold start isn't reloaded

@@ -9,10 +9,14 @@ import {
   tabParamsSchema,
   tabPatchSchema,
 } from "@jslab/rpc-schema";
+import type { KeybindingRule } from "@jslab/shared";
+import { createValidators, InvalidPayloadError } from "./rpc/validate";
 import type { RunCoordinator } from "./runs/run-coordinator";
 import type { SafeModeState } from "./services/safe-mode";
 import type { SessionStore } from "./services/session-store";
 import type { SettingsStore } from "./services/settings-store";
+
+export { InvalidPayloadError };
 
 export interface RpcHandlerDeps {
   coordinator: Pick<RunCoordinator, "start" | "stop" | "kill" | "wait" | "expand">;
@@ -25,38 +29,15 @@ export interface RpcHandlerDeps {
   /** True for JSLAB_E2E=1 launches. */
   e2e?: boolean;
   onE2EResponse?(response: E2EResponse): void;
+  keybindings?: { rules: KeybindingRule[] };
 }
-
-export class InvalidPayloadError extends Error {}
 
 /** A valid request that Main declines to act on (for example an automatic run while Safe Mode is active). */
 export class RunRefusedError extends Error {}
 
-interface SafeParser<T> {
-  safeParse(input: unknown): { success: true; data: T } | { success: false; error: { message: string } };
-}
-
 /** Handlers for the UI RPC. Every inbound payload is validated before use (spec §18). */
 export function createRpcHandlers(deps: RpcHandlerDeps) {
-  const parse = <T>(schema: SafeParser<T>, method: string, input: unknown): T => {
-    const result = schema.safeParse(input);
-    if (!result.success) {
-      deps.log(`Rejected invalid ${method} payload`, result.error.message);
-      throw new InvalidPayloadError(`Invalid payload for ${method}`);
-    }
-    return result.data;
-  };
-
-  // Messages are fire-and-forget: an invalid one is logged and dropped, never thrown into the RPC layer.
-  const message =
-    <T>(schema: SafeParser<T>, method: string, handle: (payload: T) => void) =>
-    (input: unknown) => {
-      try {
-        handle(parse(schema, method, input));
-      } catch (error) {
-        if (!(error instanceof InvalidPayloadError)) deps.log(`Handler for ${method} failed`, String(error));
-      }
-    };
+  const { parse, message } = createValidators(deps.log);
 
   return {
     requests: {
@@ -67,6 +48,7 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         safeMode: deps.safeMode,
         versions: deps.versions,
         ...(deps.e2e ? { e2e: true } : {}),
+        ...(deps.keybindings ? { keybindings: deps.keybindings.rules } : {}),
       }),
       "run.start": (input: unknown): { runId: string } => {
         const { tabId, code, language, logpoints, reason } = parse(runStartParamsSchema, "run.start", input);

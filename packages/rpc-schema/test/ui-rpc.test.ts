@@ -2,11 +2,16 @@ import { describe, expect, test } from "bun:test";
 import {
   bufferChangedSchema,
   e2eResponseSchema,
+  MAX_OPEN_FILE_BYTES,
+  MAX_TEXT_CHARS,
   runExpandParamsSchema,
   runStartParamsSchema,
   settingsUpdateParamsSchema,
+  tabCreateParamsSchema,
   tabParamsSchema,
   tabPatchSchema,
+  tabReorderSchema,
+  tabViewStateSchema,
 } from "../src/ui-rpc";
 
 const validStart = {
@@ -26,7 +31,7 @@ describe("inbound validators", () => {
     expect(runStartParamsSchema.safeParse({ ...validStart, tabId: "" }).success).toBe(false);
     expect(runStartParamsSchema.safeParse({ ...validStart, language: "python" }).success).toBe(false);
     expect(runStartParamsSchema.safeParse({ ...validStart, logpoints: [0] }).success).toBe(false);
-    expect(runStartParamsSchema.safeParse({ ...validStart, code: "x".repeat(5_000_001) }).success).toBe(false);
+    expect(runStartParamsSchema.safeParse({ ...validStart, code: "x".repeat(MAX_TEXT_CHARS + 1) }).success).toBe(false);
   });
 
   test("tab ids must use the safe id format tabs are created with", () => {
@@ -49,7 +54,7 @@ describe("inbound validators", () => {
 
   test("buffer.changed caps content size", () => {
     expect(bufferChangedSchema.safeParse({ tabId: "t1", content: "ok" }).success).toBe(true);
-    expect(bufferChangedSchema.safeParse({ tabId: "t1", content: "x".repeat(5_000_001) }).success).toBe(false);
+    expect(bufferChangedSchema.safeParse({ tabId: "t1", content: "x".repeat(MAX_TEXT_CHARS + 1) }).success).toBe(false);
   });
 
   test("tab.patch accepts partial patches and rejects invalid layouts", () => {
@@ -77,5 +82,31 @@ describe("inbound validators", () => {
     expect(settingsUpdateParamsSchema.safeParse({ patch: { editor: { lineWrap: { nested: true } } } }).success).toBe(
       false,
     );
+  });
+
+  test("workspace payloads: tab.create, widened tab.patch, tab.reorder, size-capped view state and one text cap", () => {
+    expect(MAX_TEXT_CHARS).toBeGreaterThan(MAX_OPEN_FILE_BYTES);
+    const large = "x".repeat(6 * 1024 * 1024);
+    const tooLarge = "x".repeat(MAX_TEXT_CHARS + 1);
+    const run = { tabId: "t", language: "javascript", logpoints: [], reason: "manual" };
+    expect(tabCreateParamsSchema.safeParse({ content: large }).success).toBe(true);
+    expect(tabCreateParamsSchema.safeParse({ content: tooLarge }).success).toBe(false);
+    expect(runStartParamsSchema.safeParse({ ...run, code: large }).success).toBe(true);
+    expect(runStartParamsSchema.safeParse({ ...run, code: tooLarge }).success).toBe(false);
+    expect(bufferChangedSchema.safeParse({ tabId: "t", content: large }).success).toBe(true);
+    expect(tabCreateParamsSchema.parse({ language: "tsx", content: "x", extra: 1 })).toEqual({
+      language: "tsx",
+      content: "x",
+    });
+    expect(tabCreateParamsSchema.safeParse({ runtime: "deno" }).success).toBe(false);
+    expect(
+      tabPatchSchema.safeParse({
+        tabId: "t",
+        patch: { titleIsCustom: true, runtime: "bun", layout: { outputVisible: false } },
+      }).success,
+    ).toBe(true);
+    expect(tabReorderSchema.safeParse({ tabOrder: [] }).success).toBe(false);
+    expect(tabViewStateSchema.safeParse({ tabId: "t", viewState: { a: 1 } }).success).toBe(true);
+    expect(tabViewStateSchema.safeParse({ tabId: "t", viewState: "x".repeat(200_001) }).success).toBe(false);
   });
 });

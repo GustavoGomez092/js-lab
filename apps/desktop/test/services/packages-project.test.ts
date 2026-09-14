@@ -29,8 +29,10 @@ describe("packages project (spec §11.1, §11.3)", () => {
     expect(await readdir(paths.npmHome)).toEqual([]);
 
     await writeFile(paths.packagesNpmrc, "registry=http://127.0.0.1:4873/\n");
+    await writeFile(paths.packagesJson, '{"custom":true}');
     await ensurePackagesProject(paths, (message) => log.push(message));
     expect(await readFile(paths.packagesNpmrc, "utf8")).toBe("registry=http://127.0.0.1:4873/\n");
+    expect(await readFile(paths.packagesJson, "utf8")).toBe('{"custom":true}');
     expect(log).toEqual([]);
   });
 

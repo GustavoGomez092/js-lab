@@ -11,13 +11,16 @@ describe("parseDotenv (spec §5.3: JSLab parses the WD's .env itself)", () => {
       "C=",
       'D="quoted # not a comment"',
       "E='single $HOME \\n'",
+      "E= # only a comment",
+      "F=#not-a-comment",
     ].join("\n");
     expect(parseDotenv(text)).toEqual({
       A: "1",
       B: "two words",
       C: "",
       D: "quoted # not a comment",
-      E: "single $HOME \\n",
+      E: "",
+      F: "#not-a-comment",
     });
   });
 

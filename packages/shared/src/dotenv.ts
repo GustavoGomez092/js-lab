@@ -1,7 +1,7 @@
 /** A WD `.env` larger than this is ignored (spec §5.3). */
 export const MAX_DOTENV_BYTES = 1024 * 1024;
 
-const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/;
+const LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
 const ESCAPES: Record<string, string> = { n: "\n", r: "\r", t: "\t", '"': '"', "\\": "\\" };
 
 function closingQuote(text: string, quote: string): number {
@@ -26,7 +26,8 @@ export function parseDotenv(text: string): Record<string, string> {
     const match = LINE.exec(lines[index] ?? "");
     if (!match) continue;
     const key = match[1] as string;
-    const raw = (match[2] ?? "").trim();
+    const value = match[2] ?? "";
+    const raw = value.trim();
     if (raw.startsWith('"')) {
       let body = raw.slice(1);
       while (closingQuote(body, '"') < 0 && index + 1 < lines.length) {
@@ -40,7 +41,7 @@ export function parseDotenv(text: string): Record<string, string> {
       const end = raw.indexOf("'", 1);
       out[key] = end < 0 ? raw.slice(1) : raw.slice(1, end);
     } else {
-      out[key] = raw.replace(/\s+#.*$/, "");
+      out[key] = value.replace(/\s+#.*$/, "").trim();
     }
   }
   return out;

@@ -129,6 +129,19 @@ describe("objects", () => {
     });
     expect(make().encode(dateProxy)).toMatchObject({ t: "object", ctor: "Proxy", proxy: true });
     expect(dateTrapInvoked).toBe(false);
+    let fnTrapInvoked = false;
+    const fnProxy = new Proxy(function target() {}, {
+      get: () => {
+        fnTrapInvoked = true;
+        return undefined;
+      },
+      getOwnPropertyDescriptor: () => {
+        fnTrapInvoked = true;
+        return undefined;
+      },
+    });
+    expect(make().encode(fnProxy)).toMatchObject({ t: "object", ctor: "Proxy", proxy: true });
+    expect(fnTrapInvoked).toBe(false);
   });
 });
 

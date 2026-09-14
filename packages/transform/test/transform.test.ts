@@ -158,6 +158,12 @@ describe("magic comments", () => {
       { kind: "log", line: 3, value: 1 },
     ]);
   });
+
+  test("//? on an exported declaration anchors after the export (M1 T5)", async () => {
+    expect((await runInstrumented("export const x = 1, y = 2 //?")).calls).toEqual([
+      { kind: "mc", line: 1, value: { x: 1, y: 2 } },
+    ]);
+  });
 });
 
 describe("logpoints", () => {

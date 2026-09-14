@@ -262,3 +262,13 @@ test("the runner exits when its parent dies", async () => {
 
   expect(exited).toBe(true);
 });
+
+test("events pushed right before process.exit still reach Main (final review M5)", async () => {
+  const runner = startRunner();
+  await runner.run('console.log("last words");\nprocess.exit(0);\n');
+  await runner.proc.exited;
+  expect(runner.events().find((e) => e.kind === "console")).toMatchObject({
+    level: "log",
+    args: [{ t: "string", v: "last words" }],
+  });
+});

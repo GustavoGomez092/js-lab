@@ -474,4 +474,24 @@ describe("RunCoordinator", () => {
     expect(h.events.find((e) => e.kind === "result")).toMatchObject({ source: "logpoint", line: 1, value: { v: "5" } });
     expect(h.events.find((e) => e.kind === "stdout")).toMatchObject({ text: "raw\n" });
   }, 15_000);
+
+  test("a clean process.exit(0) ends the run as idle, and a crash names its signal (final review M5)", async () => {
+    const h = await createHarness();
+    const clean = h.coordinator.start({ tabId: "t1", code: "process.exit(0)", language: "javascript", logpoints: [] });
+    await h.waitForState("idle", clean.runId);
+    await flush();
+    expect(h.events.filter((e) => e.kind === "error")).toEqual([]);
+    const killed = h.coordinator.start({
+      tabId: "t1",
+      code: "process.kill(process.pid, 'SIGTERM')",
+      language: "javascript",
+      logpoints: [],
+    });
+    await h.waitForState("failed", killed.runId);
+    await flush();
+    expect(h.events.find((e) => e.kind === "error")).toMatchObject({
+      phase: "runner",
+      message: expect.stringContaining("signal SIGTERM"),
+    });
+  }, 15_000);
 });

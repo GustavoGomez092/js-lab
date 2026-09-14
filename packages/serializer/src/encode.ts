@@ -225,6 +225,10 @@ export class Encoder {
 
   #encode(value: unknown, depth: number, ancestors: Set<object>): EncodedValue {
     this.#charge(NODE_BYTES);
+    // A Proxy around a function would run its get/getOwnPropertyDescriptor traps in #function (final review M6).
+    if (typeof value === "function" && this.hooks.isProxy?.(value)) {
+      return { t: "object", id: this.#id(value), ctor: "Proxy", props: [], proxy: true };
+    }
     switch (typeof value) {
       case "undefined":
         return { t: "undefined" };

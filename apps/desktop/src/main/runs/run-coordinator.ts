@@ -216,7 +216,7 @@ export class RunCoordinator {
       run.runner = runner;
       const mapper = createEventMapper(result.map, basename(entryPath), new Set(request.logpoints));
       run.unsubscribe = runner.onMessage((message) => this.#onRunnerMessage(run, message, mapper));
-      void runner.exited.then((code) => this.#onRunnerExit(run, code));
+      void runner.exited.then((code) => this.#onRunnerExit(run, code, runner.signalCode));
       this.deps.runLock.add(run.runId);
       runner.lastHeartbeat = Date.now();
       // stop() may have run synchronously inside runLock.add above (I1): it already sent "stop" and armed the kill
@@ -265,7 +265,7 @@ export class RunCoordinator {
     }
   }
 
-  #onRunnerExit(run: ActiveRun, code: number | null): void {
+  #onRunnerExit(run: ActiveRun, code: number | null, signal: string | null = null): void {
     clearTimeout(run.stopTimer);
     clearTimeout(run.idleTimer);
     // A dead runner can't answer: settle its pending expands now instead of after the expand timeout.
@@ -278,7 +278,13 @@ export class RunCoordinator {
     // The runner is gone: Kill, supersede, expand and quit must not act on it (or signal its possibly reused pid).
     run.runner = null;
     if (run.expectedExit || !this.#isCurrent(run)) return;
-    this.#runnerError(run, `Runtime exited unexpectedly (code ${code ?? "unknown"}). ${stderrTail}`.trim());
+    if (code === 0 && signal === null) {
+      // Spec §5.11 reports a crash only for a non-zero exit: a user `process.exit(0)` ends the run (final review M5).
+      this.#setState(run, "idle", 0);
+      return;
+    }
+    const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
+    this.#runnerError(run, `Runtime exited unexpectedly (${reason}). ${stderrTail}`.trim());
   }
 
   #runnerError(run: ActiveRun, message: string): void {

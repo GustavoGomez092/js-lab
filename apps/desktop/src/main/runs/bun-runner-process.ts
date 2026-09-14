@@ -90,6 +90,11 @@ export class BunRunnerProcess {
     return this.#stderrTail;
   }
 
+  /** The signal that ended the process (for example "SIGKILL"), or null while it runs or after a normal exit. */
+  get signalCode(): string | null {
+    return this.#proc.signalCode ?? null;
+  }
+
   onMessage(listener: (message: RunnerToMain) => void): () => void {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);

@@ -140,6 +140,10 @@ installStdio((kind, text) => {
 process.on("uncaughtException", (error) => pushError("runtime", error));
 process.on("unhandledRejection", (reason) => pushError("unhandledRejection", reason));
 process.on("disconnect", () => process.exit(0));
+// Final review M5: events queued since the last flush (for example `console.log("done"); process.exit(0)`) are sent
+// before the process exits. `exit` listeners run synchronously, before the IPC channel closes. `close()` (M1 fix wave)
+// flushes and then drops anything pushed later.
+process.on("exit", () => run?.buffer.close());
 
 async function startRun(message: Extract<MainToRunner, { type: "run" }>): Promise<void> {
   if (run) return;

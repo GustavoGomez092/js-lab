@@ -35,6 +35,8 @@ export interface NpmServiceDeps {
   queue?: OperationQueue;
   now?(): number;
   newId?(): string;
+  /** Fix round 1 (M-4): how long `list()` waits before its one retry of a transient manifest parse failure. */
+  listRetryDelayMs?: number;
   onOperation(operation: NpmOperation): void;
   onLog(opId: string, text: string): void;
   onChanged(list: NpmListResult): void;
@@ -45,6 +47,13 @@ export interface NpmServiceDeps {
 
 type RunStep = (argv: readonly string[]) => Promise<NpmSpawnResult>;
 const OK: NpmSpawnResult = { exitCode: 0, stdout: "", stderr: "" };
+const LIST_RETRY_DELAY_MS = 100;
+
+const combineResults = (first: NpmSpawnResult, second: NpmSpawnResult): NpmSpawnResult => ({
+  exitCode: second.exitCode,
+  stdout: `${first.stdout}\n${second.stdout}`,
+  stderr: `${first.stderr}\n${second.stderr}`,
+});
 
 /** The npm service (spec §11): one queue, the isolated environment, and change notifications. */
 export class NpmService {
@@ -57,15 +66,26 @@ export class NpmService {
 
   install(spec: string): NpmOperation {
     const parsed = parseInstallSpec(spec);
-    return this.operation("install", spec, async (run) => {
+    return this.operation("install", spec, async (run, markChanged) => {
       const allowScripts = this.deps.settings().allowInstallScripts;
       const before = await this.readManifest();
-      if (allowScripts && parsed?.kind === "registry") await this.#setTrusted(parsed.name, true);
-      const result = await run(["add", "--exact", spec]);
-      if (result.exitCode !== 0 || !allowScripts || parsed?.kind === "registry") return result;
+      const wasTrusted = parsed?.kind === "registry" && before.trustedDependencies.includes(parsed.name);
+      const grantsTrust = allowScripts && parsed?.kind === "registry" && !wasTrusted;
+      if (grantsTrust) await this.#setTrusted(parsed.name, true);
+      const addResult = await run(["add", "--exact", spec]);
+      if (addResult.exitCode !== 0) {
+        // Fix round 1 (M-2): a failed install never leaves behind trust it granted.
+        if (grantsTrust) await this.#setTrusted(parsed.name, false);
+        return addResult;
+      }
+      // Fix round 1 (M-3): the change already happened (package.json/node_modules), regardless of what follows.
+      markChanged();
+      if (!allowScripts || parsed?.kind === "registry") return addResult;
       const after = await this.readManifest();
       const added = Object.keys(after.dependencies).filter((name) => !(name in before.dependencies));
-      return added.length > 0 ? run(["pm", "trust", ...added]) : result;
+      if (added.length === 0) return addResult;
+      const trustResult = await run(["pm", "trust", ...added]);
+      return combineResults(addResult, trustResult);
     });
   }
 
@@ -88,8 +108,16 @@ export class NpmService {
     });
   }
 
+  /** Fix round 1 (M-4): retries once, after a short delay, when the manifest read hits a transient parse race. */
   async list(_options: { refreshOutdated: boolean } = { refreshOutdated: false }): Promise<NpmListResult> {
-    return { installed: await this.installedPackages(new Map()), outdatedCheckedAt: null, outdatedError: null };
+    let installed: InstalledPackage[];
+    try {
+      installed = await this.installedPackages(new Map());
+    } catch {
+      await Bun.sleep(this.deps.listRetryDelayMs ?? LIST_RETRY_DELAY_MS);
+      installed = await this.installedPackages(new Map());
+    }
+    return { installed, outdatedCheckedAt: null, outdatedError: null };
   }
 
   /** Resolves once every queued operation, including ones queued while waiting, has finished. */
@@ -104,8 +132,7 @@ export class NpmService {
   protected operation(
     kind: NpmOpKind,
     target: string,
-    body: (run: RunStep) => Promise<NpmSpawnResult>,
-    afterSuccess?: () => Promise<void>,
+    body: (run: RunStep, markChanged: () => void) => Promise<NpmSpawnResult>,
   ): NpmOperation {
     const op: NpmOperation = {
       id: (this.deps.newId ?? (() => crypto.randomUUID()))(),
@@ -115,22 +142,42 @@ export class NpmService {
       error: null,
       notice: null,
     };
-    this.deps.onOperation(op);
+    this.#safeEmit(op);
+    let changed = false;
     const done = this.queue
       .run(async (signal) => {
-        this.deps.onOperation({ ...op, status: "running" });
-        return body((argv) => this.spawnStep(argv, signal, (text) => this.deps.onLog(op.id, text)));
+        this.#safeEmit({ ...op, status: "running" });
+        return body(
+          (argv) => {
+            // Fix round 1 (I-1): once the queue has aborted this operation, no further step may spawn.
+            if (signal.aborted) return Promise.reject(new Error("npm operation aborted before this step"));
+            return this.spawnStep(argv, signal, (text) => this.deps.onLog(op.id, text));
+          },
+          () => {
+            changed = true;
+          },
+        );
       })
       .then(
-        (result) => this.#finish(op, result, false, afterSuccess),
-        (error: unknown) =>
-          this.#finish(
+        (result) => this.#finish(op, result, false, changed),
+        (error: unknown) => {
+          // Fix round 1 (I-1): a timeout that settled within the kill grace classifies from the child's real output.
+          if (error instanceof OperationTimeoutError && error.settled) {
+            return this.#finish(op, error.settled.value as NpmSpawnResult, true, changed);
+          }
+          return this.#finish(
             op,
             { exitCode: null, stdout: "", stderr: String(error) },
             error instanceof OperationTimeoutError,
-          ),
+            changed,
+          );
+        },
       );
-    this.#idle = this.#idle.then(() => done);
+    // Fix round 1 (M-1): `done` must never reject, or every later operation chained onto #idle would inherit it.
+    const guardedDone = done.catch((error) => {
+      this.deps.log(strings.log.npmPostChangeFailed, String(error));
+    });
+    this.#idle = this.#idle.then(() => guardedDone);
     return op;
   }
 
@@ -151,39 +198,60 @@ export class NpmService {
   /** Called after each successful change, before the new list is reported (Task 12 resets the outdated cache here). */
   protected onSucceeded(): void {}
 
-  async #finish(
-    op: NpmOperation,
-    result: NpmSpawnResult,
-    timedOut: boolean,
-    afterSuccess?: () => Promise<void>,
-  ): Promise<void> {
+  async #finish(op: NpmOperation, result: NpmSpawnResult, timedOut: boolean, forceChange: boolean): Promise<void> {
     const error = classifyNpmFailure({ ...result, timedOut });
     const notice = error ? null : detectNotice(result);
-    this.deps.onOperation({ ...op, status: error ? "failed" : "succeeded", error, notice });
-    if (error) return;
+    this.#safeEmit({ ...op, status: error ? "failed" : "succeeded", error, notice });
+    // Fix round 1 (M-3): a real change (markChanged()) still gets its post-change steps, even if this op failed.
+    if (error && !forceChange) return;
     try {
       this.onSucceeded();
       this.deps.afterChange();
-      this.deps.onChanged(await this.list({ refreshOutdated: false }));
-      await afterSuccess?.();
+      this.deps.onChanged(await this.list());
     } catch (failure) {
       this.deps.log(strings.log.npmPostChangeFailed, String(failure));
     }
   }
 
-  protected async readManifest(): Promise<PackagesManifest> {
+  /** Fix round 1 (M-1): an emission the caller (Task 18's RPC push) throws on can never break the queue's bookkeeping. */
+  #safeEmit(op: NpmOperation): void {
     try {
-      const raw = JSON.parse(await readFile(this.deps.paths.packagesJson, "utf8")) as Partial<PackagesManifest>;
-      const fallback = defaultPackagesManifest();
-      return {
-        ...fallback,
-        ...raw,
-        dependencies: typeof raw.dependencies === "object" && raw.dependencies ? raw.dependencies : {},
-        trustedDependencies: Array.isArray(raw.trustedDependencies) ? raw.trustedDependencies : [],
-      };
-    } catch {
-      return defaultPackagesManifest();
+      this.deps.onOperation(op);
+    } catch (error) {
+      this.deps.log(strings.log.npmOperationEventFailed, error);
     }
+  }
+
+  /**
+   * Fix round 1 (I-2): the default, empty manifest is returned ONLY when packages.json doesn't exist yet. Any other
+   * read failure — a parse error, or a top level that isn't a plain object — fails the caller instead of silently
+   * replacing the user's project with the empty default.
+   */
+  protected async readManifest(): Promise<PackagesManifest> {
+    let raw: string;
+    try {
+      raw = await readFile(this.deps.paths.packagesJson, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return defaultPackagesManifest();
+      throw new Error(strings.log.npmManifestUnreadable(this.deps.paths.packagesJson), { cause: error });
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new Error(strings.log.npmManifestUnreadable(this.deps.paths.packagesJson), { cause: error });
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error(strings.log.npmManifestUnreadable(this.deps.paths.packagesJson));
+    }
+    const partial = parsed as Partial<PackagesManifest>;
+    const fallback = defaultPackagesManifest();
+    return {
+      ...fallback,
+      ...partial,
+      dependencies: typeof partial.dependencies === "object" && partial.dependencies ? partial.dependencies : {},
+      trustedDependencies: Array.isArray(partial.trustedDependencies) ? partial.trustedDependencies : [],
+    };
   }
 
   protected async installedPackages(latest: ReadonlyMap<string, string>): Promise<InstalledPackage[]> {

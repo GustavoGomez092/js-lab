@@ -226,4 +226,193 @@ describe("NpmService (spec §11.3)", () => {
     expect(ops.at(-1)).toMatchObject({ status: "failed", error: { kind: "timeout" } });
     expect(calls[0]?.signal.aborted).toBe(true);
   });
+
+  test("a malformed package.json fails the operation and is never overwritten", async () => {
+    const { service, ops, calls, paths } = await setup({
+      settings: () => ({ allowInstallScripts: true, autoInstallTypes: false }),
+    });
+    const manifestPath = paths.packagesJson;
+    const bytesBefore = '{ "name": "jslab-packages", "dependencies": { "a": "1.0.0", }, }';
+    await writeFile(manifestPath, bytesBefore);
+    service.install("fixture@1.0.0");
+    await service.whenIdle();
+    expect(await readFile(manifestPath, "utf8")).toBe(bytesBefore);
+    expect(ops.at(-1)).toMatchObject({ status: "failed", error: { kind: "unknown" } });
+    expect(calls.some((call) => call.argv[0] === "add")).toBe(false);
+  });
+
+  test("list retries a transient manifest parse failure once, then reports the error", async () => {
+    const manifestPath = join(dir, "data", "packages", "package.json");
+    const { service } = await setup({ listRetryDelayMs: 20 });
+
+    await writeFile(manifestPath, "{ not json");
+    const listPromise = service.list();
+    // Fix the file well before the 20 ms retry delay elapses.
+    await writeFile(
+      manifestPath,
+      JSON.stringify({
+        name: "jslab-packages",
+        private: true,
+        dependencies: { zod: "4.6.4" },
+        trustedDependencies: [],
+      }),
+    );
+    await mkdir(join(dir, "data", "packages", "node_modules", "zod"), { recursive: true });
+    await writeFile(
+      join(dir, "data", "packages", "node_modules", "zod", "package.json"),
+      JSON.stringify({ version: "4.6.4" }),
+    );
+    const result = await listPromise;
+    expect(result.installed).toEqual([{ name: "zod", version: "4.6.4", latest: null }]);
+
+    await writeFile(manifestPath, "{ still not json");
+    await expect(service.list()).rejects.toThrow();
+  });
+
+  test("a throwing onOperation never poisons whenIdle", async () => {
+    const loggedMessages: string[] = [];
+    const { service, calls } = await setup({
+      onOperation: () => {
+        throw new Error("event sink is closed");
+      },
+      log: (message) => {
+        loggedMessages.push(message);
+      },
+    });
+    service.install("a@1.0.0");
+    service.install("b@1.0.0");
+    await service.whenIdle();
+    expect(calls.map((call) => call.argv)).toEqual([
+      ["add", "--exact", "a@1.0.0"],
+      ["add", "--exact", "b@1.0.0"],
+    ]);
+    expect(loggedMessages).toContain("npm operation event could not be delivered");
+  });
+
+  test("a failed registry install with scripts allowed rolls back the trust it added", async () => {
+    const manifestPath = join(dir, "data", "packages", "package.json");
+    const { service, calls } = await setup({
+      settings: () => ({ allowInstallScripts: true, autoInstallTypes: false }),
+      respond: async (argv) =>
+        String(argv.at(-1)).startsWith("already-trusted")
+          ? { exitCode: 1, stdout: "", stderr: "error: ConnectionRefused downloading package manifest x\n" }
+          : { exitCode: 1, stdout: "", stderr: "error: ConnectionRefused downloading package manifest y\n" },
+    });
+    // Seed a package that is already trusted before the failing install.
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.trustedDependencies = ["already-trusted"];
+    await writeFile(manifestPath, JSON.stringify(manifest));
+
+    service.install("already-trusted@2.0.0");
+    await service.whenIdle();
+    expect(JSON.parse(await readFile(manifestPath, "utf8")).trustedDependencies).toEqual(["already-trusted"]);
+
+    service.install("fixture-newly-trusted@1.0.0");
+    await service.whenIdle();
+    expect(JSON.parse(await readFile(manifestPath, "utf8")).trustedDependencies).toEqual(["already-trusted"]);
+    expect(calls.map((call) => call.argv)).toEqual([
+      ["add", "--exact", "already-trusted@2.0.0"],
+      ["add", "--exact", "fixture-newly-trusted@1.0.0"],
+    ]);
+  });
+
+  test("a failed pm trust after a successful git install still runs the post-change steps and keeps both logs", async () => {
+    const manifestPath = join(dir, "data", "packages", "package.json");
+    const { service, calls, ops, afterChange, changed } = await setup({
+      settings: () => ({ allowInstallScripts: true, autoInstallTypes: false }),
+      respond: async (argv) => {
+        if (argv[0] === "add") {
+          const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+          manifest.dependencies["from-git"] = "git+https://example.test/from-git.git";
+          await writeFile(manifestPath, JSON.stringify(manifest));
+          return { exitCode: 0, stdout: "add-ok-marker\n", stderr: "" };
+        }
+        return { exitCode: 1, stdout: "", stderr: "trust-fail-marker\n" };
+      },
+    });
+    service.install("git+https://example.test/from-git.git");
+    await service.whenIdle();
+    expect(calls.map((call) => call.argv)).toEqual([
+      ["add", "--exact", "git+https://example.test/from-git.git"],
+      ["pm", "trust", "from-git"],
+    ]);
+    const last = ops.at(-1);
+    expect(last?.status).toBe("failed");
+    expect(last?.error?.log).toContain("add-ok-marker");
+    expect(last?.error?.log).toContain("trust-fail-marker");
+    expect(afterChange()).toBe(1);
+    expect(changed).toHaveLength(1);
+  });
+
+  test("a successful install whose output reports blocked postinstalls carries notice scriptBlocked", async () => {
+    const { service: okService, ops: okOps } = await setup({
+      respond: async () => ({ exitCode: 0, stdout: "", stderr: "Blocked 1 postinstall\n" }),
+    });
+    okService.install("fixture@1.0.0");
+    await okService.whenIdle();
+    expect(okOps.at(-1)).toMatchObject({ status: "succeeded", error: null, notice: "scriptBlocked" });
+
+    const { service: failService, ops: failOps } = await setup({
+      respond: async () => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: "error: ConnectionRefused downloading package manifest x\n",
+      }),
+    });
+    failService.install("bad@1.0.0");
+    await failService.whenIdle();
+    expect(failOps.at(-1)).toMatchObject({ status: "failed", notice: null });
+  });
+
+  test("failures are classified from the captured Task 9 fixtures", async () => {
+    const fixturesDir = join(
+      import.meta.dir,
+      "..",
+      "..",
+      "..",
+      "..",
+      "packages",
+      "npm",
+      "test",
+      "fixtures",
+      "bun-output",
+    );
+    const networkFixture = JSON.parse(await readFile(join(fixturesDir, "add-network.json"), "utf8"));
+    const notFoundFixture = JSON.parse(await readFile(join(fixturesDir, "add-not-found.json"), "utf8"));
+
+    const { service: networkService, ops: networkOps } = await setup({
+      respond: async () => ({
+        exitCode: networkFixture.exitCode,
+        stdout: networkFixture.stdout,
+        stderr: networkFixture.stderr,
+      }),
+    });
+    networkService.install("fixture-outdated@1.0.0");
+    await networkService.whenIdle();
+    expect(networkOps.at(-1)?.error?.kind).toBe("network");
+
+    const { service: notFoundService, ops: notFoundOps } = await setup({
+      respond: async () => ({
+        exitCode: notFoundFixture.exitCode,
+        stdout: notFoundFixture.stdout,
+        stderr: notFoundFixture.stderr,
+      }),
+    });
+    notFoundService.install("jslab-fixture-missing");
+    await notFoundService.whenIdle();
+    expect(notFoundOps.at(-1)?.error?.kind).toBe("notFound");
+  });
+
+  test("a spawn that rejects fails the operation as unknown without post-change steps", async () => {
+    const { service, ops, afterChange, changed } = await setup({
+      respond: async () => {
+        throw Object.assign(new Error("ENOENT: no such file or directory, posix_spawn '/bun'"), { code: "ENOENT" });
+      },
+    });
+    service.install("fixture@1.0.0");
+    await service.whenIdle();
+    expect(ops.at(-1)).toMatchObject({ status: "failed", error: { kind: "unknown" } });
+    expect(afterChange()).toBe(0);
+    expect(changed).toHaveLength(0);
+  });
 });

@@ -15,6 +15,19 @@ export interface NpmSpawnOptions {
 export type NpmSpawn = (argv: readonly string[], options: NpmSpawnOptions) => Promise<NpmSpawnResult>;
 
 const MAX_CAPTURED_CHARS = 256 * 1024;
+const LOW_SURROGATE_START = 0xdc00;
+const LOW_SURROGATE_END = 0xdfff;
+
+/**
+ * Caps `text` to the last `MAX_CAPTURED_CHARS` characters. Fix round 1 (M-6): a slice can start mid-surrogate-pair;
+ * drop a leading lone low surrogate rather than keep a broken character.
+ */
+function trimCapture(text: string): string {
+  if (text.length <= MAX_CAPTURED_CHARS) return text;
+  const sliced = text.slice(-MAX_CAPTURED_CHARS);
+  const first = sliced.charCodeAt(0);
+  return first >= LOW_SURROGATE_START && first <= LOW_SURROGATE_END ? sliced.slice(1) : sliced;
+}
 
 /**
  * Spawns the bundled Bun (spec §11.3) as its own process group, so an abort (the queue's 5-minute timeout) also stops
@@ -44,8 +57,14 @@ export function createBunSpawn(bunPath: string): NpmSpawn {
       let text = "";
       for await (const chunk of stream) {
         const part = decoder.decode(chunk, { stream: true });
-        options.onOutput(part);
-        text = (text + part).slice(-MAX_CAPTURED_CHARS);
+        if (part) options.onOutput(part);
+        text = trimCapture(text + part);
+      }
+      // Fix round 1 (M-6): flush a trailing partial multi-byte sequence the loop's streaming decode held back.
+      const tail = decoder.decode();
+      if (tail) {
+        options.onOutput(tail);
+        text = trimCapture(text + tail);
       }
       return text;
     };

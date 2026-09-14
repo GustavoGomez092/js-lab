@@ -25,6 +25,10 @@ export const strings = {
     npmHomeNpmrcMoved: (path: string) =>
       `Moved an .npmrc found in npm-home to ${path}; npm operations never read one there`,
     npmPostChangeFailed: "npm post-change step failed",
+    /** Fix round 1 (I-2): packages/package.json exists but isn't a readable manifest; never replaced silently. */
+    npmManifestUnreadable: (path: string) => `npm's package.json at ${path} could not be read as JSON`,
+    /** Fix round 1 (M-1): an onOperation subscriber threw; the queue's own bookkeeping must still proceed. */
+    npmOperationEventFailed: "npm operation event could not be delivered",
   },
   dialogs: {
     startupFailed: (message: string) => `JSLab couldn't start: ${message}`,

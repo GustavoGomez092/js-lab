@@ -18,7 +18,9 @@ describe("OperationQueue (spec §11.3)", () => {
   });
 
   test("a task that exceeds the timeout is aborted and rejected, and the next task runs", async () => {
-    const queue = new OperationQueue({ timeoutMs: 20 });
+    // graceMs is short because this task's promise never settles on its own (fix round 1, I-1): only the abort
+    // handler runs, so the queue's kill-grace wait always exhausts its budget before moving on.
+    const queue = new OperationQueue({ timeoutMs: 20, graceMs: 20 });
     let aborted = false;
     const slow = queue.run(
       (signal) =>
@@ -41,5 +43,29 @@ describe("OperationQueue (spec §11.3)", () => {
     });
     await expect(failing).rejects.toThrow("boom");
     expect(await queue.run(async () => 42)).toBe(42);
+  });
+
+  test("a timed-out task's settlement is awaited, bounded by the kill grace, before the next task starts", async () => {
+    const queue = new OperationQueue({ timeoutMs: 10, graceMs: 200 });
+    const events: string[] = [];
+    const first = queue.run(
+      (signal) =>
+        new Promise<string>((resolve) => {
+          signal.addEventListener("abort", () => {
+            events.push("aborted");
+            setTimeout(() => {
+              events.push("settled");
+              resolve("first-result");
+            }, 5);
+          });
+        }),
+    );
+    const next = queue.run(async () => {
+      events.push("next started");
+      return "next";
+    });
+    await expect(first).rejects.toBeInstanceOf(OperationTimeoutError);
+    expect(events).toEqual(["aborted", "settled", "next started"]);
+    expect(await next).toBe("next");
   });
 });

@@ -87,7 +87,12 @@ export const strings = {
     context: { editor: "Editor", output: "Output" },
     themeItem: (name: string) => `Theme: ${name}`,
     empty: "No matching commands",
-    footer: { run: "run", move: "move", close: "close" },
+    footer: {
+      keys: { run: "↵", move: "↑↓", close: "esc" },
+      run: "run",
+      move: "move",
+      close: "close",
+    },
   },
   output: {
     filters: { all: "All", results: "Results", logs: "Logs", errors: "Errors" },

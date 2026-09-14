@@ -312,6 +312,34 @@ describe("App shell", () => {
     act(() => store.getState().openTab(createTab({ id: "t2" }), "", false));
     expect(document.querySelector(".tab-bar")).not.toBeNull();
   });
+
+  // Fix round 1 (I-2). ⌘⇧P toggles the palette both open and closed. The resolver skips view.commandPalette
+  // entirely while a modal is open (keybindings/resolver.ts), so the second ⌘⇧P must be dispatched at the
+  // focused combobox itself (as a real keypress would arrive), not at window.
+  test("⌘⇧P opens the palette with output context, and ⌘⇧P from inside it closes", () => {
+    const { store } = renderApp();
+    store.getState().setFocus("output");
+    press("KeyP", { shiftKey: true });
+    expect(store.getState().modal).toEqual({ kind: "palette", context: "output" });
+    // Runtime/Language <select>s in the status bar are also role "combobox"; name the palette's own input.
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Command palette" }), {
+      code: "KeyP",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(store.getState().modal).toBeNull();
+  });
+
+  // Fix round 1 (m-5). store.focus is only set by explicit focus-capture handlers and is never reset when
+  // focus moves elsewhere, so it can go stale. The palette context must follow the real DOM focus (a toolbar
+  // button here, not inside ".output") rather than trusting the stale "output" left in store.focus.
+  test("palette context follows real DOM focus rather than a stale store.focus", () => {
+    const { store } = renderApp();
+    store.getState().setFocus("output");
+    screen.getByRole("button", { name: /Auto Run/ }).focus();
+    press("KeyP", { shiftKey: true });
+    expect(store.getState().modal).toEqual({ kind: "palette", context: "editor" });
+  });
 });
 
 describe("runStateLabel", () => {

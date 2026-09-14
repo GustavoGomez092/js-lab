@@ -110,8 +110,24 @@ export function App({
         id: "view.commandPalette",
         run: () => {
           const state = store.getState();
-          if (state.modal?.kind === "palette") state.closeModal();
-          else state.openModal({ kind: "palette", context: state.focus === "output" ? "output" : "editor" });
+          if (state.modal?.kind === "palette") {
+            state.closeModal();
+            return;
+          }
+          // Fix round 1 (m-5): store.focus is only updated by explicit focus-capture handlers (OutputPanel,
+          // Monaco) and is never reset when focus moves elsewhere (toolbar, tab bar, side bar, blur to body),
+          // so it can go stale. The live DOM focus (the same signal contextFromState uses for outputFocus) is
+          // the source of truth; state.focus is only a fallback when nothing meaningful has focus.
+          const active = document.activeElement;
+          const context =
+            active && active !== document.body
+              ? active.closest(".output")
+                ? "output"
+                : "editor"
+              : state.focus === "output"
+                ? "output"
+                : "editor";
+          state.openModal({ kind: "palette", context });
         },
       },
     );

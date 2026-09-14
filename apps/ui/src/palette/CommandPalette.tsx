@@ -1,7 +1,8 @@
-import type { ResolvedBinding } from "@jslab/shared";
+import { chordFromEvent, chordsEqual, type ResolvedBinding, shortcutFor } from "@jslab/shared";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { CommandRegistry } from "../commands/registry";
+import { getEditorHandle } from "../editor/editor-handle";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { paletteItems } from "./items";
@@ -45,6 +46,8 @@ function PaletteBody(props: {
   const items = useMemo(() => paletteItems(registry, bindings, store.getState().themeId), [registry, bindings, store]);
   const sections = useMemo(() => buildSections(items, query, context), [items, query, context]);
   const flat = useMemo(() => sections.flatMap((section) => section.items), [sections]);
+  // Fix round 1 (m-2): the close chord follows a rebound view.commandPalette keybinding, not a hard-coded ⌘⇧P.
+  const closeChord = useMemo(() => shortcutFor(bindings, "view.commandPalette"), [bindings]);
 
   useEffect(() => {
     input.current?.focus();
@@ -57,7 +60,11 @@ function PaletteBody(props: {
 
   const close = () => {
     store.getState().closeModal();
-    previousFocus.current?.focus?.();
+    // Fix round 1 (m-4): mirrors RenameDialog's guard — a detached or removed opener falls back to the editor
+    // instead of stranding focus (or throwing on a stale ref).
+    const previous = previousFocus.current;
+    if (previous instanceof HTMLElement && document.contains(previous)) previous.focus();
+    else getEditorHandle()?.focus();
   };
 
   const run = (item: RankedItem | undefined) => {
@@ -72,8 +79,28 @@ function PaletteBody(props: {
   return (
     <>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: clicking the scrim is a pointer shortcut for Escape */}
-      <div className="palette-scrim" onMouseDown={close} />
-      <div className="palette" role="dialog" aria-modal="true" aria-label={strings.palette.label}>
+      <div
+        className="palette-scrim"
+        onMouseDown={(event) => {
+          // Fix round 1 (m-1): default mousedown focus handling on the (about to be unmounted) scrim can blur
+          // whatever close() just refocused; prevent it so the restored focus sticks.
+          event.preventDefault();
+          close();
+        }}
+      />
+      {/* Fix round 1 (I-1): a mousedown anywhere in the panel other than the input (the input row padding, the
+          badge, a section label, the footer, "No matching commands") would otherwise blur the input to body,
+          leaving Escape/⌘⇧P/↑↓/Enter unreachable (only a scrim click could close it). Rows keep their own
+          onClick; this only blocks the browser's default focus-follows-mousedown. */}
+      <div
+        className="palette"
+        role="dialog"
+        aria-modal="true"
+        aria-label={strings.palette.label}
+        onMouseDown={(event) => {
+          if (event.target !== input.current) event.preventDefault();
+        }}
+      >
         <div className="palette-input">
           <input
             ref={input}
@@ -98,9 +125,17 @@ function PaletteBody(props: {
               } else if (event.key === "Enter") {
                 event.preventDefault();
                 run(flat[active]);
-              } else if (event.key === "Escape" || (event.metaKey && event.shiftKey && event.code === "KeyP")) {
+              } else if (event.key === "Escape") {
                 event.preventDefault();
                 close();
+              } else {
+                // Fix round 1 (m-2): the resolver ignores view.commandPalette entirely while a modal is open
+                // (keybindings/resolver.ts), so this is the only place a rebound close chord can be honored.
+                const chord = chordFromEvent(event);
+                if (chord && closeChord && chordsEqual(chord, closeChord)) {
+                  event.preventDefault();
+                  close();
+                }
               }
             }}
           />
@@ -149,15 +184,15 @@ function PaletteBody(props: {
         </div>
         <div className="palette-foot">
           <span>
-            <b>↵</b>
+            <b>{strings.palette.footer.keys.run}</b>
             {strings.palette.footer.run}
           </span>
           <span>
-            <b>↑↓</b>
+            <b>{strings.palette.footer.keys.move}</b>
             {strings.palette.footer.move}
           </span>
           <span>
-            <b>esc</b>
+            <b>{strings.palette.footer.keys.close}</b>
             {strings.palette.footer.close}
           </span>
         </div>

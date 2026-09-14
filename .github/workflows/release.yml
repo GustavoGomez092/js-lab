@@ -1,0 +1,122 @@
+name: Release
+
+# Every push to main builds the macOS app and publishes it as a GitHub prerelease.
+# Pull requests run the same build (without publishing) so the pipeline is proven before merge.
+# GitHub-hosted macOS runners are free for public repositories.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Install Hutch 0.24.3
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o "$RUNNER_TEMP/hutch-install.sh"
+          sh "$RUNNER_TEMP/hutch-install.sh" --version 0.24.3
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test
+
+  build:
+    needs: verify
+    runs-on: macos-14
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Install Hutch 0.24.3
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o "$RUNNER_TEMP/hutch-install.sh"
+          sh "$RUNNER_TEMP/hutch-install.sh" --version 0.24.3
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - name: Build the macOS app (canary channel)
+        working-directory: apps/desktop
+        run: hutch run build
+      - name: Compute the release tag
+        id: meta
+        run: |
+          version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' apps/desktop/electrobun.config.ts | head -1)
+          if [ -z "$version" ]; then echo "Couldn't read app.version from electrobun.config.ts" >&2; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}-canary.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+      - name: Check the build artifacts
+        run: |
+          shopt -s nullglob
+          assets=(apps/desktop/artifacts/*.dmg apps/desktop/artifacts/*.tar.zst apps/desktop/artifacts/*update.json)
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo "No build artifacts found in apps/desktop/artifacts" >&2
+            ls -la apps/desktop/artifacts || true
+            exit 1
+          fi
+          printf '%s\n' "${assets[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jslab-macos-arm64
+          path: |
+            apps/desktop/artifacts/*.dmg
+            apps/desktop/artifacts/*.tar.zst
+            apps/desktop/artifacts/*update.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: jslab-macos-arm64
+          path: artifacts
+      - name: Write the release notes
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          {
+            echo "Automated canary build of JSLab ${VERSION} from commit ${short_sha} (workflow run ${GITHUB_RUN_NUMBER})."
+            echo
+            echo "**macOS on Apple Silicon.** Download the \`.dmg\`, open it and drag JSLab to Applications."
+            echo
+            echo "This build is not signed with an Apple Developer ID or notarized yet, so macOS blocks the first launch."
+            echo "To open it anyway: Control-click the app, choose **Open**, then confirm; or run"
+            echo "\`xattr -dr com.apple.quarantine \"/Applications/JSLab-canary.app\"\` once."
+            echo
+            echo "The first launch unpacks the app, which can take a few seconds."
+          } > "$RUNNER_TEMP/notes.md"
+      - name: Publish the GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          shopt -s nullglob
+          assets=(artifacts/*)
+          gh release create "$TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "JSLab ${VERSION} canary ${GITHUB_RUN_NUMBER}" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --prerelease

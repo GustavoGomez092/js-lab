@@ -81,4 +81,17 @@ export const strings = {
     runtime: "Runtime",
     language: "Language",
   },
+  output: {
+    filters: { all: "All", results: "Results", logs: "Logs", errors: "Errors" },
+    filterLabel: "Output filter",
+    copyAll: "Copy All",
+    clear: "Clear",
+    jumpToLine: (line: number) => `Go to line ${line}`,
+    truncated: (dropped: number) =>
+      `Output truncated: ${dropped} more entries were dropped. Raise the limit in Settings → Advanced.`,
+    region: "Output",
+    lastSuccessfulRun: "Last successful run",
+    copied: "Copied",
+    copyFailed: "Couldn't copy",
+  },
 } as const;

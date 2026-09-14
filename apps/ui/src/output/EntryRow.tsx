@@ -1,5 +1,7 @@
 import type { RunEvent } from "@jslab/rpc-schema";
 import type { OutputEntry } from "../state/output";
+import { strings } from "../strings";
+import { entryLevel } from "./filters";
 import { formatPrimitive, tableModel } from "./format";
 import { type ExpandHandle, ValueView } from "./ValueView";
 
@@ -9,6 +11,7 @@ interface EntryRowProps {
   expand: ExpandHandle;
   onReveal(line: number): void;
   onHover(line: number | null): void;
+  showLineNumbers?: boolean;
 }
 
 type ErrorEvent = Extract<RunEvent, { kind: "error" }>;
@@ -18,27 +21,34 @@ function kindClass(event: OutputEntry["event"]): string {
   return event.kind === "console" ? `console-${event.level}` : event.kind;
 }
 
-export function EntryRow({ entry, stale, expand, onReveal, onHover }: EntryRowProps) {
+export function EntryRow({ entry, stale, expand, onReveal, onHover, showLineNumbers = true }: EntryRowProps) {
   const { event } = entry;
   const line = event.kind === "result" || event.kind === "console" || event.kind === "error" ? event.line : undefined;
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: hover only mirrors the source-line highlight in the editor
     <div
       data-testid="entry"
-      className={`entry entry-${kindClass(event)}${stale ? " entry-stale" : ""}`}
+      className={`entry entry-${kindClass(event)} entry-level-${entryLevel(event)}${stale ? " entry-stale" : ""}`}
       style={{ paddingLeft: event.kind === "console" ? event.groupDepth * 16 : 0 }}
       onMouseEnter={() => onHover(line ?? null)}
       onMouseLeave={() => onHover(null)}
     >
+      <span className="entry-stripe" aria-hidden="true" />
       <div className="entry-body">
         {event.kind === "result" && <ValueView value={event.value} expand={expand} />}
         {event.kind === "console" && <ConsoleBody event={event} expand={expand} />}
         {(event.kind === "stdout" || event.kind === "stderr") && <pre className="entry-stream">{event.text}</pre>}
         {event.kind === "error" && <ErrorBody event={event} onReveal={onReveal} />}
       </div>
-      {line !== undefined && (
-        <button type="button" className="entry-line" onClick={() => onReveal(line)}>
-          L{line}
+      {showLineNumbers && line !== undefined && (
+        <button
+          type="button"
+          className="entry-line"
+          aria-label={`L${line}`}
+          title={strings.output.jumpToLine(line)}
+          onClick={() => onReveal(line)}
+        >
+          :{line}
         </button>
       )}
     </div>

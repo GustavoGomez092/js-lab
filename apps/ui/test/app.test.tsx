@@ -19,7 +19,7 @@ import { createFakeApi } from "./fake-api";
 mock.module("../src/editor/Editor", () => ({ Editor: () => <div data-testid="editor" /> }));
 mock.module("../src/output/OutputPanel", () => ({ OutputPanel: () => <div data-testid="output" /> }));
 
-let App: ComponentType<{ store: AppStore; api: MainApi }>;
+let App: ComponentType<{ store: AppStore; api: MainApi; scheduleFrame?: (callback: () => void) => void }>;
 beforeAll(async () => {
   ({ App } = await import("../src/shell/App"));
 });
@@ -38,7 +38,7 @@ function renderApp(
     versions: { app: "0.0.1", bun: "1.3.13" },
   });
   const { api, emit } = createFakeApi();
-  render(<App store={store} api={api} />);
+  render(<App store={store} api={api} scheduleFrame={(callback) => callback()} />);
   return { store, api, emit };
 }
 

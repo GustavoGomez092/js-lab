@@ -5,6 +5,7 @@ import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { createAppCommands } from "../commands/app-commands";
 import { createEditorCommands, EDITOR_ACTIONS } from "../commands/editor-commands";
+import { createOutputCommands } from "../commands/output-commands";
 import { CommandRegistry } from "../commands/registry";
 import { createViewCommands } from "../commands/view-commands";
 import { createE2EAgent } from "../e2e/agent";
@@ -15,6 +16,7 @@ import { createFileFlows } from "../files/file-flows";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { OutputPanel } from "../output/OutputPanel";
 import { startAutoRun } from "../state/auto-run";
+import { createEventCoalescer } from "../state/event-coalescer";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { RenameDialog } from "../tabs/RenameDialog";
@@ -35,7 +37,22 @@ import { Toolbar } from "./Toolbar";
 
 const UI_HEARTBEAT_MS = 2000;
 
-export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi; e2e?: boolean }) {
+/** Applies coalesced run events once per animation frame. Tests pass a synchronous scheduler. */
+const defaultScheduleFrame = (callback: () => void) => {
+  requestAnimationFrame(() => callback());
+};
+
+export function App({
+  store,
+  api,
+  e2e = false,
+  scheduleFrame = defaultScheduleFrame,
+}: {
+  store: AppStore;
+  api: MainApi;
+  e2e?: boolean;
+  scheduleFrame?: (callback: () => void) => void;
+}) {
   const tab = useStore(store, (s) => s.tab);
   const runState = useStore(store, (s) => s.output.runState);
   const safeMode = useStore(store, (s) => s.safeMode);
@@ -60,6 +77,14 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
   );
 
   const tabs = useMemo(() => createTabActions(store, api), [store, api]);
+  const coalescer = useMemo(
+    () =>
+      createEventCoalescer(
+        (tabId, runId, events) => store.getState().receiveEvents(runId, events, tabId),
+        scheduleFrame,
+      ),
+    [store, scheduleFrame],
+  );
   const dialogs = useMemo(() => createDialogs(store), [store]);
   const flows = useMemo(() => createFileFlows({ store, api, tabs, dialogs }), [store, api, tabs, dialogs]);
 
@@ -79,6 +104,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
       ...createFileCommands(flows, api),
+      ...createOutputCommands(store),
     );
     return created;
   }, [store, api, tabs, run, flows]);
@@ -103,13 +129,16 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
 
   useEffect(() => {
     const unsubscribers = [
-      api.on("run.events", ({ tabId, runId, events }) => store.getState().receiveEvents(runId, events, tabId)),
-      api.on("run.state", ({ tabId, runId, state, activeHandles }) =>
-        store.getState().receiveState(runId, state, activeHandles, tabId),
-      ),
-      api.on("run.diagnostics", ({ tabId, runId, diagnostics }) =>
-        store.getState().receiveDiagnostics(runId, diagnostics, tabId),
-      ),
+      api.on("run.events", ({ tabId, runId, events }) => coalescer.push(tabId, runId, events)),
+      // A state or diagnostics message applies after every event queued before it for that tab.
+      api.on("run.state", ({ tabId, runId, state, activeHandles }) => {
+        coalescer.flush(tabId);
+        store.getState().receiveState(runId, state, activeHandles, tabId);
+      }),
+      api.on("run.diagnostics", ({ tabId, runId, diagnostics }) => {
+        coalescer.flush(tabId);
+        store.getState().receiveDiagnostics(runId, diagnostics, tabId);
+      }),
       api.on("menu.command", ({ command }) => {
         registry.execute(command);
       }),
@@ -123,7 +152,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
     return () => {
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
-  }, [store, api, registry, flows]);
+  }, [store, api, registry, flows, coalescer]);
 
   useEffect(() => {
     if (!e2e) return;
@@ -141,6 +170,9 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
         statusBar: document.querySelector(".status-bar") !== null,
         output: document.querySelector(".output") !== null,
         tabBar: document.querySelector(".tab-bar") !== null,
+        outputPlain: document.querySelector(".output-plain") !== null,
+        lineAnchors: document.querySelector(".entry-line") !== null,
+        staleLabel: document.querySelector(".output-stale-label") !== null,
       }),
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {

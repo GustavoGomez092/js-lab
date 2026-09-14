@@ -44,6 +44,9 @@ describe("ValueView", () => {
     expect(childrenOf({ t: "typedArray", ctor: "BigInt64Array", length: 1, items: ["1"] })).toEqual([
       { label: "0", value: { t: "bigint", v: "1" } },
     ]);
+    expect(childrenOf({ t: "typedArray", ctor: "BigData", length: 1, items: [7] })).toEqual([
+      { label: "0", value: { t: "number", v: "7" } },
+    ]);
   });
 
   test("objects start collapsed and expand on click", () => {

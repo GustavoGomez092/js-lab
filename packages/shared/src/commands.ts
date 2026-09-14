@@ -73,6 +73,10 @@ export const COMMANDS = [
 
   { id: "output.clear", title: "Clear Output", category: "edit", context: "output" },
   { id: "output.copyAll", title: "Copy All Output", category: "edit", context: "output" },
+  { id: "output.showAll", title: "Output: Show All", category: "edit", context: "output" },
+  { id: "output.showResults", title: "Output: Show Results", category: "edit", context: "output" },
+  { id: "output.showLogs", title: "Output: Show Logs", category: "edit", context: "output" },
+  { id: "output.showErrors", title: "Output: Show Errors", category: "edit", context: "output" },
   { id: "editor.clear", title: "Clear Editor", category: "edit", context: "editor" },
   { id: "edit.find", title: "Find", category: "edit", context: "editor" },
   { id: "edit.replace", title: "Replace", category: "edit", context: "editor" },

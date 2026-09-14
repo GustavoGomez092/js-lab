@@ -1,10 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { BootstrapPayload, EncodedValue, RunEvent } from "@jslab/rpc-schema";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
-import { markersFor } from "../src/editor/markers";
+import { createMarkerTracker, markersFor } from "../src/editor/markers";
 import { keyLabel } from "../src/output/format";
 import { entryToText, valueToText } from "../src/output/text";
 import { startAutoRun, type TimerApi } from "../src/state/auto-run";
+import { createEventCoalescer } from "../src/state/event-coalescer";
 import { applyRunEvents, applyRunState, initialOutput } from "../src/state/output";
 import { createAppStore } from "../src/state/store";
 
@@ -264,5 +265,70 @@ describe("keyLabel", () => {
     expect(keyLabel({ k: "" })).toBe('""');
     expect(keyLabel({ k: "_$ok1" })).toBe("_$ok1");
     expect(keyLabel({ k: "1abc" })).toBe('"1abc"');
+    expect(keyLabel({ k: "café" })).toBe("café");
+    expect(keyLabel({ k: "π" })).toBe("π");
+  });
+});
+
+describe("marker tracker (final review M12)", () => {
+  const runtimeError = (line: number, seq: number): RunEvent => ({
+    kind: "error",
+    phase: "runtime",
+    name: "Error",
+    message: "boom",
+    line,
+    column: 1,
+    stack: [],
+    seq,
+    t: 0,
+  });
+  const consoleLog = (seq: number): RunEvent => ({ kind: "console", level: "log", groupDepth: 0, args: [], seq, t: 0 });
+
+  test("matches markersFor, scans only appended entries, and reports no change when nothing relevant arrived", () => {
+    const tracker = createMarkerTracker();
+    const diagnostics = [
+      { severity: "warning" as const, code: "magic-comment-no-value", message: "m", line: 1, column: 1 },
+    ];
+    let output = applyRunState(initialOutput, "r1", "transpiling");
+    output = applyRunEvents(output, "r1", [runtimeError(2, 1)]);
+    expect(tracker.update(diagnostics, output)).toEqual(markersFor(diagnostics, output));
+    expect(tracker.update(diagnostics, output)).toBeNull();
+    output = applyRunEvents(output, "r1", [consoleLog(2)]);
+    expect(tracker.update(diagnostics, output)).toBeNull();
+    output = applyRunEvents(output, "r1", [runtimeError(5, 3)]);
+    expect(tracker.update(diagnostics, output)).toEqual(markersFor(diagnostics, output));
+    const next = applyRunState(output, "r2", "transpiling");
+    expect(tracker.update([], next)).toEqual(markersFor([], next));
+  });
+});
+
+describe("event coalescer (final review M12, T15)", () => {
+  const consoleLog = (seq: number): RunEvent => ({ kind: "console", level: "log", groupDepth: 0, args: [], seq, t: 0 });
+
+  test("merges batches per tab and run into one apply per frame, and flushes a tab on demand", () => {
+    const applied: [string, string, number][] = [];
+    const frames: (() => void)[] = [];
+    const coalescer = createEventCoalescer(
+      (tabId, runId, events) => applied.push([tabId, runId, events.length]),
+      (callback) => frames.push(callback),
+    );
+    coalescer.push("a", "r1", [consoleLog(1)]);
+    coalescer.push("a", "r1", [consoleLog(2), consoleLog(3)]);
+    coalescer.push("b", "r9", [consoleLog(1)]);
+    expect([frames.length, applied]).toEqual([1, []]);
+    coalescer.flush("b");
+    expect(applied).toEqual([["b", "r9", 1]]);
+    frames[0]?.();
+    expect(applied).toEqual([
+      ["b", "r9", 1],
+      ["a", "r1", 3],
+    ]);
+    coalescer.push("a", "r1", [consoleLog(4)]);
+    coalescer.push("a", "r2", [consoleLog(1)]);
+    frames[1]?.();
+    expect(applied.slice(2)).toEqual([
+      ["a", "r1", 1],
+      ["a", "r2", 1],
+    ]);
   });
 });

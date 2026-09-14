@@ -46,3 +46,51 @@ export function markersFor(diagnostics: DiagnosticPayload[], output: OutputState
   }
   return markers;
 }
+
+export interface MarkerTracker {
+  /** The markers for this state, or null when they didn't change since the previous call. */
+  update(diagnostics: DiagnosticPayload[], output: OutputState): EditorMarker[] | null;
+}
+
+/** Final review M12: rescans only the entries appended since the previous update of the same run. */
+export function createMarkerTracker(): MarkerTracker {
+  let lastDiagnostics: DiagnosticPayload[] | null = null;
+  let lastEntries: OutputState["entries"] | null = null;
+  let lastRunId: string | null = null;
+  let lastStale = false;
+  let scanned = 0;
+  let diagnosticMarkers: EditorMarker[] = [];
+  let entryMarkers: EditorMarker[] = [];
+  return {
+    update(diagnostics, output) {
+      let changed = false;
+      if (diagnostics !== lastDiagnostics) {
+        diagnosticMarkers = markersFor(diagnostics, { ...output, entries: [] });
+        lastDiagnostics = diagnostics;
+        changed = true;
+      }
+      const { entries } = output;
+      const continues =
+        lastEntries !== null &&
+        output.runId === lastRunId &&
+        output.stale === lastStale &&
+        entries.length >= scanned &&
+        (scanned === 0 || entries[scanned - 1] === lastEntries[scanned - 1]);
+      if (!continues) {
+        entryMarkers = markersFor([], output);
+        changed = true;
+      } else if (entries.length > scanned) {
+        const added = markersFor([], { ...output, entries: entries.slice(scanned) });
+        if (added.length > 0) {
+          entryMarkers = [...entryMarkers, ...added];
+          changed = true;
+        }
+      }
+      scanned = entries.length;
+      lastEntries = entries;
+      lastRunId = output.runId;
+      lastStale = output.stale;
+      return changed ? [...diagnosticMarkers, ...entryMarkers] : null;
+    },
+  };
+}

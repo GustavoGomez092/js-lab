@@ -103,4 +103,32 @@ describe("EntryRow", () => {
     renderEntry({ kind: "stdout", text: "raw output\n", seq: 1, t: 0 });
     expect(screen.getByText("raw output")).toBeTruthy();
   });
+
+  test("rows carry a level stripe, only errors are tinted, and anchors can be hidden", () => {
+    const { unmount } = renderEntry({
+      kind: "result",
+      line: 5,
+      source: "autolog",
+      value: { t: "number", v: "1" },
+      seq: 1,
+      t: 0,
+    });
+    const row = screen.getByTestId("entry");
+    expect(row.className).toContain("entry-level-result");
+    expect(row.querySelector(".entry-stripe")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "L5" }).textContent).toBe(":5");
+    unmount();
+    render(
+      <EntryRow
+        entry={{ key: "k", event: { kind: "stderr", text: "boom", seq: 1, t: 0 } as DisplayEvent }}
+        stale={false}
+        expand={noExpand}
+        onReveal={() => {}}
+        onHover={() => {}}
+        showLineNumbers={false}
+      />,
+    );
+    expect(screen.getByTestId("entry").className).toContain("entry-level-error");
+    expect(screen.queryByRole("button", { name: /^L\d/ })).toBeNull();
+  });
 });

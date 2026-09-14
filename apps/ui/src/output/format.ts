@@ -67,7 +67,8 @@ export function summarize(value: EncodedValue): string {
   }
 }
 
-const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+// Unicode identifiers such as `café` or `π` print bare, as JavaScript prints them (final review T15).
+const IDENTIFIER = /^[\p{ID_Start}$_][\p{ID_Continue}$‌‍]*$/u;
 
 export function keyLabel(key: PropKey): string {
   if (!("k" in key)) return `[Symbol(${key.sym})]`;
@@ -111,7 +112,8 @@ export function childrenOf(value: EncodedValue): Child[] | null {
       ];
     case "typedArray": {
       // Items are numbers, or strings for bigints and for NaN, ±Infinity and -0; the constructor decides the type.
-      const bigint = value.ctor.startsWith("Big");
+      // Only these two hold bigints; a subclass such as `class BigData extends Uint8Array` holds numbers.
+      const bigint = /^Big(Int|Uint)64Array$/.test(value.ctor);
       return value.items.map((v, i) => ({
         label: String(i),
         value: bigint ? { t: "bigint", v: String(v) } : { t: "number", v: String(v) },

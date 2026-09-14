@@ -257,11 +257,6 @@ button:disabled {
   border-bottom: 1px solid var(--border-default);
 }
 
-.output-title {
-  flex: 1;
-  color: var(--fg-muted);
-}
-
 .output-scroller {
   flex: 1;
   overflow: auto;
@@ -269,9 +264,11 @@ button:disabled {
 }
 
 .entry {
-  display: flex;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
   gap: 8px;
-  padding: 5px 12px;
+  align-items: start;
+  padding: 5px 12px 5px 0;
   border-bottom: 1px solid var(--border-muted);
   font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1.5 var(--code-font-family, var(--mono));
   font-variant-ligatures: var(--code-ligatures, normal);
@@ -289,7 +286,7 @@ button:disabled {
 }
 
 .entry-line {
-  align-self: flex-start;
+  padding: 0 2px;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -298,9 +295,12 @@ button:disabled {
   color: var(--fg-warn);
 }
 
-.entry-console-error,
-.entry-error {
+.entry-level-error {
   background: var(--bg-errorRow);
+  border-bottom-color: color-mix(in srgb, var(--fg-error) 18%, var(--bg-errorRow));
+}
+
+.entry-level-error .entry-body {
   color: var(--fg-error);
 }
 
@@ -820,4 +820,79 @@ button:disabled {
   background: var(--bg-canvas);
   border: 1px solid var(--border-default);
   border-radius: var(--radius);
+}
+
+/* ---------- output rows: line anchors, level stripes, filter chips (Task 19) ---------- */
+.entry:hover {
+  background: var(--bg-lineHover);
+}
+
+.entry-level-error:hover {
+  background: color-mix(in srgb, var(--bg-lineHover) 40%, var(--bg-errorRow));
+}
+
+.entry-stripe {
+  width: 3px;
+  height: 15px;
+  margin: 2px 0 0 4px;
+  border-radius: 2px;
+  background: var(--console-log);
+}
+
+.entry-level-result .entry-stripe {
+  background: var(--console-result);
+}
+
+.entry-level-info .entry-stripe {
+  background: var(--console-info);
+}
+
+.entry-level-warn .entry-stripe {
+  background: var(--console-warn);
+}
+
+.entry-level-error .entry-stripe {
+  background: var(--console-error);
+}
+
+.entry:hover .entry-line {
+  color: var(--fg-accent);
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+}
+
+.chip {
+  padding: 5px 8px;
+  border-radius: 5px;
+  color: var(--fg-muted);
+  font: 500 11.5px / 1 var(--ui);
+}
+
+.chip.on {
+  background: var(--bg-hover);
+  color: var(--fg-default);
+}
+
+.output-spacer {
+  flex: 1;
+}
+
+.output-plain .v-string,
+.output-plain .v-number,
+.output-plain .v-bigint,
+.output-plain .v-boolean,
+.output-plain .v-key,
+.output-plain .v-function {
+  color: inherit;
+}
+
+.output-stale-label {
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font: 500 11px / 1 var(--ui);
 }

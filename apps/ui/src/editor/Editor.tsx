@@ -5,7 +5,7 @@ import type { MainApi } from "../api";
 import type { AppState, AppStore } from "../state/store";
 import { setEditorHandle } from "./editor-handle";
 import { type EditorOptions, editorOptionsFor } from "./editor-options";
-import { markersFor } from "./markers";
+import { createMarkerTracker, type EditorMarker, markersFor } from "./markers";
 import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
 import { installPasteGuard } from "./paste-guard";
@@ -95,18 +95,22 @@ export function Editor({ store, api, onLargePaste }: EditorProps) {
       store.getState().setCursor(position ? { line: position.lineNumber, column: position.column } : null);
     };
 
-    const applyMarkers = (state: AppState) => {
+    const setMarkers = (markers: EditorMarker[]) => {
       const model = editor.getModel();
       if (!model) return;
       monaco.editor.setModelMarkers(
         model,
         "jslab",
-        markersFor(state.diagnostics, state.output).map((marker) => ({
+        markers.map((marker) => ({
           ...marker,
           severity: marker.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
         })),
       );
     };
+    // A newly shown model has no markers, so it always gets the full set.
+    const applyMarkers = (state: AppState) => setMarkers(markersFor(state.diagnostics, state.output));
+    // Between model swaps, only entries appended since the previous batch are scanned.
+    const markerTracker = createMarkerTracker();
 
     // Tab switching, per-tab models and view state live in tab-view.ts, which has its own unit test (review C1).
     const view = createTabView<Monaco.editor.ITextModel, Monaco.editor.ICodeEditorViewState>({
@@ -271,7 +275,10 @@ export function Editor({ store, api, onLargePaste }: EditorProps) {
         editor.setPosition({ lineNumber: line, column: 1 });
         editor.focus();
       }
-      if (state.diagnostics !== previous.diagnostics || state.output !== previous.output) applyMarkers(state);
+      if (state.diagnostics !== previous.diagnostics || state.output !== previous.output) {
+        const markers = markerTracker.update(state.diagnostics, state.output);
+        if (markers) setMarkers(markers);
+      }
     });
 
     view.show(initial);

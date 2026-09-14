@@ -1,11 +1,15 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { visibleEntries } from "../state/output";
 import type { AppStore } from "../state/store";
+import { strings } from "../strings";
 import { copyEntriesToClipboard } from "./copy";
 import { EntryRow } from "./EntryRow";
+import { FilterChips } from "./FilterChips";
+import { applyFilter, filterCounts } from "./filters";
+import { entryIsStale, lastSuccessfulRunLabel } from "./stale";
 import { entryToText } from "./text";
 
 const COPY_STATUS_DURATION_MS = 2000;
@@ -18,14 +22,21 @@ interface OutputPanelProps {
 export function OutputPanel({ store, api }: OutputPanelProps) {
   const output = useStore(store, (s) => s.output);
   const showUndefined = useStore(store, (s) => s.settings?.run.showUndefined ?? false);
-  const tabId = useStore(store, (s) => s.tab?.id ?? null);
-  const entries = visibleEntries(output, { showUndefined });
+  const highlighting = useStore(store, (s) => s.settings?.output.highlighting ?? true);
+  const showLineNumbers = useStore(store, (s) => s.settings?.output.showLineNumbers ?? true);
+  const filter = useStore(store, (s) => s.outputFilter);
+  const tabId = useStore(store, (s) => s.activeTabId);
+
+  const visible = useMemo(() => visibleEntries(output, { showUndefined }), [output, showUndefined]);
+  const counts = useMemo(() => filterCounts(visible), [visible]);
+  const entries = useMemo(() => applyFilter(visible, filter), [visible, filter]);
+  const staleLabel = lastSuccessfulRunLabel(output);
 
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
+  // As built (M1 T17 fix round): Copy All reports "Copied" or "Couldn't copy" for two seconds.
   const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(null);
   const copyStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   useEffect(
     () => () => {
       if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
@@ -35,7 +46,7 @@ export function OutputPanel({ store, api }: OutputPanelProps) {
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scroller.current,
-    estimateSize: () => 24,
+    estimateSize: () => 30,
     overscan: 20,
   });
 
@@ -56,22 +67,32 @@ export function OutputPanel({ store, api }: OutputPanelProps) {
   };
 
   return (
-    <section className="output" aria-label="Output">
+    <section
+      className={`output${highlighting ? "" : " output-plain"}`}
+      aria-label={strings.output.region}
+      onFocusCapture={() => store.getState().setFocus("output")}
+    >
       <header className="output-toolbar">
-        <span className="output-title">Console</span>
-        <button type="button" onClick={copyAll} disabled={entries.length === 0}>
-          Copy All
-        </button>
+        <FilterChips counts={counts} filter={filter} onChange={(next) => store.getState().setOutputFilter(next)} />
+        {staleLabel && <span className="output-stale-label">{staleLabel}</span>}
+        <span className="output-spacer" />
         {copyStatus && (
-          <span className="output-copy-status">{copyStatus === "copied" ? "Copied" : "Couldn't copy"}</span>
+          <span className="output-copy-status">
+            {copyStatus === "copied" ? strings.output.copied : strings.output.copyFailed}
+          </span>
         )}
-        <button type="button" onClick={() => store.getState().clearOutput()} disabled={entries.length === 0}>
-          Clear
+        <button type="button" onClick={copyAll} disabled={entries.length === 0}>
+          {strings.output.copyAll}
+        </button>
+        <button type="button" onClick={() => store.getState().clearOutput()} disabled={visible.length === 0}>
+          {strings.output.clear}
         </button>
       </header>
       <div
         ref={scroller}
         className="output-scroller"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the output list is keyboard-focusable so ⌘K and the palette get output context
+        tabIndex={0}
         onScroll={(event) => {
           const el = event.currentTarget;
           pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
@@ -96,8 +117,9 @@ export function OutputPanel({ store, api }: OutputPanelProps) {
               >
                 <EntryRow
                   entry={entry}
-                  stale={output.stale}
+                  stale={entryIsStale(output, entry.event)}
                   expand={expand}
+                  showLineNumbers={showLineNumbers}
                   onReveal={(line) => store.getState().reveal(line)}
                   onHover={(line) => store.getState().setHoveredLine(line)}
                 />
@@ -105,11 +127,7 @@ export function OutputPanel({ store, api }: OutputPanelProps) {
             );
           })}
         </div>
-        {output.truncated > 0 && (
-          <div className="output-truncated">
-            Output truncated: {output.truncated} more entries were dropped. Raise the limit in Settings → Advanced.
-          </div>
-        )}
+        {output.truncated > 0 && <div className="output-truncated">{strings.output.truncated(output.truncated)}</div>}
       </div>
     </section>
   );

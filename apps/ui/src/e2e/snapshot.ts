@@ -1,5 +1,6 @@
 import type { RunState } from "@jslab/rpc-schema";
 import { deriveTitle, isDirty, type Language, type Runtime, type Settings, type TabLayout } from "@jslab/shared";
+import { filterCounts } from "../output/filters";
 import { entryToText } from "../output/text";
 import { initialOutput, visibleEntries } from "../state/output";
 import type { AppState } from "../state/store";
@@ -34,6 +35,7 @@ export interface UiSnapshot {
   focus: AppState["focus"];
   modal: string | null;
   outputFilter: AppState["outputFilter"];
+  outputCounts: Record<AppState["outputFilter"], number>;
   statusMessage: string | null;
   cursor: AppState["cursor"];
   notices: AppState["notices"];
@@ -88,6 +90,9 @@ export function snapshotState(state: AppState): UiSnapshot {
     focus: state.focus,
     modal: state.modal?.kind ?? null,
     outputFilter: state.outputFilter,
+    outputCounts: filterCounts(
+      visibleEntries(state.output, { showUndefined: state.settings?.run.showUndefined ?? false }),
+    ),
     statusMessage: state.statusMessage,
     cursor: state.cursor,
     notices: state.notices,

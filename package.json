@@ -12,7 +12,8 @@
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "e2e": "bun run --cwd packages/e2e e2e"
+    "e2e": "bun run --cwd packages/e2e e2e",
+    "readme:screenshots": "bun packages/e2e/scripts/readme-screenshots.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",

@@ -2,6 +2,7 @@ import type { Language } from "@jslab/shared";
 import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TsWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
+import { EDITOR_TS_LIB } from "./ts-lib";
 
 let configured = false;
 
@@ -31,7 +32,7 @@ export function setupMonaco(): typeof monaco {
     skipLibCheck: true,
     // TypeScript's ModuleDetectionKind.Force, so top-level await is valid in every file.
     moduleDetection: 3,
-    lib: ["esnext"],
+    lib: [...EDITOR_TS_LIB],
   };
   for (const defaults of [ts.typescriptDefaults, ts.javascriptDefaults]) {
     defaults.setCompilerOptions(compilerOptions);

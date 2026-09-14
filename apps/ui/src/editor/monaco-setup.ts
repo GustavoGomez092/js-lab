@@ -2,7 +2,7 @@ import type { Language } from "@jslab/shared";
 import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TsWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
-import { EDITOR_TS_LIB } from "./ts-lib";
+import { EDITOR_COMPILER_OPTIONS, EDITOR_DIAGNOSTIC_CODES_TO_IGNORE } from "./ts-lib";
 
 let configured = false;
 
@@ -17,29 +17,16 @@ export function setupMonaco(): typeof monaco {
   };
 
   const ts = monaco.typescript;
-  const compilerOptions: monaco.typescript.CompilerOptions = {
-    target: ts.ScriptTarget.ESNext,
-    module: ts.ModuleKind.ESNext,
-    // TypeScript's ModuleResolutionKind.Bundler; Monaco's enum predates it.
-    moduleResolution: 100 as monaco.typescript.ModuleResolutionKind,
-    jsx: ts.JsxEmit.ReactJSX,
-    strict: true,
-    allowJs: true,
-    checkJs: false,
-    allowNonTsExtensions: true,
-    esModuleInterop: true,
-    allowSyntheticDefaultImports: true,
-    skipLibCheck: true,
-    // TypeScript's ModuleDetectionKind.Force, so top-level await is valid in every file.
-    moduleDetection: 3,
-    lib: [...EDITOR_TS_LIB],
-  };
+  const compilerOptions = {
+    ...EDITOR_COMPILER_OPTIONS,
+    lib: [...EDITOR_COMPILER_OPTIONS.lib],
+  } as monaco.typescript.CompilerOptions;
   for (const defaults of [ts.typescriptDefaults, ts.javascriptDefaults]) {
     defaults.setCompilerOptions(compilerOptions);
     defaults.setDiagnosticsOptions({
       noSemanticValidation: false,
       noSyntaxValidation: false,
-      diagnosticCodesToIgnore: [1375, 1378],
+      diagnosticCodesToIgnore: [...EDITOR_DIAGNOSTIC_CODES_TO_IGNORE],
     });
   }
 

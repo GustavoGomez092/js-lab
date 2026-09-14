@@ -43,7 +43,7 @@ export function applyRunState(
   return next;
 }
 
-const isTranspileError = (event: RunEvent) => event.kind === "error" && event.phase === "transpile";
+export const isTranspileError = (event: RunEvent) => event.kind === "error" && event.phase === "transpile";
 
 export function applyRunEvents(state: OutputState, runId: string, events: RunEvent[]): OutputState {
   if (runId !== state.runId || events.length === 0) return state;

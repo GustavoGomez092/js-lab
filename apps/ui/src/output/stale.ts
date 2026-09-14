@@ -1,7 +1,5 @@
-import type { DisplayEvent, OutputState } from "../state/output";
+import { type DisplayEvent, isTranspileError, type OutputState } from "../state/output";
 import { strings } from "../strings";
-
-const isTranspileError = (event: DisplayEvent) => event.kind === "error" && event.phase === "transpile";
 
 /** Spec §5.11: after a failed compile the previous run's output stays, dimmed, labeled "Last successful run". */
 export function lastSuccessfulRunLabel(output: OutputState): string | null {

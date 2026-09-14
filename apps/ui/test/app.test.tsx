@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import type { BootstrapPayload, TabCloseResult } from "@jslab/rpc-schema";
 import {
   createTab,
@@ -11,13 +11,20 @@ import {
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentType } from "react";
 import type { MainApi } from "../src/api";
+import * as OutputPanelModule from "../src/output/OutputPanel";
 import { runStateLabel } from "../src/shell/labels";
 import { type AppStore, createAppStore } from "../src/state/store";
 import { createFakeApi } from "./fake-api";
 
 // Monaco and the virtualized list need a real browser layout; the shell behavior under test does not.
+// mock.module replaces a module for the whole `bun test` process, so keep the real panel (a plain const: import
+// bindings are live and would see the mock) and put it back afterwards for output-panel.test.tsx.
+const RealOutputPanel = OutputPanelModule.OutputPanel;
 mock.module("../src/editor/Editor", () => ({ Editor: () => <div data-testid="editor" /> }));
 mock.module("../src/output/OutputPanel", () => ({ OutputPanel: () => <div data-testid="output" /> }));
+afterAll(() => {
+  mock.module("../src/output/OutputPanel", () => ({ OutputPanel: RealOutputPanel }));
+});
 
 let App: ComponentType<{ store: AppStore; api: MainApi; scheduleFrame?: (callback: () => void) => void }>;
 beforeAll(async () => {
@@ -27,6 +34,7 @@ beforeAll(async () => {
 function renderApp(
   safeMode: BootstrapPayload["safeMode"] = { active: false, reason: null },
   keybindings: KeybindingRule[] = [],
+  scheduleFrame: (callback: () => void) => void = (callback) => callback(),
 ) {
   const store = createAppStore();
   store.getState().hydrate({
@@ -38,7 +46,7 @@ function renderApp(
     versions: { app: "0.0.1", bun: "1.3.13" },
   });
   const { api, emit } = createFakeApi();
-  render(<App store={store} api={api} scheduleFrame={(callback) => callback()} />);
+  render(<App store={store} api={api} scheduleFrame={scheduleFrame} />);
   return { store, api, emit };
 }
 
@@ -145,6 +153,28 @@ describe("App shell", () => {
     });
     expect(store.getState().runtimes.t2?.output.entries).toHaveLength(1);
     expect(store.getState().output.entries).toHaveLength(0);
+  });
+
+  test("a run.state message first applies the events still queued for its tab, and the frame applies nothing twice (M12)", async () => {
+    const frames: (() => void)[] = [];
+    const { store, emit } = renderApp(undefined, [], (callback) => {
+      frames.push(callback);
+    });
+    await emit("run.state", { tabId: "t1", runId: "r1", state: "transpiling" });
+    await emit("run.events", {
+      tabId: "t1",
+      runId: "r1",
+      events: [{ kind: "stdout", text: "queued\n", seq: 1, t: 0 }],
+    });
+    expect([frames.length, store.getState().output.entries.length]).toEqual([1, 0]);
+    await emit("run.state", { tabId: "t1", runId: "r1", state: "idle" });
+    expect([store.getState().output.entries.length, store.getState().output.runState]).toEqual([1, "idle"]);
+    act(() => {
+      for (const frame of frames.splice(0)) frame();
+    });
+    expect(store.getState().output.entries.map((entry) => entry.event)).toEqual([
+      { kind: "stdout", text: "queued\n", seq: 1, t: 0 },
+    ]);
   });
 
   test("a duplicate close result for an already-removed tab is ignored (I-1)", async () => {

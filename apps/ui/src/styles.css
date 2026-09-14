@@ -279,7 +279,6 @@ button:disabled {
 }
 
 .entry-body {
-  flex: 1;
   min-width: 0;
   white-space: pre-wrap;
   word-break: break-word;

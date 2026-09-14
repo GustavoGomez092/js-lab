@@ -67,6 +67,9 @@ export function startAppearanceSync(
 ): () => void {
   let disposed = false;
   let verified = "";
+  // The fallback notice this sync itself last set, if any (fix round 1, m-1): remembered so a later successful
+  // check can clear its own stale notice without also clearing an unrelated status message.
+  let notice: string | null = null;
 
   const apply = () => {
     const state = store.getState();
@@ -80,7 +83,16 @@ export function startAppearanceSync(
     void check(font).then((available) => {
       if (disposed || store.getState().settings?.appearance.font !== font) return;
       store.getState().setFontFallback(!available);
-      if (!available) store.getState().setStatusMessage(strings.fonts.fallback(font));
+      if (!available) {
+        // m-2 (fix round 1): the default font can itself fail its check; don't claim to fall back to itself.
+        notice = font === DEFAULT_FONT ? strings.fonts.bundledUnavailable : strings.fonts.fallback(font);
+        store.getState().setStatusMessage(notice);
+      } else if (notice && store.getState().statusMessage === notice) {
+        // m-1 (fix round 1): a later successful check clears its own stale fallback notice, but never an
+        // unrelated status message that happens to be showing.
+        store.getState().setStatusMessage(null);
+        notice = null;
+      }
       apply();
     });
   };

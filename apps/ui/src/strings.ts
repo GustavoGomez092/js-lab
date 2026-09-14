@@ -19,5 +19,8 @@ export const strings = {
   },
   fonts: {
     fallback: (font: string) => `Font "${font}" isn't available; using JetBrains Mono.`,
+    // m-2 (fix round 1): the default font itself can fail its own check; don't claim to "fall back to
+    // JetBrains Mono" from JetBrains Mono.
+    bundledUnavailable: "The bundled code font couldn't load; using the system monospace font.",
   },
 } as const;

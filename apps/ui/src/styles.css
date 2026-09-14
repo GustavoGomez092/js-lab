@@ -2,7 +2,7 @@
    Graphite fallbacks so the first paint, before JavaScript runs, is already the dark theme. */
 :root {
   --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, Menlo, monospace;
   --ui-scale: 1;
   --toolbar-height: calc(38px * var(--ui-scale));
   --tabbar-height: calc(34px * var(--ui-scale));
@@ -395,6 +395,39 @@ button:disabled {
 
 .status-run {
   margin-left: auto;
+}
+
+/* Vim mode indicator and `:`/`/` prompt (review I-1, fix round 1); pinned just above the M1 status bar while
+   editor.vimKeys is on. Never `.visually-hidden`: monaco-vim focuses a real `<input>` inside it. */
+.vim-status {
+  position: fixed;
+  right: 0;
+  bottom: var(--statusbar-height);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  height: var(--statusbar-height);
+  padding: 0 12px;
+  background: var(--bg-chrome);
+  border-top: 1px solid var(--border-default);
+  color: var(--fg-default);
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1 var(--code-font-family, var(--mono));
+  white-space: nowrap;
+}
+
+.vim-status input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+}
+
+.vim-status input:focus-visible {
+  outline: none;
 }
 
 /* ---------- banners and dialogs ---------- */

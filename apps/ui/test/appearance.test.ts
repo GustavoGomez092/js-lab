@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
 import { createViewCommands } from "../src/commands/view-commands";
 import { editorOptionsFor } from "../src/editor/editor-options";
+import { createVimStatusNode } from "../src/editor/vim-status";
 import { createAppStore } from "../src/state/store";
 import { applyAppearanceVariables, fontAvailable, fontStack, startAppearanceSync } from "../src/themes/fonts";
 import { createFakeApi } from "./fake-api";
@@ -114,6 +115,19 @@ describe("fonts", () => {
     await Bun.sleep(1);
     expect(store.getState().fontFallback).toBe(false);
     expect(root.style.getPropertyValue("--ui-scale")).toBe("1.25");
+    // m-1 (fix round 1): once a later check finds the (new) font available, the stale fallback notice for the
+    // font that failed is cleared automatically, not left standing forever.
+    expect(store.getState().statusMessage).toBeNull();
+    // m-1 continued: an unrelated status message must survive a later, unrelated successful font check.
+    store.getState().setStatusMessage("unrelated notice");
+    store
+      .getState()
+      .updateSettings(
+        mergeSettings(store.getState().settings ?? defaultSettings(), { appearance: { font: "Ubuntu Mono" } }),
+      );
+    await Bun.sleep(1);
+    expect(store.getState().fontFallback).toBe(false);
+    expect(store.getState().statusMessage).toBe("unrelated notice");
     // Field-level guard (carried behavior, review R-M2-PF3 companion): mergeSettings re-parses the whole
     // settings object on every settings.changed, so an unrelated run.autoRun update must not reapply the
     // appearance CSS variables (compare this against startThemeSync's identical guard in themes/apply.ts).
@@ -126,6 +140,22 @@ describe("fonts", () => {
     stop();
     applyAppearanceVariables(root, defaultSettings(), false);
     expect(root.style.getPropertyValue("--code-font-size")).toBe("14px");
+
+    // m-2 (fix round 1): when the default font itself (JetBrains Mono) fails its check, the notice must not
+    // claim to fall back to JetBrains Mono from JetBrains Mono; a distinct message is used instead.
+    const defaultStore = hydrated("JetBrains Mono");
+    const defaultRoot = document.createElement("div");
+    const stopDefault = startAppearanceSync(
+      defaultStore,
+      defaultRoot,
+      mock(async () => false),
+    );
+    await Bun.sleep(1);
+    expect(defaultStore.getState().fontFallback).toBe(true);
+    expect(defaultStore.getState().statusMessage).toBe(
+      "The bundled code font couldn't load; using the system monospace font.",
+    );
+    stopDefault();
   });
 
   test("zoom commands step uiScale through Main", async () => {
@@ -141,5 +171,23 @@ describe("fonts", () => {
     expect(api.updateSettings).toHaveBeenLastCalledWith({ appearance: { uiScale: 1.25 } });
     await commands.get("view.zoomReset")?.run();
     expect(api.updateSettings).toHaveBeenLastCalledWith({ appearance: { uiScale: 1 } });
+  });
+});
+
+describe("vim status node", () => {
+  // Test A (fix round 1, review I-1): monaco-vim renders its mode indicator and `:`/`/` prompt input into the
+  // node Editor.tsx gives it. The brief's node was `.visually-hidden` (1px, clipped), so a focused `:`/`/`
+  // input received keystrokes the user could never see. `startVim` needs a real Monaco editor, and importing
+  // vim.ts itself (which eagerly requires `monaco-vim`, and through it `monaco-editor/esm/vs/editor/editor.api`)
+  // fails outside the Vite build's alias (confirmed: importing vim.ts directly from this test throws "Cannot
+  // find module 'monaco-editor/esm/vs/editor/editor.api'"). So the node creation lives in its own module,
+  // editor/vim-status.ts, with no monaco-vim dependency, and this test pins that helper instead.
+  test("is visible (not `.visually-hidden`), carries `.vim-status`, and is removable", () => {
+    const node = createVimStatusNode(document.body);
+    expect(document.body.contains(node)).toBe(true);
+    expect(node.classList.contains("vim-status")).toBe(true);
+    expect(node.classList.contains("visually-hidden")).toBe(false);
+    node.remove();
+    expect(document.body.contains(node)).toBe(false);
   });
 });

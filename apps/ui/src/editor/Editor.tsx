@@ -10,6 +10,7 @@ import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
 import { createTabView } from "./tab-view";
 import { defineClipboardRegister, startVim, type VimController } from "./vim";
+import { createVimStatusNode } from "./vim-status";
 
 interface EditorProps {
   store: AppStore;
@@ -55,17 +56,20 @@ export function Editor({ store, api }: EditorProps) {
     };
     applyMonacoTheme(initial.themeId);
 
-    const vimStatus = document.createElement("div");
-    vimStatus.className = "visually-hidden";
-    document.body.appendChild(vimStatus);
     let vim: VimController | null = null;
+    // The status node is visible while Vim is on (review I-1): monaco-vim focuses an `<input>` inside it for
+    // `:`/`/`, so it's created and removed with Vim itself rather than kept mounted (and hidden) permanently.
+    let vimStatus: HTMLDivElement | null = null;
     const syncVim = (enabled: boolean) => {
       if (enabled && !vim) {
         defineClipboardRegister();
+        vimStatus = createVimStatusNode();
         vim = startVim(editor, vimStatus, (mode) => store.getState().setVimMode(mode));
       } else if (!enabled && vim) {
         vim.dispose();
         vim = null;
+        vimStatus?.remove();
+        vimStatus = null;
       }
     };
     syncVim(initial.settings.editor.vimKeys);
@@ -268,7 +272,7 @@ export function Editor({ store, api }: EditorProps) {
       scrollSubscription.dispose();
       focusSubscription.dispose();
       vim?.dispose();
-      vimStatus.remove();
+      vimStatus?.remove();
       editor.dispose();
       models.disposeAll();
     };

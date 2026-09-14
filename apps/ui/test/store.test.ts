@@ -162,4 +162,21 @@ describe("app store", () => {
     store.getState().closeModal();
     expect(store.getState().modal).toBeNull();
   });
+
+  test("run messages for an unknown tabId leave the store unchanged (m-6)", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    const before = store.getState();
+    store.getState().receiveEvents("r1", [log(1)], "ghost");
+    store.getState().receiveState("r1", "transpiling", undefined, "ghost");
+    store.getState().receiveDiagnostics("r1", [], "ghost");
+    const after = store.getState();
+    expect([after.tabs, after.buffers, after.runtimes, after.output, after.diagnostics]).toEqual([
+      before.tabs,
+      before.buffers,
+      before.runtimes,
+      before.output,
+      before.diagnostics,
+    ]);
+  });
 });

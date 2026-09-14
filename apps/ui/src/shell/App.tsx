@@ -1,5 +1,5 @@
 import type { CommandId } from "@jslab/rpc-schema";
-import { adjacentTabId } from "@jslab/shared";
+import { adjacentTabId, MAX_CLOSED_TABS } from "@jslab/shared";
 import { useCallback, useEffect } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
@@ -93,10 +93,18 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
         case "tab.close":
           if (!tabId) return;
           void api.closeTab(tabId).then((result) => {
-            const s = store.getState();
-            s.removeTab(tabId, result.replacement ? null : result.activeTabId);
-            if (result.replacement) s.openTab(result.replacement.tab, result.replacement.content, true);
-            s.setClosedCount(s.closedCount + 1);
+            const closing = store.getState();
+            // A stale or duplicate result for a tab the store no longer has is ignored outright (ruling T8-m1):
+            // `ok: true` alone is never proof a tab was removed.
+            if (!closing.tabs[tabId]) return;
+            // Only apply Main's chosen `activeTabId` while the closed tab is still the one showing; if the user
+            // already switched away while the close was in flight, let removeTab's own neighbor logic keep the
+            // tab they switched to instead of overriding it with Main's (now stale) choice.
+            const stillActive = closing.activeTabId === tabId;
+            closing.removeTab(tabId, result.replacement ? null : stillActive ? result.activeTabId : undefined);
+            if (result.replacement) store.getState().openTab(result.replacement.tab, result.replacement.content, true);
+            const after = store.getState();
+            after.setClosedCount(Math.min(after.closedCount + 1, MAX_CLOSED_TABS));
           });
           return;
         case "tab.reopenClosed":
@@ -168,10 +176,14 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
           const before = previous.tabs[id];
           if (!next || !before) continue;
           if (state.buffers[id] !== previous.buffers[id]) api.bufferChanged(id, state.buffers[id] ?? "");
+          const layoutChanged =
+            next.layout.orientation !== before.layout.orientation ||
+            next.layout.editorSize !== before.layout.editorSize ||
+            next.layout.outputVisible !== before.layout.outputVisible;
           if (
             next.language !== before.language ||
             next.runtime !== before.runtime ||
-            next.layout !== before.layout ||
+            layoutChanged ||
             next.title !== before.title ||
             next.titleIsCustom !== before.titleIsCustom
           ) {

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, mock, test } from "bun:test";
-import type { BootstrapPayload } from "@jslab/rpc-schema";
-import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
+import type { BootstrapPayload, TabCloseResult } from "@jslab/rpc-schema";
+import { createTab, defaultSession, defaultSettings, MAX_CLOSED_TABS } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentType } from "react";
 import type { MainApi } from "../src/api";
@@ -134,6 +134,69 @@ describe("App shell", () => {
     });
     expect(store.getState().runtimes.t2?.output.entries).toHaveLength(1);
     expect(store.getState().output.entries).toHaveLength(0);
+  });
+
+  test("a duplicate close result for an already-removed tab is ignored (I-1)", async () => {
+    const { store, api, emit } = renderApp();
+    const resolvers: Array<(result: TabCloseResult) => void> = [];
+    api.closeTab.mockImplementation(() => new Promise((resolve) => resolvers.push(resolve)));
+    await emit("menu.command", { command: "tab.close" });
+    await emit("menu.command", { command: "tab.close" });
+    expect(resolvers).toHaveLength(2);
+    await act(async () => {
+      resolvers[0]?.({ ok: true, activeTabId: "", replacement: null });
+      await Bun.sleep(1);
+    });
+    expect(store.getState().closedCount).toBe(1);
+    await act(async () => {
+      resolvers[1]?.({ ok: true, activeTabId: "", replacement: null });
+      await Bun.sleep(1);
+    });
+    expect(store.getState().closedCount).toBe(1);
+  });
+
+  test("closedCount never exceeds MAX_CLOSED_TABS on increment (I-1)", async () => {
+    const { store, api, emit } = renderApp();
+    act(() => store.setState({ closedCount: MAX_CLOSED_TABS }));
+    api.closeTab.mockImplementation(async () => ({ ok: true, activeTabId: "", replacement: null }));
+    await emit("menu.command", { command: "tab.close" });
+    expect(store.getState().closedCount).toBe(MAX_CLOSED_TABS);
+  });
+
+  test("a close result no longer overrides a tab switch made while the close was in flight (I-2)", async () => {
+    const { store, api, emit } = renderApp();
+    act(() => {
+      store.getState().openTab(createTab({ id: "t2" }), "", false);
+      store.getState().openTab(createTab({ id: "t3" }), "", false);
+    });
+    let resolveClose: (result: TabCloseResult) => void = () => {};
+    api.closeTab.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveClose = resolve;
+        }),
+    );
+    await emit("menu.command", { command: "tab.close" }); // closes t1, the active tab at command time
+    act(() => store.getState().activateTab("t3"));
+    await act(async () => {
+      resolveClose({ ok: true, activeTabId: "t2", replacement: null });
+      await Bun.sleep(1);
+    });
+    expect(store.getState().activeTabId).toBe("t3");
+    expect(store.getState().tabs.t1).toBeUndefined();
+  });
+
+  test("closing the last tab adopts Main's replacement (m-6)", async () => {
+    const { store, api, emit } = renderApp();
+    api.closeTab.mockImplementation(async () => ({
+      ok: true,
+      activeTabId: "unused",
+      replacement: { tab: createTab({ id: "t2" }), content: "replacement code" },
+    }));
+    await emit("menu.command", { command: "tab.close" });
+    expect(store.getState().tabOrder).toEqual(["t2"]);
+    expect(store.getState().activeTabId).toBe("t2");
+    expect(store.getState().code).toBe("replacement code");
   });
 });
 

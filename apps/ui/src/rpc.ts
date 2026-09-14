@@ -23,6 +23,10 @@ const VIEW_MESSAGES = [
   "file.saveFailed",
 ] as const satisfies readonly (keyof ViewMessages)[];
 
+// Type-level exhaustiveness check: a ViewMessages key missing from VIEW_MESSAGES fails typecheck here (m-5).
+type MissingViewMessages = Exclude<keyof ViewMessages, (typeof VIEW_MESSAGES)[number]>;
+const _allViewMessagesListed: [MissingViewMessages] extends [never] ? true : false = true;
+
 /** Electrobun-backed implementation of MainApi. The only UI module that imports Electrobun. */
 export function createRpcApi(): MainApi {
   const listeners = new Map<keyof ViewMessages, Set<AnyListener>>();

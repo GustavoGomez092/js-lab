@@ -121,8 +121,13 @@ export function createAppStore() {
   return createStore<AppState>()((set, get) => {
     /** Applies a patch and recomputes the active-tab mirrors (unless there is no active tab: M1's legacy path). */
     const commit = (patch: Partial<AppState>) => {
-      const merged = { ...get(), ...patch };
-      set(merged.activeTabId ? { ...patch, ...mirrorOf(merged) } : patch);
+      const previous = get();
+      const merged = { ...previous, ...patch };
+      // A hover from the tab being left must never highlight a line in the tab being shown (m-3).
+      const switchedTabs = merged.activeTabId !== previous.activeTabId;
+      set(
+        merged.activeTabId ? { ...patch, ...mirrorOf(merged), ...(switchedTabs ? { hoveredLine: null } : {}) } : patch,
+      );
     };
 
     const resolve = (tabId?: string | null) => {
@@ -323,7 +328,8 @@ export function createAppStore() {
 
       activateTab(tabId) {
         if (!get().tabs[tabId] || get().activeTabId === tabId) return;
-        commit({ activeTabId: tabId, hoveredLine: null });
+        // commit() clears hoveredLine itself whenever activeTabId changes (m-3).
+        commit({ activeTabId: tabId });
       },
 
       reorderTabs(order) {
@@ -339,9 +345,7 @@ export function createAppStore() {
       },
 
       setViewState(tabId, viewState) {
-        // TabState["viewState"] is opaque JSON typed `{} | null` by the zod transform; the store's own boundary
-        // (like MainApi.saveViewState) takes `unknown` on purpose, so a type-only cast bridges the two.
-        updateTab(tabId, (tab) => ({ ...tab, viewState: viewState as TabState["viewState"] }));
+        updateTab(tabId, (tab) => ({ ...tab, viewState: viewState ?? null }));
       },
 
       setClosedCount(count) {

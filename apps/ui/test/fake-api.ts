@@ -1,5 +1,12 @@
 import { mock } from "bun:test";
-import type { AppAction, E2EResponse, TabCloseResult, TabCreateParams, ViewMessages } from "@jslab/rpc-schema";
+import type {
+  AppAction,
+  E2EResponse,
+  TabCloseResult,
+  TabCreateParams,
+  TabWithContent,
+  ViewMessages,
+} from "@jslab/rpc-schema";
 import { createTab, defaultSettings } from "@jslab/shared";
 import { act } from "@testing-library/react";
 import type { MainApi } from "../src/api";
@@ -23,7 +30,7 @@ export function createFakeApi() {
     closeTab: mock(
       async (_tabId: string): Promise<TabCloseResult> => ({ ok: true, activeTabId: "", replacement: null }),
     ),
-    reopenTab: mock(async (): Promise<{ tab: ReturnType<typeof createTab>; content: string } | null> => null),
+    reopenTab: mock(async (): Promise<TabWithContent | null> => null),
     activateTab: mock((_tabId: string) => {}),
     reorderTabs: mock((_order: string[]) => {}),
     saveViewState: mock((_tabId: string, _viewState: unknown) => {}),

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTab, type Session } from "@jslab/shared";
@@ -148,4 +148,29 @@ describe("SessionStore tabs", () => {
     await store.closeTab("t1");
     expect(existsSync(join(dir, "buffers", "t1.js.bak"))).toBe(false);
   });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "closeTab rejects and leaves the tab open when its buffer can't be moved to the closed stack",
+    async () => {
+      const store = await open();
+      const b = await store.createTab({ content: "kept" });
+      await mkdir(join(dir, "buffers", "closed"), { recursive: true });
+      // No write permission on buffers/: the rename can't remove the source entry there, so it fails with
+      // EACCES, not ENOENT. (buffers/closed/ itself stays writable, so a naive fallback write would succeed
+      // and mask the failure — this is what distinguishes a real move failure from a merely-missing buffer.)
+      await chmod(join(dir, "buffers"), 0o500);
+      try {
+        await expect(store.closeTab(b.id)).rejects.toThrow();
+      } finally {
+        await chmod(join(dir, "buffers"), 0o700);
+      }
+      expect(store.session.tabs[b.id]).toBeDefined();
+      expect(store.session.tabOrder).toContain(b.id);
+      expect(store.session.closedStack).toEqual([]);
+      expect(await readFile(join(dir, "buffers", `${b.id}.ts`), "utf8")).toBe("kept");
+      store.setBuffer(b.id, "still saves");
+      await store.flush();
+      expect(await readFile(join(dir, "buffers", `${b.id}.ts`), "utf8")).toBe("still saves");
+    },
+  );
 });

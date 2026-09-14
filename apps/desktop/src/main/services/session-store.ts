@@ -184,9 +184,7 @@ export class SessionStore {
     const defined = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
     const tab = createTab({ ...this.tabDefaults(), ...defined });
     await writeFileAtomic(this.#bufferPath(tab), content);
-    const order = [...this.#session.tabOrder];
-    const activeIndex = order.indexOf(this.#session.activeTabId);
-    order.splice(activeIndex < 0 ? order.length : activeIndex + 1, 0, tab.id);
+    const order = this.#insertAfterActive(this.#session.tabOrder, tab.id);
     this.#commit({
       ...this.#session,
       tabs: { ...this.#session.tabs, [tab.id]: tab },
@@ -201,11 +199,20 @@ export class SessionStore {
     if (!tab) return { closed: false, replacement: null, activeTabId: this.#session.activeTabId };
 
     await this.#bufferWriters.get(tabId)?.flush();
-    this.#bufferWriters.delete(tabId);
-    this.#unreadableBuffers.delete(tabId);
     const closedPath = join(this.dataDir, "buffers", closedBufferFileName(tab));
     await mkdir(dirname(closedPath), { recursive: true });
-    await rename(this.#bufferPath(tab), closedPath).catch(() => writeFileAtomic(closedPath, ""));
+    try {
+      await rename(this.#bufferPath(tab), closedPath);
+    } catch (error) {
+      // Same rule as readBuffer/reopenClosed: only a missing buffer (never written) becomes an empty closed
+      // entry. Anything else (EACCES, EIO, …) must not silently lose the tab's content — the close is aborted,
+      // with nothing yet deleted from #bufferWriters/#unreadableBuffers and no session mutation performed, so
+      // the tab stays open and fully usable (fix round 1).
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await writeFileAtomic(closedPath, "");
+    }
+    this.#bufferWriters.delete(tabId);
+    this.#unreadableBuffers.delete(tabId);
     // Spec §10.1 keeps a .bak of every buffer write; a closed tab's backup has nothing left to protect.
     await unlink(`${this.#bufferPath(tab)}.bak`).catch(() => {});
 
@@ -241,9 +248,8 @@ export class SessionStore {
     });
     await writeFileAtomic(this.#bufferPath(tab), content);
     await unlink(closedPath).catch(() => {});
-    const order = this.#session.tabOrder.filter((id) => id !== tab.id);
-    const activeIndex = order.indexOf(this.#session.activeTabId);
-    order.splice(activeIndex < 0 ? order.length : activeIndex + 1, 0, tab.id);
+    const withoutTab = this.#session.tabOrder.filter((id) => id !== tab.id);
+    const order = this.#insertAfterActive(withoutTab, tab.id);
     this.#commit({
       ...this.#session,
       tabs: { ...this.#session.tabs, [tab.id]: tab },
@@ -327,6 +333,14 @@ export class SessionStore {
       this.#bufferWriters.set(tabId, writer);
     }
     return writer;
+  }
+
+  /** Shared by createTab and reopenClosed: inserts `id` right after the active tab (spec §7.3). */
+  #insertAfterActive(order: readonly string[], id: string): string[] {
+    const next = [...order];
+    const activeIndex = next.indexOf(this.#session.activeTabId);
+    next.splice(activeIndex < 0 ? next.length : activeIndex + 1, 0, id);
+    return next;
   }
 
   #bufferPath(tab: Pick<TabState, "id" | "language">): string {

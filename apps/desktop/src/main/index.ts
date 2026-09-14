@@ -10,6 +10,7 @@ import Electrobun, {
   BrowserWindow,
   PATHS,
   type RPCSchema,
+  Screen,
   Updater,
   Utils,
 } from "electrobun/main";
@@ -37,7 +38,9 @@ import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
 import { latestCorruptCopy, startupNotices } from "./startup-notices";
 import { strings } from "./strings";
-import { shouldReloadView } from "./ui-watchdog";
+import { onReload, shouldReloadView } from "./ui-watchdog";
+import { type DisplayInfo, displayForFrame, restoreFrame } from "./windows/frame-restore";
+import { createMainWindowController } from "./windows/main-window";
 
 // `.hutch/devkit`'s `api/sdks/main/proc/native.ts` references the WebWorker global `self` in a carrot/Bunny Ears
 // bridge class we never instantiate, but this project's tsconfig has no "dom"/"webworker" lib entry (a Bun main
@@ -216,7 +219,11 @@ async function start(): Promise<void> {
           if (!e2eEnabled && !relaunchApp(PATHS.RESOURCES_FOLDER, process.pid)) log(strings.log.relaunchFailed);
           Utils.quit();
         },
-        toggleFullScreen: () => window.setFullScreen(!window.isFullScreen()),
+        toggleFullScreen: () => {
+          const current = mainWindow.window;
+          if (current) current.setFullScreen(!current.isFullScreen());
+        },
+        closeWindow: () => mainWindow.close(),
       }),
       createFileHandlers({
         files: new FileService(nodeFileSystem),
@@ -257,25 +264,53 @@ async function start(): Promise<void> {
     env: process.env,
     probe: (target, signal) => fetch(target, { method: "HEAD", signal }),
   });
-  const window = new BrowserWindow({
-    title: "JSLab",
-    url,
-    frame: session.session.window ?? { x: 120, y: 80, width: 1280, height: 820 },
-    titleBarStyle: "hiddenInset",
-    rpc,
+  const displays = (): DisplayInfo[] => Screen.getAllDisplays();
+  // A blocked web or mail link opens in the default browser; E2E runs record it instead (never the user's browser).
+  const openExternal = (link: string) =>
+    e2eEnabled ? appendFileSync(join(paths.dataDir, "e2e-external.txt"), `${link}\n`) : Utils.openExternal(link);
+  const createWindow = () => {
+    // Spec §10.1: back on its display if that display still exists, otherwise centered on the primary display.
+    const restored = restoreFrame(session.session.window, displays());
+    const created = new BrowserWindow({
+      title: "JSLab",
+      url,
+      frame: restored.frame,
+      titleBarStyle: "hiddenInset",
+      rpc,
+    });
+    // Spec §18, as built by the M1 fix wave (navigation.ts): the RPC-bridged view never navigates away from views://
+    // (a dropped URL or a clicked link would replace the UI). Applied to every created window, including a Dock reopen.
+    created.webview.setNavigationRules(navigationRulesFor(url));
+    created.webview.on("will-navigate", (event: unknown) => {
+      const link = externalLinkFrom((event as { data?: { detail?: unknown } }).data?.detail);
+      if (link) openExternal(link);
+    });
+    if (restored.fullscreen) created.setFullScreen(true);
+    const saveFrame = () => {
+      if (created.isFullScreen()) {
+        // Keep the windowed frame, so leaving full screen after a relaunch returns to a normal size.
+        const previous = session.session.window;
+        if (previous) session.setWindow({ ...previous, fullscreen: true });
+        return;
+      }
+      const frame = created.getFrame();
+      const display = displayForFrame(frame, displays());
+      session.setWindow({ ...frame, ...(display ? { displayId: String(display.id) } : {}), fullscreen: false });
+    };
+    created.on("resize", saveFrame);
+    created.on("move", saveFrame);
+    // Every new window (a Dock reopen included) is a fresh boot with the watchdog's 30 s grace (R-M2-T18-3).
+    ({ sawFirstHeartbeat, bootWindowStartedAt, lastUiHeartbeat } = onReload(Date.now()));
+    return created;
+  };
+  const mainWindow = createMainWindowController({
+    create: createWindow,
+    onClosed: () => e2eBridge.rejectAll("The JSLab window closed"),
   });
-
-  // Spec §18: the RPC-bridged view never navigates away from views:// (a dropped URL or a clicked link would otherwise
-  // replace the UI); blocked web and mail links open in the default browser instead.
-  window.webview.setNavigationRules(navigationRulesFor(url));
-  window.webview.on("will-navigate", (event: unknown) => {
-    const link = externalLinkFrom((event as { data?: { detail?: unknown } }).data?.detail);
-    if (link) Utils.openExternal(link);
+  mainWindow.open();
+  Electrobun.events.on("reopen", () => {
+    mainWindow.open();
   });
-
-  const saveFrame = () => session.setWindow(window.getFrame());
-  window.on("resize", saveFrame);
-  window.on("move", saveFrame);
 
   // `MenuItem` (Task 13) models the shape ApplicationMenu.setApplicationMenu ends up accepting at runtime
   // (`type: "separator"` is treated identically to "divider", see .hutch/devkit's ApplicationMenu.ts), but its
@@ -310,11 +345,22 @@ async function start(): Promise<void> {
       methods: createSocketMethods({
         e2eEnabled,
         bridge: e2eBridge,
-        mainState: () => ({ safeMode, dataDir: paths.dataDir, windowOpen: true, pid: process.pid }),
+        mainState: () => ({
+          safeMode,
+          dataDir: paths.dataDir,
+          windowOpen: mainWindow.isOpen(),
+          pid: process.pid,
+          windowFrame: mainWindow.window?.getFrame() ?? null,
+          primaryWorkArea: Screen.getPrimaryDisplay().workArea,
+        }),
+        uiAvailable: () => mainWindow.isOpen(),
+        reopenWindow: () => void mainWindow.open(),
         screenshot: async (name) => {
           await mkdir(paths.screenshotsDir, { recursive: true });
           const out = join(paths.screenshotsDir, `${name}.png`);
-          const result = await captureWindow(windowNumberOf(window.ptr), out, () => Utils.screenCapture.hasAccess());
+          const result = await captureWindow(windowNumberOf(mainWindow.window?.ptr ?? null), out, () =>
+            Utils.screenCapture.hasAccess(),
+          );
           if ("skipped" in result) log(`Screenshot ${name} skipped: ${result.skipped}`);
           return result;
         },
@@ -337,14 +383,17 @@ async function start(): Promise<void> {
   // forever (I1).
   setInterval(() => {
     const now = Date.now();
+    // Final review M11: no reload while the window is closed (the M1 loop kept calling loadURL on a closed window).
+    const current = mainWindow.window;
+    if (!current) return;
     if (!shouldReloadView({ now, startedAt: bootWindowStartedAt, lastHeartbeat: lastUiHeartbeat, sawFirstHeartbeat })) {
       return;
     }
     log("UI heartbeat missed; reloading the view");
-    // Still waiting on the first heartbeat: start a fresh boot window rather than reloading every tick.
-    if (!sawFirstHeartbeat) bootWindowStartedAt = now;
-    lastUiHeartbeat = now;
-    window.webview.loadURL(url);
+    // A reload is a fresh boot (R-M2-T18-3): the reloaded view gets the 30 s boot grace until its own first
+    // heartbeat, instead of the 6 s steady-state deadline left over from the view it replaces.
+    ({ sawFirstHeartbeat, bootWindowStartedAt, lastUiHeartbeat } = onReload(now));
+    current.webview.loadURL(url);
   }, 2000);
 
   let quitting = false;

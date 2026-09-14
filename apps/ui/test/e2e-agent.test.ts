@@ -88,6 +88,29 @@ describe("E2E agent", () => {
     await expect(agent("command", { id: "tab.reopenClosed" })).rejects.toThrow("Command is disabled: tab.reopenClosed");
     expect(await agent("state", {})).toMatchObject({ missingEditorActions: ["editor.action.nope"] });
   });
+
+  test("the e2e.openLink command clicks a temporary web link in the page (R-M1-17(e))", async () => {
+    const { agent, executeCommand } = setup();
+    const clicked: string[] = [];
+    const onClick = (event: Event) => {
+      clicked.push((event.target as HTMLAnchorElement).getAttribute("href") ?? "");
+      event.preventDefault();
+    };
+    document.addEventListener("click", onClick);
+    try {
+      expect(await agent("command", { id: "e2e.openLink", args: { href: "https://example.com/x" } })).toEqual({
+        executed: "e2e.openLink",
+      });
+    } finally {
+      document.removeEventListener("click", onClick);
+    }
+    expect(clicked).toEqual(["https://example.com/x"]);
+    expect(executeCommand).not.toHaveBeenCalled();
+    expect(document.querySelector("a[data-e2e-link]")).toBeNull();
+    await expect(agent("command", { id: "e2e.openLink", args: { href: "javascript:alert(1)" } })).rejects.toThrow(
+      "e2e.openLink needs an http(s) URL",
+    );
+  });
 });
 
 describe("keyEventInit", () => {

@@ -11,6 +11,9 @@ export interface SocketMethodDeps {
   /** Resolves `{ path }`, or `{ skipped }` when JSLab has no Screen Recording access (never prompts). */
   screenshot(name: string): Promise<CaptureResult>;
   quit(): void;
+  /** False while the main window is closed (spec §10.3). */
+  uiAvailable(): boolean;
+  reopenWindow(): void;
 }
 
 const typeParams = z.object({ text: z.string().max(1_000_000), replace: z.boolean().optional() });
@@ -27,18 +30,32 @@ export function createSocketMethods(deps: SocketMethodDeps): Record<string, Sock
   const methods: Record<string, SocketMethod> = {};
   if (!deps.e2eEnabled) return methods;
 
+  const requireUi = () => {
+    if (!deps.uiAvailable()) throw new Error("The JSLab window is closed");
+  };
   const forward =
     (method: E2EUiMethod, schema: z.ZodType): SocketMethod =>
-    async (params) => ({ result: await deps.bridge.request(method, schema.parse(params ?? {})) });
+    async (params) => {
+      requireUi();
+      return { result: await deps.bridge.request(method, schema.parse(params ?? {})) };
+    };
 
   methods["e2e.type"] = forward("type", typeParams);
   methods["e2e.key"] = forward("key", keyParams);
   methods["e2e.command"] = forward("command", commandParams);
   methods["e2e.output"] = forward("output", outputParams);
-  methods["e2e.state"] = async () => ({ ui: await deps.bridge.request("state", {}), main: deps.mainState() });
-  methods["e2e.screenshot"] = async (params) => ({
-    ...(await deps.screenshot(screenshotParams.parse(params ?? {}).name)),
+  methods["e2e.state"] = async () => ({
+    ui: deps.uiAvailable() ? await deps.bridge.request("state", {}) : null,
+    main: deps.mainState(),
   });
+  methods["e2e.reopen"] = async () => {
+    deps.reopenWindow();
+    return {};
+  };
+  methods["e2e.screenshot"] = async (params) => {
+    requireUi();
+    return { ...(await deps.screenshot(screenshotParams.parse(params ?? {}).name)) };
+  };
   methods["e2e.quit"] = async () => {
     setTimeout(() => deps.quit(), 50);
     return {};

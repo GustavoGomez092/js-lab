@@ -19,6 +19,24 @@ export interface E2EAgentDeps {
   regions?(): Record<string, boolean>;
 }
 
+/** E2E-only command: clicks a temporary link inside the page, as a user clicking a web link would (R-M1-17(e)). */
+export const E2E_OPEN_LINK = "e2e.openLink";
+
+function openLink(args: unknown): { executed: string } {
+  const href = (args as { href?: unknown } | undefined)?.href;
+  if (typeof href !== "string" || !/^https?:\/\//.test(href)) throw new Error("e2e.openLink needs an http(s) URL");
+  const link = document.createElement("a");
+  link.href = href;
+  link.dataset.e2eLink = "";
+  document.body.append(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+  }
+  return { executed: E2E_OPEN_LINK };
+}
+
 /**
  * Answers Main's `e2e.request` messages (spec §22.3). Main has already validated params with zod,
  * so the agent only narrows their types. Only installed for JSLAB_E2E=1 launches.
@@ -42,6 +60,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
       }
       case "command": {
         const { id, args } = params as { id: string; args?: unknown };
+        if (id === E2E_OPEN_LINK) return openLink(args);
         const result = deps.executeCommand(id, args);
         if (result === "unknown") throw new Error(`Unknown command: ${id}`);
         if (result === "disabled") throw new Error(`Command is disabled: ${id}`);

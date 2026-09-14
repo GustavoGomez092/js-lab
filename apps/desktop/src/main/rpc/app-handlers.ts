@@ -14,6 +14,7 @@ export interface AppHandlerDeps {
   openPath(path: string): void;
   restartInSafeMode(): void;
   toggleFullScreen(): void;
+  closeWindow(): void;
   redact: Redactor;
   log: Log;
 }
@@ -51,6 +52,9 @@ export function createAppHandlers(deps: AppHandlerDeps) {
             return;
           case "toggleFullScreen":
             deps.toggleFullScreen();
+            return;
+          case "closeWindow":
+            deps.closeWindow();
             return;
         }
       }),

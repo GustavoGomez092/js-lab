@@ -46,6 +46,8 @@ export interface LaunchedApp {
   quit(): Promise<void>;
   forceKill(): Promise<void>;
   relaunch(options?: Omit<LaunchOptions, "userData">): Promise<LaunchedApp>;
+  /** Reopens a closed main window (a Dock click) and waits until its UI is ready again. */
+  reopenWindow(): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -192,6 +194,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
       await waitFor(() => livePids().length === 0, { timeoutMs: 10_000, message: "JSLab processes survived SIGKILL" });
     },
     relaunch: (next = {}) => launchApp({ ...next, channel: options.channel, userData }),
+    reopenWindow: async () => {
+      await client.call("e2e.reopen");
+      await waitFor(async () => (await client.call<{ ui: { ready: boolean } | null }>("e2e.state")).ui?.ready || null, {
+        timeoutMs: readyTimeoutMs,
+        message: "The reopened window never became ready",
+      });
+    },
     dispose: async () => {
       if (app.alive()) await app.quit();
       if (process.env.JSLAB_E2E_KEEP !== "1") await rm(userData, { recursive: true, force: true });

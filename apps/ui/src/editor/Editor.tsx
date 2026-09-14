@@ -8,6 +8,7 @@ import { type EditorOptions, editorOptionsFor } from "./editor-options";
 import { markersFor } from "./markers";
 import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
+import { installPasteGuard } from "./paste-guard";
 import { createTabView } from "./tab-view";
 import { defineClipboardRegister, startVim, type VimController } from "./vim";
 import { createVimStatusNode } from "./vim-status";
@@ -15,6 +16,7 @@ import { createVimStatusNode } from "./vim-status";
 interface EditorProps {
   store: AppStore;
   api: Pick<MainApi, "saveViewState">;
+  onLargePaste?(bytes: number): Promise<boolean>;
 }
 
 /**
@@ -28,7 +30,7 @@ function toMonacoOptions(options: EditorOptions): Omit<Monaco.editor.IEditorOpti
   return { ...options, hover: { enabled: options.hover.enabled ? "on" : "off", delay: options.hover.delay } };
 }
 
-export function Editor({ store, api }: EditorProps) {
+export function Editor({ store, api, onLargePaste }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -237,6 +239,15 @@ export function Editor({ store, api }: EditorProps) {
       },
     });
 
+    const removePasteGuard = installPasteGuard(
+      editorContainer,
+      (bytes) => onLargePaste?.(bytes) ?? Promise.resolve(true),
+      (text) => {
+        const selection = editor.getSelection();
+        if (selection) editor.executeEdits("paste", [{ range: selection, text }]);
+      },
+    );
+
     const unsubscribe = store.subscribe((state, previous) => {
       if (state.themeId !== previous.themeId) applyMonacoTheme(state.themeId);
       if ((state.settings !== previous.settings || state.fontFallback !== previous.fontFallback) && state.settings) {
@@ -267,6 +278,7 @@ export function Editor({ store, api }: EditorProps) {
 
     return () => {
       setEditorHandle(null);
+      removePasteGuard();
       unsubscribe();
       view.saveActive();
       view.flush();
@@ -279,7 +291,7 @@ export function Editor({ store, api }: EditorProps) {
       editor.dispose();
       models.disposeAll();
     };
-  }, [store, api]);
+  }, [store, api, onLargePaste]);
 
   return <div ref={host} className="editor" data-testid="editor" />;
 }

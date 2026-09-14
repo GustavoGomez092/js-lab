@@ -10,6 +10,8 @@ import { createViewCommands } from "../commands/view-commands";
 import { createE2EAgent } from "../e2e/agent";
 import { Editor } from "../editor/Editor";
 import { getEditorHandle } from "../editor/editor-handle";
+import { createFileCommands } from "../files/file-commands";
+import { createFileFlows } from "../files/file-flows";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { OutputPanel } from "../output/OutputPanel";
 import { startAutoRun } from "../state/auto-run";
@@ -22,6 +24,8 @@ import { startThemeSync } from "../themes/apply";
 import { startAppearanceSync } from "../themes/fonts";
 import { createThemeCommands } from "../themes/theme-commands";
 import { ActivityBar } from "./ActivityBar";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { createDialogs } from "./dialogs";
 import { BUSY_STATES } from "./labels";
 import { SafeModeBanner, StartupNotices, UnresponsiveDialog } from "./parts";
 import { SideBar } from "./SideBar";
@@ -56,6 +60,12 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
   );
 
   const tabs = useMemo(() => createTabActions(store, api), [store, api]);
+  const dialogs = useMemo(() => createDialogs(store), [store]);
+  const flows = useMemo(() => {
+    const created = createFileFlows({ store, api, tabs, dialogs });
+    tabs.setBeforeClose((tabId) => created.beforeClose(tabId));
+    return created;
+  }, [store, api, tabs, dialogs]);
 
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>
@@ -66,9 +76,10 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       ...createEditorCommands(getEditorHandle),
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
+      ...createFileCommands(flows, api),
     );
     return created;
-  }, [store, api, tabs, run]);
+  }, [store, api, tabs, run, flows]);
 
   const resolver = useMemo(
     () => new KeybindingResolver(resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings)),
@@ -101,11 +112,16 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
         registry.execute(command);
       }),
       api.on("settings.changed", ({ settings }) => store.getState().updateSettings(settings)),
+      api.on("file.opened", (payload) => void flows.handleOpened(payload)),
+      api.on("file.saved", (payload) => flows.handleSaved(payload)),
+      api.on("file.saveCancelled", (payload) => flows.handleSaveCancelled(payload)),
+      api.on("file.saveFailed", (payload) => flows.handleSaveFailed(payload)),
+      api.on("file.saveAsConfirm", (payload) => void flows.handleSaveAsConfirm(payload)),
     ];
     return () => {
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
-  }, [store, api, registry]);
+  }, [store, api, registry, flows]);
 
   useEffect(() => {
     if (!e2e) return;
@@ -216,7 +232,23 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
   const busy = runState !== null && BUSY_STATES.has(runState);
 
   return (
-    <div className="app">
+    // biome-ignore lint/a11y/noStaticElementInteractions: file drops land anywhere in the window (spec §10.2); not a control
+    <div
+      className="app"
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        const folders = new Set(
+          [...event.dataTransfer.items]
+            .filter((item) => item.webkitGetAsEntry?.()?.isDirectory)
+            .map((item) => item.getAsFile()?.name ?? ""),
+        );
+        void flows.dropFiles([...event.dataTransfer.files], folders);
+      }}
+    >
       <Toolbar
         autoRun={settings.run.autoRun}
         busy={busy}
@@ -252,7 +284,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
           secondVisible={tab.layout.outputVisible}
           onResize={(size) => store.getState().setEditorSize(size)}
           onReset={() => store.getState().resetEditorSize()}
-          first={<Editor store={store} api={api} />}
+          first={<Editor store={store} api={api} onLargePaste={flows.confirmLargePaste} />}
           second={<OutputPanel store={store} api={api} />}
         />
       </div>
@@ -260,6 +292,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
         <StatusBar store={store} onToggleLayout={() => registry.execute("view.toggleLayout")} />
       )}
       <RenameDialog store={store} />
+      <ConfirmDialog store={store} dialogs={dialogs} />
       {runState === "unresponsive" && (
         <UnresponsiveDialog onKill={() => registry.execute("run.kill")} onWait={() => api.wait(tabId)} />
       )}

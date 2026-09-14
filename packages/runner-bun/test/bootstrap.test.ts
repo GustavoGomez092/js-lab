@@ -155,6 +155,17 @@ test("reports errors thrown while evaluating the module", async () => {
   });
 });
 
+// Task 18 (R-M2-T18-2): a ReferenceError for a 6 MB identifier carried the whole identifier in its message, and
+// rendering that one output row froze the UI past the watchdog deadline. Error text is capped where it is created.
+test("an error's message is capped at 10,000 characters", async () => {
+  const runner = startRunner();
+  await runner.run('throw new Error("m".repeat(1_000_000));\n');
+  await runner.until((m) => m.type === "state" && m.state === "idle");
+  const error = runner.events().find((e) => e.kind === "error");
+  const message = error?.kind === "error" ? error.message : "";
+  expect([message.length, message.startsWith("mmm"), message.endsWith("…")]).toEqual([10_001, true, true]);
+});
+
 test("stop does not report errors from work it aborted", async () => {
   let requests = 0;
   const server = Bun.serve({

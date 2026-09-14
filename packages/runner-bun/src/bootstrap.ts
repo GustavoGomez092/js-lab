@@ -14,6 +14,14 @@ const timers = {
   setInterval: globalThis.setInterval,
 };
 const heartbeatMs = Number(process.env.JSLAB_HEARTBEAT_MS ?? 500);
+/**
+ * Error names and messages are capped where they are created. A ReferenceError for a 6 MB identifier otherwise
+ * carries the whole identifier, and rendering that one output row freezes the UI (Task 18, R-M2-T18-2). Task 19's
+ * exact-byte error-text budgets refine this.
+ */
+const MAX_ERROR_TEXT_CHARS = 10_000;
+const capErrorText = (text: string) =>
+  text.length > MAX_ERROR_TEXT_CHARS ? `${text.slice(0, MAX_ERROR_TEXT_CHARS)}…` : text;
 const send = (message: RunnerToMain) => process.send?.(message);
 const hooks = {
   peekPromise: (promise: Promise<unknown>) => {
@@ -57,8 +65,8 @@ function pushError(phase: "runtime" | "unhandledRejection", error: unknown): voi
   run.buffer.push({
     kind: "error",
     phase,
-    name: typeof e?.name === "string" ? e.name : "Error",
-    message: typeof e?.message === "string" ? e.message : String(error),
+    name: capErrorText(typeof e?.name === "string" ? e.name : "Error"),
+    message: capErrorText(typeof e?.message === "string" ? e.message : String(error)),
     stack: parseStack(typeof e?.stack === "string" ? e.stack : ""),
     value: run.encoder.encode(error),
   });

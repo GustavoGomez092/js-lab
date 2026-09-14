@@ -72,6 +72,7 @@ export const tabCreateParamsSchema = z.object({
   language: languageSchema.optional(),
   runtime: runtimeSchema.optional(),
   title: z.string().max(200).optional(),
+  titleIsCustom: z.boolean().optional(),
   content: z.string().max(MAX_TEXT_CHARS).optional(),
 });
 
@@ -91,6 +92,7 @@ export const APP_ACTIONS = [
   "openDataFolder",
   "resetSettings",
   "toggleFullScreen",
+  "closeWindow",
 ] as const;
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });

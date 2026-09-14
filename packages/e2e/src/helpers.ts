@@ -3,6 +3,8 @@ export interface TabSnapshot {
   title: string;
   language: string;
   runtime: string;
+  filePath: string | null;
+  dirty: boolean;
   code: string;
   runState: string | null;
   activeHandles: number;

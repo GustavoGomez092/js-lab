@@ -36,6 +36,8 @@ describe("createSocketMethods", () => {
     mainState: () => ({ windowOpen: true }),
     screenshot: mock(async (name: string) => ({ path: `/shots/${name}.png` })),
     quit: mock(() => {}),
+    uiAvailable: () => true,
+    reopenWindow: mock(() => {}),
   });
 
   test("exposes no e2e methods unless JSLAB_E2E=1", () => {
@@ -45,6 +47,7 @@ describe("createSocketMethods", () => {
       "e2e.key",
       "e2e.output",
       "e2e.quit",
+      "e2e.reopen",
       "e2e.screenshot",
       "e2e.state",
       "e2e.type",
@@ -70,5 +73,19 @@ describe("createSocketMethods", () => {
     expect(await methods["e2e.screenshot"]?.({ name: "typing-result" })).toEqual({ path: "/shots/typing-result.png" });
     await expect(methods["e2e.screenshot"]?.({ name: "../escape" }) ?? Promise.resolve()).rejects.toThrow();
     expect(d.screenshot).toHaveBeenCalledTimes(1);
+  });
+
+  test("with the window closed, state reports ui null, UI methods fail fast and reopen restores it", async () => {
+    let open = false;
+    const d = { ...deps(true), uiAvailable: () => open };
+    const methods = createSocketMethods(d);
+    expect(await methods["e2e.state"]?.({})).toEqual({ ui: null, main: { windowOpen: true } });
+    await expect(methods["e2e.type"]?.({ text: "x" }) ?? Promise.resolve()).rejects.toThrow(
+      "The JSLab window is closed",
+    );
+    expect(d.bridge.request).not.toHaveBeenCalled();
+    await methods["e2e.reopen"]?.({});
+    open = true;
+    expect(d.reopenWindow).toHaveBeenCalledTimes(1);
   });
 });

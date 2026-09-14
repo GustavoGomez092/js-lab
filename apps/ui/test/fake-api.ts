@@ -2,6 +2,7 @@ import { mock } from "bun:test";
 import type {
   AppAction,
   E2EResponse,
+  FileSaveResult,
   TabCloseResult,
   TabCreateParams,
   TabWithContent,
@@ -35,7 +36,7 @@ export function createFakeApi() {
     reorderTabs: mock((_order: string[]) => {}),
     saveViewState: mock((_tabId: string, _viewState: unknown) => {}),
     updateSettings: mock(async (_patch: unknown) => defaultSettings()),
-    saveFile: mock(async (_tabId: string, _content: string) => ({ needsSaveAs: true }) as const),
+    saveFile: mock(async (_tabId: string, _content: string): Promise<FileSaveResult> => ({ needsSaveAs: true })),
     openFileDialog: mock(() => {}),
     confirmLargeFiles: mock((_tokens: string[]) => {}),
     saveAsDialog: mock((_tabId: string, _content: string) => {}),

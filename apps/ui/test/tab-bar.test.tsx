@@ -39,6 +39,7 @@ function setup() {
     previous: mock(() => {}),
     goto: mock((_n: number) => {}),
     reorder: mock((_order: string[]) => {}),
+    setBeforeClose: mock((_guard: (id: string) => Promise<boolean>) => {}),
   } satisfies TabActions;
   const { api } = createFakeApi();
   render(<TabBar store={store} tabs={tabs} api={api} />);

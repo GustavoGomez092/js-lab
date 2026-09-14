@@ -8,7 +8,7 @@ import { strings } from "../strings";
 export interface TabActions {
   activate(tabId: string | null): void;
   newTab(params?: TabCreateParams): Promise<void>;
-  /** Resolves true when the tab was closed. Task 18 adds the unsaved-changes and confirm-close prompts. */
+  /** Resolves true when the tab was closed, and false when the close guard (Task 18's prompts) refuses. */
   close(tabId?: string): Promise<boolean>;
   closeOthers(tabId?: string): Promise<void>;
   closeToRight(tabId?: string): Promise<void>;
@@ -17,6 +17,7 @@ export interface TabActions {
   previous(): void;
   goto(position: number): void;
   reorder(order: string[]): void;
+  setBeforeClose(guard: (tabId: string) => Promise<boolean>): void;
 }
 
 /**
@@ -37,6 +38,7 @@ async function guarded<T>(store: AppStore, run: () => Promise<T>, fallback: T): 
 
 export function createTabActions(store: AppStore, api: MainApi): TabActions {
   const s = () => store.getState();
+  let beforeClose: ((tabId: string) => Promise<boolean>) | null = null;
 
   const activate = (tabId: string | null) => {
     if (!tabId || tabId === s().activeTabId || !s().tabs[tabId]) return;
@@ -51,6 +53,9 @@ export function createTabActions(store: AppStore, api: MainApi): TabActions {
     return guarded(
       store,
       async () => {
+        // Task 18's prompts (unsaved changes, Confirm Close, the lone empty tab). Inside `guarded`, so a prompt
+        // that rejects is reported like any other failed tab action. A refused close keeps the tab.
+        if (beforeClose && !(await beforeClose(id))) return false;
         const result = await api.closeTab(id);
         const closing = s();
         // A stale or duplicate result for a tab the store no longer has is ignored outright (carried behavior,
@@ -134,6 +139,9 @@ export function createTabActions(store: AppStore, api: MainApi): TabActions {
       if (!isPermutation(s().tabOrder, order)) return;
       s().reorderTabs(order);
       api.reorderTabs(order);
+    },
+    setBeforeClose(guard) {
+      beforeClose = guard;
     },
   };
 }

@@ -15,6 +15,7 @@ function setup() {
     openPath: mock((_path: string) => {}),
     restartInSafeMode: mock(() => {}),
     toggleFullScreen: mock(() => {}),
+    closeWindow: mock(() => {}),
     redact: createRedactor(),
     log: mock(() => {}),
   } satisfies AppHandlerDeps;
@@ -32,7 +33,14 @@ describe("app.command", () => {
 
   test("folder, reset, restart and full-screen actions reach their adapters", async () => {
     const { deps, handlers } = setup();
-    for (const action of ["openLogsFolder", "openDataFolder", "resetSettings", "restartSafeMode", "toggleFullScreen"]) {
+    for (const action of [
+      "openLogsFolder",
+      "openDataFolder",
+      "resetSettings",
+      "restartSafeMode",
+      "toggleFullScreen",
+      "closeWindow",
+    ]) {
       handlers.messages["app.command"]({ action });
     }
     await Bun.sleep(0);
@@ -40,6 +48,7 @@ describe("app.command", () => {
     expect(deps.settings.reset).toHaveBeenCalledTimes(1);
     expect(deps.restartInSafeMode).toHaveBeenCalledTimes(1);
     expect(deps.toggleFullScreen).toHaveBeenCalledTimes(1);
+    expect(deps.closeWindow).toHaveBeenCalledTimes(1);
   });
 
   test("unknown actions are logged and dropped", () => {

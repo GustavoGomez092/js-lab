@@ -494,4 +494,27 @@ describe("RunCoordinator", () => {
       message: expect.stringContaining("signal SIGTERM"),
     });
   }, 15_000);
+
+  test("a stopped run's runner is recycled once Stop is acknowledged (R-M1-18)", async () => {
+    const started: BunRunnerProcess[] = [];
+    const h = await createHarness({}, { onRunnerStart: (runner) => started.push(runner) });
+    const { runId } = h.coordinator.start({
+      tabId: "t1",
+      code: "console.log(String(process.pid));\nsetInterval(() => {}, 10);",
+      language: "typescript",
+      logpoints: [],
+    });
+    await h.waitForState("settled", runId);
+    await flush();
+    const logged = h.events.find((e) => e.kind === "console");
+    const pid = logged?.kind === "console" && logged.args[0]?.t === "string" ? Number(logged.args[0].v) : 0;
+    const runner = started.find((candidate) => candidate.pid === pid);
+    expect(runner).toBeDefined();
+    h.coordinator.stop("t1");
+    await h.waitForState("stopped", runId);
+    const outcome = await Promise.race([runner?.exited.then(() => "exited"), Bun.sleep(2000).then(() => "alive")]);
+    expect(outcome).toBe("exited");
+    expect(h.states.some((s) => s.runId === runId && s.state === "killed")).toBe(false);
+    expect(h.events.filter((e) => e.kind === "error")).toEqual([]);
+  }, 15_000);
 });

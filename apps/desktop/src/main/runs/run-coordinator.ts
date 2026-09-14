@@ -259,7 +259,16 @@ export class RunCoordinator {
         if (message.state !== "evaluating") this.deps.runLock.remove(run.runId);
         if (run.state === "stopping" && message.state !== "stopped") return;
         this.#setState(run, message.state, message.activeHandles);
-        if (message.state === "idle" || message.state === "stopped") this.#scheduleIdleExpiry(run);
+        if (message.state === "stopped") {
+          // R-M1-18: code that resumed after Stop (a CPU loop, an awaited Bun.sleep) would keep running in this runner
+          // until the idle TTL, with its output already dropped. Recycle the runner now; the next run takes a fresh
+          // spare. Values from the stopped run can no longer be expanded (expand resolves null).
+          clearTimeout(run.idleTimer);
+          run.expectedExit = true;
+          run.runner?.kill();
+          return;
+        }
+        if (message.state === "idle") this.#scheduleIdleExpiry(run);
         else clearTimeout(run.idleTimer);
         return;
     }

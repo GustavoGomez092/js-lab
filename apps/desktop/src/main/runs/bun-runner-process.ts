@@ -23,11 +23,24 @@ function killProcessGroup(proc: Subprocess): void {
   }
 }
 
+/**
+ * Kills what is left of the process group of a runner that exited on its own (user `process.exit`, a crash), so
+ * processes its user code spawned don't outlive it (R-M1-17(c), R-M1-18 N3). It runs in the same callback that
+ * observes the exit: while any group member lives, the group id can't be reused, and with none left the call fails
+ * with ESRCH, which is ignored. If Main itself crashes, nothing signals the group (see the M2 backlog notes).
+ */
+function signalExitedGroup(pid: number): void {
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {}
+}
+
 export class BunRunnerProcess {
   readonly #listeners = new Set<(message: RunnerToMain) => void>();
   readonly #proc: Subprocess;
   #stderrTail = "";
   #hasExited = false;
+  #killed = false;
   lastHeartbeat = Date.now();
   bunVersion = "";
   readonly exited: Promise<number | null>;
@@ -36,6 +49,7 @@ export class BunRunnerProcess {
     this.#proc = proc;
     // Set in the same callback that resolves `exited`, so anything awaiting `exited` already sees it.
     this.exited = proc.exited.then(() => {
+      if (!this.#killed) signalExitedGroup(proc.pid);
       this.#hasExited = true;
       return proc.exitCode;
     });
@@ -65,7 +79,7 @@ export class BunRunnerProcess {
       runner = new BunRunnerProcess(proc);
       const started = runner;
       const timer = setTimeout(() => {
-        killProcessGroup(proc);
+        started.kill();
         reject(new Error(`Runner did not start within ${timeoutMs}ms`));
       }, timeoutMs);
       const off = started.onMessage((message) => {
@@ -114,6 +128,7 @@ export class BunRunnerProcess {
    */
   kill(): void {
     if (this.#hasExited) return;
+    this.#killed = true;
     killProcessGroup(this.#proc);
   }
 

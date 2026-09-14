@@ -119,3 +119,37 @@ test.skipIf(process.platform === "win32")(
   },
   15_000,
 );
+
+test.skipIf(process.platform === "win32")(
+  "a runner that exits on its own takes the processes its user code spawned with it (R-M1-17(c), R-M1-18 N3)",
+  async () => {
+    const runner = await startRunner();
+    const messages: RunnerToMain[] = [];
+    runner.onMessage((message) => messages.push(message));
+    // Production layout, as in the kill test above (Bun 1.4.0 imports entries from a subdirectory of its cwd).
+    const entry = join(dir, "runs", "t1", "entry-self-exit.mjs");
+    await Bun.write(
+      entry,
+      'import { spawn } from "node:child_process";\nconst child = spawn("sleep", ["30"], { stdio: "ignore" });\nconsole.log(String(child.pid));\nsetTimeout(() => process.exit(3), 200);\n',
+    );
+    runner.send({ type: "run", runId: "run-1", entry, settings: { maxEntries: 100 } });
+
+    let childPid = 0;
+    try {
+      const started = Date.now();
+      while (!childPid) {
+        if (Date.now() - started > 5000) throw new Error(`no child pid; received ${JSON.stringify(messages)}`);
+        const event = messages.flatMap((m) => (m.type === "events" ? m.events : [])).find((e) => e.kind === "console");
+        if (event?.kind === "console" && event.args[0]?.t === "string") childPid = Number(event.args[0].v);
+        await Bun.sleep(10);
+      }
+      expect(await runner.exited).toBe(3);
+      const pollStart = Date.now();
+      while (alive(childPid) && Date.now() - pollStart < 3000) await Bun.sleep(20);
+      expect(alive(childPid)).toBe(false);
+    } finally {
+      if (childPid > 0 && alive(childPid)) process.kill(childPid, "SIGKILL");
+    }
+  },
+  15_000,
+);

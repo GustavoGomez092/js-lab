@@ -79,6 +79,20 @@ function setup(
 
 const flush = () => Bun.sleep(5);
 
+/** Polls until `check` stops throwing (real fs work has no fixed duration), failing after `timeoutMs`. */
+const eventually = async (check: () => void, timeoutMs = 2000) => {
+  const started = Date.now();
+  for (;;) {
+    try {
+      check();
+      return;
+    } catch (error) {
+      if (Date.now() - started > timeoutMs) throw error;
+      await Bun.sleep(2);
+    }
+  }
+};
+
 describe("file handlers", () => {
   test("the open dialog creates tabs by extension, focuses open files and forwards large files", async () => {
     const { handlers, sent, deps } = setup({ openPaths: ["/w/b.jsx", "/w/a.ts", "/w/big.js"] });
@@ -206,11 +220,12 @@ describe("file handlers", () => {
       const s = setup({ documentsDir: dir, saveResult: nfdPath });
       s.tabs.accent = createTab({ id: "accent", title: "café", titleIsCustom: true, language: "typescript" });
       s.handlers.messages["file.saveAsDialog"]({ tabId: "accent", content: "" });
-      await flush();
+      await eventually(() => {
+        expect(s.sent).toEqual([
+          { name: "file.saveAsConfirm", payload: { token: SAVE_TOKEN, tabId: "accent", path: nfdPath } },
+        ]);
+      });
       expect(s.deps.files.write).not.toHaveBeenCalled();
-      expect(s.sent).toEqual([
-        { name: "file.saveAsConfirm", payload: { token: SAVE_TOKEN, tabId: "accent", path: nfdPath } },
-      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -227,12 +242,13 @@ describe("file handlers", () => {
       const chosen = join(linkDir, "Untitled.tsx");
       const s = setup({ documentsDir: linkDir, saveResult: chosen });
       s.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "" });
-      await flush();
+      await eventually(() => {
+        expect(s.sent).toEqual([
+          { name: "file.saveAsConfirm", payload: { token: SAVE_TOKEN, tabId: "scratch", path: chosen } },
+        ]);
+      });
       expect(s.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "Untitled.tsx", defaultDir: linkDir });
       expect(s.deps.files.write).not.toHaveBeenCalled();
-      expect(s.sent).toEqual([
-        { name: "file.saveAsConfirm", payload: { token: SAVE_TOKEN, tabId: "scratch", path: chosen } },
-      ]);
     } finally {
       await rm(linkParent, { recursive: true, force: true });
       await rm(realDir, { recursive: true, force: true });
@@ -263,9 +279,10 @@ describe("file handlers", () => {
         lastSavedHash: "h",
       });
       ts.handlers.messages["file.saveAsDialog"]({ tabId: "tsTab", content: "x" });
-      await flush();
-      expect(ts.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "original.ts", defaultDir: dir });
-      expect(ts.tabs.tsTab).toMatchObject({ filePath: join(dir, "renamed.tsx"), language: "tsx" });
+      await eventually(() => {
+        expect(ts.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "original.ts", defaultDir: dir });
+        expect(ts.tabs.tsTab).toMatchObject({ filePath: join(dir, "renamed.tsx"), language: "tsx" });
+      });
 
       const json = setup({ documentsDir: dir, saveResult: join(dir, "data.json") });
       json.tabs.jsonTab = createTab({
@@ -275,9 +292,10 @@ describe("file handlers", () => {
         lastSavedHash: "h",
       });
       json.handlers.messages["file.saveAsDialog"]({ tabId: "jsonTab", content: "{}" });
-      await flush();
-      expect(json.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "data.json", defaultDir: dir });
-      expect(json.tabs.jsonTab).toMatchObject({ filePath: join(dir, "data.json"), language: "typescript" });
+      await eventually(() => {
+        expect(json.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "data.json", defaultDir: dir });
+        expect(json.tabs.jsonTab).toMatchObject({ filePath: join(dir, "data.json"), language: "typescript" });
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -292,8 +310,9 @@ describe("file handlers", () => {
       const missingLast = join(lastDir, "gone");
       const noFilePath = setup({ documentsDir: docs, lastDirectory: missingLast });
       noFilePath.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "" });
-      await flush();
-      expect(noFilePath.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "Untitled.tsx", defaultDir: docs });
+      await eventually(() => {
+        expect(noFilePath.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "Untitled.tsx", defaultDir: docs });
+      });
 
       const missingOwnFolder = setup({ documentsDir: docs, lastDirectory: lastDir });
       missingOwnFolder.tabs.ghost = createTab({
@@ -302,8 +321,9 @@ describe("file handlers", () => {
         language: "typescript",
       });
       missingOwnFolder.handlers.messages["file.saveAsDialog"]({ tabId: "ghost", content: "" });
-      await flush();
-      expect(missingOwnFolder.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "a.ts", defaultDir: lastDir });
+      await eventually(() => {
+        expect(missingOwnFolder.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "a.ts", defaultDir: lastDir });
+      });
     } finally {
       await rm(docs, { recursive: true, force: true });
       await rm(lastDir, { recursive: true, force: true });

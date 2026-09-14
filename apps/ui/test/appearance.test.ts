@@ -189,5 +189,31 @@ describe("vim status node", () => {
     expect(node.classList.contains("visually-hidden")).toBe(false);
     node.remove();
     expect(document.body.contains(node)).toBe(false);
+
+    // Fix round 2 (review N-1): a `position: fixed` bar covered the last 28px of the editor/output while Vim
+    // was on, because it sat outside `.app`'s flex column. Inside a real `.app`/`.status-bar` pair, the node
+    // must become a normal flex sibling placed immediately before `.status-bar` (option a), so `.app-main`
+    // shrinks to make room instead of being covered.
+    const app = document.createElement("div");
+    app.className = "app";
+    const appMain = document.createElement("div");
+    appMain.className = "app-main";
+    const statusBar = document.createElement("footer");
+    statusBar.className = "status-bar";
+    app.append(appMain, statusBar);
+    document.body.appendChild(app);
+
+    const appNode = createVimStatusNode(appMain);
+    expect(appNode.classList.contains("vim-status")).toBe(true);
+    expect(appNode.classList.contains("visually-hidden")).toBe(false);
+    expect(appNode.parentElement).toBe(app);
+    expect(appNode.nextElementSibling).toBe(statusBar);
+    appNode.remove();
+    expect(app.contains(appNode)).toBe(false);
+    // The reservation is entirely the node's own flex-box footprint (no separate class/property to clear):
+    // removing it hands the space straight back to `.app-main`.
+    expect(app.children.length).toBe(2);
+
+    app.remove();
   });
 });

@@ -397,15 +397,13 @@ button:disabled {
   margin-left: auto;
 }
 
-/* Vim mode indicator and `:`/`/` prompt (review I-1, fix round 1); pinned just above the M1 status bar while
-   editor.vimKeys is on. Never `.visually-hidden`: monaco-vim focuses a real `<input>` inside it. */
+/* Vim mode indicator and `:`/`/` prompt (review I-1, fix round 1). A normal flex child of `.app`, inserted
+   directly before `.status-bar` (fix round 2, review N-1), so it reserves its own layout space instead of
+   covering the editor/output with `position: fixed`. Never `.visually-hidden`: monaco-vim focuses a real
+   `<input>` inside it. */
 .vim-status {
-  position: fixed;
-  right: 0;
-  bottom: var(--statusbar-height);
-  left: 0;
-  z-index: 10;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   height: var(--statusbar-height);
   padding: 0 12px;
@@ -426,8 +424,10 @@ button:disabled {
   font: inherit;
 }
 
+/* review N-2 (fix round 2): give the ex-command/search input a visible focus state instead of suppressing it. */
 .vim-status input:focus-visible {
-  outline: none;
+  outline: 1px solid var(--fg-accent);
+  outline-offset: -1px;
 }
 
 /* ---------- banners and dialogs ---------- */

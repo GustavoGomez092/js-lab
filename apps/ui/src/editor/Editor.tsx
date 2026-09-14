@@ -56,14 +56,17 @@ export function Editor({ store, api }: EditorProps) {
     };
     applyMonacoTheme(initial.themeId);
 
+    const editorContainer = host.current;
     let vim: VimController | null = null;
     // The status node is visible while Vim is on (review I-1): monaco-vim focuses an `<input>` inside it for
     // `:`/`/`, so it's created and removed with Vim itself rather than kept mounted (and hidden) permanently.
+    // It's anchored from the editor's own container so createVimStatusNode can find `.app`/`.status-bar` and
+    // insert it as a normal flex child that reserves its own layout space (review N-1, fix round 2).
     let vimStatus: HTMLDivElement | null = null;
     const syncVim = (enabled: boolean) => {
       if (enabled && !vim) {
         defineClipboardRegister();
-        vimStatus = createVimStatusNode();
+        vimStatus = createVimStatusNode(editorContainer);
         vim = startVim(editor, vimStatus, (mode) => store.getState().setVimMode(mode));
       } else if (!enabled && vim) {
         vim.dispose();

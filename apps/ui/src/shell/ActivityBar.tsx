@@ -38,7 +38,7 @@ export function ActivityBar(props: {
 }) {
   const open = (panel: "snippets" | "ai") => props.sideBarOpen && props.panel === panel;
   return (
-    <nav className="activity-bar" aria-label="Activity">
+    <nav className="activity-bar" aria-label={strings.shell.activity}>
       {props.busy ? (
         <button
           type="button"
@@ -53,7 +53,7 @@ export function ActivityBar(props: {
           <Icon path={ICONS.run} />
         </button>
       )}
-      {props.busy && <output className="activity-spinner" aria-label="Running" />}
+      {props.busy && <output className="activity-spinner" aria-label={strings.shell.running} />}
       <button
         type="button"
         title={strings.shell.snippets}

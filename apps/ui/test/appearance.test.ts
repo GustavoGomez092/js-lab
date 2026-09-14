@@ -215,5 +215,22 @@ describe("vim status node", () => {
     expect(app.children.length).toBe(2);
 
     app.remove();
+
+    // Fix round 1 (review I-1): with `view.statusBar: false` there's no `.status-bar` at all. The node must
+    // still land inside `.app`, as its last flex child, rather than falling back to `document.body` -- the
+    // real fallback is invisible (`.app { height: 100% }` inside an `overflow: hidden` root), so a monaco-vim
+    // `:`/`/` prompt focused there would take keystrokes the user can never see.
+    const appNoStatusBar = document.createElement("div");
+    appNoStatusBar.className = "app";
+    const appMainOnly = document.createElement("div");
+    appMainOnly.className = "app-main";
+    appNoStatusBar.append(appMainOnly);
+    document.body.appendChild(appNoStatusBar);
+
+    const noStatusBarNode = createVimStatusNode(appMainOnly);
+    expect(noStatusBarNode.parentElement).toBe(appNoStatusBar);
+    expect(appNoStatusBar.lastElementChild).toBe(noStatusBarNode);
+    noStatusBarNode.remove();
+    appNoStatusBar.remove();
   });
 });

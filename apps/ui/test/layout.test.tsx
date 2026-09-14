@@ -93,10 +93,14 @@ describe("layout", () => {
     expect(commands.get("view.toggleStatusBar")?.description?.()).toBe("currently off");
     await commands.get("view.toggleTabBar")?.run();
     expect(api.updateSettings).toHaveBeenLastCalledWith({ view: { tabBarForSingleTab: false } });
+    // Fix round 1 (review m-1): per-tab layout toggles are session state, not app-wide Settings -- they must
+    // never round-trip through Main's updateSettings the way the view.* toggles above do.
+    const updateSettingsCallsBefore = api.updateSettings.mock.calls.length;
     commands.get("view.toggleOutput")?.run();
     commands.get("view.layoutVertical")?.run();
     expect(store.getState().tab?.layout).toMatchObject({ outputVisible: false, orientation: "vertical" });
     commands.get("view.toggleLayout")?.run();
     expect(store.getState().tab?.layout.orientation).toBe("horizontal");
+    expect(api.updateSettings).toHaveBeenCalledTimes(updateSettingsCallsBefore);
   });
 });

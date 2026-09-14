@@ -1,13 +1,4 @@
-import type { SettingsUpdateParams } from "@jslab/rpc-schema";
-import {
-  type CommandId,
-  isRuntimeAvailable,
-  type Language,
-  type Runtime,
-  readSetting,
-  type SettingKey,
-  settingPatch,
-} from "@jslab/shared";
+import { type CommandId, isRuntimeAvailable, type Language, type Runtime, type SettingKey } from "@jslab/shared";
 import type { MainApi } from "../api";
 import type { EditorHandle } from "../editor/editor-handle";
 import { copyEntriesToClipboard } from "../output/copy";
@@ -17,6 +8,7 @@ import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import type { TabActions } from "../tabs/tab-actions";
 import type { CommandSpec } from "./registry";
+import { toggleSettingCommand } from "./toggle-setting";
 
 export interface AppCommandDeps {
   store: AppStore;
@@ -46,16 +38,8 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
     if (id) action(id);
   };
 
-  const toggleSetting = (id: CommandId, key: SettingKey, description?: () => string | null): CommandSpec => ({
-    id,
-    run: async () => {
-      const current = s().settings;
-      if (!current) return;
-      const patch = settingPatch(key, !readSetting(current, key)) as SettingsUpdateParams["patch"];
-      s().updateSettings(await deps.api.updateSettings(patch));
-    },
-    ...(description ? { description } : {}),
-  });
+  const toggleSetting = (id: CommandId, key: SettingKey, description?: () => string | null): CommandSpec =>
+    toggleSettingCommand(id, key, deps.store, deps.api, description);
 
   return [
     { id: "run.start", run: () => deps.run("manual") },

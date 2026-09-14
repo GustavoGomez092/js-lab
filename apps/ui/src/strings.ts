@@ -27,6 +27,8 @@ export const strings = {
     run: "Run",
     stop: "Stop",
     autoRun: "Auto Run",
+    activity: "Activity",
+    running: "Running",
     on: "on",
     off: "off",
     snippets: "Snippets",

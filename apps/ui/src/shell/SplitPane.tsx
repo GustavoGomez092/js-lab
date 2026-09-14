@@ -24,6 +24,17 @@ export function SplitPane(props: {
     };
   }, []);
 
+  // Fix round 1 (review m-5): hiding the second pane mid-drag (e.g. view.toggleOutput) removes the divider
+  // from the DOM, but the drag's window-level pointermove/pointerup listeners survive independently of it --
+  // only unmount or the user's own pointerup used to clear them. Without this, a pointerup after the divider
+  // is gone still calls onResize with a stale ratio against the divider's old rect.
+  useEffect(() => {
+    if (props.secondVisible || !activeDrag.current) return;
+    window.removeEventListener("pointermove", activeDrag.current.move);
+    window.removeEventListener("pointerup", activeDrag.current.up);
+    activeDrag.current = null;
+  }, [props.secondVisible]);
+
   const startDrag = (event: ReactPointerEvent) => {
     event.preventDefault();
     const rect = container.current?.getBoundingClientRect();

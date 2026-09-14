@@ -11,15 +11,24 @@
  * Fix round 2 (review N-1): inserted as a normal flex child of `.app`, directly before `.status-bar`, so it
  * takes real layout space (`.app-main` shrinks to make room) instead of a `position: fixed` bar that covered
  * the last 28px of the editor/output. `anchor` only needs to be some element inside `.app` (the editor's own
- * container works); falls back to appending to `document.body` when no `.app`/`.status-bar` pair is reachable
- * (an isolated test, for example).
+ * container works).
+ *
+ * Fix round 1 (review I-1): `view.statusBar: false` (Task 16) leaves `.app` with no `.status-bar` at all. The
+ * node still belongs inside `.app` -- as its last flex child, via `insertBefore(node, null)` -- never in the
+ * `document.body` fallback, which sits outside `.app`'s `height: 100%` flex column inside the app root's
+ * `overflow: hidden`, and is therefore invisible; a `:`/`/` prompt focused there would take keystrokes the user
+ * can never see. `document.body` is used only when there's no `.app` at all (an isolated test, for example).
  */
 export function createVimStatusNode(anchor: Element = document.body): HTMLDivElement {
   const node = document.createElement("div");
   node.className = "vim-status";
   const app = anchor.closest(".app");
-  const statusBar = app?.querySelector(".status-bar") ?? null;
-  if (app && statusBar) app.insertBefore(node, statusBar);
-  else document.body.appendChild(node);
+  if (app) {
+    // `insertBefore(node, null)` -- when there's no `.status-bar` -- appends node as the last child, same as
+    // `app.appendChild(node)`; written this way so the "before the status bar, if any" intent stays explicit.
+    app.insertBefore(node, app.querySelector(".status-bar"));
+  } else {
+    document.body.appendChild(node);
+  }
   return node;
 }

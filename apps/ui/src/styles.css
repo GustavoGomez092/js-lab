@@ -145,6 +145,14 @@ button:disabled {
   box-shadow: inset 2px 0 0 var(--fg-accent);
 }
 
+.activity-spacer {
+  flex: 1;
+}
+
+.activity-bar > button:last-child {
+  margin-bottom: 10px;
+}
+
 .activity-spinner {
   width: 16px;
   height: 16px;
@@ -398,10 +406,6 @@ button:disabled {
   color: inherit;
 }
 
-.status-run {
-  margin-left: auto;
-}
-
 /* Vim mode indicator and `:`/`/` prompt (review I-1, fix round 1). A normal flex child of `.app`, inserted
    directly before `.status-bar` (fix round 2, review N-1), so it reserves its own layout space instead of
    covering the editor/output with `position: fixed`. Never `.visually-hidden`: monaco-vim focuses a real
@@ -534,7 +538,11 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: var(--toolbar-height);
+  /* Fix round 1 (review I-2): the native traffic lights (hiddenInset) are a fixed OS size, not scaled by
+     --ui-scale. A pure var(--toolbar-height) row shrinks below them at low zoom (spilling into whatever sits
+     below) and leaves them stranded above centered controls at high zoom. 38px is the same native minimum the
+     row's unscaled height already was; --toolbar-height still grows the row past that at higher zoom. */
+  height: max(38px, var(--toolbar-height));
   padding-right: 10px;
   background: var(--bg-chrome);
   border-bottom: 1px solid var(--border-default);
@@ -596,14 +604,6 @@ button:disabled {
 
 .tb-btn.run .kbd {
   color: var(--fg-onAccent);
-}
-
-.activity-spacer {
-  flex: 1;
-}
-
-.activity-bar > button:last-child {
-  margin-bottom: 10px;
 }
 
 /* ---------- side bar ---------- */

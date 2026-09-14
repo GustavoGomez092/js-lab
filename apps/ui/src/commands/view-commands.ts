@@ -3,6 +3,7 @@ import type { MainApi } from "../api";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import type { CommandSpec } from "./registry";
+import { toggleSettingCommand } from "./toggle-setting";
 
 type ViewKey = keyof Pick<Settings["view"], "activityBar" | "statusBar" | "sideBar" | "tabBarForSingleTab">;
 
@@ -17,15 +18,8 @@ export function createViewCommands(store: AppStore, api: Pick<MainApi, "updateSe
     s().updateSettings(await api.updateSettings({ appearance: { uiScale } }));
   };
 
-  const toggleView = (id: CommandSpec["id"], key: ViewKey): CommandSpec => ({
-    id,
-    run: async () => {
-      const settings = s().settings;
-      if (!settings) return;
-      s().updateSettings(await api.updateSettings({ view: { [key]: !settings.view[key] } }));
-    },
-    description: () => strings.commands.onOff(Boolean(s().settings?.view[key])),
-  });
+  const toggleView = (id: CommandSpec["id"], key: ViewKey): CommandSpec =>
+    toggleSettingCommand(id, `view.${key}`, store, api, () => strings.commands.onOff(Boolean(s().settings?.view[key])));
 
   return [
     { id: "view.zoomIn", run: zoom(1) },

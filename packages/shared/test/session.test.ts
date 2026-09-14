@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { bufferFileName, createTab, defaultSession, normalizeSession, sessionSchema } from "../src/session";
+import {
+  bufferFileName,
+  createTab,
+  defaultSession,
+  normalizeSession,
+  parseSession,
+  SESSION_VERSION,
+  sessionParser,
+  sessionSchema,
+} from "../src/session";
 import { defaultSettings } from "../src/settings";
 
 const tab = (id: string) => createTab({ id });
@@ -50,5 +59,29 @@ describe("session", () => {
   test("buffer file names use the language extension", () => {
     expect(bufferFileName({ id: "a", language: "tsx" })).toBe("a.tsx");
     expect(bufferFileName({ id: "b", language: "javascript" })).toBe("b.js");
+  });
+
+  test("one invalid tab is dropped and reported without losing the other tabs (final review I4)", () => {
+    const { session, droppedTabs } = parseSession({
+      version: 1,
+      tabOrder: ["a", "bad"],
+      tabs: { a: tab("a"), bad: { title: "no id" } },
+    });
+    expect(Object.keys(session.tabs)).toEqual(["a"]);
+    expect(droppedTabs).toEqual(["bad"]);
+  });
+
+  test("versions: an M1 file migrates to the current version, and a newer file keeps its version and unknown keys (I4)", () => {
+    const m1 = parseSession({ version: 1, tabs: { a: tab("a") } });
+    expect([m1.fileVersion, m1.newerThanBuild, m1.session.version]).toEqual([1, false, SESSION_VERSION]);
+    expect(parseSession({ tabs: {} }).fileVersion).toBe(1);
+    const newer = parseSession({ version: SESSION_VERSION + 1, tabs: {}, workspaces: [{ id: "w" }] });
+    expect([newer.fileVersion, newer.newerThanBuild, newer.session.version]).toEqual([
+      SESSION_VERSION + 1,
+      true,
+      SESSION_VERSION + 1,
+    ]);
+    expect((newer.session as Record<string, unknown>).workspaces).toEqual([{ id: "w" }]);
+    expect(() => sessionParser.parse([])).toThrow("session.json must contain an object");
   });
 });

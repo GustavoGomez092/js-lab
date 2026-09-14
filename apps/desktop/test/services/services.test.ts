@@ -159,6 +159,24 @@ describe("recovery preserves backups", () => {
     expect(sessionSchema.parse(sessionBackup)).toEqual(sessionBackup);
     expect(sessionBackup.tabOrder).toEqual(["t1"]);
   });
+
+  test("a session file from a newer JSLab is read and reported but never overwritten; one bad tab is skipped (I4)", async () => {
+    const path = join(dir, "session.json");
+    const text = JSON.stringify({
+      version: 99,
+      window: null,
+      tabOrder: ["a", "bad"],
+      activeTabId: "a",
+      tabs: { a: { id: "a", title: "kept" }, bad: { title: "no id" } },
+      workspaces: [{ id: "w1" }],
+    });
+    await writeFile(path, text);
+    const store = await SessionStore.open(dir, { delayMs: 10 });
+    expect([store.newerVersion, store.droppedTabs, store.session.tabOrder]).toEqual([99, ["bad"], ["a"]]);
+    store.setWindow({ x: 1, y: 2, width: 800, height: 600 });
+    await store.flush();
+    expect(await readFile(path, "utf8")).toBe(text);
+  });
 });
 
 describe("safe mode", () => {

@@ -96,6 +96,15 @@ async function start(): Promise<void> {
   const { settings, session, runLock, safeMode, transform, spares, coordinator } = services;
   if (settings.recovered !== "none") log(`settings.json recovered from ${settings.recovered}`);
   if (session.recovered !== "none") log(`session.json recovered from ${session.recovered}`);
+  if (settings.newerVersion !== null) {
+    log(`settings.json was written by a newer JSLab (version ${settings.newerVersion}); it won't be overwritten`);
+  }
+  if (session.newerVersion !== null) {
+    log(`session.json was written by a newer JSLab (version ${session.newerVersion}); it won't be overwritten`);
+  }
+  if (session.droppedTabs.length > 0) {
+    log(`session.json: skipped ${session.droppedTabs.length} unreadable tab entries`, session.droppedTabs);
+  }
   if (safeMode.active) log(`starting in Safe Mode (${safeMode.reason})`);
 
   // The UI gets a longer boot grace period for its first heartbeat (cold WKWebView init, bundle load, etc.);

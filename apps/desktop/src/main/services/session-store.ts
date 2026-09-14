@@ -4,8 +4,9 @@ import {
   bufferFileName,
   defaultSession,
   normalizeSession,
+  parseSession,
   type Session,
-  sessionSchema,
+  type SessionParseResult,
   type TabState,
   tabStateSchema,
   type WindowState,
@@ -29,10 +30,17 @@ export class SessionStore {
     session: Session,
     readonly recovered: Recovery,
     delayMs: number,
+    /** The version stored in a session.json written by a newer JSLab, or null. While set, session.json is never written (I4). */
+    readonly newerVersion: number | null = null,
+    /** Keys of tab entries that failed validation and were skipped; their buffer files are left untouched. */
+    readonly droppedTabs: readonly string[] = [],
   ) {
     this.#session = session;
     this.#sessionWriter = createDebouncedWriter(
-      (data) => writeFileAtomic(join(dataDir, "session.json"), data, { backup: true }),
+      (data) =>
+        this.newerVersion === null
+          ? writeFileAtomic(join(dataDir, "session.json"), data, { backup: true })
+          : Promise.resolve(),
       delayMs,
     );
     this.delayMs = delayMs;
@@ -45,14 +53,29 @@ export class SessionStore {
     options: { newTab?: () => TabState; delayMs?: number } = {},
   ): Promise<SessionStore> {
     const newTab = options.newTab ?? (() => tabStateSchema.parse({ id: crypto.randomUUID() }));
-    const { value, recovered } = await loadJson(join(dataDir, "session.json"), sessionSchema, () =>
-      defaultSession(newTab),
-    );
+    // loadJson retries the same parser on session.json.bak, so the report describes the file that was actually used.
+    const parsed: { report: SessionParseResult | null } = { report: null };
+    const parser = {
+      parse(input: unknown): Session {
+        parsed.report = parseSession(input);
+        return parsed.report.session;
+      },
+    };
+    const { value, recovered } = await loadJson(join(dataDir, "session.json"), parser, () => defaultSession(newTab));
     const session = normalizeSession(value, newTab);
-    const store = new SessionStore(dataDir, session, recovered, options.delayMs ?? 500);
+    const report = parsed.report;
+    const newerVersion = report?.newerThanBuild ? report.fileVersion : null;
+    const store = new SessionStore(
+      dataDir,
+      session,
+      recovered,
+      options.delayMs ?? 500,
+      newerVersion,
+      report?.droppedTabs ?? [],
+    );
     // No backup here: `session.json` still holds the corrupt/stale primary at this point, and backing it up
-    // would clobber a good `.bak` that recovery just read from (ruling I1).
-    if (recovered !== "none") {
+    // would clobber a good `.bak` that recovery just read from (ruling I1). A newer file is never rewritten (I4).
+    if (recovered !== "none" && newerVersion === null) {
       await writeFileAtomic(join(dataDir, "session.json"), `${JSON.stringify(session, null, 2)}\n`, {
         backup: false,
       });

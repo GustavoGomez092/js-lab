@@ -267,14 +267,24 @@ export function createMenuController(deps: { build(): MenuItem[]; apply(menu: Me
 /**
  * A menu command while the window is closed reopens the window and drops the command, because the UI isn't
  * loaded yet to run it (spec §7.4, R-M2-T22-2). Extracted so this rule has its own test rather than living only
- * in untested `index.ts` wiring.
+ * in untested `index.ts` wiring. JSLab → Settings… is the exception: Main opens or focuses the Settings window
+ * itself, whether or not the main window is open (spec §7.5, review m-5).
  */
 export function dispatchMenuAction(
   action: string | undefined,
-  target: { isOpen(): boolean; open(): void; send(command: { command: CommandId; args?: unknown }): void },
+  target: {
+    isOpen(): boolean;
+    open(): void;
+    openSettings(): void;
+    send(command: { command: CommandId; args?: unknown }): void;
+  },
 ): void {
   const parsed = action ? commandForMenuAction(action) : null;
   if (!parsed) return;
+  if (parsed.command === "app.settings") {
+    target.openSettings();
+    return;
+  }
   if (!target.isOpen()) {
     target.open();
     return;

@@ -131,12 +131,19 @@ describe("application menu", () => {
     controller.dispose();
   });
 
-  test("dispatchMenuAction reopens a closed window instead of sending, sends when open, and ignores unknown actions", () => {
-    const calls: { opened: number; sent: { command: string; args?: unknown }[] } = { opened: 0, sent: [] };
+  test("dispatchMenuAction reopens a closed window instead of sending, sends when open, opens Settings directly, and ignores unknown actions", () => {
+    const calls: { opened: number; settings: number; sent: { command: string; args?: unknown }[] } = {
+      opened: 0,
+      settings: 0,
+      sent: [],
+    };
     const target = (open: boolean) => ({
       isOpen: () => open,
       open: () => {
         calls.opened += 1;
+      },
+      openSettings: () => {
+        calls.settings += 1;
       },
       send: (command: { command: string; args?: unknown }) => {
         calls.sent.push(command);
@@ -145,12 +152,18 @@ describe("application menu", () => {
 
     dispatchMenuAction(undefined, target(true));
     dispatchMenuAction("command:rm.rf", target(true));
-    expect(calls).toEqual({ opened: 0, sent: [] });
+    expect(calls).toEqual({ opened: 0, settings: 0, sent: [] });
 
     dispatchMenuAction(menuAction("run.start"), target(false));
-    expect(calls).toEqual({ opened: 1, sent: [] });
+    expect(calls).toEqual({ opened: 1, settings: 0, sent: [] });
 
     dispatchMenuAction(menuAction("run.start"), target(true));
-    expect(calls).toEqual({ opened: 1, sent: [{ command: "run.start" }] });
+    expect(calls).toEqual({ opened: 1, settings: 0, sent: [{ command: "run.start" }] });
+
+    // Spec §7.5: JSLab → Settings… (⌘,) opens or focuses Settings whether or not the main window is open.
+    dispatchMenuAction(menuAction("app.settings"), target(false));
+    expect(calls).toEqual({ opened: 1, settings: 1, sent: [{ command: "run.start" }] });
+    dispatchMenuAction(menuAction("app.settings"), target(true));
+    expect(calls).toEqual({ opened: 1, settings: 2, sent: [{ command: "run.start" }] });
   });
 });

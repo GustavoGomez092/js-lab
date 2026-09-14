@@ -1,5 +1,8 @@
 /** Every user-visible Main string, kept in one place for M5 i18n extraction (spec §17). */
 export const strings = {
+  window: {
+    settingsTitle: "JSLab Settings",
+  },
   log: {
     keybindingsInvalid: (path: string) => `keybindings.json at ${path} is not valid JSON; using the default keymap`,
     safeMode: (reason: string) => `starting in Safe Mode (${reason})`,

@@ -9,4 +9,9 @@ test("the CSP restricts base URIs and form submissions", () => {
   expect(directives).toContain("default-src 'self' views:");
   expect(directives).toContain("base-uri 'self'");
   expect(directives).toContain("form-action 'none'");
+  // The Settings window is RPC-bridged too, so its page carries the identical policy (review m-1).
+  const settingsHtml = readFileSync(join(import.meta.dir, "../src/settings.html"), "utf8");
+  const contentOf = (text: string) => /content="(default-src[^"]*)"/.exec(text)?.[1];
+  expect(contentOf(html)).toBe(csp);
+  expect(contentOf(settingsHtml)).toBe(csp);
 });

@@ -366,6 +366,8 @@ async function start(): Promise<void> {
     dispatchMenuAction(action, {
       isOpen: () => mainWindow.isOpen(),
       open: () => void mainWindow.open(),
+      // `settingsWindow` is declared below; this handler only runs after startup.
+      openSettings: () => void settingsWindow.open(),
       send: (c) => rpc.send["menu.command"](c),
     });
   });
@@ -391,7 +393,7 @@ async function start(): Promise<void> {
         displays(),
       );
       const created = new BrowserWindow({
-        title: "JSLab Settings",
+        title: strings.window.settingsTitle,
         url: settingsUrl,
         frame: restored.frame,
         // The nav column has a 40px top pad and is the drag region, which is built for the inset title bar (review M13).

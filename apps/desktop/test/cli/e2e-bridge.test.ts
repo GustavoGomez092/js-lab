@@ -34,7 +34,7 @@ describe("createSocketMethods", () => {
     e2eEnabled,
     bridge: { request: mock(async (method: string, params: unknown) => ({ method, params })) },
     mainState: () => ({ windowOpen: true }),
-    screenshot: mock(async (name: string) => ({ path: `/shots/${name}.png` })),
+    screenshot: mock(async (name: string, _window?: string) => ({ path: `/shots/${name}.png` })),
     quit: mock(() => {}),
     uiAvailable: () => true,
     reopenWindow: mock(() => {}),
@@ -114,7 +114,21 @@ describe("createSocketMethods", () => {
     await expect(
       methods["e2e.command"]?.({ id: "settings.set", window: "settings" }) ?? Promise.resolve(),
     ).rejects.toThrow("The Settings window is closed");
+    // Screenshots capture the requested window: main by default, Settings only while it is open (review m-2).
+    expect(await methods["e2e.screenshot"]?.({ name: "typing-result" })).toEqual({ path: "/shots/typing-result.png" });
+    expect(d.screenshot.mock.calls).toEqual([["typing-result", "main"]]);
+    await expect(
+      methods["e2e.screenshot"]?.({ name: "settings-general", window: "settings" }) ?? Promise.resolve(),
+    ).rejects.toThrow("The Settings window is closed");
+    expect(d.screenshot).toHaveBeenCalledTimes(1);
     settingsOpen = true;
+    expect(await methods["e2e.screenshot"]?.({ name: "settings-general", window: "settings" })).toEqual({
+      path: "/shots/settings-general.png",
+    });
+    expect(d.screenshot.mock.calls).toEqual([
+      ["typing-result", "main"],
+      ["settings-general", "settings"],
+    ]);
     expect(
       await methods["e2e.command"]?.({
         id: "settings.set",

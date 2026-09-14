@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSystemFonts, SystemFontsService } from "../../src/main/platform/system-fonts";
+import { parseSystemFonts, SYSTEM_FONTS_RETRY_MS, SystemFontsService } from "../../src/main/platform/system-fonts";
 import { createFontHandlers } from "../../src/main/rpc/font-handlers";
 
 const PROFILER_OUTPUT = JSON.stringify({
@@ -86,6 +86,33 @@ describe("system fonts", () => {
     expect(await missing.list()).toEqual({ fonts: null, refreshing: true });
     // Await the refresh list() started, so its cache write lands before cleanup.
     expect((await missing.refresh())?.monospace).toContain("SF Mono");
+  });
+
+  test("a failed scan backs off: list() doesn't re-run system_profiler inside the retry window", async () => {
+    let now = 1_000;
+    let fail: (error: Error) => void = () => {};
+    const run = mock(() => new Promise<string>((_, reject) => (fail = reject)));
+    const service = new SystemFontsService({ cacheFile: join(dir, "none.json"), run, now: () => now, log: () => {} });
+
+    expect(await service.list()).toEqual({ fonts: null, refreshing: true });
+    // Await the background refresh list() started (the shared in-flight promise), failing it.
+    const first = service.refresh();
+    fail(new Error("system_profiler exited with 1"));
+    expect(await first).toBeNull();
+    expect(run).toHaveBeenCalledTimes(1);
+
+    // Inside the retry window: no new scan, and the view is told nothing is loading.
+    now += SYSTEM_FONTS_RETRY_MS - 1;
+    expect(await service.list()).toEqual({ fonts: null, refreshing: false });
+    expect(run).toHaveBeenCalledTimes(1);
+
+    // Past the window, list() starts a scan again.
+    now += 2;
+    expect(await service.list()).toEqual({ fonts: null, refreshing: true });
+    expect(run).toHaveBeenCalledTimes(2);
+    const second = service.refresh();
+    fail(new Error("system_profiler exited with 1"));
+    expect(await second).toBeNull();
   });
 
   test("fonts.list answers from the service", async () => {

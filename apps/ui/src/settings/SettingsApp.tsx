@@ -24,7 +24,15 @@ export function SettingsApp({ api, initial, e2e = false }: { api: SettingsApi; i
 
   const set = useCallback(
     async (key: FieldDef["key"], value: boolean | number | string) => {
-      setSettings(await api.update(settingPatch(key, value) as SettingsUpdateParams["patch"]));
+      try {
+        setSettings(await api.update(settingPatch(key, value) as SettingsUpdateParams["patch"]));
+      } catch {
+        // Main didn't save (a failed write, for example): show what Main holds now, which also resets a number
+        // field's draft through its value (review m-3). If that fails too, the next broadcast resyncs the view.
+        try {
+          setSettings((await api.get()).settings);
+        } catch {}
+      }
     },
     [api],
   );
@@ -44,7 +52,8 @@ export function SettingsApp({ api, initial, e2e = false }: { api: SettingsApi; i
       const result = await api.listFonts();
       if (cancelled) return;
       setFonts(result);
-      if (result.refreshing || !result.fonts) timer = setTimeout(load, 2000);
+      // Poll only while Main is scanning: a failed scan backs off in Main, so re-asking would only spin (review I-1).
+      if (result.refreshing) timer = setTimeout(load, 2000);
     };
     void load();
     return () => {
@@ -322,7 +331,9 @@ function FieldControl(props: {
               </optgroup>
             </>
           ) : (
-            <option disabled>{strings.settings.loadingFonts}</option>
+            <option disabled>
+              {fonts.refreshing ? strings.settings.loadingFonts : strings.settings.fontsUnavailable}
+            </option>
           )}
         </select>
       );

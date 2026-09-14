@@ -130,6 +130,7 @@ export const strings = {
       installed: "Installed",
     },
     loadingFonts: "Loading installed fonts…",
+    fontsUnavailable: "Couldn't load installed fonts",
     openDataFolder: "Open Data Folder",
     resetAll: "Reset All Settings…",
     confirmReset: "Confirm Reset",

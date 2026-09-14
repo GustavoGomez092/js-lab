@@ -91,6 +91,43 @@ describe("SettingsApp", () => {
     expect((screen.getByLabelText("Show Undefined") as HTMLInputElement).checked).toBe(true);
   });
 
+  test("a font scan that isn't refreshing is not polled again, and the picker says installed fonts couldn't load", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const delays: (number | undefined)[] = [];
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number, ...rest: unknown[]) => {
+      delays.push(delay);
+      return realSetTimeout(handler, delay, ...rest);
+    }) as typeof setTimeout;
+    try {
+      const { api } = fakeSettingsApi({ fonts: null, refreshing: false });
+      render(<SettingsApp api={api} initial={defaultSettings()} />);
+      fireEvent.click(screen.getByRole("tab", { name: "Appearance" }));
+      await waitFor(() => expect(screen.getByText("Couldn't load installed fonts")).toBeTruthy());
+      expect(screen.queryByText("Loading installed fonts…")).toBeNull();
+      expect(api.listFonts).toHaveBeenCalledTimes(1);
+      // The font poll's 2 s re-check was never scheduled (review I-1).
+      expect(delays).not.toContain(2000);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
+
+  test("a failed save resyncs from Main, so a number field shows Main's value instead of the typed draft", async () => {
+    const { api } = fakeSettingsApi();
+    api.update.mockImplementationOnce(async () => {
+      throw new Error("settings.json could not be written");
+    });
+    const mainValue = mergeSettings(defaultSettings(), { appearance: { fontSize: 22 } });
+    api.get.mockImplementationOnce(async () => ({ settings: mainValue, e2e: false }));
+    render(<SettingsApp api={api} initial={defaultSettings()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Appearance" }));
+    fireEvent.change(screen.getByLabelText("Font Size"), { target: { value: "30" } });
+    fireEvent.blur(screen.getByLabelText("Font Size"));
+    await waitFor(() => expect((screen.getByLabelText("Font Size") as HTMLInputElement).value).toBe("22"));
+    expect(api.update).toHaveBeenCalledWith({ appearance: { fontSize: 30 } });
+    expect(api.get).toHaveBeenCalledTimes(1);
+  });
+
   test("the Settings window E2E agent reports state, runs settings commands and types into fields", async () => {
     const input = document.createElement("input");
     document.body.appendChild(input);

@@ -59,8 +59,12 @@ export async function runSystemProfiler(timeoutMs = 60_000): Promise<string> {
   }
 }
 
+/** After a failed scan, `list()` waits this long before starting another (review I-1). */
+export const SYSTEM_FONTS_RETRY_MS = 10 * 60_000;
+
 export class SystemFontsService {
   #refreshing: Promise<SystemFontList | null> | null = null;
+  #lastFailureAt: number | null = null;
 
   constructor(
     private readonly deps: {
@@ -68,6 +72,8 @@ export class SystemFontsService {
       run(): Promise<string>;
       now?(): number;
       maxAgeMs?: number;
+      /** Backoff after a failed scan; defaults to SYSTEM_FONTS_RETRY_MS. */
+      retryMs?: number;
       log(message: string, detail?: unknown): void;
     },
   ) {}
@@ -76,10 +82,16 @@ export class SystemFontsService {
     const cached = await this.#readCache();
     const now = (this.deps.now ?? Date.now)();
     const stale = !cached || now - cached.at > (this.deps.maxAgeMs ?? SYSTEM_FONTS_MAX_AGE_MS);
+    // A scan that just failed (a non-zero exit or the 60 s kill) isn't re-run on every poll: the Settings window
+    // would otherwise spawn system_profiler back to back while it stays open.
+    const backingOff =
+      this.#lastFailureAt !== null && now - this.#lastFailureAt < (this.deps.retryMs ?? SYSTEM_FONTS_RETRY_MS);
+    if (stale && backingOff && !this.#refreshing) return { fonts: cached?.fonts ?? null, refreshing: false };
     if (stale) void this.refresh();
     return { fonts: cached?.fonts ?? null, refreshing: stale };
   }
 
+  /** Scans now (sharing an in-flight scan). An explicit call ignores the failure backoff. */
   refresh(): Promise<SystemFontList | null> {
     if (this.#refreshing) return this.#refreshing;
     this.#refreshing = (async () => {
@@ -87,8 +99,10 @@ export class SystemFontsService {
         const fonts = parseSystemFonts(await this.deps.run());
         const at = (this.deps.now ?? Date.now)();
         await writeFileAtomic(this.deps.cacheFile, JSON.stringify({ at, fonts }));
+        this.#lastFailureAt = null;
         return fonts;
       } catch (error) {
+        this.#lastFailureAt = (this.deps.now ?? Date.now)();
         this.deps.log("System font scan failed", String(error));
         return null;
       } finally {

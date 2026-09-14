@@ -3,10 +3,13 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultSettings } from "@jslab/shared";
+import { defaultSettings, mergeSettings, settingsSchema } from "@jslab/shared";
 import { buildDebugReport } from "../../src/main/logging/debug-report";
 import { createRedactor } from "../../src/main/logging/redact";
 import { RotatingLog } from "../../src/main/logging/rotating-log";
+
+/** A fake macOS home folder for the FA-m12 redaction tests. */
+const HOME_FIXTURE = join("/Users", "tester");
 
 let dir = "";
 beforeEach(async () => {
@@ -108,6 +111,7 @@ describe("debug report", () => {
         settings: defaultSettings(),
         logLines: [...Array.from({ length: 600 }, (_, i) => `l${i}`), "Authorization: Bearer leak"],
         redact: createRedactor(),
+        home: HOME_FIXTURE,
       }),
     );
     expect(report).toMatchObject({
@@ -117,7 +121,7 @@ describe("debug report", () => {
       macOS: "26.5.2",
       arch: "arm64",
     });
-    expect(report.settings.version).toBe(2);
+    expect(report.settings.version).toBe(defaultSettings().version);
     expect(report.log).toHaveLength(500);
     expect(report.log.at(-1)).toBe("Authorization: [REDACTED]");
   });
@@ -129,8 +133,57 @@ describe("debug report", () => {
       settings: defaultSettings(),
       logLines: ["//registry.npmjs.org/:_authToken=npm_testtoken"],
       redact: createRedactor(),
+      home: HOME_FIXTURE,
     });
     const report = JSON.parse(text);
     expect(report.log.at(-1)).not.toContain("npm_testtoken");
+  });
+
+  test("writes the home folder and any other /Users/<name> prefix as ~ (FA-m12)", () => {
+    const home = HOME_FIXTURE;
+    const settings = mergeSettings(defaultSettings(), { appearance: { font: `${home}/Fonts/Custom Mono` } });
+    const text = buildDebugReport({
+      versions: { app: "0.3.0", bun: "1.4.0", electrobun: "2.0.1" },
+      os: { macOS: "26.5.2", arch: "arm64" },
+      settings,
+      logLines: [`opened ${home}/proj/a.ts`, `spawn cwd "${join("/Users", "someone")}/x"`],
+      redact: createRedactor(),
+      home,
+    });
+    expect(text).not.toContain("/Users/");
+    const report = JSON.parse(text);
+    expect(report.settings.appearance.font).toBe("~/Fonts/Custom Mono");
+    expect(report.log).toEqual(["opened ~/proj/a.ts", 'spawn cwd "~/x"']);
+  });
+
+  test("keeps only schema-defined settings fields and masks secret-looking strings (FA-m12)", () => {
+    const settings = settingsSchema.parse({
+      run: { autoRun: false, apiToken: "sk-proj-ABCDEFGHIJKLMNOPQRSTUV" },
+      future: { password: "hunter2-value" },
+      appearance: { font: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" },
+    });
+    const report = JSON.parse(
+      buildDebugReport({
+        versions: { app: "0.3.0", bun: "1.4.0", electrobun: "2.0.1" },
+        os: { macOS: "26.5.2", arch: "arm64" },
+        settings,
+        logLines: [],
+        redact: createRedactor(),
+        home: HOME_FIXTURE,
+      }),
+    );
+    expect(Object.keys(report)).toEqual([
+      "version",
+      "bunVersion",
+      "electrobunVersion",
+      "macOS",
+      "arch",
+      "settings",
+      "log",
+    ]);
+    expect(report.settings.run.autoRun).toBe(false);
+    expect(report.settings.run).not.toHaveProperty("apiToken");
+    expect(report.settings).not.toHaveProperty("future");
+    expect(report.settings.appearance.font).toBe("[REDACTED]");
   });
 });

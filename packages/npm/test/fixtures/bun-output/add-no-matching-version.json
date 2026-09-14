@@ -1,0 +1,8 @@
+{
+  "name": "add-no-matching-version",
+  "argv": ["add", "--exact", "fixture-outdated@9.9.9"],
+  "exitCode": 1,
+  "stdout": "bun add v1.4.0 (<rev>)\n",
+  "stderr": "error: No version matching \"9.9.9\" found for specifier \"fixture-outdated\" (but package exists)\nerror: fixture-outdated@9.9.9 failed to resolve\n",
+  "bunVersion": "1.4.0"
+}

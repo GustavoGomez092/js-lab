@@ -1,6 +1,18 @@
 import { copyFile, readFile } from "node:fs/promises";
+import { basename } from "node:path";
 
 export type Recovery = "none" | "backup" | "defaults";
+
+/** What was wrong with the primary file, if anything (FA-m4): the recovery notice words a missing file differently. */
+export type PrimaryFile = "ok" | "missing" | "corrupt";
+
+export interface LoadResult<T> {
+  value: T;
+  recovered: Recovery;
+  primary: PrimaryFile;
+  /** The file name of the corrupt-file copy saved by this load, or null. */
+  corruptCopy: string | null;
+}
 
 /** Anything with a zod-compatible `parse` that throws on invalid input. */
 export interface Parser<T> {
@@ -27,19 +39,25 @@ async function tryRead<T>(path: string, parser: Parser<T>): Promise<ReadResult<T
  * Loads a JSON file, falling back to `<path>.bak` and then to defaults.
  * A corrupt primary file is preserved as `<name>.corrupt-<timestamp>.json` for diagnosis.
  */
-export async function loadJson<T>(
-  path: string,
-  parser: Parser<T>,
-  fallback: () => T,
-): Promise<{ value: T; recovered: Recovery }> {
+export async function loadJson<T>(path: string, parser: Parser<T>, fallback: () => T): Promise<LoadResult<T>> {
   const primary = await tryRead(path, parser);
-  if (primary.ok) return { value: primary.value, recovered: "none" };
+  if (primary.ok) return { value: primary.value, recovered: "none", primary: "ok", corruptCopy: null };
+  let corruptCopy: string | null = null;
   if (primary.reason === "corrupt") {
-    await copyFile(path, `${path.replace(/\.json$/, "")}.corrupt-${Date.now()}.json`).catch(() => {});
+    const copy = `${path.replace(/\.json$/, "")}.corrupt-${Date.now()}.json`;
+    corruptCopy = await copyFile(path, copy).then(
+      () => basename(copy),
+      () => null,
+    );
   }
   const backup = await tryRead(`${path}.bak`, parser);
-  if (backup.ok) return { value: backup.value, recovered: "backup" };
-  return { value: fallback(), recovered: primary.reason === "missing" ? "none" : "defaults" };
+  if (backup.ok) return { value: backup.value, recovered: "backup", primary: primary.reason, corruptCopy };
+  return {
+    value: fallback(),
+    recovered: primary.reason === "missing" ? "none" : "defaults",
+    primary: primary.reason,
+    corruptCopy,
+  };
 }
 
 export interface DebouncedWriter {

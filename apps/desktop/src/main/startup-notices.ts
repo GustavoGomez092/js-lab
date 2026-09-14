@@ -1,46 +1,52 @@
-import { readdirSync } from "node:fs";
 import type { StartupNotice } from "@jslab/rpc-schema";
-import type { Recovery } from "./persistence/json-store";
+import type { PrimaryFile, Recovery } from "./persistence/json-store";
 import { strings } from "./strings";
 
-export interface StartupNoticeInput {
-  settings: { recovered: Recovery; newerVersion: number | null };
-  session: { recovered: Recovery; newerVersion: number | null; droppedTabs: readonly string[] };
-  /** The newest `<name>.corrupt-<timestamp>.json` snapshot that loadJson saved for each file, or null. */
-  corruptCopies: { settings: string | null; session: string | null };
+/** How one settings.json or session.json load went (SettingsStore and SessionStore expose these fields). */
+export interface FileLoadReport {
+  recovered: Recovery;
+  newerVersion: number | null;
+  primary: PrimaryFile;
+  /** The corrupt-file copy saved during this launch's load, or null (FA-m4: never an earlier launch's copy). */
+  corruptCopy: string | null;
 }
 
-/** The newest corrupt-file snapshot `loadJson` saved for `settings.json` or `session.json`, or null. */
-export function latestCorruptCopy(dataDir: string, name: "settings" | "session"): string | null {
-  const pattern = new RegExp(`^${name}\\.corrupt-(\\d+)\\.json$`);
-  let entries: string[];
-  try {
-    entries = readdirSync(dataDir);
-  } catch {
-    return null;
-  }
-  let best: { file: string; at: number } | null = null;
-  for (const file of entries) {
-    const match = pattern.exec(file);
-    if (!match) continue;
-    const at = Number(match[1]);
-    if (!best || at > best.at) best = { file, at };
-  }
-  return best?.file ?? null;
+export interface StartupNoticeInput {
+  settings: FileLoadReport;
+  session: FileLoadReport & { droppedTabs: readonly string[] };
+}
+
+function recoveryMessage(
+  file: FileLoadReport,
+  text: { reset: string; restored: string; restoredMissing: string },
+): string {
+  const base =
+    file.recovered === "defaults" ? text.reset : file.primary === "missing" ? text.restoredMissing : text.restored;
+  return `${base}${file.corruptCopy ? strings.notices.copySaved(file.corruptCopy) : ""}`;
 }
 
 /** What Main tells the user at startup (spec §20; final review M7 and I4). */
 export function startupNotices(input: StartupNoticeInput): StartupNotice[] {
   const notices: StartupNotice[] = [];
-  const copy = (file: string | null) => (file ? strings.notices.copySaved(file) : "");
   if (input.settings.recovered !== "none") {
-    const base =
-      input.settings.recovered === "backup" ? strings.notices.settingsRestored : strings.notices.settingsReset;
-    notices.push({ id: "settingsRecovered", message: `${base}${copy(input.corruptCopies.settings)}` });
+    notices.push({
+      id: "settingsRecovered",
+      message: recoveryMessage(input.settings, {
+        reset: strings.notices.settingsReset,
+        restored: strings.notices.settingsRestored,
+        restoredMissing: strings.notices.settingsRestoredMissing,
+      }),
+    });
   }
   if (input.session.recovered !== "none") {
-    const base = input.session.recovered === "backup" ? strings.notices.sessionRestored : strings.notices.sessionReset;
-    notices.push({ id: "sessionRecovered", message: `${base}${copy(input.corruptCopies.session)}` });
+    notices.push({
+      id: "sessionRecovered",
+      message: recoveryMessage(input.session, {
+        reset: strings.notices.sessionReset,
+        restored: strings.notices.sessionRestored,
+        restoredMissing: strings.notices.sessionRestoredMissing,
+      }),
+    });
   }
   if (input.settings.newerVersion !== null) {
     notices.push({ id: "settingsNewer", message: strings.notices.settingsNewer(input.settings.newerVersion) });

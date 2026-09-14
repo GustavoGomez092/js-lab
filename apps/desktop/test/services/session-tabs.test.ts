@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTab, type Session } from "@jslab/shared";
@@ -85,6 +85,43 @@ describe("SessionStore tabs", () => {
     expect(store.session.closedStack).toHaveLength(20);
     expect(existsSync(join(dir, "buffers", "closed", `${ids[0]}.ts`))).toBe(false);
     expect(existsSync(join(dir, "buffers", "closed", `${ids[20]}.ts`))).toBe(true);
+  });
+
+  test("a view state for a closed or unknown tab is a quiet no-op: no change, no write, nothing to log (Seat B cross-seat 3)", async () => {
+    const store = await open();
+    const b = await store.createTab();
+    await store.closeTab(b.id);
+    const heard: Session[] = [];
+    store.onChange((session) => heard.push(session));
+    const before = store.session;
+    store.setViewState(b.id, { cursorState: [{ position: { lineNumber: 2, column: 1 } }] });
+    store.setViewState("never-existed", { scrollTop: 1 });
+    expect(heard).toEqual([]);
+    expect(store.session).toBe(before);
+  });
+
+  test("while session.json is from a newer JSLab, closed buffers are never deleted by eviction or reopen (FA-m5)", async () => {
+    const closed = Array.from({ length: 20 }, (_, i) => `c${i}`);
+    await mkdir(join(dir, "buffers", "closed"), { recursive: true });
+    for (const id of closed) await writeFile(join(dir, "buffers", "closed", `${id}.ts`), id);
+    await writeFile(
+      join(dir, "session.json"),
+      JSON.stringify({
+        version: 99,
+        tabOrder: ["a", "b"],
+        activeTabId: "a",
+        tabs: { a: { id: "a", title: "a" }, b: { id: "b", title: "b" } },
+        closedStack: closed.map((id, i) => ({ tab: { id, title: id }, closedAt: 100 - i })),
+      }),
+    );
+    const store = await open();
+    expect(store.newerVersion).toBe(99);
+    // Closing a 21st tab evicts the oldest entry (c19), which the newer file still lists.
+    await store.closeTab("a");
+    expect(existsSync(join(dir, "buffers", "closed", "c19.ts"))).toBe(true);
+    // Reopening moves the buffer back into buffers/ but leaves the closed copy in place.
+    expect((await store.reopenClosed())?.tab.id).toBe("a");
+    expect(existsSync(join(dir, "buffers", "closed", "a.ts"))).toBe(true);
   });
 
   test("reorder accepts only permutations; activate ignores unknown ids; view state persists", async () => {

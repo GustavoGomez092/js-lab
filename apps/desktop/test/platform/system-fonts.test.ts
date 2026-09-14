@@ -73,8 +73,9 @@ describe("system fonts", () => {
     });
     expect(await failing.refresh()).toBeNull();
     expect((await failing.list()).fonts?.monospace).toContain("SF Mono");
-    // list() started another background refresh for the stale cache. Await that shared promise, so nothing logs
-    // after afterEach removes the folder (review M8).
+    // That failure starts the SYSTEM_FONTS_RETRY_MS backoff, so list() served the stale cache without scanning again.
+    // An explicit refresh() ignores the backoff and scans (and fails) once more; awaiting it here means nothing logs
+    // after afterEach removes the folder (review M8, FA-m14).
     expect(await failing.refresh()).toBeNull();
     expect(log).toHaveBeenCalled();
 

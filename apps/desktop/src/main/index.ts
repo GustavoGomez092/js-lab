@@ -26,6 +26,7 @@ import { resolveAppPaths } from "./app-paths";
 import { E2EBridge } from "./cli/e2e-bridge";
 import { createSocketMethods } from "./cli/socket-methods";
 import { type SocketServer, startSocketServer } from "./cli/socket-server";
+import { createErrorPolicy } from "./error-policy";
 import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-service";
 import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
@@ -39,7 +40,7 @@ import { saveDialog } from "./platform/save-dialog";
 import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
-import { createAppHandlers } from "./rpc/app-handlers";
+import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } from "./rpc/app-handlers";
 import { createFileHandlers } from "./rpc/file-handlers";
 import { createFontHandlers } from "./rpc/font-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
@@ -47,10 +48,10 @@ import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
-import { latestCorruptCopy, startupNotices } from "./startup-notices";
+import { startupNotices } from "./startup-notices";
 import { strings } from "./strings";
 import { onReload, shouldReloadView } from "./ui-watchdog";
-import { type DisplayInfo, displayForFrame, restoreFrame } from "./windows/frame-restore";
+import { type DisplayInfo, displayForFrame, frameToSave, restoreFrame } from "./windows/frame-restore";
 import { createMainWindowController } from "./windows/main-window";
 
 // `.hutch/devkit`'s `api/sdks/main/proc/native.ts` references the WebWorker global `self` in a carrot/Bunny Ears
@@ -79,29 +80,37 @@ type SettingsRPC = {
 
 const APP_VERSION = "0.0.1";
 
-// Console until start() creates the rotating log, which then replaces it; fail() always logs through `log`.
+// Console until start() creates the rotating log, which then replaces both.
 let log: (message: string, detail?: unknown) => void = (message, detail) =>
   console.error(`[jslab] ${message}`, detail ?? "");
+let logError: (message: string, detail?: unknown) => void = (message, detail) =>
+  console.error(`[jslab] ${message}`, detail ?? "");
+// Set once the main window and its RPC exist; until then there is nowhere to show a notice.
+let showUnexpectedErrorNotice: () => void = () => {};
 
 /**
- * A rejection anywhere in `start()` -- a failing store recovery rewrite, for example -- must not crash Main
- * before any window (or dialog) appears, which would look like the app silently "doesn't launch" (I2).
+ * Spec §20 (FA-I3, error-policy.ts). A rejection anywhere in `start()` -- a failing store recovery rewrite, for
+ * example -- must not crash Main before any window (or dialog) appears, which would look like the app silently
+ * "doesn't launch" (I2): until startup finishes, errors fail fast with one dialog and exit code 1. After that, an
+ * uncaught error is logged and shown as a notice, and JSLab keeps running.
  */
-async function fail(error: unknown): Promise<void> {
-  log("startup failed", error);
-  const message = error instanceof Error ? error.message : String(error);
-  try {
-    // Utils.showMessageBox (apps/desktop/.hutch/devkit/api/sdks/main/core/Utils.ts:284-306, backed by the
-    // native `ffi.request.showMessageBox`) shows a native dialog independent of any BrowserWindow -- exactly
-    // what's needed here, since startup can fail before a window exists.
-    await Utils.showMessageBox({ type: "error", title: "JSLab", message: `JSLab couldn't start: ${message}` });
-  } catch (dialogError) {
-    log("startup failure dialog could not be shown", dialogError);
-  }
-  // Utils.quit() itself falls back to process.exit() when native FFI isn't available (see Utils.ts), and
-  // returns false only if a quit is already in flight; process.exit(1) covers that remaining case.
-  if (!Utils.quit(1)) process.exit(1);
-}
+const errorPolicy = createErrorPolicy({
+  log: (message, detail) => logError(message, detail),
+  // Utils.showMessageBox (apps/desktop/.hutch/devkit/api/sdks/main/core/Utils.ts:284-306, backed by the native
+  // `ffi.request.showMessageBox`) shows a native dialog independent of any BrowserWindow -- exactly what's needed
+  // here, since startup can fail before a window exists.
+  showFatal: async (message) => {
+    await Utils.showMessageBox({ type: "error", title: "JSLab", message: strings.dialogs.startupFailed(message) });
+  },
+  // Utils.quit() itself falls back to process.exit() when native FFI isn't available (see Utils.ts), and returns
+  // false only if a quit is already in flight; process.exit covers that remaining case.
+  quit: (code) => {
+    if (!Utils.quit(code)) process.exit(code);
+  },
+  notify: () => showUnexpectedErrorNotice(),
+});
+process.on("uncaughtException", (error) => errorPolicy.onUncaught("exception", error));
+process.on("unhandledRejection", (reason) => errorPolicy.onUncaught("rejection", reason));
 
 async function start(): Promise<void> {
   const paths = resolveAppPaths({
@@ -115,17 +124,7 @@ async function start(): Promise<void> {
   const logsDir = join(paths.dataDir, "logs");
   const logger = new RotatingLog({ dir: logsDir, debug: process.env.JSLAB_DEBUG === "1", redact });
   log = (message, detail) => logger.warn(message, detail);
-  // m-3: an uncaught exception leaves Main in an unknown state, so it logs then fails fast (dialog + quit) rather
-  // than limping on; a second exception raised while `fail` itself is running must not start a fail-loop.
-  let handlingFatalError = false;
-  process.on("uncaughtException", (error) => {
-    logger.error("Uncaught exception", error);
-    if (handlingFatalError) return;
-    handlingFatalError = true;
-    log(strings.log.fatalError);
-    void fail(error);
-  });
-  process.on("unhandledRejection", (reason) => logger.error("Unhandled rejection", reason));
+  logError = (message, detail) => logger.error(message, detail);
   const ELECTROBUN_VERSION = "2.0.1";
   // m-4: sw_vers blocks the event loop; only Copy Debug Log needs it, so it's computed on first use and cached
   // rather than on every launch. A plain getter satisfies AppHandlerDeps' `os: { macOS: string; arch: string }`.
@@ -144,6 +143,9 @@ async function start(): Promise<void> {
   // primary file as "none", never writing until an update or a real recovery), but SparePool's pre-warmed runner
   // spawns with this as its cwd, and Bun.spawn throws synchronously (ENOENT) for a cwd that doesn't exist yet.
   mkdirSync(paths.dataDir, { recursive: true });
+  // FA-I2: the E2E harness reads this to tear down a launch that never became ready, even a Main reparented away from
+  // its launcher (the harness checks this PID's command line first). Written before any step that could hang.
+  if (process.env.JSLAB_E2E === "1") writeFileSync(join(paths.dataDir, "e2e-main.pid"), String(process.pid));
 
   // Read the modifier keys as early as possible: the user may release Shift while stores load.
   const shiftHeld = isShiftHeld();
@@ -196,9 +198,9 @@ async function start(): Promise<void> {
   const writeClipboard = (text: string) =>
     e2eEnabled ? writeFileSync(join(paths.dataDir, "e2e-clipboard.txt"), text) : Utils.clipboardWriteText(text);
 
-  // Shared by the main window and the Settings window. `mainWindow` and `settingsWindow` are declared later; the
-  // handlers read them only when invoked, after startup.
-  const appHandlers = createAppHandlers({
+  // Shared by the main window and the Settings window (whose RPC accepts only its own actions, FA-m11). `mainWindow`
+  // and `settingsWindow` are declared later; the handlers read them only when invoked, after startup.
+  const appHandlerDeps: AppHandlerDeps = {
     logTail: (lines) => logger.tail(lines),
     settings,
     paths: { dataDir: paths.dataDir, logsDir },
@@ -223,7 +225,8 @@ async function start(): Promise<void> {
     },
     closeWindow: () => mainWindow.close(),
     openSettings: () => void settingsWindow.open(),
-  });
+  };
+  const appHandlers = createAppHandlers(appHandlerDeps);
 
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
@@ -244,14 +247,8 @@ async function start(): Promise<void> {
           sawFirstHeartbeat = true;
           lastUiHeartbeat = Date.now();
         },
-        notices: startupNotices({
-          settings,
-          session,
-          corruptCopies: {
-            settings: latestCorruptCopy(paths.dataDir, "settings"),
-            session: latestCorruptCopy(paths.dataDir, "session"),
-          },
-        }),
+        // The stores report what their own load found, including the corrupt copy saved this launch (FA-m4).
+        notices: startupNotices({ settings, session }),
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
@@ -317,17 +314,16 @@ async function start(): Promise<void> {
       if (link) openExternal(link);
     });
     if (restored.fullscreen) created.setFullScreen(true);
-    const saveFrame = () => {
-      if (created.isFullScreen()) {
-        // Keep the windowed frame, so leaving full screen after a relaunch returns to a normal size.
-        const previous = session.session.window;
-        if (previous) session.setWindow({ ...previous, fullscreen: true });
-        return;
-      }
-      const frame = created.getFrame();
-      const display = displayForFrame(frame, displays());
-      session.setWindow({ ...frame, ...(display ? { displayId: String(display.id) } : {}), fullscreen: false });
-    };
+    // Full screen keeps the windowed frame; the first toggle with none saved keeps the current one (FA-m6).
+    const saveFrame = () =>
+      session.setWindow(
+        frameToSave({
+          fullScreen: created.isFullScreen(),
+          frame: created.getFrame(),
+          previous: session.session.window,
+          displays: displays(),
+        }),
+      );
     created.on("resize", saveFrame);
     created.on("move", saveFrame);
     // Every new window (a Dock reopen included) is a fresh boot with the watchdog's 30 s grace (R-M2-T18-3).
@@ -342,6 +338,11 @@ async function start(): Promise<void> {
   Electrobun.events.on("reopen", () => {
     mainWindow.open();
   });
+  // Spec §20 (FA-I3): after startup, an unexpected Main error shows a non-blocking notice in the main window.
+  showUnexpectedErrorNotice = () => {
+    if (mainWindow.isOpen())
+      rpc.send["app.notice"]({ id: "unexpectedError", message: strings.notices.unexpectedError });
+  };
 
   // `MenuItem` (menu.ts) is the devkit's own `ApplicationMenuItemConfig` shape at its source (final review T14),
   // proved at compile time by `MENU_IS_DEVKIT_CONFIG`, so a built menu is passed straight to
@@ -380,7 +381,7 @@ async function start(): Promise<void> {
     handlers: mergeHandlers(
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createFontHandlers({ fonts: systemFonts, log }),
-      appHandlers,
+      createSettingsAppHandlers(appHandlerDeps),
       createE2EResponseHandler(settingsE2E, log),
     ),
   });
@@ -492,9 +493,15 @@ async function start(): Promise<void> {
     coordinator.dispose();
     transform.dispose();
     runLock.releaseAll();
-    // Final review T14: a hung flush must not keep JSLab from quitting.
-    void flushBeforeQuit(() => session.flush(), log).finally(() => Utils.quit());
+    // Final review T14: a hung flush must not keep JSLab from quitting. FA-I1: settings writes are awaited too.
+    // A quit started by a startup failure keeps its exit code 1 (FA-I3).
+    void flushBeforeQuit(() => Promise.all([session.flush(), settings.flush()]).then(() => {}), log).finally(() =>
+      Utils.quit(errorPolicy.exitCode),
+    );
   });
 }
 
-void start().catch(fail);
+void start().then(
+  () => errorPolicy.markStarted(),
+  (error: unknown) => errorPolicy.fail(error),
+);

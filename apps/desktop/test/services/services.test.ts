@@ -74,6 +74,47 @@ describe("SettingsStore", () => {
     expect((await SettingsStore.open(dir)).current.editor.lineWrap).toBe(true);
   });
 
+  test("overlapping writes land in order, so a slow first write can't overwrite a later update; flush awaits it (FA-I1)", async () => {
+    const { writeFileAtomic } = await import("../../src/main/persistence/atomic-write");
+    let calls = 0;
+    let firstLanded = false;
+    const store = await SettingsStore.open(dir, {
+      write: async (path, data, options) => {
+        calls++;
+        if (calls === 1) {
+          // The first write (uiScale 1.25) is slow, like an fsync that finishes after the next write starts.
+          await Bun.sleep(80);
+          await writeFileAtomic(path, data, options);
+          firstLanded = true;
+          return;
+        }
+        await writeFileAtomic(path, data, options);
+      },
+    });
+    const first = store.update({ appearance: { uiScale: 1.25 } });
+    const second = store.update({ appearance: { uiScale: 1.5 } });
+    await store.flush();
+    expect(firstLanded).toBe(true);
+    await Promise.all([first, second]);
+    expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).appearance.uiScale).toBe(1.5);
+    // Reset goes through the same writer.
+    const reset = store.reset();
+    await store.flush();
+    expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).appearance.uiScale).toBe(1);
+    await reset;
+  });
+
+  test("an update resolves with the current settings, including a change made while its write was queued (Seat B cross-seat 4)", async () => {
+    const store = await SettingsStore.open(dir);
+    // The main window's zoom and a Settings-window font change overlap: neither response may roll the other back.
+    const zoom = store.update({ appearance: { uiScale: 1.25 } });
+    const font = store.update({ appearance: { fontSize: 18 } });
+    const [first, second] = await Promise.all([zoom, font]);
+    expect([first.appearance.uiScale, first.appearance.fontSize]).toEqual([1.25, 18]);
+    expect(first).toBe(store.current);
+    expect(second).toBe(store.current);
+  });
+
   test("a settings file from a newer JSLab is used but never overwritten (final review I4)", async () => {
     const text = JSON.stringify({ version: 99, editor: { lineWrap: false }, future: { flag: true } });
     await writeFile(join(dir, "settings.json"), text);
@@ -112,13 +153,13 @@ describe("SessionStore", () => {
     expect((await openSession()).session.tabs.t1?.language).toBe("tsx");
   });
 
-  test("persists the window frame and ignores invalid frames", async () => {
+  test("persists the window frame and clamps one smaller than 400×300 (FA-m6)", async () => {
     const store = await openSession({ delayMs: 20 });
     store.setWindow({ x: 10, y: 20, width: 1200, height: 800 });
     await store.flush();
     expect((await openSession()).session.window).toEqual({ x: 10, y: 20, width: 1200, height: 800 });
     store.setWindow({ x: 0, y: 0, width: 5, height: 5 });
-    expect(store.session.window).toBeNull();
+    expect(store.session.window).toEqual({ x: 0, y: 0, width: 400, height: 300 });
   });
 
   test("an unreadable buffer is surfaced instead of read as empty", async () => {

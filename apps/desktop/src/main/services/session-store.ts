@@ -20,7 +20,13 @@ import {
   windowStateSchema,
 } from "@jslab/shared";
 import { writeFileAtomic } from "../persistence/atomic-write";
-import { createDebouncedWriter, type DebouncedWriter, loadJson, type Recovery } from "../persistence/json-store";
+import {
+  createDebouncedWriter,
+  type DebouncedWriter,
+  loadJson,
+  type PrimaryFile,
+  type Recovery,
+} from "../persistence/json-store";
 
 export type TabPatch = Partial<
   Pick<TabState, "title" | "titleIsCustom" | "language" | "runtime" | "filePath" | "lastSavedHash">
@@ -75,6 +81,9 @@ export class SessionStore {
     readonly newerVersion: number | null = null,
     /** Task 4 (I4): keys of tab entries skipped because they failed validation. */
     readonly droppedTabs: readonly string[] = [],
+    /** FA-m4: what was wrong with session.json at load, and the corrupt copy saved this launch. */
+    readonly primary: PrimaryFile = "ok",
+    readonly corruptCopy: string | null = null,
   ) {
     this.#session = session;
     this.#sessionWriter = createDebouncedWriter(
@@ -98,7 +107,9 @@ export class SessionStore {
         return parsed.report.session;
       },
     };
-    const { value, recovered } = await loadJson(join(dataDir, "session.json"), parser, () => defaultSession(newTab));
+    const { value, recovered, primary, corruptCopy } = await loadJson(join(dataDir, "session.json"), parser, () =>
+      defaultSession(newTab),
+    );
     const report = parsed.report;
     const newerVersion = report?.newerThanBuild ? report.fileVersion : null;
     const session = normalizeSession(value, newTab);
@@ -111,6 +122,8 @@ export class SessionStore {
       options.onWriteError,
       newerVersion,
       report?.droppedTabs ?? [],
+      primary,
+      corruptCopy,
     );
     // Task 4 Step 11 (R-M1-18): a repaired tab keeps its content when its old id is a plain file name.
     const repairedTabIds = report?.repairedTabIds ?? [];
@@ -217,8 +230,11 @@ export class SessionStore {
     await unlink(`${this.#bufferPath(tab)}.bak`).catch(() => {});
 
     const { stack, evicted } = pushClosed(this.#session.closedStack, { tab, closedAt: Date.now() });
-    for (const entry of evicted) {
-      await unlink(join(this.dataDir, "buffers", closedBufferFileName(entry.tab))).catch(() => {});
+    // FA-m5: a newer JSLab's session.json (never rewritten) may still list an evicted tab, so its buffer stays.
+    if (this.newerVersion === null) {
+      for (const entry of evicted) {
+        await unlink(join(this.dataDir, "buffers", closedBufferFileName(entry.tab))).catch(() => {});
+      }
     }
 
     const nextActive = tabAfterClose(this.#session.tabOrder, tabId, this.#session.activeTabId);
@@ -247,7 +263,8 @@ export class SessionStore {
       throw error;
     });
     await writeFileAtomic(this.#bufferPath(tab), content);
-    await unlink(closedPath).catch(() => {});
+    // FA-m5: the newer file still lists this closed entry, so its closed buffer is left in place.
+    if (this.newerVersion === null) await unlink(closedPath).catch(() => {});
     const withoutTab = this.#session.tabOrder.filter((id) => id !== tab.id);
     const order = this.#insertAfterActive(withoutTab, tab.id);
     this.#commit({

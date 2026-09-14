@@ -70,6 +70,8 @@ describe("loadJson", () => {
     expect(await loadJson(join(dir, "s.json"), numberDoc, () => ({ n: 0 }))).toEqual({
       value: { n: 0 },
       recovered: "none",
+      primary: "missing",
+      corruptCopy: null,
     });
   });
 
@@ -78,24 +80,37 @@ describe("loadJson", () => {
     expect(await loadJson(join(dir, "s.json"), numberDoc, () => ({ n: 0 }))).toEqual({
       value: { n: 5 },
       recovered: "none",
+      primary: "ok",
+      corruptCopy: null,
     });
   });
 
-  test("falls back to the backup and preserves the corrupt file", async () => {
+  test("falls back to the backup and names the copy of the corrupt file it saved", async () => {
     await writeFile(join(dir, "s.json"), "{not json");
+    await writeFile(join(dir, "s.json.bak"), '{"n":3}');
+    const result = await loadJson(join(dir, "s.json"), numberDoc, () => ({ n: 0 }));
+    expect(result).toMatchObject({ value: { n: 3 }, recovered: "backup", primary: "corrupt" });
+    expect(result.corruptCopy).toMatch(/^s\.corrupt-\d+\.json$/);
+    expect(await readdir(dir)).toContain(result.corruptCopy ?? "");
+  });
+
+  test("a missing file restored from its backup is reported as missing, and an older corrupt copy isn't named (FA-m4)", async () => {
+    await writeFile(join(dir, "s.corrupt-100.json"), "{from an earlier launch");
     await writeFile(join(dir, "s.json.bak"), '{"n":3}');
     expect(await loadJson(join(dir, "s.json"), numberDoc, () => ({ n: 0 }))).toEqual({
       value: { n: 3 },
       recovered: "backup",
+      primary: "missing",
+      corruptCopy: null,
     });
-    expect((await readdir(dir)).some((name) => name.startsWith("s.corrupt-"))).toBe(true);
   });
 
   test("uses defaults when both files are invalid", async () => {
     await writeFile(join(dir, "s.json"), '{"n":"x"}');
-    expect(await loadJson(join(dir, "s.json"), numberDoc, () => ({ n: 0 }))).toEqual({
+    expect(await loadJson(join(dir, "s.json"), numberDoc, () => ({ n: 0 }))).toMatchObject({
       value: { n: 0 },
       recovered: "defaults",
+      primary: "corrupt",
     });
   });
 });

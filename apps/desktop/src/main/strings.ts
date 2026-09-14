@@ -9,7 +9,14 @@ export const strings = {
     e2eEnabled: (path: string) => `E2E automation enabled on ${path}`,
     restartRequested: "Restart in Safe Mode requested",
     relaunchFailed: "Could not relaunch JSLab after Restart in Safe Mode; quitting without reopening",
-    fatalError: "Unhandled error; quitting",
+    startupFailed: "startup failed",
+    startupDialogFailed: "startup failure dialog could not be shown",
+    uncaughtException: "Uncaught exception",
+    unhandledRejection: "Unhandled rejection",
+    noticeFailed: "Couldn't show the unexpected-error notice",
+  },
+  dialogs: {
+    startupFailed: (message: string) => `JSLab couldn't start: ${message}`,
   },
   files: {
     tooLarge: (name: string) => `${name} is larger than 50 MB and can't be opened.`,
@@ -24,8 +31,12 @@ export const strings = {
     copySaved: (file: string) => ` A copy was saved as ${file}`,
     settingsReset: "Settings were reset because the file was unreadable.",
     settingsRestored: "Settings were restored from the backup because the file was unreadable.",
+    settingsRestoredMissing: "Settings were restored from the backup because settings.json was missing.",
     sessionReset: "Your tabs couldn't be restored because session.json was unreadable.",
     sessionRestored: "Your tabs were restored from the backup because session.json was unreadable.",
+    sessionRestoredMissing: "Your tabs were restored from the backup because session.json was missing.",
+    /** Spec §20 "Unexpected Main exception": a non-blocking notice; the app keeps running (FA-I3). */
+    unexpectedError: "Something went wrong. Choose Help → Copy Debug Log to report it.",
     settingsNewer: (version: number) =>
       `settings.json was written by a newer version of JSLab (version ${version}). Changes made in this window won't be saved to it.`,
     sessionNewer: (version: number) =>

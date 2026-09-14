@@ -9,6 +9,8 @@ export interface Rect {
 /** The part of Electrobun's `Display` (devkit `api/sdks/main/proc/native.ts:3068-3074`) that restoring needs. */
 export interface DisplayInfo {
   id: number;
+  /** The whole display, menu bar and Dock included. */
+  bounds: Rect;
   workArea: Rect;
   isPrimary: boolean;
 }
@@ -26,10 +28,49 @@ const centerOf = (rect: Rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect
 const contains = (area: Rect, point: { x: number; y: number }) =>
   point.x >= area.x && point.x < area.x + area.width && point.y >= area.y && point.y < area.y + area.height;
 
-/** The display whose work area holds the frame's center. Saving a frame records its id (spec §10.1). */
+const overlap = (a: Rect, b: Rect) =>
+  Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) *
+  Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+
+/**
+ * The display whose work area holds the frame's center; otherwise the display whose full bounds the frame overlaps
+ * most, so a frame centered over the menu bar or Dock strip still records a display (FA-m6). Saving a frame records
+ * its id (spec §10.1).
+ */
 export function displayForFrame(frame: Rect, displays: readonly DisplayInfo[]): DisplayInfo | null {
   const center = centerOf(frame);
-  return displays.find((display) => contains(display.workArea, center)) ?? null;
+  const byCenter = displays.find((display) => contains(display.workArea, center));
+  if (byCenter) return byCenter;
+  let best: DisplayInfo | null = null;
+  let bestArea = 0;
+  for (const display of displays) {
+    const area = overlap(frame, display.bounds);
+    if (area > bestArea) {
+      best = display;
+      bestArea = area;
+    }
+  }
+  return best;
+}
+
+/**
+ * The main window frame to persist after a move, resize or full-screen change (spec §10.1). In full screen the
+ * windowed frame is kept, so leaving full screen after a relaunch returns to a normal size; with no windowed frame
+ * saved yet (the first toggle), the current frame is saved with `fullscreen: true` (FA-m6).
+ */
+export function frameToSave(input: {
+  fullScreen: boolean;
+  frame: Rect;
+  previous: SavedFrame | null;
+  displays: readonly DisplayInfo[];
+}): SavedFrame {
+  if (input.fullScreen && input.previous) return { ...input.previous, fullscreen: true };
+  const display = displayForFrame(input.frame, input.displays);
+  return {
+    ...rectOf(input.frame),
+    ...(display ? { displayId: String(display.id) } : {}),
+    fullscreen: input.fullScreen,
+  };
 }
 
 /** Shrinks the frame to fit the area, then moves it fully inside. */

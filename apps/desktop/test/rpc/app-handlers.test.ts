@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { defaultSettings } from "@jslab/shared";
 import { createRedactor } from "../../src/main/logging/redact";
 import { appBundlePath, relaunchCommand } from "../../src/main/platform/relaunch";
-import { type AppHandlerDeps, createAppHandlers } from "../../src/main/rpc/app-handlers";
+import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } from "../../src/main/rpc/app-handlers";
 
 function setup() {
   const deps = {
@@ -52,6 +52,23 @@ describe("app.command", () => {
     expect(deps.toggleFullScreen).toHaveBeenCalledTimes(1);
     expect(deps.closeWindow).toHaveBeenCalledTimes(1);
     expect(deps.openSettings).toHaveBeenCalledTimes(1);
+  });
+
+  test("the Settings window RPC rejects main-window actions such as closeWindow and runs its own (FA-m11)", async () => {
+    const { deps } = setup();
+    const handlers = createSettingsAppHandlers(deps);
+    for (const action of ["closeWindow", "toggleFullScreen", "openSettings", "openDataFolder"]) {
+      handlers.messages["app.command"]({ action });
+    }
+    await Bun.sleep(0);
+    expect(deps.closeWindow).not.toHaveBeenCalled();
+    expect(deps.toggleFullScreen).not.toHaveBeenCalled();
+    expect(deps.openSettings).not.toHaveBeenCalled();
+    expect(deps.openPath.mock.calls).toEqual([["/data"]]);
+    const rejected = (deps.log.mock.calls as unknown[][]).filter(
+      (call) => call[0] === "Rejected invalid app.command payload",
+    );
+    expect(rejected).toHaveLength(3);
   });
 
   test("unknown actions are logged and dropped", () => {

@@ -1,30 +1,24 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, mock, test } from "bun:test";
 import { flushBeforeQuit } from "../src/main/quit";
-import { latestCorruptCopy, startupNotices } from "../src/main/startup-notices";
-
-let dir = "";
-beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "jslab-startup-"));
-});
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
-});
+import { startupNotices } from "../src/main/startup-notices";
 
 describe("startup notices (spec §20, final review M7 and I4)", () => {
   test("recovery, newer-version and skipped-tab notices say what happened", () => {
-    writeFileSync(join(dir, "settings.corrupt-100.json"), "{");
-    writeFileSync(join(dir, "settings.corrupt-200.json"), "{");
-    expect(latestCorruptCopy(dir, "settings")).toBe("settings.corrupt-200.json");
-    expect(latestCorruptCopy(dir, "session")).toBeNull();
     expect(
       startupNotices({
-        settings: { recovered: "defaults", newerVersion: null },
-        session: { recovered: "backup", newerVersion: 3, droppedTabs: ["x", "y"] },
-        corruptCopies: { settings: "settings.corrupt-200.json", session: null },
+        settings: {
+          recovered: "defaults",
+          newerVersion: null,
+          primary: "corrupt",
+          corruptCopy: "settings.corrupt-200.json",
+        },
+        session: {
+          recovered: "backup",
+          newerVersion: 3,
+          droppedTabs: ["x", "y"],
+          primary: "corrupt",
+          corruptCopy: null,
+        },
       }),
     ).toEqual([
       {
@@ -47,11 +41,40 @@ describe("startup notices (spec §20, final review M7 and I4)", () => {
     ]);
     expect(
       startupNotices({
-        settings: { recovered: "none", newerVersion: null },
-        session: { recovered: "none", newerVersion: null, droppedTabs: [] },
-        corruptCopies: { settings: null, session: null },
+        settings: { recovered: "none", newerVersion: null, primary: "ok", corruptCopy: null },
+        session: { recovered: "none", newerVersion: null, droppedTabs: [], primary: "missing", corruptCopy: null },
       }),
     ).toEqual([]);
+  });
+
+  test("a missing file restored from its backup says it was missing; a corrupt one names this launch's copy (FA-m4)", () => {
+    expect(
+      startupNotices({
+        settings: { recovered: "backup", newerVersion: null, primary: "missing", corruptCopy: null },
+        session: {
+          recovered: "backup",
+          newerVersion: null,
+          droppedTabs: [],
+          primary: "corrupt",
+          corruptCopy: "session.corrupt-5.json",
+        },
+      }),
+    ).toEqual([
+      { id: "settingsRecovered", message: "Settings were restored from the backup because settings.json was missing." },
+      {
+        id: "sessionRecovered",
+        message:
+          "Your tabs were restored from the backup because session.json was unreadable. A copy was saved as session.corrupt-5.json",
+      },
+    ]);
+    expect(
+      startupNotices({
+        settings: { recovered: "none", newerVersion: null, primary: "ok", corruptCopy: null },
+        session: { recovered: "backup", newerVersion: null, droppedTabs: [], primary: "missing", corruptCopy: null },
+      }),
+    ).toEqual([
+      { id: "sessionRecovered", message: "Your tabs were restored from the backup because session.json was missing." },
+    ]);
   });
 });
 

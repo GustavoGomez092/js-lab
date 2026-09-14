@@ -44,7 +44,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | EX-20 | Unhandled promise rejections surface as errors | Docs, CL 1.13.0 | `error` event (`unhandledRejection`) | §5.11 | M1 | I | ✅ `apps/desktop/test/runs/run-coordinator.test.ts`, `apps/ui/test/entry-row.test.tsx` |
 | EX-21 | Syntax error messages | CL 1.2.1 | Squiggle + code frame; previous output dimmed | §5.11 | M1 | E | ✅ `packages/transform/test/transform.test.ts`, `apps/ui/test/logic.test.ts`, `apps/ui/test/output.test.ts` |
 | EX-22 | Runtime environments per tab: Browser & Node.js (default), Node.js, Browser | Docs, CL 4.0.0 | `browser-node` (default), `bun`, `browser` | §5.2 | M1/M4 | E | 📝 Node.js → Bun (D2); `browser-node` Node APIs are async-only for fs/child_process (§5.13) |
-| EX-23 | Default runtime setting | Docs | `run.defaultRuntime` | §8 | M2 | U | ✅ `packages/e2e/scenarios/settings.test.ts` |
+| EX-23 | Default runtime setting | Docs | `run.defaultRuntime` | §8 | M2 | U | 🚧 default runtime setting persists; new tabs use Bun until M4 |
 | EX-24 | Status-bar runtime switcher | Docs | Same + Actions → Runtime | §7.1 | M2 | E | 🚧 switcher and menu in M2; browser runtimes enable in M4 |
 | EX-25 | `alert` / `confirm` / `prompt` | CL 3.0.3, 3.1.0 | Native if supported, async fallback otherwise | §5.12 | M4 | E | ⬜ (📝 if M0-S4 fails) |
 | EX-26 | `process.memoryUsage()` and most of `process` available | CL 1.7.0, 1.8.0 | Full in `bun`; snapshot in `browser-node` | §5.13 | M1/M4 | I | 🚧 no automated test yet (planned with the M3 runner environment work) |
@@ -64,7 +64,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
-| LB-01 | Per-tab language: TypeScript, JavaScript, TSX, JSX | Docs, CL 4.0.0 | Same | §6.1 | M1/M2 | E | ⬜ |
+| LB-01 | Per-tab language: TypeScript, JavaScript, TSX, JSX | Docs, CL 4.0.0 | Same | §6.1 | M1/M2 | E | ✅ (M2) `packages/e2e/scenarios/language.test.ts` |
 | LB-02 | Default Language setting | Docs | `run.defaultLanguage` | §8 | M2 | U | ✅ `packages/e2e/scenarios/settings.test.ts` |
 | LB-03 | TypeScript compiled before running; types don't block execution | Docs | Babel preset-typescript | §5.4 | M1 | U | ⬜ |
 | LB-04 | JSX/TSX automatic runtime (no React import) | Docs | `runtime: "automatic"` | §5.4 | M1 | U | ⬜ |
@@ -109,7 +109,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
 | OU-01 | Console output with warn/error styling | Docs | Same | §7.2 | M1 | E | ✅ `apps/ui/test/entry-row.test.tsx` ("styles console levels and indents groups") |
-| OU-02 | Expandable trees for objects, arrays, Maps, Sets | Docs, CL 1.10.0 | Value tree + lazy handles | §5.9, §7.2 | M1 | U, E | ✅ `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx` |
+| OU-02 | Expandable trees for objects, arrays, Maps, Sets | Docs, CL 1.10.0 | Value tree + lazy handles | §5.9, §7.2 | M1 | U, E | ✅ `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx` (📝 entries past the first 10,000 aren't reachable yet; paging in M4) |
 | OU-03 | Expand everything | Docs | Entry menu → Expand All | §7.2 | M1 | E | 🚧 pending M1 manual QA (M2 E2E) — no unit/integration test covers the aggregate "Expand All" menu command (only per-node expand is tested, `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx`); the canary boot fix (R-M1-14) doesn't exercise menu clicks |
 | OU-04 | Functions, classes, Promises identifiable without expanding | Docs | Encoded kinds; Promise updates in place | §5.9 | M1 | U | ✅ `packages/serializer/test/encode.test.ts` |
 | OU-05 | Strings verbatim at top level, quoted when nested | Docs | Same | §7.2 | M1 | U | ✅ `packages/serializer/test/encode.test.ts`, `apps/ui/test/value-view.test.tsx` |
@@ -151,13 +151,13 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | TF-08 | Confirm Close | CL 2.4.0, Docs | `tabs.confirmClose` | §7.3 | M2 | E | ✅ `packages/e2e/scenarios/files.test.ts` |
 | TF-09 | Prompt to save a modified file on close | CL 2.7.1 | Same | §7.3 | M2 | E | ✅ `packages/e2e/scenarios/files.test.ts` |
 | TF-10 | Open / Save / Save As | Docs | Open dialog + `saveDialog` adapter | §10.2 | M2 | E | ✅ `packages/e2e/scenarios/files.test.ts` |
-| TF-11 | Drag and drop files opens new tabs | CL 2.7.1, 3.2.0 | Same + folder sets WD | §7.3 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q14) |
+| TF-11 | Drag and drop files opens new tabs | CL 2.7.1, 3.2.0 | New tabs as unsaved scratch copies named after the file, with no file path; folder sets WD | §7.3 | M2 | M | 📝 deviation until native drop (M3); drops pending user manual QA (docs/qa/m2-checklist.md Q14) |
 | TF-12 | Large file open guard | CL 2.6.0 | 5 MB confirmation | §10.2 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q15) |
 | TF-13 | Auto-save tab contents on change; restore on restart | CL 2.11.0, #590 | Buffers + session | §10.1 | M1/M2 | I | ✅ `apps/desktop/test/persistence/persistence.test.ts`, `packages/shared/test/session.test.ts`, `packages/e2e/scenarios/tabs.test.ts`, `packages/e2e/scenarios/view-state.test.ts` (M2) |
 | TF-14 | Window size/position remembered | CL 1.6.0 | Same | §10.1 | M1 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q34); the off-screen restore scenario (`packages/e2e/scenarios/files.test.ts`) covers only the clamp, and M1 evidence: `apps/desktop/test/services/services.test.ts` ("persists the window frame and ignores invalid frames"), `packages/shared/test/session.test.ts` |
 | TF-15 | Tab tooltip shows file path | #644 | Same + Reveal in Finder | §7.3 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q8) |
-| TF-16 | Horizontal/vertical layout; draggable divider | Docs, CL 2.1.0 | Same, per tab | §7.1 | M2 | E | ✅ `packages/e2e/scenarios/layout.test.ts` |
-| TF-17 | Toggle Output, Side Bar, Activity Bar, Status Bar, Full Screen | Docs, Strings | View menu | §7.4 | M2 | E | ✅ `packages/e2e/scenarios/layout.test.ts`, `packages/e2e/scenarios/menu.test.ts` |
+| TF-16 | Horizontal/vertical layout; draggable divider | Docs, CL 2.1.0 | Same, per tab | §7.1 | M2 | E | 🚧 orientation ✅ (`packages/e2e/scenarios/layout.test.ts`); divider drag pending Q3 (docs/qa/m2-checklist.md) |
+| TF-17 | Toggle Output, Side Bar, Activity Bar, Status Bar, Full Screen | Docs, Strings | View menu | §7.4 | M2 | E | 🚧 Full Screen pending Q1 (docs/qa/m2-checklist.md); the other toggles ✅ `packages/e2e/scenarios/layout.test.ts`, `packages/e2e/scenarios/menu.test.ts` |
 | TF-18 | Activity bar: Run, Stop, Snippets, NPM, AI Chat, Settings | Docs | Same | §7.1 | M2 | E | 🚧 Run/Stop/Settings in M2; Snippets/AI panels M5, NPM M3; side bar resizing (240–600 px, spec §7.1) arrives with the first side-bar panel in M5 |
 | TF-19 | Status bar: runtime, language, web view toggle, split toggle | Docs | Same + WD chip, run state, vim mode | §7.1 | M2 | E | 🚧 runtime/language/split in M2; Web View toggle M4, WD chip M3 |
 | TF-20 | File associations js/jsx/ts/tsx | #620 | + mjs/cjs/mts/cts via Info.plist patch | §4.6 | M6 | M | ⬜ |
@@ -233,7 +233,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | XT-08 | Keychain-stored secrets | — | §18 | M5 | I | ⬜ |
 | XT-09 | Safe Mode + crash-loop detection | #6, #178, #416 | §5.14 | M1 | E | ✅ `apps/desktop/test/services/services.test.ts`, `apps/ui/test/app.test.tsx` |
 | XT-10 | Configurable Auto Run delay, loop limit, output cap, hover delay | #419, #683, #567, #705 | §8 | M1–M3 | U | ⬜ |
-| XT-11 | Formatting preserves folds, scroll, cursor | #639, #654 | §6.4 | M2 | E | ✅ `packages/e2e/scenarios/format.test.ts` |
+| XT-11 | Formatting preserves folds, scroll, cursor | #639, #654 | §6.4 | M2 | E | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q22): folds/scroll; the cursor is kept in `packages/e2e/scenarios/format.test.ts` |
 | XT-12 | Auto-install `@types` option | #629 | §11.4 | M3 | I | ⬜ |
 
 ## Deviation notes
@@ -241,6 +241,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 - **EX-22 / D2:** RunJS's "Node.js" runtime is replaced by Bun (Node-compatible). Known differences are documented in `docs/user/bun-vs-node.md` (spec §26). In "Browser & Node APIs", synchronous `fs`/`child_process` APIs aren't available; errors explain this and offer to switch the tab to Bun.
 - **EX-34:** the `browser` runtime enforces CORS, as a real browser does. `browser-node` and `bun` don't.
 - **OU-07:** user-defined getters are evaluated only when expanded, to avoid side effects during logging.
+- **TF-11:** the webview doesn't get a dropped file's path, so a dropped file opens as an unsaved scratch copy titled with the file's name. ⌘S asks Save As, and Reveal in Finder and Copy Path are disabled. A Main-side native drop that keeps the path is planned for M3.
 - **TF-21:** closing the last tab keeps the app open with a fresh tab.
 - **PL-02:** Windows and Linux follow v1.
 - **PL-05:** there's no licensing; JSLab is MIT and fully free.

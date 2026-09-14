@@ -1,6 +1,6 @@
 # M1 Manual QA Checklist
 
-Run against a packaged canary build (`cd apps/desktop && hutch run build`), on macOS arm64, starting from a clean data folder. Launch it the way M0-S1 recorded:
+Run against a packaged canary build (`cd apps/desktop && hutch run build`), on macOS arm64, starting from a fresh data folder (an existing one is moved into the QA folder, never deleted). Launch it the way M0-S1 recorded:
 - The canary `.app` (`JSLab-canary.app`) is a self-extracting installer. On first launch it extracts into the data folder below.
 - Copy it to internal disk first. Launched from an external/removable volume, it stalls on a hidden removable-volume permission prompt.
 - **R-M1-14: always launch with the shell's working directory set to an internal-disk directory before exec'ing the launcher — e.g. `cd` into the copy's own folder first.** At startup Bun opens its current working directory. If that cwd is itself on an external/removable volume (for example, a shell left `cd`'d into a worktree checked out on such a volume), macOS raises a `kTCCServiceSystemPolicyRemovableVolumes` consent prompt — and a script-launched, backgrounded app has no session to show that prompt in, so the process hangs forever in the underlying `openat` syscall, before ever creating a window. A normal Finder/LaunchServices double-click launch uses `cwd=/` and is never affected; this only bites scripted/background launches whose invoking shell happens to be sitting in a directory on a non-internal volume. `cd`-ing into the internal-disk copy (or any internal-disk directory) before exec'ing the launcher avoids it entirely.
@@ -10,8 +10,10 @@ From the repository root (the build step above leaves the shell in `apps/desktop
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-rm -rf "$HOME/Library/Application Support/dev.jslab.app/canary"
 QA_DIR="<an internal-disk working directory>"   # e.g. mktemp -d; must NOT be on an external/removable volume
+JSLAB_QA_DIR="$QA_DIR"
+# Move an existing canary data folder into the QA folder instead of deleting it: it may hold canary state from earlier QA.
+[ -d "$HOME/Library/Application Support/dev.jslab.app/canary" ] && mv "$HOME/Library/Application Support/dev.jslab.app/canary" "$JSLAB_QA_DIR/canary-data-backup-$(date +%Y%m%d-%H%M%S)"
 cp -R "apps/desktop/build/canary-macos-arm64/JSLab-canary.app" "$QA_DIR/"
 cd "$QA_DIR"   # R-M1-14: cwd must be internal disk before exec'ing the launcher
 ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "$QA_DIR/JSLab-canary.app/Contents/MacOS/launcher" &

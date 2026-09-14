@@ -120,6 +120,7 @@ M5 depends on M3 because snippets autocomplete, AI context and the CLI all use t
   6. Audio indicator and mute.
   7. Runtime switcher enabling all three runtimes.
   8. Decision record: keep `browser-node` as default or switch to `bun` (risk R8).
+  9. Paging for expanded large collections in the output: entries past the first 10,000 aren't reachable yet.
 - **Parity rows:** EX-22, EX-25, EX-34, EX-35, LB-06, WV-01..WV-06.
 - **Exit:** all four guide scenarios pass manual QA.
 

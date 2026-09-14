@@ -1,6 +1,6 @@
 # M2 Manual QA Checklist
 
-Run against the packaged canary build on macOS arm64, from a clean data folder, using the M0-S1 launch procedure as corrected in M1:
+Run against the packaged canary build on macOS arm64, from a fresh canary data folder (an existing one is moved into `$JSLAB_QA_DIR`, never deleted), using the M0-S1 launch procedure as corrected in M1:
 - Copy the `.app` to internal disk first.
 - Launch it with `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1`, from a shell whose working directory is on internal disk (R-M1-14). Bun opens its cwd at startup, and a cwd on an external volume (such as a worktree checkout) blocks forever on a hidden removable-volume consent prompt.
 - Quit from the app menu. When a script must stop it, use the scoped, zsh-safe teardown below (R-M1-13) and nothing broader.
@@ -11,7 +11,8 @@ REPO="$(git rev-parse --show-toplevel)"
 builtin cd "$REPO/apps/desktop" && hutch run build && builtin cd "$REPO"
 : "${JSLAB_QA_DIR:?set JSLAB_QA_DIR to a folder under the session scratchpad (internal disk, R-M1-8)}"
 APP="$(ls -d apps/desktop/build/canary-macos-arm64/*.app)"
-rm -rf "$HOME/Library/Application Support/dev.jslab.app/canary"
+# Move an existing canary data folder into the QA folder instead of deleting it: it may hold canary state from earlier QA.
+[ -d "$HOME/Library/Application Support/dev.jslab.app/canary" ] && mv "$HOME/Library/Application Support/dev.jslab.app/canary" "$JSLAB_QA_DIR/canary-data-backup-$(date +%Y%m%d-%H%M%S)"
 cp -R "$APP" "$JSLAB_QA_DIR/"
 builtin cd "$JSLAB_QA_DIR"  # R-M1-14: internal-disk cwd before exec'ing the launcher
 ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "$JSLAB_QA_DIR/$(basename "$APP")/Contents/MacOS/launcher" &
@@ -77,7 +78,7 @@ Each item passes only if the result matches exactly. Items marked **(E)** are al
 ## Tabs
 - [ ] **Q6 Tab bar (TF-01, TF-02).**
   - ⌘T adds a tab after the active one, with an accent underline on the active tab.
-  - Titles follow the first code line, then the file name.
+  - Titles use the custom title when one is set, then the file name, then the first non-empty code line.
   - **Pending user:** the accent underline on the active tab, a visual check.
 - [ ] **Q7 Middle-click (TF-03).** Middle-clicking a tab closes it.
   - **Pending user:** the middle-click, a pointer check.
@@ -111,7 +112,7 @@ Each item passes only if the result matches exactly. Items marked **(E)** are al
   - **✅ covered:** Don't Save (⌘D) (`packages/e2e/scenarios/files.test.ts`, "closing a modified file asks to save, and ⌘D discards").
   - **Pending user:** Save and Cancel in the prompt. Only Don't Save is scripted.
 - [ ] **Q14 Drag and drop (TF-11).**
-  - Dropping two `.ts` files opens two tabs.
+  - Dropping two `.ts` files opens two tabs. Each is an unsaved scratch copy titled with the file's name and with no file path: ⌘S asks Save As, there's no dirty dot, and Reveal in Finder and Copy Path are disabled (a deviation until a native drop lands in M3).
   - Dropping a PNG shows "isn't a text file".
   - Dropping a folder shows the working-directory notice.
   - Dropping a file onto the Monaco editor area opens it as a tab instead of inserting its text (T18).
@@ -150,8 +151,9 @@ Each item passes only if the result matches exactly. Items marked **(E)** are al
 - [ ] **Q22 Format Code (ED-22, XT-11).**
   - ⌥⇧F formats. A fold elsewhere in the file stays folded, and the scroll position stays.
   - One ⌘Z undoes the whole format.
-  - **Pending user:** the fold, the scroll position and one-step undo, by eye.
-- [x] **Q23 Format on run and save (ED-23, XT-05).** With each option on, a manual run or a save formats first. Formatting doesn't happen while you type.
+  - A slow format shows "Formatting…" in the status bar, and a hung formatter times out with "Couldn't format" (T21 timeout).
+  - **Pending user:** the fold, the scroll position and one-step undo, by eye, and the "Formatting…" and timeout messages.
+- [x] **Q23 Format on run and save (ED-23, XT-05).** With Format on Run on, a manual run formats first, except while you are typing (the editor has focus and you typed in the last second). With Format on Save on, a save formats first, right away, even while you are typing.
   - Covered by `packages/e2e/scenarios/format.test.ts` ("format on run formats before a manual run when not typing", "format on save writes formatted code").
 
 ## Settings, themes and output
@@ -184,14 +186,16 @@ Each item passes only if the result matches exactly. Items marked **(E)** are al
   - Copy All copies only the entries visible under the current filter chip (R-M2-T19A-1): switch to Errors, press Copy All, and only error entries are copied.
   - The 3px level stripes use the result, log and error colors, and only error rows are tinted, in both Graphite and Graphite Light (T19A).
   - `console.log("x".repeat(1_000_000))` and `process.stdout.write("y".repeat(2_000_000))` keep JSLab responsive and each show one truncated entry (R-M2-T19B-1/2).
-  - **Pending user:** stripe colors and tint in both themes, hover and click, filtered Copy All (the real clipboard), and the two large writes.
+  - Minimize JSLab during a long logging run for a few minutes, then restore it: the UI stays responsive (FB-I1).
+  - **Pending user:** stripe colors and tint in both themes, hover and click, filtered Copy All (the real clipboard), the two large writes, and the minimized logging run.
 - [ ] **Q29 Command palette.**
   - ⌘⇧P opens a 520px palette over a scrim, with an EDITOR (or OUTPUT, after clicking the output) badge.
   - Typing "tog" highlights "Tog" in the accent color.
   - It shows RUN/VIEW sections, "currently on" descriptions and keycaps.
   - ↑↓, ↵ and esc behave as the footer says.
   - Clicking inside the palette panel (the footer, a label) keeps ↑↓, ↵ and esc working (R-M2-T20-1).
-  - **Pending user:** the size, scrim, badge, highlight color and keycaps by eye, and the keys after clicking inside the panel.
+  - The empty palette lists every section, including Theme and Help (FB-m1).
+  - **Pending user:** the size, scrim, badge, highlight color and keycaps by eye, the keys after clicking inside the panel, and scrolling the empty palette to Theme and Help.
 
 ## Help
 - [x] **Q30 Copy Debug Log (ST-10).** Pasting shows JSON with versions, macOS, arch, settings and the last log lines, with no secrets.
@@ -200,7 +204,8 @@ Each item passes only if the result matches exactly. Items marked **(E)** are al
   - **Pending user:** Finder opening. The scenario only checks the path recorded in `e2e-opened.txt`.
 - [ ] **Q32 Restart in Safe Mode.** The app quits and relaunches with the banner "Safe Mode: restarted from Help → Restart in Safe Mode."
   - Recovery notice (T9-m2): quit, move `settings.json` away while `settings.json.bak` exists, and relaunch. Then do the same with `session.json` and `session.json.bak`. Check that each notice's wording reads correctly for a missing file rather than a corrupt one. The notices currently say "…restored from the backup because the file was unreadable." and "Your tabs were restored from the backup because session.json was unreadable."
-  - **Pending user:** the relaunch itself (E2E suppresses `open -n`; the scenario checks only that the next launch is in Safe Mode), and the recovery-notice wording for a missing file.
+  - An unexpected error after startup shows a notice with a Copy Debug Log button, and the app keeps running (spec §20).
+  - **Pending user:** the relaunch itself (E2E suppresses `open -n`; the scenario checks only that the next launch is in Safe Mode), the recovery-notice wording for a missing file, and the unexpected-error notice if one occurs.
 
 ## Known limitations (record, don't fix in M2)
 - **Main crash.** If JSLab's Main process crashes or is force-quit, a running runner exits, but processes its user code spawned keep running. They are in the runner's own process group, and nothing signals it (R-M1-18 N3). A runner that exits on its own, and every Kill, Stop and quit, does take them with it.
@@ -209,10 +214,11 @@ Each item passes only if the result matches exactly. Items marked **(E)** are al
 - **Long error text.** Error messages are clipped at 16 KB and error names at 1 KB (R-M2-T19B-1/2).
 
 ## Automated suite
-- [x] **Q33 Canary E2E.** `JSLAB_E2E_APP="$JSLAB_QA_DIR/$(basename "$APP")" bun run e2e` → 47 pass, 0 fail.
-  - **Dev build** (`hutch run build:dev`, then `bun run e2e`): 47 pass, 0 fail, 16 files, 925 s.
-  - **Packaged canary** (`JSLab-canary.app` copied to `$JSLAB_QA_DIR`): 47 pass, 0 fail, 16 files, 924 s.
-    - The first run of that copy was 46 pass, 1 fail. Its first launch (`themes.test.ts`) self-extracted the app. The reparented, extracted app never opened `jslab.sock` in the scenario's data folder before the 45 s wait ran out, which is the first-launch case in the M2 plan (Task 25, Step 4).
-    - The stuck launch was stopped with the scoped R-M1-13 teardown. The copy was already extracted, so the suite was rerun without a separate warm-up.
-  - **Unit and integration suite**, from a clean install (`rm -rf node_modules && bun install --frozen-lockfile && bun run lint && bun run typecheck && bun run test`): lint and typecheck exit 0. 561 tests pass, 0 fail: shared 40, rpc-schema 11, serializer 31, transform 53, runner-bun 34, desktop 190, ui 186, themes 7, e2e 9. That is 293 more than the M1 final of 268 (`bae17c4`).
+- [x] **Q33 Canary E2E.** `JSLAB_E2E_APP="$JSLAB_QA_DIR/$(basename "$APP")" bun run e2e` → 48 pass, 0 fail.
+  - **Dev build** (`hutch run build:dev`, then `bun run e2e`): 48 pass, 0 fail, 17 files, 472 s.
+  - **Packaged canary** (`JSLab-canary.app` copied to `$JSLAB_QA_DIR`): 48 pass, 0 fail, 17 files, 487 s.
+    - The first run of that copy was 47 pass, 1 fail. Its first launch (`themes.test.ts`) self-extracted the app, and the extracted app never opened `jslab.sock` in the scenario's data folder before the 45 s wait ran out, which is the first-launch case in the M2 plan (Task 25, Step 4).
+    - That launch's launcher and Main were still running after the run. They were stopped with the scoped R-M1-13 teardown. The copy was already extracted, so the suite was rerun without a separate warm-up.
+  - **Unit and integration suite** (`bun run lint && bun run typecheck && bun run test`): lint and typecheck exit 0. 615 tests pass, 0 fail: shared 42, rpc-schema 14, serializer 31, transform 54, runner-bun 35, desktop 206, ui 215, themes 8, e2e 10. That is 347 more than the M1 final of 268 (`bae17c4`).
   - Review fix rounds added tests beyond the plan's count of 497: R-M2-T2-1, then each task's fix rounds.
+  - The final review fix waves added more: Wave 1 took the suite from 561 to 586 tests (and 47 to 48 scenarios), and Wave 2 took it to 615.

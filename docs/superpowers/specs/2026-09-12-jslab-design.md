@@ -474,6 +474,7 @@ Special cases:
 | Bundle (browser) | Same presentation. Unresolved imports offer "Install <pkg>" (§11.4). |
 | Runtime (thrown / unhandled rejection) | An error entry with name, message, and a source-mapped stack. Frames in user code are clickable (`L12:5`) and move the caret; internal frames are collapsed. The editor adds an inline error decoration on the throwing line. |
 | Runner crash (exit ≠ 0 without `done`) | "Runtime exited unexpectedly (code N / signal S)" plus the stderr tail. The next spare is used on the next run. |
+| User `process.exit` | Not an error. Pending output is flushed, and the runner exits once IPC drains, at most 2 s later. Code after the call doesn't run. |
 
 ### 5.12 Web runners (`browser`, `browser-node`)
 
@@ -573,7 +574,8 @@ Special cases:
   - Actions → Format Code (`Alt+Shift+F`).
   - Before each run when `run.formatOnRun` is on. Formatting is skipped while the editor has focus and typing happened in the last 1 s, so the cursor doesn't jump.
   - On save when `editor.formatOnSave` is on.
-- **Edits** are applied as a minimal Monaco edit (`pushEditOperations` over a diff), so undo, folding, scroll, and cursor are preserved. This fixes RunJS #639 and #654.
+- **Edits** are applied as a minimal Monaco edit (`executeEdits` over a line diff, bracketed by `pushUndoStop`), so undo, folding, scroll, and cursor are preserved. This fixes RunJS #639 and #654.
+- **Timeout:** a format request fails after 10 s plus 5 s per MB of code, at most 60 s. The worker restarts, the status bar says "Couldn't format", and the run or save goes ahead. A request pending for more than 300 ms shows "Formatting…" in the status bar.
 - **Options:** all `prettier.*` settings (§8).
 - **Failure** (a syntax error) leaves the code unchanged and shows a status-bar message.
 
@@ -582,7 +584,7 @@ Special cases:
 - **Command registry.** Every action is a `CommandId`, e.g. `run.start` or `tab.reopenClosed`, with a handler, a `when` context (`editorFocus`, `outputFocus`, `vimNormal`, …), and a default binding.
 - **One resolver in the UI owns keyboard dispatch.** Native menu items dispatch the same `CommandId` through the `menu.command` message.
 - **User overrides** are stored in `keybindings.json` as `[{ "key": "cmd+shift+enter", "command": "run.start", "when": "editorFocus" }, { "key": "cmd+k", "command": "-output.clear" }]`. The format is VS Code-style; a leading `-` removes a binding.
-- **Command palette** (⌘⇧P): a context-sensitive list of every command, grouped by category, with match highlighting, inline state descriptions and keycaps. It was pulled into v1 by the M2 UI decision ("Graphite with a spice of Daylight Rail").
+- **Command palette** (⌘⇧P): a context-sensitive list of every enabled command except the ones hidden from the palette, grouped by category, with match highlighting, inline state descriptions and keycaps. It was pulled into v1 by the M2 UI decision ("Graphite with a spice of Daylight Rail").
 - **Settings → Keybindings:**
   - A searchable table: Command, Keybinding, When, Source (Default/User).
   - A key-capture editor that warns on conflicts.
@@ -696,7 +698,7 @@ Special cases:
 - **Confirm Close** (`tabs.confirmClose`) asks before closing any tab. Separately, a saved file with changes always prompts "Save changes to x.ts?" with Save, Don't Save, and Cancel.
 - Tabs reorder by dragging, and a saved-file tab's tooltip shows the full path.
 - **Closing the last tab** opens a fresh empty tab. `Cmd+W` on a single empty tab closes the window; the app stays in the Dock, and clicking the Dock icon reopens it.
-- **Dropped files** open in new tabs, one per file. Non-text files and files over 50 MB are rejected, and files over 5 MB open only after confirmation. A dropped folder sets the current tab's WD.
+- **Dropped files** open in new tabs, one per file. The webview doesn't get a dropped file's path, so each opens as an unsaved scratch copy titled with the file's name and with no file path: ⌘S asks Save As, and Reveal in Finder and Copy Path are disabled. A Main-side native drop that keeps the path is planned for M3. Non-text files and files over 50 MB are rejected, and files over 5 MB open only after confirmation. A dropped folder sets the current tab's WD.
 
 ### 7.4 Application menu
 
@@ -834,7 +836,7 @@ The Settings window has these tabs: **General · Editor · Formatting · Appeara
 }
 ```
 
-UI colors are applied as CSS variables. From M2 on, built-in themes are semantic token sets from `@jslab/themes` rather than the `ui` object sketched above: `bg.canvas`, `bg.chrome`, `bg.elevated`, `bg.hover`, `bg.selection`, `bg.activeRow`, `bg.errorRow`, `bg.lineHover`, `bg.lineHighlight`, `bg.accentMuted`, `bg.scrim`; `border.default`, `border.muted`, `border.accent`; `fg.default`, `fg.muted`, `fg.accent`, `fg.onAccent`, `fg.success`, `fg.warn`, `fg.error`, `fg.info`; `console.result`, `console.log`, `console.info`, `console.warn`, `console.error`; and `syntax.comment`, `syntax.keyword`, `syntax.string`, `syntax.number`, `syntax.type`, `syntax.function`. Each token is a CSS variable (`bg.canvas` → `--bg-canvas`), the Monaco theme is built from the same tokens, and every text token meets WCAG AA on each surface it is drawn on. The output value renderer uses the `console.*` and `syntax.*` tokens. The M5 VS Code importer and `*.jslab-theme.json` files map onto this token set.
+UI colors are applied as CSS variables. From M2 on, built-in themes are semantic token sets from `@jslab/themes` rather than the `ui` object sketched above: `bg.canvas`, `bg.chrome`, `bg.elevated`, `bg.hover`, `bg.selection`, `bg.activeRow`, `bg.errorRow`, `bg.errorRowHover`, `bg.lineHover`, `bg.lineHighlight`, `bg.accentMuted`, `bg.scrim`; `border.default`, `border.muted`, `border.accent`; `fg.default`, `fg.muted`, `fg.accent`, `fg.onAccent`, `fg.success`, `fg.warn`, `fg.error`, `fg.info`; `console.result`, `console.log`, `console.info`, `console.warn`, `console.error`; and `syntax.comment`, `syntax.keyword`, `syntax.string`, `syntax.number`, `syntax.type`, `syntax.function`. Each token is a CSS variable (`bg.canvas` → `--bg-canvas`), the Monaco theme is built from the same tokens, and every text token meets WCAG AA on each surface it is drawn on. The output value renderer uses the `console.*` and `syntax.*` tokens. The M5 VS Code importer and `*.jslab-theme.json` files map onto this token set.
 
 ### 9.2 Built-in themes
 
@@ -870,7 +872,7 @@ Invalid files produce a readable error.
 ### 10.1 Session
 
 `session.json` (schema in Appendix C):
-- **Window:** frame and display id. Restored if the display still exists, otherwise centered on the primary display.
+- **Window:** frame and display id. Restored if the display still exists, otherwise centered on the primary display. A restored frame is clamped to at least 400×300.
 - **Tabs:** tab order, active tab id, reopen-closed stack (content stored in `buffers/closed/`).
 - **Per tab:**
   - `id`, `title`, `titleIsCustom`, `language`, `runtime`, `filePath`, `workingDirectory`, `gistId`
@@ -899,7 +901,7 @@ Invalid files produce a readable error.
 
 - The app runs a single main window in v1.
 - Closing the window keeps the app running (macOS convention), and clicking the Dock icon reopens it.
-- Quitting flushes state, disposes runners, and removes `run.lock`.
+- Quitting flushes state (the session, buffers and `settings.json`), disposes runners, and removes `run.lock`.
 
 ---
 
@@ -1180,7 +1182,7 @@ jslab --version | --help
 | Settings / session | Corrupt JSON | Load `.bak`; otherwise defaults plus a notice "Settings were reset because the file was unreadable. A copy was saved as settings.corrupt-<ts>.json" |
 | Disk | Write failure (ENOSPC, EACCES) | A toast with the path and error; retried with backoff; no data is lost in memory |
 | RPC | Validation failure | Rejected, logged with the method name; a dev build asserts |
-| Unexpected Main exception | Uncaught | Logged; the user sees a non-blocking toast "Something went wrong. Copy Debug Log"; the app keeps running when possible |
+| Unexpected Main exception | Uncaught exception or unhandled rejection after startup | Logged; the user sees a dismissible notice banner ("Something went wrong…") with a Copy Debug Log button, and the app keeps running. A failure during startup shows one dialog and exits with code 1 |
 
 **Logging.** `logs/main.log` rotates (5 × 5 MB) with levels `error|warn|info|debug`; debug is enabled with `JSLAB_DEBUG=1`. Help → Copy Debug Log copies `{ version, bunVersion, electrobunVersion, macOS, arch, settings (redacted), last 500 log lines }`.
 

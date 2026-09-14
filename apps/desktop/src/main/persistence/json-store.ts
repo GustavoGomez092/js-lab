@@ -60,33 +60,41 @@ export async function loadJson<T>(path: string, parser: Parser<T>, fallback: () 
   };
 }
 
+/** What a writer writes: the text itself, or a function that builds it when the write starts (FA-m9). */
+export type WriteData = string | (() => string);
+
 export interface DebouncedWriter {
-  schedule(data: string): void;
+  schedule(data: WriteData): void;
   flush(): Promise<void>;
 }
 
-/** Coalesces rapid writes; writes run sequentially and `flush` resolves after the last one lands. */
+/**
+ * Coalesces rapid writes; writes run sequentially and `flush` resolves after the last one lands. A scheduled function
+ * is called once, when its write starts, so the newest state is written and nothing is serialized per change.
+ */
 export function createDebouncedWriter(
   write: (data: string) => Promise<void>,
   delayMs = 500,
   onError: (error: unknown) => void = (error) => console.error("[jslab] persistence write failed", error),
 ): DebouncedWriter {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let pending: string | null = null;
+  let pending: WriteData | null = null;
   let inflight: Promise<void> = Promise.resolve();
 
   const run = (): Promise<void> => {
     clearTimeout(timer);
     timer = undefined;
-    const data = pending;
+    const scheduled = pending;
     pending = null;
-    if (data !== null) {
-      // Chain from settled promise so past failures don't block future writes
-      const next = inflight.catch(() => {}).then(() => write(data));
+    if (scheduled !== null) {
+      // Chain from the settled promise so past failures don't block future writes.
+      const next = inflight
+        .catch(() => {})
+        .then(() => write(typeof scheduled === "function" ? scheduled() : scheduled));
       inflight = next;
       return next;
     }
-    // No pending data: wait for any in-flight write to settle, then resolve
+    // No pending data: wait for any in-flight write to settle, then resolve.
     return inflight.catch(() => {});
   };
 

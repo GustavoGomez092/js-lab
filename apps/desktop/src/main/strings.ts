@@ -19,6 +19,9 @@ export const strings = {
     quitFlushFailed: "Couldn't save the session and settings before quitting",
     quitFlushTimedOut: (timeoutMs: number) =>
       `Couldn't save the session and settings within ${timeoutMs} ms before quitting; quitting anyway`,
+    /** RR1-m2: a settings write that hung. */
+    settingsWriteTimedOut: (timeoutMs: number) => `settings.json write did not finish within ${timeoutMs} ms`,
+    settingsWriteFailed: "Couldn't save settings.json",
   },
   dialogs: {
     startupFailed: (message: string) => `JSLab couldn't start: ${message}`,

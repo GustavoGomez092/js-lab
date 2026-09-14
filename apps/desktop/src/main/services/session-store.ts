@@ -371,6 +371,7 @@ export class SessionStore {
   }
 
   #scheduleSave(): void {
-    this.#sessionWriter.schedule(`${JSON.stringify(this.#session, null, 2)}\n`);
+    // FA-m9: serialized when the write starts, not on every commit.
+    this.#sessionWriter.schedule(() => `${JSON.stringify(this.#session, null, 2)}\n`);
   }
 }

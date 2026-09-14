@@ -7,6 +7,7 @@ import { SparePool } from "./runs/spare-pool";
 import { consumeSafeModeFlag, detectSafeMode, type SafeModeState } from "./services/safe-mode";
 import { SessionStore } from "./services/session-store";
 import { SettingsStore } from "./services/settings-store";
+import { strings } from "./strings";
 import { CachingTransformHost, type TransformHost, WorkerTransformHost } from "./transform/transform-host";
 
 export interface MainServicesOptions {
@@ -21,6 +22,8 @@ export interface MainServicesOptions {
   /** Test seams. Production spawns real Bun runners and runs Babel in the bundled transform worker. */
   startRunner?: (config: RunnerSpawnConfig) => Promise<BunRunnerProcess>;
   transformHost?: TransformHost;
+  /** Main's log (index.ts passes the rotating log). Defaults to console.error. */
+  log?: (message: string, detail?: unknown) => void;
 }
 
 export interface MainServices {
@@ -41,8 +44,11 @@ export interface MainServices {
  */
 export async function createMainServices(options: MainServicesOptions): Promise<MainServices> {
   const { paths } = options;
+  const log = options.log ?? ((message: string, detail?: unknown) => console.error(`[jslab] ${message}`, detail ?? ""));
   const runLock = new RunLock(paths.runLock);
-  const settings = await SettingsStore.open(paths.dataDir);
+  const settings = await SettingsStore.open(paths.dataDir, {
+    onWriteError: (error) => log(strings.log.settingsWriteFailed, String(error)),
+  });
   const session = await SessionStore.open(paths.dataDir, {
     tabDefaults: () => ({
       language: settings.current.run.defaultLanguage,

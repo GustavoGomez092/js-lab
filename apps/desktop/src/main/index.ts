@@ -154,6 +154,7 @@ async function start(): Promise<void> {
     paths,
     env: process.env,
     shiftHeld,
+    log,
     onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
     onState: (tabId, runId, state, activeHandles) =>
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),

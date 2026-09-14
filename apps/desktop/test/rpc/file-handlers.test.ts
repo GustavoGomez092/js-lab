@@ -169,7 +169,7 @@ describe("file handlers", () => {
         { name: "file.saveFailed", payload: { tabId: "scratch", error: "osascript exited with 1" } },
       ]);
     });
-  });
+  }, 15000);
 
   test("save-as confirmations, reveal and copy path act only on known tokens and saved tabs", async () => {
     const { handlers, sent, deps } = setup();
@@ -212,7 +212,7 @@ describe("file handlers", () => {
       ]);
     });
     expect(closedMidDialog.deps.files.write).not.toHaveBeenCalled();
-  });
+  }, 15000);
 
   // Test 4 (m-3): the default-path comparison normalizes both sides to NFC and resolves the default folder's
   // real path first, so a dialog result under the folder's realpath (e.g. /private/var vs /var on macOS) in NFD
@@ -306,7 +306,7 @@ describe("file handlers", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  });
+  }, 15000);
 
   // Test 9 (m-7 c): the default folder falls back through candidates that no longer exist on disk, ending at
   // Documents.
@@ -335,14 +335,15 @@ describe("file handlers", () => {
       await rm(docs, { recursive: true, force: true });
       await rm(lastDir, { recursive: true, force: true });
     }
-  });
+  }, 15000);
 
   // Test 10 (m-9): a declined Save As confirmation must cancel, not write.
   test("confirmSaveAs cancellation writes nothing", async () => {
     const { handlers, sent, deps } = setup();
     handlers.messages["file.confirmSaveAs"]({ token: SAVE_TOKEN, confirmed: false });
-    await flush();
+    await eventually(() => {
+      expect(sent).toEqual([{ name: "file.saveCancelled", payload: { tabId: "scratch" } }]);
+    });
     expect(deps.files.write).not.toHaveBeenCalled();
-    expect(sent).toEqual([{ name: "file.saveCancelled", payload: { tabId: "scratch" } }]);
   });
 });

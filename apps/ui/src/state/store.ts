@@ -69,6 +69,8 @@ export interface AppState {
 
   hydrate(payload: BootstrapPayload): void;
   dismissNotice(id: StartupNotice["id"]): void;
+  /** A notice Main sends after startup (`app.notice`, FA-I3): shown once per id, at most MAX_NOTICES at a time. */
+  addNotice(notice: StartupNotice): void;
   editCode(code: string, tabId?: string): void;
   armAutoRun(): void;
   setLanguage(language: Language): void;
@@ -112,6 +114,9 @@ export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "a
 }
 
 const NO_DIAGNOSTICS: DiagnosticPayload[] = [];
+
+/** Most notices shown at once; the oldest is dropped first (FA-I3). */
+export const MAX_NOTICES = 5;
 
 function mirrorOf(state: Pick<AppState, "tabs" | "activeTabId" | "buffers" | "runtimes">) {
   const id = state.activeTabId;
@@ -210,6 +215,12 @@ export function createAppStore() {
 
       dismissNotice(id) {
         set({ notices: get().notices.filter((notice) => notice.id !== id) });
+      },
+
+      addNotice(notice) {
+        const notices = get().notices;
+        if (notices.some((existing) => existing.id === notice.id)) return;
+        set({ notices: [...notices, notice].slice(-MAX_NOTICES) });
       },
 
       editCode(code, tabId) {

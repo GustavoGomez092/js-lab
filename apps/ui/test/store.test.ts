@@ -35,6 +35,23 @@ describe("app store", () => {
     expect(shouldAutoRun(s)).toBe(false);
   });
 
+  test("runtime notices from Main are added once per id and capped at the 5 newest (FA-I3)", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload({ notices: [{ id: "settingsNewer", message: "newer" }] }));
+    store.getState().addNotice({ id: "unexpectedError", message: "Something went wrong." });
+    store.getState().addNotice({ id: "unexpectedError", message: "Something went wrong." });
+    expect(store.getState().notices.map((n) => n.id)).toEqual(["settingsNewer", "unexpectedError"]);
+    store.getState().dismissNotice("unexpectedError");
+    store.getState().addNotice({ id: "unexpectedError", message: "Something went wrong." });
+    expect(store.getState().notices.map((n) => n.id)).toEqual(["settingsNewer", "unexpectedError"]);
+
+    const full = createAppStore();
+    const ids = ["settingsRecovered", "sessionRecovered", "settingsNewer", "sessionNewer", "tabsDropped"] as const;
+    full.getState().hydrate(payload({ notices: ids.map((id) => ({ id, message: id })) }));
+    full.getState().addNotice({ id: "unexpectedError", message: "Something went wrong." });
+    expect(full.getState().notices.map((n) => n.id)).toEqual([...ids.slice(1), "unexpectedError"]);
+  });
+
   test("the first edit arms auto-run", () => {
     const store = createAppStore();
     store.getState().hydrate(payload());

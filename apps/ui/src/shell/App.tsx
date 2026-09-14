@@ -1,4 +1,4 @@
-import { MAX_TEXT_CHARS } from "@jslab/rpc-schema";
+import { appNoticeSchema, MAX_TEXT_CHARS } from "@jslab/rpc-schema";
 import { commandMeta, DEFAULT_KEYBINDINGS, deriveTitle, resolveKeybindings } from "@jslab/shared";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useStore } from "zustand";
@@ -229,6 +229,11 @@ export function App({
       api.on("file.saveCancelled", (payload) => flows.handleSaveCancelled(payload)),
       api.on("file.saveFailed", (payload) => flows.handleSaveFailed(payload)),
       api.on("file.saveAsConfirm", (payload) => void flows.handleSaveAsConfirm(payload)),
+      // Spec §20 (FA-I3): a notice Main sends after startup, validated before it is shown.
+      api.on("app.notice", (payload) => {
+        const notice = appNoticeSchema.safeParse(payload);
+        if (notice.success) store.getState().addNotice(notice.data);
+      }),
     ];
     return () => {
       for (const unsubscribe of unsubscribers) unsubscribe();

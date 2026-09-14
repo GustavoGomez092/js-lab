@@ -269,6 +269,17 @@ describe("App shell", () => {
     expect(screen.queryByTestId("startup-notices")).toBeNull();
   });
 
+  test("an app.notice from Main after startup is shown once until dismissed, and an invalid one is ignored (FA-I3)", async () => {
+    const { emit } = renderApp();
+    await emit("app.notice", { id: "unexpectedError", message: "Something went wrong." });
+    await emit("app.notice", { id: "unexpectedError", message: "Something went wrong." });
+    await emit("app.notice", { id: "notAKnownNotice", message: "ignored" } as never);
+    expect(screen.getByTestId("startup-notices").textContent).toContain("Something went wrong.");
+    expect(screen.getAllByRole("button", { name: /^Dismiss:/ })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: /^Dismiss:/ }));
+    expect(screen.queryByTestId("startup-notices")).toBeNull();
+  });
+
   test("tab commands create, switch and close tabs through Main", async () => {
     const { store, api, emit } = renderApp();
     api.createTab.mockImplementation(async () => ({ tab: createTab({ id: "t2" }) }));

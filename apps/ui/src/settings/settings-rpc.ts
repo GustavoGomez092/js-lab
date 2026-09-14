@@ -1,6 +1,6 @@
 import type {
-  AppAction,
   E2EResponse,
+  SettingsAppAction,
   SettingsUpdateParams,
   SettingsViewMessages,
   SettingsWindowMessages,
@@ -19,7 +19,7 @@ export interface SettingsApi {
   get(): Promise<{ settings: Settings; e2e: boolean }>;
   update(patch: SettingsUpdateParams["patch"]): Promise<Settings>;
   listFonts(): Promise<SettingsWindowRequests["fonts.list"]["response"]>;
-  appCommand(action: AppAction): void;
+  appCommand(action: SettingsAppAction): void;
   e2eRespond(response: E2EResponse): void;
   on<K extends keyof SettingsViewMessages>(name: K, listener: (payload: SettingsViewMessages[K]) => void): () => void;
 }

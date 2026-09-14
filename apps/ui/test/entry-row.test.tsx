@@ -74,9 +74,24 @@ describe("EntryRow", () => {
       { onReveal },
     );
     expect(screen.getByText(/Uncaught \(in promise\) Error: nope/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "at load (L4:9)" }));
+    fireEvent.click(screen.getByRole("button", { name: strings.output.frame("load", 4, 9) }));
     expect(onReveal).toHaveBeenCalledWith(4);
     expect(screen.getByText(strings.output.internalFrames(1))).toBeTruthy();
+  });
+
+  // RR2-m5: the stack-frame label lives in strings.ts, including the anonymous-function fallback.
+  test("an anonymous stack frame uses the shared anonymous-function string", () => {
+    renderEntry({
+      kind: "error",
+      phase: "runtime",
+      name: "Error",
+      message: "boom",
+      line: 1,
+      stack: [{ line: 1, column: 1, user: true }],
+      seq: 1,
+      t: 0,
+    });
+    expect(screen.getByRole("button", { name: strings.output.frame(strings.output.anonymous, 1, 1) })).toBeTruthy();
   });
 
   test("renders console.table as a table", () => {

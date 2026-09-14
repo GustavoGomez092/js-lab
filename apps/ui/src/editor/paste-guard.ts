@@ -27,19 +27,36 @@ export function installPasteGuard<C>(
   return () => target.removeEventListener("paste", onPaste, true);
 }
 
-/** The slice of a Monaco editor a confirmed paste needs. `IStandaloneCodeEditor` satisfies it; tests use a fake. */
-export interface PasteEditor<M, R> {
+/**
+ * The slice of a Monaco editor a confirmed paste needs. `IStandaloneCodeEditor` satisfies it; tests use a fake.
+ * `R` is the (looser) range type `executeEdits` takes for each edit; `S` is the (more specific) selection type
+ * `getSelections` returns and `executeEdits`'s end-cursor-state computer must return, mirroring Monaco's own
+ * `IRange`/`Selection` split.
+ */
+export interface PasteEditor<M, R, S extends R = R> {
   getModel(): M | null;
-  getSelections(): R[] | null;
+  getSelections(): S[] | null;
   pushUndoStop(): unknown;
-  executeEdits(source: string, edits: { range: R; text: string }[]): unknown;
+  executeEdits(
+    source: string,
+    edits: { range: R; text: string }[],
+    /** RR2-m3: computes the end cursor state from Monaco's inverse edit operations. */
+    endCursorState?: (inverseEditOperations: { range: R }[]) => S[],
+  ): unknown;
 }
 
 /**
  * Inserts a confirmed paste into `model` only if it is still the attached model, replacing every selection as one
- * undo step (T18-m-paste). Returns whether anything was inserted.
+ * undo step (T18-m-paste). Each selection collapses to a caret at the end of its inserted range, as a native paste
+ * leaves it (RR2-m3): `toCaretAtEnd` builds that caret from the inverse operation's range, in the same undo-stop
+ * bracket as the edit itself. Returns whether anything was inserted.
  */
-export function pasteInto<M, R>(editor: PasteEditor<M, R>, model: M | null, text: string): boolean {
+export function pasteInto<M, R, S extends R = R>(
+  editor: PasteEditor<M, R, S>,
+  model: M | null,
+  text: string,
+  toCaretAtEnd?: (insertedRange: R) => S,
+): boolean {
   if (model === null || editor.getModel() !== model) return false;
   const selections = editor.getSelections();
   if (!selections || selections.length === 0) return false;
@@ -47,6 +64,7 @@ export function pasteInto<M, R>(editor: PasteEditor<M, R>, model: M | null, text
   editor.executeEdits(
     "paste",
     selections.map((range) => ({ range, text })),
+    toCaretAtEnd ? (inverseEditOperations) => inverseEditOperations.map((op) => toCaretAtEnd(op.range)) : undefined,
   );
   editor.pushUndoStop();
   return true;

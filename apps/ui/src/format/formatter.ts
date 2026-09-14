@@ -40,14 +40,41 @@ export function createWorkerFormatter(
   const timeoutFor = options.timeoutMs ?? formatTimeoutMs;
   let worker: WorkerLike | null = null;
   let nextId = 1;
-  const pending = new Map<number, { resolve: (outcome: FormatOutcome) => void; timer: unknown }>();
+  interface Entry {
+    resolve: (outcome: FormatOutcome) => void;
+    /** This request's own timeout budget; the timer itself starts only once the request is the queue's head. */
+    timeoutMs: number;
+    timer: unknown;
+  }
+  const pending = new Map<number, Entry>();
+  // RR2-m2: requests run sequentially in the worker, so a request's timer must start (or restart) only when it
+  // becomes the head of this queue, i.e. when the request ahead of it settles — not when it was merely posted.
+  const queue: number[] = [];
+
+  const onTimeout = (id: number) => () => {
+    const current = worker;
+    settle(id, { ok: false, error: strings.format.timedOut });
+    if (current) stop(current);
+    failAll(strings.format.restarted);
+  };
+
+  const startTimer = (id: number) => {
+    const entry = pending.get(id);
+    if (!entry) return;
+    entry.timer = timers.setTimeout(onTimeout(id), entry.timeoutMs);
+  };
 
   const settle = (id: number, outcome: FormatOutcome) => {
     const entry = pending.get(id);
     if (!entry) return;
     pending.delete(id);
     timers.clearTimeout(entry.timer);
+    const wasHead = queue[0] === id;
+    const index = queue.indexOf(id);
+    if (index !== -1) queue.splice(index, 1);
     entry.resolve(outcome);
+    // The next request in line only starts counting down once it actually becomes the head (RR2-m2).
+    if (wasHead && queue.length > 0) startTimer(queue[0] as number);
   };
 
   const failAll = (error: string) => {
@@ -56,6 +83,10 @@ export function createWorkerFormatter(
 
   const stop = (target: WorkerLike) => {
     target.terminate();
+    // RR2-m2: null the terminated worker's handlers so a late event from it (unreachable with a real
+    // Worker.terminate(), but defensive) can never reach the new worker's requests.
+    target.onmessage = null;
+    target.onerror = null;
     if (worker === target) worker = null;
   };
 
@@ -78,13 +109,12 @@ export function createWorkerFormatter(
     format(code, formatOptions, cursorOffset) {
       const id = nextId++;
       return new Promise((resolve) => {
-        const timer = timers.setTimeout(() => {
-          const current = worker;
-          settle(id, { ok: false, error: strings.format.timedOut });
-          if (current) stop(current);
-          failAll(strings.format.restarted);
-        }, timeoutFor(code.length));
-        pending.set(id, { resolve, timer });
+        const isHead = queue.length === 0;
+        queue.push(id);
+        pending.set(id, { resolve, timeoutMs: timeoutFor(code.length), timer: undefined });
+        // Only the queue's head counts down: the worker runs requests one at a time, so a request behind another
+        // hasn't started yet and must not time out purely from waiting (RR2-m2).
+        if (isHead) startTimer(id);
         try {
           ensure().postMessage({ id, code, options: formatOptions, cursorOffset });
         } catch (error) {

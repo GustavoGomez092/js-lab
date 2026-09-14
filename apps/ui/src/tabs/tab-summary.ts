@@ -17,6 +17,8 @@ export interface TabSummaryCache {
   dirty(tab: SummaryTab, code: string): boolean;
   /** Forgets tabs that are no longer open. */
   retain(openIds: ReadonlySet<string>): void;
+  /** Entries currently cached (RR2-m1: for tests, and to bound App.tsx's single-tab toolbar-title cache). */
+  size(): number;
 }
 
 /**
@@ -68,6 +70,9 @@ export function createTabSummaryCache(
     },
     retain(openIds) {
       for (const id of entries.keys()) if (!openIds.has(id)) entries.delete(id);
+    },
+    size() {
+      return entries.size;
     },
   };
 }

@@ -111,7 +111,7 @@ function ErrorBody({ event, onReveal }: { event: ErrorEvent; onReveal(line: numb
           className="entry-frame"
           onClick={() => onReveal(frame.line as number)}
         >
-          at {frame.fn ?? "<anonymous>"} (L{frame.line}:{frame.column})
+          {strings.output.frame(frame.fn ?? strings.output.anonymous, frame.line as number, frame.column as number)}
         </button>
       ))}
       {internal > 0 && <span className="entry-internal">{strings.output.internalFrames(internal)}</span>}

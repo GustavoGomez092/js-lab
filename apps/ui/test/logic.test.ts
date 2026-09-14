@@ -405,4 +405,26 @@ describe("event coalescer (final review M12, T15)", () => {
     frames.shift()?.();
     expect(runs.mock.calls.length).toBe(2);
   });
+
+  // RR2-m6: no dispose meant a pending frame/timeout callback could still fire after App unmounted or the
+  // coalescer was rebuilt, and apply queued events to a surviving store with no way to stop it.
+  test("dispose() clears pending queues and makes an already-scheduled callback apply nothing", () => {
+    const applied: number[] = [];
+    const frames: (() => void)[] = [];
+    const coalescer = createEventCoalescer(
+      (_tabId, _runId, events) => applied.push(events.length),
+      (callback) => frames.push(callback),
+    );
+    coalescer.push("a", "r1", [consoleLog(1)]);
+    coalescer.push("b", "r9", [consoleLog(2)]);
+    expect(frames.length).toBe(1);
+    coalescer.dispose();
+    // The scheduler's callback still fires (nothing can force-cancel a real rAF/timeout from here), but it must
+    // find no queued work and apply nothing.
+    frames[0]?.();
+    expect(applied).toEqual([]);
+    // A flush after dispose is also a no-op: the queues were cleared.
+    coalescer.flush();
+    expect(applied).toEqual([]);
+  });
 });

@@ -17,11 +17,13 @@ export function runStateLabel(input: {
   activeHandles: number;
   autoRunArmed: boolean;
   safeMode: boolean;
+  /** The formatted Run chord, or null when that binding was removed. */
+  keys: string | null;
 }): string {
   const labels = strings.shell.runState;
   if (input.state === null) {
-    if (input.safeMode) return labels.safeModePaused;
-    return input.autoRunArmed ? "" : labels.paused;
+    if (input.safeMode) return labels.safeModePaused(input.keys);
+    return input.autoRunArmed ? "" : labels.paused(input.keys);
   }
   switch (input.state) {
     case "transpiling":

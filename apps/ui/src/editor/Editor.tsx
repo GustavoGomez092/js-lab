@@ -247,12 +247,19 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
     });
 
     // T18-m-paste: the model attached at paste time is captured, and the text goes in only if it is still attached
-    // after the confirm, into every selection, as one undo step.
+    // after the confirm, into every selection, as one undo step. RR2-m3: each selection then collapses to a caret
+    // at the end of its inserted range, as a native paste leaves it.
     const removePasteGuard = installPasteGuard(
       editorContainer,
       (bytes) => largePaste.current?.(bytes) ?? Promise.resolve(true),
       () => editor.getModel(),
-      (text, model) => void pasteInto(editor, model, text),
+      (text, model) =>
+        void pasteInto(editor, model, text, (insertedRange) =>
+          monaco.Selection.fromPositions({
+            lineNumber: insertedRange.endLineNumber,
+            column: insertedRange.endColumn,
+          }),
+        ),
     );
 
     const unsubscribe = store.subscribe((state, previous) => {

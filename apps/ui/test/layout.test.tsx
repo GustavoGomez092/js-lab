@@ -126,7 +126,7 @@ describe("layout", () => {
       store.getState().setCursor({ line: 4, column: 7 });
       store.getState().setVimMode("insert");
     });
-    render(<StatusBar store={store} onToggleLayout={() => {}} />);
+    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
     expect(screen.getByTestId("run-status").textContent).toBe("Safe Mode: press ⌘R to run");
     expect(screen.getByText("Safe Mode")).toBeTruthy();
     const runtime = screen.getByLabelText("Runtime") as HTMLSelectElement;

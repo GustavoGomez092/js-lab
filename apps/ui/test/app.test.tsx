@@ -256,7 +256,7 @@ describe("App shell", () => {
   test("safe mode shows a banner and a paused status", () => {
     renderApp({ active: true, reason: "crashLoop" });
     expect(screen.getByTestId("safe-mode-banner").textContent).toBe(strings.shell.safeModeBanner.crashLoop);
-    expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.safeModePaused);
+    expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.safeModePaused("⌘R"));
   });
 
   test("edits and language changes are sent to Main for persistence", () => {
@@ -575,6 +575,21 @@ describe("App shell", () => {
     expect(document.querySelector(".toolbar .tb-btn.run .kbd")?.textContent).toBe("⇧⌘R");
   });
 
+  // Status-bar residual item: the "press ⌘R" label derives its chord from the effective bindings too.
+  test("a rebound Run chord shows in the status-bar paused label", () => {
+    const rules = [{ key: "cmd+enter", command: "run.start" }];
+    const run = formatChord(shortcutFor(resolveKeybindings(DEFAULT_KEYBINDINGS, rules), "run.start") ?? chordOf("x"));
+    expect(run).not.toBe("⌘R");
+    renderApp(undefined, rules);
+    expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.paused(run));
+  });
+
+  test("with the Run binding removed, the status-bar paused label omits a keycap", () => {
+    const rules = [{ key: "cmd+r", command: "-run.start" }];
+    renderApp(undefined, rules);
+    expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.paused(null));
+  });
+
   // T16-rr1: the Vim status node lives in a React-owned slot before the status bar, so turning the status bar off
   // and on again can't move the Vim prompt below it.
   test("the Vim status slot stays directly before the status bar when the status bar remounts (T16-rr1)", async () => {
@@ -651,16 +666,29 @@ describe("App shell", () => {
 });
 
 describe("runStateLabel", () => {
-  const base = { activeHandles: 0, autoRunArmed: true, safeMode: false };
+  const base = { activeHandles: 0, autoRunArmed: true, safeMode: false, keys: "⌘R" };
 
   test("describes each state", () => {
     const labels = strings.shell.runState;
-    expect(runStateLabel({ ...base, state: null, autoRunArmed: false })).toBe(labels.paused);
+    expect(runStateLabel({ ...base, state: null, autoRunArmed: false })).toBe(labels.paused("⌘R"));
     expect(runStateLabel({ ...base, state: "evaluating" })).toBe(labels.running);
     expect(labels.settled(1)).toBe("Running: 1 active handle");
     expect(runStateLabel({ ...base, state: "settled", activeHandles: 1 })).toBe(labels.settled(1));
     expect(runStateLabel({ ...base, state: "settled", activeHandles: 2 })).toBe("Running: 2 active handles");
     expect(runStateLabel({ ...base, state: "killed" })).toBe(labels.killed);
     expect(runStateLabel({ ...base, state: "idle" })).toBe("");
+  });
+
+  // Status-bar residual item: a null chord (the binding was removed) renders without a keycap.
+  test("a paused state with no Run binding omits the keycap", () => {
+    expect(runStateLabel({ ...base, state: null, autoRunArmed: false, keys: null })).toBe(
+      strings.shell.runState.paused(null),
+    );
+  });
+
+  test("a safe-mode paused state with no Run binding omits the keycap", () => {
+    expect(runStateLabel({ ...base, state: null, safeMode: true, keys: null })).toBe(
+      strings.shell.runState.safeModePaused(null),
+    );
   });
 });

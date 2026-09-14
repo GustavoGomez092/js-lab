@@ -70,4 +70,47 @@ describe("paste guard", () => {
     await Bun.sleep(1);
     expect(calls).toEqual(["stop", `paste:1=${big},3=${big}`, "stop"]);
   });
+
+  // RR2-m3: a native paste leaves the caret at the end of the inserted text, not a selection covering it. Monaco's
+  // `executeEdits` recovers each selection from its tracked range unless given an end-cursor-state computer.
+  test("every selection collapses to a caret at the end of its inserted range (RR2-m3)", async () => {
+    type Range = { line: number; label: string };
+    const calls: unknown[] = [];
+    const selections: Range[] = [
+      { line: 1, label: "sel-1" },
+      { line: 3, label: "sel-3" },
+    ];
+    const inverseRanges: Range[] = [
+      { line: 1, label: "end-1" },
+      { line: 3, label: "end-3" },
+    ];
+    let capturedEndCursorState: ((inverse: { range: Range }[]) => Range[]) | undefined;
+    const editor = {
+      getModel: () => "m",
+      getSelections: () => selections,
+      pushUndoStop: () => void calls.push("stop"),
+      executeEdits: (
+        _source: string,
+        edits: { range: Range; text: string }[],
+        endCursorState?: (inverse: { range: Range }[]) => Range[],
+      ) => {
+        capturedEndCursorState = endCursorState;
+        calls.push(edits.map((edit) => edit.range.label));
+      },
+    };
+    const toCaretAtEnd = (insertedRange: Range): Range => ({
+      line: insertedRange.line,
+      label: `caret-after-${insertedRange.label}`,
+    });
+
+    pasteInto(editor, "m", "pasted text", toCaretAtEnd);
+
+    expect(calls).toEqual(["stop", ["sel-1", "sel-3"], "stop"]);
+    // Monaco calls this with the inverse edit operations once it knows their post-edit ranges; simulate that.
+    const endCursorState = capturedEndCursorState?.(inverseRanges.map((range) => ({ range })));
+    expect(endCursorState).toEqual([
+      { line: 1, label: "caret-after-end-1" },
+      { line: 3, label: "caret-after-end-3" },
+    ]);
+  });
 });

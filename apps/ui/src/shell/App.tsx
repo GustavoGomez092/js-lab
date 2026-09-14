@@ -73,6 +73,11 @@ export function App({
   // FB-m9: the single-tab toolbar title follows edits; the summary cache keeps this selector cheap per keystroke.
   const [titles] = useState(createTabSummaryCache);
   const toolbarTitle = useStore(store, (s) => (s.tab ? titles.title(s.tab, s.code) : ""));
+  // RR2-m1: this cache only ever needs the active tab's entry, so prune it to that one tab whenever it changes.
+  // Otherwise every tab that was ever active, and its last buffer string, stays reachable for the window's life.
+  useEffect(() => {
+    titles.retain(new Set(tabId ? [tabId] : []));
+  }, [titles, tabId]);
   const runState = useStore(store, (s) => s.output.runState);
   const safeMode = useStore(store, (s) => s.safeMode);
   const notices = useStore(store, (s) => s.notices);
@@ -140,6 +145,9 @@ export function App({
       ),
     [store, scheduleFrame],
   );
+  // RR2-m6: dispose whenever the coalescer is rebuilt or App unmounts, so a callback the scheduler already armed
+  // can't apply queued events after this coalescer no longer owns them.
+  useEffect(() => coalescer.dispose, [coalescer]);
   const dialogs = useMemo(() => createDialogs(store), [store]);
   const flows = useMemo(
     () =>
@@ -449,7 +457,7 @@ export function App({
       </div>
       <div className="vim-slot" ref={vimSlot} />
       {settings.view.statusBar && (
-        <StatusBar store={store} onToggleLayout={() => registry.execute("view.toggleLayout")} />
+        <StatusBar store={store} onToggleLayout={() => registry.execute("view.toggleLayout")} runKeys={keycaps.run} />
       )}
       <RenameDialog store={store} />
       <ConfirmDialog store={store} dialogs={dialogs} />

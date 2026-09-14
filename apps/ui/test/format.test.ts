@@ -215,7 +215,9 @@ describe("formatter", () => {
     const options = prettierOptions(defaultSettings(), "javascript");
     const first = formatter.format("a", options, 0);
     const second = formatter.format("b", options, 0);
-    expect([...pending.values()].map((timer) => timer.ms)).toEqual([10_000, 10_000]);
+    // RR2-m2: requests run sequentially in the worker, so only the head of the queue has a timer running. The
+    // second request's timer starts only once the first settles.
+    expect([...pending.values()].map((timer) => timer.ms)).toEqual([10_000]);
     const [firstTimer] = [...pending.values()];
     firstTimer?.callback();
     expect(await first).toEqual({ ok: false, error: strings.format.timedOut });
@@ -230,6 +232,91 @@ describe("formatter", () => {
     } as MessageEvent);
     expect(await third).toEqual({ ok: true, formatted: "c;\n", cursorOffset: 0 });
     expect(pending.size).toBe(0);
+  });
+
+  // RR2-m2: the timer used to start when a request was posted, not when the worker actually started on it. A small
+  // request queued behind a large one could then time out purely from waiting, even though the large one was still
+  // well within its own budget.
+  test("a small request queued behind a slow large one doesn't time out while the large one is within its budget (RR2-m2)", async () => {
+    const workers: SilentWorker[] = [];
+    class SilentWorker implements WorkerLike {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: ErrorEvent) => void) | null = null;
+      sent: { id: number }[] = [];
+      terminated = false;
+      postMessage(message: { id: number }) {
+        this.sent.push(message);
+      }
+      terminate() {
+        this.terminated = true;
+      }
+    }
+    const { timers, pending } = manualTimers();
+    const formatter = createWorkerFormatter(
+      () => {
+        const worker = new SilentWorker();
+        workers.push(worker);
+        return worker;
+      },
+      { timers },
+    );
+    const options = prettierOptions(defaultSettings(), "javascript");
+    const big = "x".repeat(6 * 1024 * 1024);
+    const large = formatter.format(big, options, 0);
+    const small = formatter.format("x", options, 0);
+    // Only the large request (the head) has a timer; the small one queued behind it doesn't yet.
+    expect([...pending.values()].map((timer) => timer.ms)).toEqual([formatTimeoutMs(big.length)]);
+
+    const [w] = workers;
+    w?.onmessage?.({ data: { id: w.sent[0]?.id, ok: true, formatted: "big;\n", cursorOffset: 0 } } as MessageEvent);
+    expect(await large).toEqual({ ok: true, formatted: "big;\n", cursorOffset: 0 });
+
+    // Only now does the small request's own (small) timer start, not counting the time it spent waiting.
+    expect([...pending.values()].map((timer) => timer.ms)).toEqual([formatTimeoutMs(1)]);
+    w?.onmessage?.({ data: { id: w.sent[1]?.id, ok: true, formatted: "x;\n", cursorOffset: 0 } } as MessageEvent);
+    expect(await small).toEqual({ ok: true, formatted: "x;\n", cursorOffset: 0 });
+  });
+
+  // RR2-m2 related hardening: a terminated worker's handlers are nulled in `stop()`, so a late event from it
+  // (which a real Worker.terminate() never fires, but is defensive) can't reach the new worker's requests.
+  test("a late error from a terminated worker doesn't fail the new worker's requests (RR2-m2)", async () => {
+    const workers: SilentWorker[] = [];
+    class SilentWorker implements WorkerLike {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: ErrorEvent) => void) | null = null;
+      sent: { id: number }[] = [];
+      terminated = false;
+      postMessage(message: { id: number }) {
+        this.sent.push(message);
+      }
+      terminate() {
+        this.terminated = true;
+      }
+    }
+    const { timers, pending } = manualTimers();
+    const formatter = createWorkerFormatter(
+      () => {
+        const worker = new SilentWorker();
+        workers.push(worker);
+        return worker;
+      },
+      { timers },
+    );
+    const options = prettierOptions(defaultSettings(), "javascript");
+    const first = formatter.format("a", options, 0);
+    const [firstTimer] = [...pending.values()];
+    firstTimer?.callback();
+    await first;
+
+    const stale = workers[0];
+    const third = formatter.format("c", options, 0);
+    // A late error arrives from the already-terminated worker.
+    stale?.onerror?.({ message: "late" } as ErrorEvent);
+    const [fresh] = workers.slice(1);
+    fresh?.onmessage?.({
+      data: { id: fresh.sent[0]?.id, ok: true, formatted: "c;\n", cursorOffset: 0 },
+    } as MessageEvent);
+    expect(await third).toEqual({ ok: true, formatted: "c;\n", cursorOffset: 0 });
   });
 
   // Review rec 1: a format that takes a noticeable time says so, so ⌘R and ⌘S never look dead.

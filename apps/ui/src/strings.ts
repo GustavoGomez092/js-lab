@@ -103,8 +103,9 @@ export const strings = {
       shift: "Safe Mode: Shift was held at launch. Auto Run is paused for this session.",
     },
     runState: {
-      safeModePaused: "Safe Mode: press ⌘R to run",
-      paused: "Paused: press ⌘R to run",
+      /** The Run chord follows the effective bindings; omits the keycap when the binding was removed. */
+      safeModePaused: (keys: string | null) => (keys ? `Safe Mode: press ${keys} to run` : "Safe Mode: paused"),
+      paused: (keys: string | null) => (keys ? `Paused: press ${keys} to run` : "Paused"),
       running: "Running…",
       settled: (handles: number) => `Running: ${handles} active ${handles === 1 ? "handle" : "handles"}`,
       stopping: "Stopping…",
@@ -165,6 +166,9 @@ export const strings = {
     tableIndex: "(index)",
     uncaughtInPromise: "Uncaught (in promise) ",
     internalFrames: (count: number) => `${count} internal frames`,
+    /** A clickable stack-frame line (RR2-m5). */
+    frame: (fn: string, line: number, column: number) => `at ${fn} (L${line}:${column})`,
+    anonymous: "<anonymous>",
   },
   settings: {
     windowTitle: "Settings",

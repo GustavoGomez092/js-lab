@@ -4,7 +4,16 @@ import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { LANGUAGE_LABELS, RUNTIME_LABELS, runStateKind, runStateLabel } from "./labels";
 
-export function StatusBar({ store, onToggleLayout }: { store: AppStore; onToggleLayout(): void }) {
+export function StatusBar({
+  store,
+  onToggleLayout,
+  runKeys,
+}: {
+  store: AppStore;
+  onToggleLayout(): void;
+  /** The formatted Run chord from the effective bindings, or null when that binding was removed. */
+  runKeys: string | null;
+}) {
   // As built (M1 T18 fix round): primitive selectors only. `s.output` is a new object on every run.events batch,
   // and selecting it would re-render the status bar on every batch. Likewise `s.tab` is replaced by every view-state
   // commit (FB-I2).
@@ -20,7 +29,7 @@ export function StatusBar({ store, onToggleLayout }: { store: AppStore; onToggle
   const vimMode = useStore(store, (s) => s.vimMode);
   const message = useStore(store, (s) => s.statusMessage);
   if (!hasTab) return null;
-  const label = runStateLabel({ state: runState, activeHandles, autoRunArmed, safeMode });
+  const label = runStateLabel({ state: runState, activeHandles, autoRunArmed, safeMode, keys: runKeys });
   return (
     <footer className="status-bar">
       <div className="status-left">

@@ -34,6 +34,10 @@ describe("when expressions", () => {
     expect(evaluateWhen("outputFocus || editorFocus", ctx)).toBe(true);
     expect(evaluateWhen("unknownKey", ctx)).toBe(false);
     expect(evaluateWhen("editorFocus == true", ctx)).toBe(false);
+    // m-5: a leading or trailing `||`/`&&` produces an empty clause or term; the whole expression fails
+    // closed rather than letting an intact OR-clause elsewhere make it true.
+    expect(evaluateWhen("editorFocus ||", ctx)).toBe(false);
+    expect(evaluateWhen("&& modalOpen", ctx)).toBe(false);
   });
 });
 
@@ -49,6 +53,9 @@ describe("KeybindingResolver", () => {
       "edit.toggleLineComment",
     );
     expect(resolver.resolve(key("Digit9", { metaKey: true }), base)).toBe("tab.goto9");
+    // m-4: an extra modifier (⌃ alongside ⌘) or no modifier at all must not still match cmd+r.
+    expect(resolver.resolve(key("KeyR", { metaKey: true, ctrlKey: true }), base)).toBeNull();
+    expect(resolver.resolve(key("KeyR"), base)).toBeNull();
   });
 
   test("modals block global bindings; text inputs only allow ⌘ or ⌃ chords", () => {

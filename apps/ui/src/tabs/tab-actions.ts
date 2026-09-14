@@ -21,8 +21,9 @@ export interface TabActions {
 /**
  * Runs `run`, reporting a rejection through the store instead of letting it reach the caller (T11-m4): every
  * tab action here is awaited by its caller (the command registry, or later a tab-bar click handler), so none
- * of them may resolve to an unhandled rejection. `fallback` is returned, and the store is left exactly as it
- * was before `run` threw.
+ * of them may resolve to an unhandled rejection. `fallback` is returned. The store is left exactly as it was
+ * before `run` threw only when `run` rejects before mutating the store (as every action here does: it awaits
+ * Main first and only then applies the result) -- this guard does not undo a store mutation that itself throws.
  */
 async function guarded<T>(store: AppStore, run: () => Promise<T>, fallback: T): Promise<T> {
   try {
@@ -84,6 +85,10 @@ export function createTabActions(store: AppStore, api: MainApi): TabActions {
     async closeOthers(tabId = s().activeTabId ?? undefined) {
       if (!tabId) return;
       for (const id of s().tabOrder.filter((candidate) => candidate !== tabId)) {
+        // A tab already gone from the store (closed by an earlier iteration, or elsewhere, while this loop
+        // was awaiting) is not a refusal: skip it and keep going (m-2). Only a `close()` refused for a tab
+        // that still exists stops the loop.
+        if (!s().tabs[id]) continue;
         if (!(await close(id))) return;
       }
       activate(tabId);
@@ -92,6 +97,7 @@ export function createTabActions(store: AppStore, api: MainApi): TabActions {
       if (!tabId) return;
       const order = s().tabOrder;
       for (const id of order.slice(order.indexOf(tabId) + 1)) {
+        if (!s().tabs[id]) continue;
         if (!(await close(id))) return;
       }
     },

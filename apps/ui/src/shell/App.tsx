@@ -110,10 +110,17 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
             if (content.length > MAX_TEXT_CHARS) store.getState().setStatusMessage(strings.limits.tooLarge);
             else api.bufferChanged(id, content);
           }
+          // updateLayout (state/store.ts) always replaces the layout object, even when the clamped
+          // fields end up the same (a divider drag past 10/90, or a reset to the current split), so
+          // compare fields rather than the object reference (fix round 1, I-1).
+          const layoutChanged =
+            next.layout.orientation !== before.layout.orientation ||
+            next.layout.editorSize !== before.layout.editorSize ||
+            next.layout.outputVisible !== before.layout.outputVisible;
           if (
             next.language !== before.language ||
             next.runtime !== before.runtime ||
-            next.layout !== before.layout ||
+            layoutChanged ||
             next.title !== before.title ||
             next.titleIsCustom !== before.titleIsCustom
           ) {

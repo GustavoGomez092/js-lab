@@ -117,6 +117,26 @@ describe("tab actions: error handling (T11-m4)", () => {
     expect(store.getState().tabOrder).toEqual(["t1"]);
     expect(store.getState().statusMessage).toContain("EACCES");
   });
+
+  // m-3: the same guard covers createTab and reopenTab, not just closeTab.
+  test("a rejected createTab and a rejected reopenTab each set a status message and leave tab state unchanged", async () => {
+    const { store, api, tabs } = setup();
+    api.createTab.mockImplementation(async () => {
+      throw new Error("disk full");
+    });
+    await tabs.newTab();
+    expect(store.getState().tabOrder).toEqual(["t1"]);
+    expect(store.getState().statusMessage).toContain("disk full");
+
+    store.getState().setStatusMessage(null);
+    api.reopenTab.mockImplementation(async () => {
+      throw new Error("ENOENT");
+    });
+    await tabs.reopen();
+    expect(store.getState().tabOrder).toEqual(["t1"]);
+    expect(store.getState().closedCount).toBe(0);
+    expect(store.getState().statusMessage).toContain("ENOENT");
+  });
 });
 
 // Carried item T11-oos1: `tab.reopenClosed` must not drift closedCount when Main's result is stale or

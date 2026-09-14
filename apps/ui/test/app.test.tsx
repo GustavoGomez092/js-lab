@@ -228,6 +228,16 @@ describe("App shell", () => {
     press("KeyK", { shiftKey: true });
     expect(store.getState().output.entries).toHaveLength(0);
   });
+
+  // I-1 (fix round 1): the persistence subscriber must compare layout fields, not the layout object
+  // reference, which `updateLayout` always replaces (state/store.ts) -- otherwise every clamped
+  // setEditorSize (even one that doesn't change the clamped value) sends a redundant patchTab.
+  test("setting the same clamped editor size twice patches the tab only once", () => {
+    const { store, api } = renderApp();
+    act(() => store.getState().setEditorSize(95));
+    act(() => store.getState().setEditorSize(95));
+    expect(api.patchTab).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("runStateLabel", () => {

@@ -75,9 +75,12 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
         case "output.clear":
           state.clearOutput();
           return;
-        case "editor.clear":
-          state.editCode("");
+        case "editor.clear": {
+          const editor = getEditorHandle();
+          if (editor) editor.replaceAll("");
+          else state.editCode("");
           return;
+        }
         case "help.copyDebugLog":
           api.appCommand("copyDebugLog");
           return;
@@ -231,7 +234,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
           orientation={tab.layout.orientation}
           size={tab.layout.editorSize}
           onResize={(size) => store.getState().setEditorSize(size)}
-          first={<Editor store={store} />}
+          first={<Editor store={store} api={api} />}
           second={<OutputPanel store={store} api={api} />}
         />
       </div>

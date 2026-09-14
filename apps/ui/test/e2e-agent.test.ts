@@ -6,7 +6,7 @@ import { keyEventInit } from "../src/e2e/keys";
 import type { EditorHandle } from "../src/editor/editor-handle";
 import { createAppStore } from "../src/state/store";
 
-function setup(editor: EditorHandle | null = null) {
+function setup(editor: Pick<EditorHandle, "typeText"> | null = null) {
   const store = createAppStore();
   store.getState().hydrate({
     settings: defaultSettings(),
@@ -70,7 +70,7 @@ describe("E2E agent", () => {
 
   test("type delegates to the mounted editor and fails without one", async () => {
     const typeText = mock((_text: string, _replace: boolean) => {});
-    const withEditor = setup({ typeText, focus: () => {} });
+    const withEditor = setup({ typeText });
     expect(await withEditor.agent("type", { text: "2 + 2", replace: true })).toEqual({ typed: 5 });
     expect(typeText).toHaveBeenCalledWith("2 + 2", true);
     await expect(setup(null).agent("type", { text: "x" })).rejects.toThrow("No editor is mounted");

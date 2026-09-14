@@ -1,28 +1,31 @@
 import type * as Monaco from "monaco-editor";
 import { useEffect, useRef } from "react";
-import type { AppStore } from "../state/store";
+import type { MainApi } from "../api";
+import type { AppState, AppStore } from "../state/store";
 import { setEditorHandle } from "./editor-handle";
 import { markersFor } from "./markers";
+import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
+import { createTabView } from "./tab-view";
 
 interface EditorProps {
   store: AppStore;
+  api: Pick<MainApi, "saveViewState">;
 }
 
-export function Editor({ store }: EditorProps) {
+export function Editor({ store, api }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const monaco = setupMonaco();
     const initial = store.getState();
-    if (!host.current || !initial.tab || !initial.settings) return;
+    if (!host.current || !initial.settings) return;
 
-    const createModel = (value: string, tabId: string, language: Parameters<typeof languageId>[0]) =>
-      monaco.editor.createModel(value, languageId(language), monaco.Uri.parse(modelUri(tabId, language)));
-
-    let model = createModel(initial.code, initial.tab.id, initial.tab.language);
+    const models = new ModelCache<Monaco.editor.ITextModel>((tabId, language, value) =>
+      monaco.editor.createModel(value, languageId(language), monaco.Uri.parse(modelUri(tabId, language))),
+    );
     const editor = monaco.editor.create(host.current, {
-      model,
+      model: null,
       theme: "jslab-dark",
       automaticLayout: true,
       fontFamily: `"${initial.settings.appearance.font}", ui-monospace, Menlo, monospace`,
@@ -35,26 +38,25 @@ export function Editor({ store }: EditorProps) {
       scrollBeyondLastLine: false,
     });
 
-    setEditorHandle({
-      typeText: (text, replace) => {
-        editor.focus();
-        const current = editor.getModel();
-        if (replace && current) editor.setSelection(current.getFullModelRange());
-        editor.trigger("e2e", "type", { text });
-      },
-      focus: () => editor.focus(),
-    });
-
-    let applyingExternal = false;
-    const listenToModel = (target: Monaco.editor.ITextModel) =>
-      target.onDidChangeContent(() => {
-        if (!applyingExternal) store.getState().editCode(target.getValue());
-      });
-    let contentSubscription = listenToModel(model);
+    let contentSubscription: Monaco.IDisposable | null = null;
     const hover = editor.createDecorationsCollection();
 
-    const applyMarkers = () => {
-      const state = store.getState();
+    const applyHover = (line: number | null) => {
+      hover.set(
+        line
+          ? [{ range: new monaco.Range(line, 1, line, 1), options: { isWholeLine: true, className: "line-hover" } }]
+          : [],
+      );
+    };
+
+    const reportCursor = () => {
+      const position = editor.getPosition();
+      store.getState().setCursor(position ? { line: position.lineNumber, column: position.column } : null);
+    };
+
+    const applyMarkers = (state: AppState) => {
+      const model = editor.getModel();
+      if (!model) return;
       monaco.editor.setModelMarkers(
         model,
         "jslab",
@@ -65,49 +67,132 @@ export function Editor({ store }: EditorProps) {
       );
     };
 
-    const applyHover = (line: number | null) => {
-      hover.set(
-        line
-          ? [{ range: new monaco.Range(line, 1, line, 1), options: { isWholeLine: true, className: "line-hover" } }]
-          : [],
-      );
-    };
+    // Tab switching, per-tab models and view state live in tab-view.ts, which has its own unit test (review C1).
+    const view = createTabView<Monaco.editor.ITextModel, Monaco.editor.ICodeEditorViewState>({
+      store,
+      editor,
+      models,
+      persist: (tabId, viewState) => api.saveViewState(tabId, viewState),
+      applyExternal: (model, value) => {
+        // As built (M1 T17 fix round): apply store content as an edit so undo history survives, and restore the
+        // clamped cursor. pushStackElement on both sides keeps it out of the user's undo group (final review T17).
+        const savedSelections = editor.getModel() === model ? editor.getSelections() : null;
+        model.pushStackElement();
+        model.pushEditOperations(savedSelections, [{ range: model.getFullModelRange(), text: value }], () => null);
+        model.pushStackElement();
+        if (!savedSelections) return;
+        editor.setSelections(
+          savedSelections.map((selection) => {
+            const anchor = model.validatePosition({
+              lineNumber: selection.selectionStartLineNumber,
+              column: selection.selectionStartColumn,
+            });
+            const active = model.validatePosition({
+              lineNumber: selection.positionLineNumber,
+              column: selection.positionColumn,
+            });
+            return new monaco.Selection(anchor.lineNumber, anchor.column, active.lineNumber, active.column);
+          }),
+        );
+      },
+      onShown: (tabId, model) => {
+        contentSubscription?.dispose();
+        contentSubscription = null;
+        if (!tabId || !model) return;
+        contentSubscription = model.onDidChangeContent(() => {
+          if (!view.applyingExternal) store.getState().editCode(model.getValue(), tabId);
+        });
+        reportCursor();
+        // A new model starts with no markers or decorations (as built in M1): reapply both.
+        applyMarkers(store.getState());
+        applyHover(store.getState().hoveredLine);
+      },
+    });
+
+    const cursorSubscription = editor.onDidChangeCursorPosition(() => {
+      reportCursor();
+      view.saveActive();
+    });
+    const scrollSubscription = editor.onDidScrollChange(() => view.saveActive());
+    const focusSubscription = editor.onDidFocusEditorText(() => store.getState().setFocus("editor"));
+
+    setEditorHandle({
+      typeText: (text, replace) => {
+        editor.focus();
+        const model = editor.getModel();
+        if (replace && model) editor.setSelection(model.getFullModelRange());
+        editor.trigger("e2e", "type", { text });
+      },
+      focus: () => editor.focus(),
+      hasFocus: () => editor.hasTextFocus(),
+      runAction: (actionId) => {
+        if (!editor.getAction(actionId)) return false;
+        editor.focus();
+        editor.trigger("jslab", actionId, null);
+        return true;
+      },
+      replaceAll: (text) => {
+        const model = editor.getModel();
+        if (!model) return;
+        editor.pushUndoStop();
+        editor.executeEdits("jslab", [{ range: model.getFullModelRange(), text }]);
+        editor.pushUndoStop();
+      },
+      getValue: () => editor.getModel()?.getValue() ?? "",
+      getCursorOffset: () => {
+        const model = editor.getModel();
+        const position = editor.getPosition();
+        return model && position ? model.getOffsetAt(position) : 0;
+      },
+      getSelectedLineRange: () => {
+        const selection = editor.getSelection();
+        if (!selection) return null;
+        const endLine =
+          selection.endLineNumber > selection.startLineNumber && selection.endColumn === 1
+            ? selection.endLineNumber - 1
+            : selection.endLineNumber;
+        return { startLine: selection.startLineNumber, endLine };
+      },
+      getLines: (startLine, endLine) => {
+        const model = editor.getModel();
+        if (!model) return [];
+        const lines: string[] = [];
+        for (let line = startLine; line <= endLine; line++) lines.push(model.getLineContent(line));
+        return lines;
+      },
+      replaceLines: (startLine, endLine, lines) => {
+        const model = editor.getModel();
+        if (!model) return;
+        const range = new monaco.Range(startLine, 1, endLine, model.getLineMaxColumn(endLine));
+        editor.pushUndoStop();
+        editor.executeEdits("jslab", [{ range, text: lines.join(model.getEOL()) }]);
+        editor.pushUndoStop();
+      },
+      applyOffsetEdits: (edits, cursorOffset) => {
+        const model = editor.getModel();
+        if (!model || edits.length === 0) return;
+        const operations = edits.map((edit) => ({
+          range: monaco.Range.fromPositions(model.getPositionAt(edit.start), model.getPositionAt(edit.end)),
+          text: edit.text,
+        }));
+        editor.pushUndoStop();
+        editor.executeEdits("format", operations);
+        if (cursorOffset !== undefined) editor.setPosition(model.getPositionAt(cursorOffset));
+        editor.pushUndoStop();
+      },
+      missingActions: (ids) => ids.filter((id) => !editor.getAction(id)),
+    });
 
     const unsubscribe = store.subscribe((state, previous) => {
-      if (state.tab && previous.tab && state.tab.language !== previous.tab.language) {
-        // Recreate the model so its URI extension matches the new language.
-        const next = createModel(model.getValue(), state.tab.id, state.tab.language);
-        contentSubscription.dispose();
-        editor.setModel(next);
-        model.dispose();
-        model = next;
-        contentSubscription = listenToModel(model);
-        // The new model starts with no markers or hover decoration; reapply both immediately.
-        applyMarkers();
-        applyHover(state.hoveredLine);
+      if (
+        state.activeTabId !== previous.activeTabId ||
+        state.tabs !== previous.tabs ||
+        state.buffers !== previous.buffers
+      ) {
+        view.show(state);
       }
-      if (state.code !== model.getValue()) {
-        // Replace the content as an edit (not `setValue`) so undo history survives, then restore the
-        // cursor/selection clamped to the new content instead of losing it to the start of the buffer.
-        const savedSelections = editor.getSelections();
-        applyingExternal = true;
-        model.pushEditOperations(savedSelections, [{ range: model.getFullModelRange(), text: state.code }], () => null);
-        applyingExternal = false;
-        if (savedSelections) {
-          editor.setSelections(
-            savedSelections.map((selection) => {
-              const anchor = model.validatePosition({
-                lineNumber: selection.selectionStartLineNumber,
-                column: selection.selectionStartColumn,
-              });
-              const active = model.validatePosition({
-                lineNumber: selection.positionLineNumber,
-                column: selection.positionColumn,
-              });
-              return new monaco.Selection(anchor.lineNumber, anchor.column, active.lineNumber, active.column);
-            }),
-          );
-        }
+      if (state.tabOrder !== previous.tabOrder) {
+        for (const closed of models.prune(new Set(state.tabOrder))) view.cancel(closed);
       }
       if (state.hoveredLine !== previous.hoveredLine) applyHover(state.hoveredLine);
       if (state.revealRequest && state.revealRequest !== previous.revealRequest) {
@@ -116,17 +201,24 @@ export function Editor({ store }: EditorProps) {
         editor.setPosition({ lineNumber: line, column: 1 });
         editor.focus();
       }
-      if (state.diagnostics !== previous.diagnostics || state.output !== previous.output) applyMarkers();
+      if (state.diagnostics !== previous.diagnostics || state.output !== previous.output) applyMarkers(state);
     });
+
+    view.show(initial);
 
     return () => {
       setEditorHandle(null);
       unsubscribe();
-      contentSubscription.dispose();
+      view.saveActive();
+      view.flush();
+      contentSubscription?.dispose();
+      cursorSubscription.dispose();
+      scrollSubscription.dispose();
+      focusSubscription.dispose();
       editor.dispose();
-      model.dispose();
+      models.disposeAll();
     };
-  }, [store]);
+  }, [store, api]);
 
   return <div ref={host} className="editor" data-testid="editor" />;
 }

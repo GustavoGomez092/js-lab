@@ -8,7 +8,7 @@ export interface E2EAgentDeps {
   store: AppStore;
   /** Runs a command id; returns false when the id is unknown. */
   executeCommand(id: string, args?: unknown): boolean;
-  editor(): EditorHandle | null;
+  editor(): Pick<EditorHandle, "typeText"> | null;
   /** Where synthetic keys are dispatched; the app passes the focused element. */
   target(): EventTarget;
 }

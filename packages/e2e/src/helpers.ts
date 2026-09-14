@@ -21,6 +21,7 @@ export interface UiState {
   tabs: TabSnapshot[];
   // biome-ignore lint/suspicious/noExplicitAny: scenarios read arbitrary settings paths
   settings: Record<string, any> | null;
+  cursor?: { line: number; column: number } | null;
   [key: string]: unknown;
 }
 

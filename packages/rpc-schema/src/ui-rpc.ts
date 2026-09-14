@@ -1,4 +1,4 @@
-import { SETTINGS_SECTIONS, type Session, type Settings } from "@jslab/shared";
+import { type CommandId, SETTINGS_SECTIONS, type Session, type Settings } from "@jslab/shared";
 import { z } from "zod";
 import type { RunEvent, RunState } from "./events";
 import type { EncodedValue } from "./values";
@@ -77,7 +77,7 @@ export type RunExpandParams = z.infer<typeof runExpandParamsSchema>;
 export type BufferChanged = z.infer<typeof bufferChangedSchema>;
 export type TabPatch = z.infer<typeof tabPatchSchema>;
 
-export type CommandId = "run.start" | "run.stop" | "run.kill" | "output.clear" | "editor.clear";
+export type { CommandId };
 
 export interface DiagnosticPayload {
   severity: "error" | "warning";

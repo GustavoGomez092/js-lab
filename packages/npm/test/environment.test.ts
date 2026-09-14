@@ -38,7 +38,8 @@ describe("npm environment (M0-S8, spec §11.3)", () => {
     expect(
       resolveBunCacheDir({ BUN_INSTALL_CACHE_DIR: "/c", XDG_CACHE_HOME: "/x", BUN_INSTALL: "/b" }, USER_HOME),
     ).toBe("/c");
-    expect(resolveBunCacheDir({ XDG_CACHE_HOME: "/x/", BUN_INSTALL: "/b" }, USER_HOME)).toBe("/x/.bun/install/cache");
+    expect(resolveBunCacheDir({ XDG_CACHE_HOME: "/x/", BUN_INSTALL: "/b" }, USER_HOME)).toBe("/b/install/cache");
+    expect(resolveBunCacheDir({ XDG_CACHE_HOME: "/x/" }, USER_HOME)).toBe("/x/.bun/install/cache");
     expect(resolveBunCacheDir({ BUN_INSTALL: "/b" }, USER_HOME)).toBe("/b/install/cache");
     expect(resolveBunCacheDir({}, USER_HOME)).toBe(`${USER_HOME}/.bun/install/cache`);
   });

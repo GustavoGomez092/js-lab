@@ -6,14 +6,14 @@ const STRIPPED_PREFIXES = ["bun_config_", "npm_config_"];
 const trimSlash = (path: string) => path.replace(/\/+$/, "");
 
 /**
- * The user's Bun package cache, resolved from the login-shell environment before HOME is overridden (spec §11.3):
- * BUN_INSTALL_CACHE_DIR, then $XDG_CACHE_HOME/.bun/install/cache, then $BUN_INSTALL/install/cache, then the real home.
- * Task 9 checks this order against `bun pm cache` on the bundled Bun.
+ * The user's Bun package cache, resolved from the login-shell environment before HOME is overridden (spec §11.3), in
+ * the order the bundled Bun 1.4.0 uses (verified by Task 9's capture of `bun pm cache`): BUN_INSTALL_CACHE_DIR, then
+ * $BUN_INSTALL/install/cache, then $XDG_CACHE_HOME/.bun/install/cache, then the real home.
  */
 export function resolveBunCacheDir(env: EnvLike, realHome: string): string {
   if (env.BUN_INSTALL_CACHE_DIR) return env.BUN_INSTALL_CACHE_DIR;
-  if (env.XDG_CACHE_HOME) return `${trimSlash(env.XDG_CACHE_HOME)}/.bun/install/cache`;
   if (env.BUN_INSTALL) return `${trimSlash(env.BUN_INSTALL)}/install/cache`;
+  if (env.XDG_CACHE_HOME) return `${trimSlash(env.XDG_CACHE_HOME)}/.bun/install/cache`;
   return `${trimSlash(realHome)}/.bun/install/cache`;
 }
 

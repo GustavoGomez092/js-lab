@@ -1,6 +1,6 @@
 import type { EnvLike } from "./npmrc";
 
-const STRIPPED_KEYS = new Set(["HOME", "BUN_INSTALL_CACHE_DIR", "XDG_CONFIG_HOME"]);
+const STRIPPED_KEYS = new Set(["HOME", "BUN_INSTALL_CACHE_DIR", "XDG_CONFIG_HOME", "BUN_INSTALL"]);
 const STRIPPED_PREFIXES = ["bun_config_", "npm_config_"];
 
 const trimSlash = (path: string) => path.replace(/\/+$/, "");

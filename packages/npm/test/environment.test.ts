@@ -18,6 +18,7 @@ describe("npm environment (M0-S8, spec §11.3)", () => {
         Npm_Config_Cache: "/x",
         XDG_CONFIG_HOME: `${USER_HOME}/.config`,
         BUN_INSTALL_CACHE_DIR: "/somewhere/else",
+        BUN_INSTALL: `${USER_HOME}/.bun`,
         JSLAB_USER_DATA: "/data",
         LANG: "en_US.UTF-8",
         EMPTY: undefined,

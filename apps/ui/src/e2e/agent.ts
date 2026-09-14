@@ -1,4 +1,5 @@
 import type { E2EUiMethod } from "@jslab/rpc-schema";
+import type { ExecuteResult } from "../commands/registry";
 import type { EditorHandle } from "../editor/editor-handle";
 import type { AppStore } from "../state/store";
 import { keyEventInit } from "./keys";
@@ -6,11 +7,13 @@ import { snapshotOutput, snapshotState } from "./snapshot";
 
 export interface E2EAgentDeps {
   store: AppStore;
-  /** Runs a command id; returns false when the id is unknown. */
-  executeCommand(id: string, args?: unknown): boolean;
+  /** Runs a command id through the registry. */
+  executeCommand(id: string, args?: unknown): ExecuteResult;
   editor(): Pick<EditorHandle, "typeText"> | null;
   /** Where synthetic keys are dispatched; the app passes the focused element. */
   target(): EventTarget;
+  /** Monaco action ids from EDITOR_ACTIONS that don't exist in this Monaco build (verification step). */
+  missingEditorActions?(): string[];
 }
 
 /**
@@ -36,11 +39,13 @@ export function createE2EAgent(deps: E2EAgentDeps) {
       }
       case "command": {
         const { id, args } = params as { id: string; args?: unknown };
-        if (!deps.executeCommand(id, args)) throw new Error(`Unknown command: ${id}`);
+        const result = deps.executeCommand(id, args);
+        if (result === "unknown") throw new Error(`Unknown command: ${id}`);
+        if (result === "disabled") throw new Error(`Command is disabled: ${id}`);
         return { executed: id };
       }
       case "state":
-        return snapshotState(deps.store.getState());
+        return { ...snapshotState(deps.store.getState()), missingEditorActions: deps.missingEditorActions?.() ?? [] };
       case "output":
         return { entries: snapshotOutput(deps.store.getState(), (params as { tabId?: string }).tabId) };
     }

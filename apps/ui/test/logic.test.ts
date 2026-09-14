@@ -4,7 +4,6 @@ import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
 import { markersFor } from "../src/editor/markers";
 import { keyLabel } from "../src/output/format";
 import { entryToText, valueToText } from "../src/output/text";
-import { commandForKey } from "../src/shell/keys";
 import { startAutoRun, type TimerApi } from "../src/state/auto-run";
 import { applyRunEvents, applyRunState, initialOutput } from "../src/state/output";
 import { createAppStore } from "../src/state/store";
@@ -148,33 +147,6 @@ describe("startAutoRun", () => {
     expect(clock.pending.size).toBe(0);
     clock.fireAll();
     expect(run).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("commandForKey", () => {
-  const key = (
-    code: string,
-    mods: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {},
-  ) => ({
-    code,
-    metaKey: true,
-    ctrlKey: false,
-    shiftKey: false,
-    altKey: false,
-    ...mods,
-  });
-
-  test("maps the M1 shortcuts", () => {
-    expect(commandForKey(key("KeyR"))).toBe("run.start");
-    expect(commandForKey(key("KeyR", { shiftKey: true }))).toBe("run.stop");
-    expect(commandForKey(key("KeyR", { altKey: true }))).toBe("run.kill");
-    expect(commandForKey(key("KeyK"))).toBe("output.clear");
-  });
-
-  test("ignores keys without Cmd or with Ctrl", () => {
-    expect(commandForKey(key("KeyR", { metaKey: false }))).toBeNull();
-    expect(commandForKey(key("KeyR", { ctrlKey: true }))).toBeNull();
-    expect(commandForKey(key("KeyX"))).toBeNull();
   });
 });
 

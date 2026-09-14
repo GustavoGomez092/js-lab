@@ -16,7 +16,7 @@ function setup(editor: Pick<EditorHandle, "typeText"> | null = null) {
     safeMode: { active: false, reason: null },
     versions: { app: "0.0.1", bun: "1.4.0" },
   });
-  const executeCommand = mock((id: string) => id === "run.start");
+  const executeCommand = mock((id: string): "executed" | "unknown" => (id === "run.start" ? "executed" : "unknown"));
   const target = new EventTarget();
   const agent = createE2EAgent({ store, executeCommand, editor: () => editor, target: () => target });
   return { store, agent, executeCommand, target };
@@ -74,6 +74,19 @@ describe("E2E agent", () => {
     expect(await withEditor.agent("type", { text: "2 + 2", replace: true })).toEqual({ typed: 5 });
     expect(typeText).toHaveBeenCalledWith("2 + 2", true);
     await expect(setup(null).agent("type", { text: "x" })).rejects.toThrow("No editor is mounted");
+  });
+
+  test("disabled commands are reported as disabled", async () => {
+    const store = createAppStore();
+    const agent = createE2EAgent({
+      store,
+      executeCommand: () => "disabled",
+      editor: () => null,
+      target: () => new EventTarget(),
+      missingEditorActions: () => ["editor.action.nope"],
+    });
+    await expect(agent("command", { id: "tab.reopenClosed" })).rejects.toThrow("Command is disabled: tab.reopenClosed");
+    expect(await agent("state", {})).toMatchObject({ missingEditorActions: ["editor.action.nope"] });
   });
 });
 

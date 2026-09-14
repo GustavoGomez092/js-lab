@@ -1,37 +1,23 @@
-import type { CommandId } from "@jslab/rpc-schema";
-import { adjacentTabId, MAX_CLOSED_TABS } from "@jslab/shared";
-import { useCallback, useEffect } from "react";
+import { MAX_TEXT_CHARS } from "@jslab/rpc-schema";
+import { commandMeta, DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
+import { useCallback, useEffect, useMemo } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
+import { createAppCommands } from "../commands/app-commands";
+import { createEditorCommands, EDITOR_ACTIONS } from "../commands/editor-commands";
+import { CommandRegistry } from "../commands/registry";
 import { createE2EAgent } from "../e2e/agent";
 import { Editor } from "../editor/Editor";
 import { getEditorHandle } from "../editor/editor-handle";
+import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { OutputPanel } from "../output/OutputPanel";
 import { startAutoRun } from "../state/auto-run";
 import type { AppStore } from "../state/store";
-import { gotoTabIndex } from "../state/workspace";
-import { commandForKey } from "./keys";
+import { strings } from "../strings";
+import { createTabActions } from "../tabs/tab-actions";
 import { ActivityBar, SafeModeBanner, SplitPane, StartupNotices, StatusBar, UnresponsiveDialog } from "./parts";
 
 const UI_HEARTBEAT_MS = 2000;
-
-/** Commands the shell handles until Task 13's registry takes over. */
-const SHELL_COMMANDS: ReadonlySet<string> = new Set([
-  "run.start",
-  "run.stop",
-  "run.kill",
-  "output.clear",
-  "editor.clear",
-  "help.copyDebugLog",
-  "help.openLogsFolder",
-  "help.restartSafeMode",
-  "tab.new",
-  "tab.close",
-  "tab.reopenClosed",
-  "tab.next",
-  "tab.previous",
-  ...Array.from({ length: 9 }, (_, i) => `tab.goto${i + 1}`),
-]);
 
 export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi; e2e?: boolean }) {
   const tab = useStore(store, (s) => s.tab);
@@ -44,91 +30,32 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       const state = store.getState();
       if (!state.tab) return;
       if (reason === "manual") state.armAutoRun();
+      if (state.code.length > MAX_TEXT_CHARS) {
+        // Main would reject a run.start this large (MAX_TEXT_CHARS); say so instead of failing silently.
+        state.setStatusMessage(strings.limits.tooLarge);
+        return;
+      }
       void api.startRun({ tabId: state.tab.id, code: state.code, language: state.tab.language, logpoints: [], reason });
     },
     [store, api],
   );
 
-  const activate = useCallback(
-    (tabId: string | null) => {
-      if (!tabId || tabId === store.getState().activeTabId) return;
-      store.getState().activateTab(tabId);
-      api.activateTab(tabId);
-    },
-    [store, api],
-  );
+  const tabs = useMemo(() => createTabActions(store, api), [store, api]);
 
-  const execute = useCallback(
-    (command: CommandId) => {
-      const state = store.getState();
-      const tabId = state.activeTabId;
-      switch (command) {
-        case "run.start":
-          run("manual");
-          return;
-        case "run.stop":
-          if (tabId) api.stop(tabId);
-          return;
-        case "run.kill":
-          if (tabId) api.kill(tabId);
-          return;
-        case "output.clear":
-          state.clearOutput();
-          return;
-        case "editor.clear": {
-          const editor = getEditorHandle();
-          if (editor) editor.replaceAll("");
-          else state.editCode("");
-          return;
-        }
-        case "help.copyDebugLog":
-          api.appCommand("copyDebugLog");
-          return;
-        case "help.openLogsFolder":
-          api.appCommand("openLogsFolder");
-          return;
-        case "help.restartSafeMode":
-          api.appCommand("restartSafeMode");
-          return;
-        case "tab.new":
-          void api.createTab({}).then(({ tab: created }) => store.getState().openTab(created, "", true));
-          return;
-        case "tab.close":
-          if (!tabId) return;
-          void api.closeTab(tabId).then((result) => {
-            const closing = store.getState();
-            // A stale or duplicate result for a tab the store no longer has is ignored outright (ruling T8-m1):
-            // `ok: true` alone is never proof a tab was removed.
-            if (!closing.tabs[tabId]) return;
-            // Only apply Main's chosen `activeTabId` while the closed tab is still the one showing; if the user
-            // already switched away while the close was in flight, let removeTab's own neighbor logic keep the
-            // tab they switched to instead of overriding it with Main's (now stale) choice.
-            const stillActive = closing.activeTabId === tabId;
-            closing.removeTab(tabId, result.replacement ? null : stillActive ? result.activeTabId : undefined);
-            if (result.replacement) store.getState().openTab(result.replacement.tab, result.replacement.content, true);
-            const after = store.getState();
-            after.setClosedCount(Math.min(after.closedCount + 1, MAX_CLOSED_TABS));
-          });
-          return;
-        case "tab.reopenClosed":
-          void api.reopenTab().then((reopened) => {
-            if (!reopened) return;
-            const s = store.getState();
-            s.openTab(reopened.tab, reopened.content, true);
-            s.setClosedCount(s.closedCount - 1);
-          });
-          return;
-        case "tab.next":
-          if (tabId) activate(adjacentTabId(state.tabOrder, tabId, 1));
-          return;
-        case "tab.previous":
-          if (tabId) activate(adjacentTabId(state.tabOrder, tabId, -1));
-          return;
-        default:
-          if (command.startsWith("tab.goto")) activate(gotoTabIndex(state.tabOrder, Number(command.slice(8))));
-      }
-    },
-    [store, api, run, activate],
+  const registry = useMemo(() => {
+    const created = new CommandRegistry((id, error) =>
+      store.getState().setStatusMessage(strings.commands.failed(commandMeta(id)?.title ?? id, error)),
+    );
+    created.register(
+      ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle }),
+      ...createEditorCommands(getEditorHandle),
+    );
+    return created;
+  }, [store, api, tabs, run]);
+
+  const resolver = useMemo(
+    () => new KeybindingResolver(resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings)),
+    [store],
   );
 
   useEffect(() => startAutoRun(store, () => run("auto")), [store, run]);
@@ -142,13 +69,15 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       api.on("run.diagnostics", ({ tabId, runId, diagnostics }) =>
         store.getState().receiveDiagnostics(runId, diagnostics, tabId),
       ),
-      api.on("menu.command", ({ command }) => execute(command)),
+      api.on("menu.command", ({ command }) => {
+        registry.execute(command);
+      }),
       api.on("settings.changed", ({ settings }) => store.getState().updateSettings(settings)),
     ];
     return () => {
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
-  }, [store, api, execute]);
+  }, [store, api, registry]);
 
   useEffect(() => {
     if (!e2e) return;
@@ -156,11 +85,8 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       store,
       editor: getEditorHandle,
       target: () => document.activeElement ?? document.body,
-      executeCommand: (id) => {
-        if (!SHELL_COMMANDS.has(id)) return false;
-        execute(id as CommandId);
-        return true;
-      },
+      executeCommand: (id, args) => registry.execute(id, args),
+      missingEditorActions: () => getEditorHandle()?.missingActions(Object.values(EDITOR_ACTIONS)) ?? [],
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {
       agent(method, params).then(
@@ -169,7 +95,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
           api.e2eRespond({ reqId, ok: false, error: error instanceof Error ? error.message : String(error) }),
       );
     });
-  }, [e2e, store, api, execute]);
+  }, [e2e, store, api, registry]);
 
   useEffect(
     () =>
@@ -178,15 +104,16 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
           const next = state.tabs[id];
           const before = previous.tabs[id];
           if (!next || !before) continue;
-          if (state.buffers[id] !== previous.buffers[id]) api.bufferChanged(id, state.buffers[id] ?? "");
-          const layoutChanged =
-            next.layout.orientation !== before.layout.orientation ||
-            next.layout.editorSize !== before.layout.editorSize ||
-            next.layout.outputVisible !== before.layout.outputVisible;
+          if (state.buffers[id] !== previous.buffers[id]) {
+            const content = state.buffers[id] ?? "";
+            // Main rejects buffer.changed above MAX_TEXT_CHARS. Tell the user rather than dropping the edit silently.
+            if (content.length > MAX_TEXT_CHARS) store.getState().setStatusMessage(strings.limits.tooLarge);
+            else api.bufferChanged(id, content);
+          }
           if (
             next.language !== before.language ||
             next.runtime !== before.runtime ||
-            layoutChanged ||
+            next.layout !== before.layout ||
             next.title !== before.title ||
             next.titleIsCustom !== before.titleIsCustom
           ) {
@@ -209,17 +136,22 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
   }, [api]);
 
   useEffect(() => {
-    // Capture phase so shortcuts win over Monaco and WKWebView defaults (for example Cmd+R reload).
+    // Capture phase, so shortcuts win over Monaco and WKWebView defaults (for example Cmd+R reload).
     const onKeyDown = (event: KeyboardEvent) => {
-      const command = commandForKey(event);
-      if (!command) return;
+      const context = contextFromState(
+        store.getState(),
+        document.activeElement,
+        getEditorHandle()?.hasFocus() ?? false,
+      );
+      const command = resolver.resolve(event, context);
+      if (!command || !registry.isEnabled(command)) return;
       event.preventDefault();
       event.stopPropagation();
-      execute(command);
+      registry.execute(command);
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [execute]);
+  }, [store, resolver, registry]);
 
   if (!tab) return null;
   const tabId = tab.id;
@@ -229,7 +161,11 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       {safeMode.active && <SafeModeBanner reason={safeMode.reason} />}
       <StartupNotices notices={notices} onDismiss={(id) => store.getState().dismissNotice(id)} />
       <div className="app-main">
-        <ActivityBar runState={runState} onRun={() => execute("run.start")} onStop={() => execute("run.stop")} />
+        <ActivityBar
+          runState={runState}
+          onRun={() => registry.execute("run.start")}
+          onStop={() => registry.execute("run.stop")}
+        />
         <SplitPane
           orientation={tab.layout.orientation}
           size={tab.layout.editorSize}
@@ -240,7 +176,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       </div>
       <StatusBar store={store} />
       {runState === "unresponsive" && (
-        <UnresponsiveDialog onKill={() => execute("run.kill")} onWait={() => api.wait(tabId)} />
+        <UnresponsiveDialog onKill={() => registry.execute("run.kill")} onWait={() => api.wait(tabId)} />
       )}
     </div>
   );

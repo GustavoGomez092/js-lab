@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, mock, test } from "bun:test";
 import type { BootstrapPayload, TabCloseResult } from "@jslab/rpc-schema";
-import { createTab, defaultSession, defaultSettings, MAX_CLOSED_TABS } from "@jslab/shared";
+import { createTab, defaultSession, defaultSettings, type KeybindingRule, MAX_CLOSED_TABS } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentType } from "react";
 import type { MainApi } from "../src/api";
@@ -17,13 +17,17 @@ beforeAll(async () => {
   ({ App } = await import("../src/shell/App"));
 });
 
-function renderApp(safeMode: BootstrapPayload["safeMode"] = { active: false, reason: null }) {
+function renderApp(
+  safeMode: BootstrapPayload["safeMode"] = { active: false, reason: null },
+  keybindings: KeybindingRule[] = [],
+) {
   const store = createAppStore();
   store.getState().hydrate({
     settings: defaultSettings(),
     session: defaultSession(() => createTab({ id: "t1" })),
     buffers: { t1: "1 + 1" },
     safeMode,
+    keybindings,
     versions: { app: "0.0.1", bun: "1.3.13" },
   });
   const { api, emit } = createFakeApi();
@@ -197,6 +201,32 @@ describe("App shell", () => {
     expect(store.getState().tabOrder).toEqual(["t2"]);
     expect(store.getState().activeTabId).toBe("t2");
     expect(store.getState().code).toBe("replacement code");
+  });
+
+  test("Cmd+2 activates the second tab; Cmd+Shift+T reopens only when a closed tab exists", () => {
+    const { store, api } = renderApp();
+    act(() => store.getState().openTab(createTab({ id: "t2" }), "", false));
+    press("Digit2");
+    expect(store.getState().activeTabId).toBe("t2");
+    expect(api.activateTab).toHaveBeenCalledWith("t2");
+    press("KeyT", { shiftKey: true });
+    expect(api.reopenTab).not.toHaveBeenCalled();
+    act(() => store.getState().setClosedCount(1));
+    press("KeyT", { shiftKey: true });
+    expect(api.reopenTab).toHaveBeenCalledTimes(1);
+  });
+
+  test("keybinding overrides from keybindings.json replace defaults", async () => {
+    const { store, emit } = renderApp(undefined, [
+      { key: "cmd+k", command: "-output.clear" },
+      { key: "cmd+shift+k", command: "output.clear" },
+    ]);
+    await emit("run.state", { tabId: "t1", runId: "r1", state: "transpiling" });
+    await emit("run.events", { tabId: "t1", runId: "r1", events: [{ kind: "stdout", text: "x\n", seq: 1, t: 0 }] });
+    press("KeyK");
+    expect(store.getState().output.entries).toHaveLength(1);
+    press("KeyK", { shiftKey: true });
+    expect(store.getState().output.entries).toHaveLength(0);
   });
 });
 

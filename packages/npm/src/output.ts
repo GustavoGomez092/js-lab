@@ -59,11 +59,11 @@ const RULES: [NpmErrorKind, RegExp][] = [
   ["disk", /ENOSPC|no space left|EACCES|EPERM|EROFS|permission denied/i],
   [
     "network",
-    /ConnectionRefused|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|UnableToConnect|ConnectionClosed|NetworkUnreachable|getaddrinfo|certificate/i,
+    /ConnectionRefused|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|UnableToConnect|ConnectionClosed|NetworkUnreachable|certificate has expired|unable to get local issuer certificate|unable to verify the first certificate|self[- ]signed certificate|\bCERT_HAS_EXPIRED\b|\bUNABLE_TO_VERIFY_LEAF_SIGNATURE\b|\bDEPTH_ZERO_SELF_SIGNED_CERT\b|\bSELF_SIGNED_CERT_IN_CHAIN\b/i,
   ],
   ["noMatchingVersion", /no version matching|no matching version|ETARGET/i],
-  ["notFound", /\b404\b|not found|E404/i],
-  ["peerConflict", /peer dep|incorrect peer|ERESOLVE|conflicting peer/i],
+  ["notFound", /(?:^|\s)-\s*404\b|\b404 Not Found\b|\bE404\b|not found in (?:the )?(?:npm )?registry/i],
+  ["peerConflict", /incorrect peer dependency|conflicting peer dependency|\bERESOLVE\b/i],
   ["nativeBuild", /node-gyp|gyp ERR|prebuild-install|make: \*\*\*|binding\.gyp/i],
   ["scriptBlocked", /blocked \d+ (?:pre|post)?install/i],
 ];

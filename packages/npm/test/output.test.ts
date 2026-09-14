@@ -72,6 +72,7 @@ describe("bun output parsing (captured from the bundled Bun, Task 9)", () => {
   test("classifies peer, native build, disk, timeout and unknown failures; success is not a failure", () => {
     const fail = (stderr: string, extra: { timedOut?: boolean } = {}) =>
       classifyNpmFailure({ exitCode: 1, stdout: "", stderr, ...extra })?.kind;
+    const lines = (...parts: string[]) => parts.join(String.fromCharCode(10));
     expect(fail("error: incorrect peer dependency react@17")).toBe("peerConflict");
     expect(fail("gyp ERR! build error")).toBe("nativeBuild");
     expect(fail("error: ENOSPC: no space left on device")).toBe("disk");
@@ -81,6 +82,19 @@ describe("bun output parsing (captured from the bundled Bun, Task 9)", () => {
     const long = classifyNpmFailure({ exitCode: 1, stdout: "a".repeat(MAX_NPM_LOG_CHARS), stderr: "tail" });
     expect(long?.log.length).toBe(MAX_NPM_LOG_CHARS);
     expect(long?.log.endsWith("tail")).toBe(true);
+    expect(fail(lines("> node-gyp rebuild", "sh: python: command not found", "gyp ERR! configure error"))).toBe(
+      "nativeBuild",
+    );
+    expect(fail(lines("installing http-404-page@1.0.0", "error: incorrect peer dependency react@17"))).toBe(
+      "peerConflict",
+    );
+    expect(
+      fail(lines("npm warn peer dep missing: react@^18, required by some-lib@1.0.0", "gyp ERR! build error")),
+    ).toBe("nativeBuild");
+    expect(
+      fail(lines("npm error path /project/node_modules/foo/lib/certificate-utils.js", "gyp ERR! build error")),
+    ).toBe("nativeBuild");
+    expect(fail("error: unable to verify the first certificate")).toBe("network");
   });
 
   test("a blocked postinstall on a successful install is a notice", () => {

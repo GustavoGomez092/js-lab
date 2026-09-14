@@ -14,6 +14,7 @@ export interface E2EAgentDeps {
   target(): EventTarget;
   /** Monaco action ids from EDITOR_ACTIONS that don't exist in this Monaco build (verification step). */
   missingEditorActions?(): string[];
+  editorOptions?(): Record<string, unknown> | null;
 }
 
 /**
@@ -45,7 +46,11 @@ export function createE2EAgent(deps: E2EAgentDeps) {
         return { executed: id };
       }
       case "state":
-        return { ...snapshotState(deps.store.getState()), missingEditorActions: deps.missingEditorActions?.() ?? [] };
+        return {
+          ...snapshotState(deps.store.getState()),
+          missingEditorActions: deps.missingEditorActions?.() ?? [],
+          editorOptions: deps.editorOptions?.() ?? null,
+        };
       case "output":
         return { entries: snapshotOutput(deps.store.getState(), (params as { tabId?: string }).tabId) };
     }

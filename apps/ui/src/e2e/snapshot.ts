@@ -38,6 +38,8 @@ export interface UiSnapshot {
   cursor: AppState["cursor"];
   notices: AppState["notices"];
   themeId: string;
+  vimMode: string | null;
+  fontFallback: boolean;
 }
 
 export interface OutputSnapshotEntry {
@@ -90,6 +92,8 @@ export function snapshotState(state: AppState): UiSnapshot {
     cursor: state.cursor,
     notices: state.notices,
     themeId: state.themeId,
+    vimMode: state.vimMode,
+    fontFallback: state.fontFallback,
   };
 }
 

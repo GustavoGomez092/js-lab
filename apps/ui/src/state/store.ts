@@ -50,6 +50,8 @@ export interface AppState {
   cursor: { line: number; column: number } | null;
   vimMode: string | null;
   themeId: string;
+  /** True when `appearance.font` failed to load and JetBrains Mono is in use instead (spec §9.4). */
+  fontFallback: boolean;
 
   // Mirrors of the active tab, so M1 components keep reading a single tab.
   tab: TabState | null;
@@ -99,6 +101,7 @@ export interface AppState {
   setCursor(cursor: { line: number; column: number } | null): void;
   setVimMode(mode: string | null): void;
   setThemeId(themeId: string): void;
+  setFontFallback(value: boolean): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -171,6 +174,7 @@ export function createAppStore() {
       cursor: null,
       vimMode: null,
       themeId: "graphite",
+      fontFallback: false,
       tab: null,
       code: "",
       autoRunArmed: false,
@@ -389,6 +393,10 @@ export function createAppStore() {
 
       setThemeId(themeId) {
         if (themeId !== get().themeId) set({ themeId });
+      },
+
+      setFontFallback(fontFallback) {
+        if (fontFallback !== get().fontFallback) set({ fontFallback });
       },
     };
   });

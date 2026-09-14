@@ -4,14 +4,27 @@ import { useEffect, useRef } from "react";
 import type { MainApi } from "../api";
 import type { AppState, AppStore } from "../state/store";
 import { setEditorHandle } from "./editor-handle";
+import { type EditorOptions, editorOptionsFor } from "./editor-options";
 import { markersFor } from "./markers";
 import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
 import { createTabView } from "./tab-view";
+import { defineClipboardRegister, startVim, type VimController } from "./vim";
 
 interface EditorProps {
   store: AppStore;
   api: Pick<MainApi, "saveViewState">;
+}
+
+/**
+ * `EditorOptions.hover.enabled` is a plain boolean (its own contract, pinned by appearance.test.ts and the E2E
+ * `editorOptions` snapshot); Monaco 0.56's `IEditorHoverOptions.enabled` takes `"on" | "off"` instead (an API
+ * change from the boolean the brief assumed). Convert only at the two Monaco call sites.
+ */
+function toMonacoOptions(options: EditorOptions): Omit<Monaco.editor.IEditorOptions, "hover"> & {
+  hover: { enabled: "on" | "off"; delay: number };
+} {
+  return { ...options, hover: { enabled: options.hover.enabled ? "on" : "off", delay: options.hover.delay } };
 }
 
 export function Editor({ store, api }: EditorProps) {
@@ -29,14 +42,10 @@ export function Editor({ store, api }: EditorProps) {
       model: null,
       theme: getTheme(initial.themeId).id,
       automaticLayout: true,
-      fontFamily: `"${initial.settings.appearance.font}", ui-monospace, Menlo, monospace`,
-      fontSize: initial.settings.appearance.fontSize,
-      lineNumbers: initial.settings.editor.lineNumbers ? "on" : "off",
-      wordWrap: initial.settings.editor.lineWrap ? "on" : "off",
-      minimap: { enabled: false },
       glyphMargin: true,
       fixedOverflowWidgets: true,
       scrollBeyondLastLine: false,
+      ...toMonacoOptions(editorOptionsFor(initial.settings, initial.fontFallback)),
     });
 
     const applyMonacoTheme = (themeId: string) => {
@@ -45,6 +54,21 @@ export function Editor({ store, api }: EditorProps) {
       monaco.editor.setTheme(theme.id);
     };
     applyMonacoTheme(initial.themeId);
+
+    const vimStatus = document.createElement("div");
+    vimStatus.className = "visually-hidden";
+    document.body.appendChild(vimStatus);
+    let vim: VimController | null = null;
+    const syncVim = (enabled: boolean) => {
+      if (enabled && !vim) {
+        defineClipboardRegister();
+        vim = startVim(editor, vimStatus, (mode) => store.getState().setVimMode(mode));
+      } else if (!enabled && vim) {
+        vim.dispose();
+        vim = null;
+      }
+    };
+    syncVim(initial.settings.editor.vimKeys);
 
     let contentSubscription: Monaco.IDisposable | null = null;
     const hover = editor.createDecorationsCollection();
@@ -189,10 +213,29 @@ export function Editor({ store, api }: EditorProps) {
         editor.pushUndoStop();
       },
       missingActions: (ids) => ids.filter((id) => !editor.getAction(id)),
+      getOptions: () => {
+        const options = editor.getRawOptions();
+        return {
+          fontFamily: options.fontFamily,
+          fontSize: options.fontSize,
+          fontLigatures: options.fontLigatures,
+          lineNumbers: options.lineNumbers,
+          wordWrap: options.wordWrap,
+          renderWhitespace: options.renderWhitespace,
+          renderLineHighlight: options.renderLineHighlight,
+          autoClosingBrackets: options.autoClosingBrackets,
+          minimap: options.minimap?.enabled,
+          hoverDelay: options.hover?.delay,
+        };
+      },
     });
 
     const unsubscribe = store.subscribe((state, previous) => {
       if (state.themeId !== previous.themeId) applyMonacoTheme(state.themeId);
+      if ((state.settings !== previous.settings || state.fontFallback !== previous.fontFallback) && state.settings) {
+        editor.updateOptions(toMonacoOptions(editorOptionsFor(state.settings, state.fontFallback)));
+        syncVim(state.settings.editor.vimKeys);
+      }
       if (
         state.activeTabId !== previous.activeTabId ||
         state.tabs !== previous.tabs ||
@@ -224,6 +267,8 @@ export function Editor({ store, api }: EditorProps) {
       cursorSubscription.dispose();
       scrollSubscription.dispose();
       focusSubscription.dispose();
+      vim?.dispose();
+      vimStatus.remove();
       editor.dispose();
       models.disposeAll();
     };

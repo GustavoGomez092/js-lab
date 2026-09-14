@@ -17,4 +17,7 @@ export const strings = {
     actionFailed: (error: unknown) =>
       `Couldn't complete that action: ${error instanceof Error ? error.message : String(error)}`,
   },
+  fonts: {
+    fallback: (font: string) => `Font "${font}" isn't available; using JetBrains Mono.`,
+  },
 } as const;

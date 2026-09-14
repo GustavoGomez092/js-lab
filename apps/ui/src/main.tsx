@@ -4,10 +4,12 @@ import { App } from "./shell/App";
 import { showStartupFailure } from "./shell/startup-failure";
 import { createAppStore } from "./state/store";
 import "./styles.css";
+import { registerBundledFontFaces } from "./themes/font-faces";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root element is missing from index.html");
 
+registerBundledFontFaces();
 const api = createRpcApi();
 const store = createAppStore();
 

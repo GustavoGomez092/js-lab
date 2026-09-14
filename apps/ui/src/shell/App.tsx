@@ -6,6 +6,7 @@ import type { MainApi } from "../api";
 import { createAppCommands } from "../commands/app-commands";
 import { createEditorCommands, EDITOR_ACTIONS } from "../commands/editor-commands";
 import { CommandRegistry } from "../commands/registry";
+import { createViewCommands } from "../commands/view-commands";
 import { createE2EAgent } from "../e2e/agent";
 import { Editor } from "../editor/Editor";
 import { getEditorHandle } from "../editor/editor-handle";
@@ -16,6 +17,7 @@ import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { createTabActions } from "../tabs/tab-actions";
 import { startThemeSync } from "../themes/apply";
+import { startAppearanceSync } from "../themes/fonts";
 import { createThemeCommands } from "../themes/theme-commands";
 import { ActivityBar, SafeModeBanner, SplitPane, StartupNotices, StatusBar, UnresponsiveDialog } from "./parts";
 
@@ -52,6 +54,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle }),
       ...createEditorCommands(getEditorHandle),
       ...createThemeCommands(store, api),
+      ...createViewCommands(store, api),
     );
     return created;
   }, [store, api, tabs, run]);
@@ -71,6 +74,8 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       }),
     [store],
   );
+
+  useEffect(() => startAppearanceSync(store, document.documentElement), [store]);
 
   useEffect(() => {
     const unsubscribers = [
@@ -99,6 +104,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
       target: () => document.activeElement ?? document.body,
       executeCommand: (id, args) => registry.execute(id, args),
       missingEditorActions: () => getEditorHandle()?.missingActions(Object.values(EDITOR_ACTIONS)) ?? [],
+      editorOptions: () => getEditorHandle()?.getOptions() ?? null,
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {
       agent(method, params).then(

@@ -24,6 +24,8 @@ export interface EditorHandle {
   /** Applies non-overlapping offset edits (computed against the current text) as one undoable step. */
   applyOffsetEdits(edits: OffsetEdit[], cursorOffset?: number): void;
   missingActions(ids: readonly string[]): string[];
+  /** Settings-driven editor options currently in effect (E2E verification). */
+  getOptions(): Record<string, unknown>;
 }
 
 let active: EditorHandle | null = null;

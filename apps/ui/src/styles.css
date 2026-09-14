@@ -3,9 +3,10 @@
 :root {
   --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
-  --toolbar-height: 38px;
-  --tabbar-height: 34px;
-  --statusbar-height: 28px;
+  --ui-scale: 1;
+  --toolbar-height: calc(38px * var(--ui-scale));
+  --tabbar-height: calc(34px * var(--ui-scale));
+  --statusbar-height: calc(28px * var(--ui-scale));
   --activity-width: 48px;
   --radius: 6px;
 
@@ -58,7 +59,7 @@ body,
   overflow: hidden;
   background: var(--bg-canvas);
   color: var(--fg-default);
-  font: 13px / 1.4 var(--ui);
+  font: calc(13px * var(--ui-scale)) / 1.4 var(--ui);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -259,7 +260,8 @@ button:disabled {
   gap: 8px;
   padding: 5px 12px;
   border-bottom: 1px solid var(--border-muted);
-  font: 12.5px / 19px var(--mono);
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1.5 var(--code-font-family, var(--mono));
+  font-variant-ligatures: var(--code-ligatures, normal);
 }
 
 .entry-stale {
@@ -381,7 +383,7 @@ button:disabled {
   background: var(--bg-chrome);
   border-top: 1px solid var(--border-default);
   color: var(--fg-muted);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-scale));
   white-space: nowrap;
 }
 

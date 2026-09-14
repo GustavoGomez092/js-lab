@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileOpened } from "@jslab/rpc-schema";
@@ -132,6 +132,15 @@ describe("file handlers", () => {
     expect(defaulted.sent).toEqual([
       { name: "file.saveAsConfirm", payload: { token: SAVE_TOKEN, tabId: "scratch", path: "/Docs/<a->.tsx" } },
     ]);
+    // R-M2-T18-1: a confirmation whose token expired (5-minute TTL) answers the tab's pending Save As.
+    defaulted.deps.files.takeSaveAsToken.mockImplementation(() => null);
+    defaulted.handlers.messages["file.confirmSaveAs"]({ token: SAVE_TOKEN, confirmed: true });
+    await flush();
+    expect(defaulted.deps.files.write).not.toHaveBeenCalled();
+    expect(defaulted.sent.at(-1)).toEqual({
+      name: "file.saveFailed",
+      payload: { tabId: "scratch", error: "That save request expired. Save again." },
+    });
 
     const cancelled = setup({ saveResult: null });
     cancelled.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "" });
@@ -204,6 +213,29 @@ describe("file handlers", () => {
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // R-M2-T18-1: the dialog result is resolved like the default folder, so the untouched default path reached
+  // through a symlinked folder (on macOS /var -> /private/var) still asks for confirmation instead of writing.
+  test("Save As treats the default path spelled through a symlinked folder as the untouched default", async () => {
+    const realDir = await realpath(await mkdtemp(join(tmpdir(), "jslab-real-")));
+    const linkParent = await mkdtemp(join(tmpdir(), "jslab-link-"));
+    try {
+      const linkDir = join(linkParent, "docs");
+      await symlink(realDir, linkDir);
+      const chosen = join(linkDir, "Untitled.tsx");
+      const s = setup({ documentsDir: linkDir, saveResult: chosen });
+      s.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "" });
+      await flush();
+      expect(s.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "Untitled.tsx", defaultDir: linkDir });
+      expect(s.deps.files.write).not.toHaveBeenCalled();
+      expect(s.sent).toEqual([
+        { name: "file.saveAsConfirm", payload: { token: SAVE_TOKEN, tabId: "scratch", path: chosen } },
+      ]);
+    } finally {
+      await rm(linkParent, { recursive: true, force: true });
+      await rm(realDir, { recursive: true, force: true });
     }
   });
 

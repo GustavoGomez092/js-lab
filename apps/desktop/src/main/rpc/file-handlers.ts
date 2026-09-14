@@ -1,5 +1,5 @@
 import { realpath, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   emptyParamsSchema,
   type FileOpened,
@@ -61,6 +61,8 @@ async function firstExistingDir(candidates: (string | null)[], fallback: string)
 /** Open, Save, Save As, reveal and copy path (spec §7.3, §10.2). */
 export function createFileHandlers(deps: FileHandlerDeps) {
   const { parse, message } = createValidators(deps.log);
+  // Save As confirmation tokens this handler issued, by tab, so an expired token still answers its tab (R-M2-T18-1).
+  const confirmTabs = new Map<string, string>();
 
   const openReady = async (ready: ReadyFile[], extra: Pick<FileOpened, "large" | "errors">) => {
     const tabs: TabWithContent[] = [];
@@ -169,13 +171,16 @@ export function createFileHandlers(deps: FileHandlerDeps) {
           deps.send.saveCancelled({ tabId });
           return;
         }
-        // Compared as NFC, against the folder's real path when it exists, so /tmp vs /private/tmp and NFD vs
-        // NFC spellings of the same path still count as "untouched" (m-3).
-        const resolvedDir = await realpath(defaultDir).catch(() => defaultDir);
-        const defaultPath = join(resolvedDir, defaultName).normalize("NFC");
-        if (path.normalize("NFC") === defaultPath) {
+        // Both sides are resolved the same way: the folder's real path when it exists, then NFC. So /var vs
+        // /private/var (either side) and NFD vs NFC spellings of the same path still count as "untouched"
+        // (m-3, R-M2-T18-1).
+        const resolve = async (folder: string, name: string) =>
+          join(await realpath(folder).catch(() => folder), name).normalize("NFC");
+        const defaultPath = await resolve(defaultDir, defaultName);
+        if ((await resolve(dirname(path), basename(path))) === defaultPath) {
           // M0-S6: an untouched dialog can resolve to the default path by itself. Never write without confirmation.
           const token = deps.files.issueSaveAsToken({ tabId, path, content });
+          confirmTabs.set(token, tabId);
           deps.send.saveAsConfirm({ token, tabId, path });
           return;
         }
@@ -183,7 +188,14 @@ export function createFileHandlers(deps: FileHandlerDeps) {
       }),
       "file.confirmSaveAs": message(fileConfirmSaveAsSchema, "file.confirmSaveAs", async ({ token, confirmed }) => {
         const pending = deps.files.takeSaveAsToken(token);
-        if (!pending) return;
+        const issuedFor = confirmTabs.get(token);
+        confirmTabs.delete(token);
+        if (!pending) {
+          // Expired (5-minute TTL) or already used: answer the tab's pending Save As so the UI doesn't wait forever.
+          // A token this handler never issued has no tab to answer.
+          if (issuedFor) deps.send.saveFailed({ tabId: issuedFor, error: strings.files.confirmExpired });
+          return;
+        }
         if (!confirmed) {
           deps.send.saveCancelled({ tabId: pending.tabId });
           return;

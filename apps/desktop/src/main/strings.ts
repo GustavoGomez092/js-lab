@@ -13,6 +13,7 @@ export const strings = {
     notText: (name: string) => `${name} isn't a text file.`,
     unreadable: (name: string) => `${name} couldn't be read.`,
     expired: "That file request expired. Open the file again.",
+    confirmExpired: "That save request expired. Save again.",
     tabGone: "That tab is no longer open.",
     openInAnotherTab: (name: string) => `${name} is already open in another tab.`,
   },

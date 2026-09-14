@@ -49,15 +49,16 @@ describe("app.command", () => {
     expect(deps.clipboard).not.toHaveBeenCalled();
   });
 
-  test("relaunch targets the enclosing .app bundle", () => {
+  test("relaunch targets the enclosing .app bundle and waits (capped) for the old pid to exit (m-5)", () => {
     expect(appBundlePath("/Applications/JSLab.app/Contents/Resources")).toBe("/Applications/JSLab.app");
     expect(appBundlePath("/usr/local/lib")).toBeNull();
-    expect(relaunchCommand('/Apps/JSLab "x".app')).toEqual([
+    expect(relaunchCommand('/Apps/JSLab "x".app', 4242)).toEqual([
       "/bin/sh",
       "-c",
-      'sleep 1; /usr/bin/open -n "$1"',
+      'i=0; while kill -0 "$2" 2>/dev/null && [ "$i" -lt 150 ]; do sleep 0.2; i=$((i+1)); done; /usr/bin/open -n "$1"',
       "jslab-relaunch",
       '/Apps/JSLab "x".app',
+      "4242",
     ]);
   });
 });

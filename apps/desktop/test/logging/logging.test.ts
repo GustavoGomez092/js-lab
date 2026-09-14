@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,12 @@ describe("redaction", () => {
     const redact = createRedactor(() => ["hunter2", "ab"]);
     expect(redact("password=hunter2, short=ab")).toBe("password=[REDACTED], short=ab");
   });
+
+  test("masks an array-valued Authorization header without eating the enclosing brackets (m-1)", () => {
+    const redact = createRedactor();
+    expect(redact('{"Authorization":["Bearer abc123"]}')).toBe('{"Authorization":["[REDACTED]"]}');
+    expect(redact('{"Authorization":"Bearer abc123"}')).toBe('{"Authorization":"[REDACTED]"}');
+  });
 });
 
 describe("RotatingLog", () => {
@@ -70,6 +76,27 @@ describe("RotatingLog", () => {
     expect(lines.at(-1)).toContain("entry 11");
     expect(lines[0]).toContain("entry 7");
   });
+
+  test("recreates a deleted logs folder and keeps writing (I-2)", () => {
+    const log = new RotatingLog({ dir, now: fixedNow, redact: createRedactor(), echo: () => {} });
+    log.info("first");
+    rmSync(dir, { recursive: true, force: true });
+    log.info("second");
+    expect(existsSync(join(dir, "main.log"))).toBe(true);
+    expect(readFileSync(join(dir, "main.log"), "utf8")).toContain("second");
+  });
+
+  test("a rotation failure never throws and later writes still succeed (I-2)", () => {
+    const log = new RotatingLog({ dir, maxBytes: 10, maxFiles: 2, now: fixedNow, echo: () => {} });
+    log.info("seed");
+    // main.log.1 is the rotated slot rotate() must clear; making it a non-empty directory forces that
+    // filesystem operation to fail instead of silently succeeding.
+    mkdirSync(join(dir, "main.log.1"));
+    writeFileSync(join(dir, "main.log.1", "blocker.txt"), "x");
+    expect(() => log.info("this write triggers a rotation whose cleanup step can't proceed")).not.toThrow();
+    expect(() => log.info("after")).not.toThrow();
+    expect(readFileSync(join(dir, "main.log"), "utf8")).toContain("after");
+  });
 });
 
 describe("debug report", () => {
@@ -93,5 +120,17 @@ describe("debug report", () => {
     expect(report.settings.version).toBe(2);
     expect(report.log).toHaveLength(500);
     expect(report.log.at(-1)).toBe("Authorization: [REDACTED]");
+  });
+
+  test("stays valid JSON even when a log line ends in an auth token (I-1)", () => {
+    const text = buildDebugReport({
+      versions: { app: "0.2.0", bun: "1.4.0", electrobun: "2.0.1" },
+      os: { macOS: "26.5.2", arch: "arm64" },
+      settings: defaultSettings(),
+      logLines: ["//registry.npmjs.org/:_authToken=npm_testtoken"],
+      redact: createRedactor(),
+    });
+    const report = JSON.parse(text);
+    expect(report.log.at(-1)).not.toContain("npm_testtoken");
   });
 });

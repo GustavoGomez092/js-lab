@@ -92,10 +92,30 @@ async function start(): Promise<void> {
   const logsDir = join(paths.dataDir, "logs");
   const logger = new RotatingLog({ dir: logsDir, debug: process.env.JSLAB_DEBUG === "1", redact });
   log = (message, detail) => logger.warn(message, detail);
-  process.on("uncaughtException", (error) => logger.error("Uncaught exception", error));
+  // m-3: an uncaught exception leaves Main in an unknown state, so it logs then fails fast (dialog + quit) rather
+  // than limping on; a second exception raised while `fail` itself is running must not start a fail-loop.
+  let handlingFatalError = false;
+  process.on("uncaughtException", (error) => {
+    logger.error("Uncaught exception", error);
+    if (handlingFatalError) return;
+    handlingFatalError = true;
+    log(strings.log.fatalError);
+    void fail(error);
+  });
   process.on("unhandledRejection", (reason) => logger.error("Unhandled rejection", reason));
   const ELECTROBUN_VERSION = "2.0.1";
-  const macOSVersion = Bun.spawnSync(["sw_vers", "-productVersion"]).stdout.toString().trim() || "unknown";
+  // m-4: sw_vers blocks the event loop; only Copy Debug Log needs it, so it's computed on first use and cached
+  // rather than on every launch. A plain getter satisfies AppHandlerDeps' `os: { macOS: string; arch: string }`.
+  let macOSVersionCache: string | null = null;
+  const osInfo = {
+    get macOS(): string {
+      if (macOSVersionCache === null) {
+        macOSVersionCache = Bun.spawnSync(["sw_vers", "-productVersion"]).stdout.toString().trim() || "unknown";
+      }
+      return macOSVersionCache;
+    },
+    arch: arch(),
+  };
 
   // A fresh install has no userData directory yet: settings/session recovery tolerates that (it treats a missing
   // primary file as "none", never writing until an update or a real recovery), but SparePool's pre-warmed runner
@@ -175,7 +195,7 @@ async function start(): Promise<void> {
         settings,
         paths: { dataDir: paths.dataDir, logsDir },
         versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
-        os: { macOS: macOSVersion, arch: arch() },
+        os: osInfo,
         redact,
         log,
         clipboard: (text) =>
@@ -185,7 +205,9 @@ async function start(): Promise<void> {
         restartInSafeMode: () => {
           logger.info(strings.log.restartRequested);
           requestSafeModeOnNextLaunch(paths.dataDir);
-          if (!e2eEnabled) relaunchApp(PATHS.RESOURCES_FOLDER);
+          // m-6: a relaunch that couldn't be spawned is still reported; either way JSLab quits (the user can
+          // reopen it themselves, and the flag makes the next launch start in Safe Mode regardless).
+          if (!e2eEnabled && !relaunchApp(PATHS.RESOURCES_FOLDER, process.pid)) log(strings.log.relaunchFailed);
           Utils.quit();
         },
         toggleFullScreen: () => window.setFullScreen(!window.isFullScreen()),

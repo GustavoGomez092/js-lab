@@ -34,9 +34,15 @@ export class RotatingLog {
   #size: number;
 
   constructor(private readonly options: RotatingLogOptions) {
-    mkdirSync(options.dir, { recursive: true });
+    // `path` must always be assigned, even if the folder can't be created (I-2): a constructor failure falls
+    // back to console-only logging (via write()'s own append-failure retry below) instead of throwing into Main.
     this.path = join(options.dir, options.fileName ?? "main.log");
-    this.#size = existsSync(this.path) ? statSync(this.path).size : 0;
+    try {
+      mkdirSync(options.dir, { recursive: true });
+      this.#size = existsSync(this.path) ? statSync(this.path).size : 0;
+    } catch {
+      this.#size = 0;
+    }
   }
 
   write(level: LogLevel, message: string, detail?: unknown): void {
@@ -44,14 +50,34 @@ export class RotatingLog {
     const raw = `${(this.options.now ?? (() => new Date()))().toISOString()} ${level.toUpperCase()} ${message}${formatDetail(detail)}`;
     const line = `${(this.options.redact ?? ((text: string) => text))(raw)}\n`;
     const bytes = Buffer.byteLength(line);
-    if (this.#size > 0 && this.#size + bytes > (this.options.maxBytes ?? 5 * 1024 * 1024)) this.#rotate();
+    // Every filesystem operation below (including rotation) is guarded: logging must never throw into Main,
+    // whatever goes wrong on disk (I-2).
+    try {
+      if (this.#size > 0 && this.#size + bytes > (this.options.maxBytes ?? 5 * 1024 * 1024)) this.#rotate();
+    } catch {
+      // A rotation failure (a rotated slot replaced by something unwritable, for example) must not stop logging;
+      // the live file just keeps growing past maxBytes instead of throwing.
+    }
+    this.#append(line, bytes);
+    (this.options.echo ?? ((text: string) => console.error(text)))(line.trimEnd());
+  }
+
+  /** Appends one line, recreating a deleted logs folder and retrying once before giving up silently (I-2). */
+  #append(line: string, bytes: number): void {
     try {
       appendFileSync(this.path, line);
       this.#size += bytes;
+      return;
     } catch {
-      // Logging must never crash Main; a full disk is reported by the toast path (spec §20).
+      // Falls through to the recovery attempt below.
     }
-    (this.options.echo ?? ((text: string) => console.error(text)))(line.trimEnd());
+    try {
+      mkdirSync(this.options.dir, { recursive: true });
+      appendFileSync(this.path, line);
+      this.#size += bytes;
+    } catch {
+      // Give up silently; the caller still echoes the line to the console below.
+    }
   }
 
   error(message: string, detail?: unknown): void {
@@ -76,7 +102,9 @@ export class RotatingLog {
     const maxFiles = this.options.maxFiles ?? 5;
     for (let index = 0; index < maxFiles && lines.length < count; index++) {
       const file = index === 0 ? this.path : `${this.path}.${index}`;
-      if (!existsSync(file)) break;
+      // A missing live file (deleted from under us, or not yet created) must not stop reading older rotated
+      // files behind it (I-2): continue past it rather than breaking out of the loop.
+      if (!existsSync(file)) continue;
       const fileLines = readFileSync(file, "utf8").split("\n").filter(Boolean);
       lines.unshift(...fileLines);
     }

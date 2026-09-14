@@ -2,9 +2,12 @@ export type Redactor = (text: string) => string;
 
 export const REDACTED = "[REDACTED]";
 
+// Value classes stop at whitespace, quotes, `,`, `}` and `]` (never `\S+`/greedy) so a match can never swallow
+// JSON/quote delimiters around it -- required even though buildDebugReport now redacts free text before
+// JSON.stringify (I-1), since createRedactor is also used on already-serialized log lines.
 const PATTERNS: [RegExp, string][] = [
-  [/(authorization["']?\s*[:=]\s*["']?)(?:(?:bearer|basic|token)\s+)?[^\s"',}]+/gi, `$1${REDACTED}`],
-  [/(_authToken\s*=\s*)\S+/g, `$1${REDACTED}`],
+  [/(authorization["']?\s*[:=]\s*\[?\s*["']?)(?:(?:bearer|basic|token)\s+)?[^\s"',}\]]+/gi, `$1${REDACTED}`],
+  [/(_authToken\s*=\s*)[^\s"',}\]]+/g, `$1${REDACTED}`],
   [/\bsk-[A-Za-z0-9_-]{16,}/g, REDACTED],
   [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, REDACTED],
   [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, REDACTED],

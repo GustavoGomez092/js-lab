@@ -5,6 +5,8 @@ export const strings = {
     safeMode: (reason: string) => `starting in Safe Mode (${reason})`,
     e2eEnabled: (path: string) => `E2E automation enabled on ${path}`,
     restartRequested: "Restart in Safe Mode requested",
+    relaunchFailed: "Could not relaunch JSLab after Restart in Safe Mode; quitting without reopening",
+    fatalError: "Unhandled error; quitting",
   },
   notices: {
     copySaved: (file: string) => ` A copy was saved as ${file}`,

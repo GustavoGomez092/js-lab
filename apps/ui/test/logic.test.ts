@@ -130,6 +130,25 @@ describe("startAutoRun", () => {
     clock2.fireAll();
     expect(run2).not.toHaveBeenCalled();
   });
+
+  test("switching tabs never schedules a run, and cancels a debounce pending for the tab being left", () => {
+    const store = hydratedStore();
+    const run = mock(() => {});
+    const clock = manualTimers();
+    startAutoRun(store, run, clock.timers);
+    store.getState().editCode("1 +");
+    clock.fireAll();
+    store.getState().openTab(createTab({ id: "t2" }), "2 + 2", false);
+    store.getState().activateTab("t2");
+    store.getState().activateTab("t1");
+    expect(clock.pending.size).toBe(0);
+    store.getState().editCode("1 + 2");
+    expect(clock.pending.size).toBe(1);
+    store.getState().activateTab("t2");
+    expect(clock.pending.size).toBe(0);
+    clock.fireAll();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("commandForKey", () => {

@@ -24,6 +24,12 @@ export function startAutoRun(store: AppStore, run: () => void, timers: TimerApi 
     pending = null;
   };
   const unsubscribe = store.subscribe((state, previous) => {
+    // Switching tabs changes the mirrored code but is not an edit (spec §5.14). A debounce pending for the tab being
+    // left must not fire and run the tab being shown, so cancel it, like every other case where the guard stops holding.
+    if (state.activeTabId !== previous.activeTabId) {
+      cancel();
+      return;
+    }
     if (!shouldAutoRun(state)) {
       cancel();
       return;

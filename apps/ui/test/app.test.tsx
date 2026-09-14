@@ -1,11 +1,12 @@
 import { beforeAll, describe, expect, mock, test } from "bun:test";
-import type { BootstrapPayload, ViewMessages } from "@jslab/rpc-schema";
+import type { BootstrapPayload } from "@jslab/rpc-schema";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentType } from "react";
 import type { MainApi } from "../src/api";
 import { runStateLabel } from "../src/shell/labels";
 import { type AppStore, createAppStore } from "../src/state/store";
+import { createFakeApi } from "./fake-api";
 
 // Monaco and the virtualized list need a real browser layout; the shell behavior under test does not.
 mock.module("../src/editor/Editor", () => ({ Editor: () => <div data-testid="editor" /> }));
@@ -16,35 +17,6 @@ beforeAll(async () => {
   ({ App } = await import("../src/shell/App"));
 });
 
-function fakeApi() {
-  const listeners = new Map<string, Set<(payload: unknown) => void>>();
-  const api = {
-    bootstrap: mock(async () => {
-      throw new Error("not used");
-    }),
-    startRun: mock(async () => ({ runId: "r1" })),
-    expand: mock(async () => null),
-    stop: mock((_tabId: string) => {}),
-    kill: mock((_tabId: string) => {}),
-    wait: mock((_tabId: string) => {}),
-    bufferChanged: mock((_tabId: string, _content: string) => {}),
-    patchTab: mock((_tabId: string, _patch: unknown) => {}),
-    heartbeat: mock(() => {}),
-    appCommand: mock((_action: string) => {}),
-    on(name: string, listener: (payload: never) => void) {
-      const set = listeners.get(name) ?? new Set();
-      listeners.set(name, set);
-      set.add(listener as (payload: unknown) => void);
-      return () => set.delete(listener as (payload: unknown) => void);
-    },
-  } satisfies MainApi;
-  const emit = <K extends keyof ViewMessages>(name: K, payload: ViewMessages[K]) =>
-    act(() => {
-      for (const listener of listeners.get(name) ?? []) listener(payload);
-    });
-  return { api, emit };
-}
-
 function renderApp(safeMode: BootstrapPayload["safeMode"] = { active: false, reason: null }) {
   const store = createAppStore();
   store.getState().hydrate({
@@ -54,7 +26,7 @@ function renderApp(safeMode: BootstrapPayload["safeMode"] = { active: false, rea
     safeMode,
     versions: { app: "0.0.1", bun: "1.3.13" },
   });
-  const { api, emit } = fakeApi();
+  const { api, emit } = createFakeApi();
   render(<App store={store} api={api} />);
   return { store, api, emit };
 }
@@ -135,6 +107,33 @@ describe("App shell", () => {
     expect(screen.getByTestId("startup-notices").textContent).toContain("settings.corrupt-1.json");
     fireEvent.click(screen.getByRole("button", { name: /^Dismiss:/ }));
     expect(screen.queryByTestId("startup-notices")).toBeNull();
+  });
+
+  test("tab commands create, switch and close tabs through Main", async () => {
+    const { store, api, emit } = renderApp();
+    api.createTab.mockImplementation(async () => ({ tab: createTab({ id: "t2" }) }));
+    api.closeTab.mockImplementation(async () => ({ ok: true, activeTabId: "t2", replacement: null }));
+    await emit("menu.command", { command: "tab.new" });
+    expect([store.getState().tabOrder, store.getState().activeTabId]).toEqual([["t1", "t2"], "t2"]);
+    await emit("menu.command", { command: "tab.previous" });
+    expect(store.getState().activeTabId).toBe("t1");
+    expect(api.activateTab).toHaveBeenCalledWith("t1");
+    await emit("menu.command", { command: "tab.close" });
+    expect(api.closeTab).toHaveBeenCalledWith("t1");
+    expect([store.getState().tabOrder, store.getState().activeTabId]).toEqual([["t2"], "t2"]);
+  });
+
+  test("run messages for a background tab update only that tab", async () => {
+    const { store, emit } = renderApp();
+    act(() => store.getState().openTab(createTab({ id: "t2" }), "", false));
+    await emit("run.state", { tabId: "t2", runId: "r9", state: "transpiling" });
+    await emit("run.events", {
+      tabId: "t2",
+      runId: "r9",
+      events: [{ kind: "stdout", text: "bg\n", seq: 1, t: 0 }],
+    });
+    expect(store.getState().runtimes.t2?.output.entries).toHaveLength(1);
+    expect(store.getState().output.entries).toHaveLength(0);
   });
 });
 

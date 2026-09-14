@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { BootstrapPayload, RunEvent } from "@jslab/rpc-schema";
-import { createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
+import {
+  createTab,
+  defaultSession,
+  defaultSettings,
+  mergeSettings,
+  normalizeSession,
+  sessionSchema,
+} from "@jslab/shared";
 import { createAppStore, shouldAutoRun } from "../src/state/store";
 
 function payload(overrides: Partial<BootstrapPayload> = {}): BootstrapPayload {
@@ -83,5 +90,76 @@ describe("app store", () => {
     store.getState().setEditorSize(99);
     store.getState().toggleOrientation();
     expect(store.getState().tab?.layout).toEqual({ orientation: "vertical", editorSize: 90, outputVisible: true });
+  });
+
+  test("hydrate loads every tab with its own buffer and output, and switching swaps the mirrors", () => {
+    const store = createAppStore();
+    const session = normalizeSession(
+      sessionSchema.parse({
+        tabOrder: ["a", "b"],
+        activeTabId: "b",
+        tabs: { a: createTab({ id: "a" }), b: createTab({ id: "b" }) },
+        closedStack: [{ tab: createTab({ id: "c" }), closedAt: 1 }],
+      }),
+    );
+    store.getState().hydrate(payload({ session, buffers: { a: "1", b: "2" } }));
+    expect([store.getState().activeTabId, store.getState().code, store.getState().closedCount]).toEqual(["b", "2", 1]);
+    store.getState().receiveState("r1", "transpiling", undefined, "a");
+    store.getState().receiveEvents("r1", [log(1)], "a");
+    expect(store.getState().output.entries).toHaveLength(0);
+    store.getState().activateTab("a");
+    expect([store.getState().code, store.getState().output.entries.length]).toEqual(["1", 1]);
+  });
+
+  test("openTab inserts after the active tab; removing the last tab clears the mirrors", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    store.getState().openTab(createTab({ id: "t2" }), "two");
+    store.getState().activateTab("t1");
+    store.getState().openTab(createTab({ id: "t3" }), "three");
+    expect(store.getState().tabOrder).toEqual(["t1", "t3", "t2"]);
+    store.getState().removeTab("t3");
+    expect(store.getState().activeTabId).toBe("t2");
+    store.getState().removeTab("t2");
+    store.getState().removeTab("t1");
+    expect([store.getState().activeTabId, store.getState().tab, store.getState().code]).toEqual([null, null, ""]);
+  });
+
+  test("rename, Main tab updates and reorder", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    store.getState().setViewState("t1", { scrollTop: 40 });
+    store.getState().renameTab("t1", "  mine ");
+    expect(store.getState().tab).toMatchObject({ title: "mine", titleIsCustom: true });
+    store.getState().applyTabUpdate(createTab({ id: "t1", filePath: "/a.ts", lastSavedHash: "h" }));
+    expect(store.getState().tab).toMatchObject({ filePath: "/a.ts", viewState: { scrollTop: 40 } });
+    store.getState().openTab(createTab({ id: "t2" }), "");
+    store.getState().reorderTabs(["t2"]);
+    expect(store.getState().tabOrder).toEqual(["t1", "t2"]);
+    store.getState().reorderTabs(["t2", "t1"]);
+    expect(store.getState().tabOrder).toEqual(["t2", "t1"]);
+  });
+
+  test("focus, modal, output filter, status message, cursor and editor size reset", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    store.getState().setFocus("output");
+    store.getState().openModal({ kind: "palette", context: "output" });
+    store.getState().setOutputFilter("errors");
+    store.getState().setStatusMessage("Formatted");
+    store.getState().setCursor({ line: 3, column: 9 });
+    store.getState().setEditorSize(80);
+    store.getState().resetEditorSize();
+    const s = store.getState();
+    expect([s.focus, s.modal?.kind, s.outputFilter, s.statusMessage, s.cursor, s.tab?.layout.editorSize]).toEqual([
+      "output",
+      "palette",
+      "errors",
+      "Formatted",
+      { line: 3, column: 9 },
+      50,
+    ]);
+    store.getState().closeModal();
+    expect(store.getState().modal).toBeNull();
   });
 });

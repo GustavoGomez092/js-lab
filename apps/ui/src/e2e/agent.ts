@@ -42,7 +42,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
       case "state":
         return snapshotState(deps.store.getState());
       case "output":
-        return { entries: snapshotOutput(deps.store.getState()) };
+        return { entries: snapshotOutput(deps.store.getState(), (params as { tabId?: string }).tabId) };
     }
   };
 }

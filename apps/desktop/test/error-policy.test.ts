@@ -60,4 +60,17 @@ describe("Main error policy (spec §20, FA-I3)", () => {
       "Couldn't show the unexpected-error notice",
     ]);
   });
+
+  test("a throwing log call before startup still shows the dialog and quits exactly once (RR1-m3)", async () => {
+    const { deps, policy, releaseDialog } = setup();
+    deps.log.mockImplementationOnce(() => {
+      throw new Error("logger unavailable");
+    });
+    const failing = policy.fail(new Error("boom"));
+    releaseDialog();
+    await failing;
+    expect(deps.quit.mock.calls).toEqual([[1]]);
+    expect(deps.showFatal.mock.calls).toEqual([["boom"]]);
+    expect(policy.exitCode).toBe(1);
+  });
 });

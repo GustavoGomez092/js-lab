@@ -11,9 +11,14 @@ export const strings = {
     relaunchFailed: "Could not relaunch JSLab after Restart in Safe Mode; quitting without reopening",
     startupFailed: "startup failed",
     startupDialogFailed: "startup failure dialog could not be shown",
+    startupLogFailed: "the startup-failure log call itself failed",
     uncaughtException: "Uncaught exception",
     unhandledRejection: "Unhandled rejection",
     noticeFailed: "Couldn't show the unexpected-error notice",
+    /** RR1-m1: the quit flush now covers session and settings, not session alone. */
+    quitFlushFailed: "Couldn't save the session and settings before quitting",
+    quitFlushTimedOut: (timeoutMs: number) =>
+      `Couldn't save the session and settings within ${timeoutMs} ms before quitting; quitting anyway`,
   },
   dialogs: {
     startupFailed: (message: string) => `JSLab couldn't start: ${message}`,

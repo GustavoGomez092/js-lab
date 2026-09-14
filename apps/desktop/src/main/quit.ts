@@ -1,3 +1,5 @@
+import { strings } from "./strings";
+
 export const QUIT_FLUSH_TIMEOUT_MS = 2000;
 
 /**
@@ -16,12 +18,12 @@ export async function flushBeforeQuit(
   const flushed = flush().then(
     () => "flushed" as const,
     (error: unknown) => {
-      log("session flush failed at quit", error);
+      log(strings.log.quitFlushFailed, error);
       return "failed" as const;
     },
   );
   const result = await Promise.race([flushed, timedOut]);
   clearTimeout(timer);
-  if (result === "timedOut") log(`session flush did not finish within ${timeoutMs} ms; quitting anyway`);
+  if (result === "timedOut") log(strings.log.quitFlushTimedOut(timeoutMs));
   return result;
 }

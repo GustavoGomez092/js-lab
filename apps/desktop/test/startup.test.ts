@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { flushBeforeQuit } from "../src/main/quit";
 import { startupNotices } from "../src/main/startup-notices";
+import { strings } from "../src/main/strings";
 
 describe("startup notices (spec §20, final review M7 and I4)", () => {
   test("recovery, newer-version and skipped-tab notices say what happened", () => {
@@ -87,10 +88,10 @@ describe("flushBeforeQuit (final review T14)", () => {
         throw new Error("disk full");
       }, log),
     ).toBe("failed");
-    expect(log.mock.calls[0]?.[0]).toBe("session flush failed at quit");
+    expect(log.mock.calls[0]?.[0]).toBe(strings.log.quitFlushFailed);
     const started = Date.now();
     expect(await flushBeforeQuit(() => new Promise<void>(() => {}), log, 20)).toBe("timedOut");
     expect(Date.now() - started).toBeLessThan(1000);
-    expect(log.mock.calls[1]?.[0]).toBe("session flush did not finish within 20 ms; quitting anyway");
+    expect(log.mock.calls[1]?.[0]).toBe(strings.log.quitFlushTimedOut(20));
   });
 });

@@ -25,7 +25,16 @@ export function createErrorPolicy(deps: ErrorPolicyDeps) {
     if (failing) return failing;
     exitCode = 1;
     failing = (async () => {
-      deps.log(strings.log.startupFailed, error);
+      try {
+        deps.log(strings.log.startupFailed, error);
+      } catch (logError) {
+        // The dialog and quit below must still happen even if the pre-quit log call itself throws (RR1-m3).
+        try {
+          deps.log(strings.log.startupLogFailed, logError);
+        } catch {
+          // Nothing more can be done if logging keeps throwing; fall through to the dialog and quit.
+        }
+      }
       const message = error instanceof Error ? error.message : String(error);
       try {
         await deps.showFatal(message);

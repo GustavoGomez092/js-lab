@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultSettings, mergeSettings, settingsSchema } from "@jslab/shared";
-import { buildDebugReport } from "../../src/main/logging/debug-report";
+import { buildDebugReport, redactHomePaths } from "../../src/main/logging/debug-report";
 import { createRedactor } from "../../src/main/logging/redact";
 import { RotatingLog } from "../../src/main/logging/rotating-log";
 
@@ -185,5 +185,14 @@ describe("debug report", () => {
     expect(report.settings.run).not.toHaveProperty("apiToken");
     expect(report.settings).not.toHaveProperty("future");
     expect(report.settings.appearance.font).toBe("[REDACTED]");
+  });
+
+  test("redacts the home folder only at a path boundary, never as a prefix of a longer name (I-1, R-M3-T1-1)", () => {
+    const home = HOME_FIXTURE;
+    expect(redactHomePaths(`${home}/a`, home)).toBe("~/a");
+    expect(redactHomePaths(`${join("/Users", "testers")}/x`, home)).toBe("~/x");
+    expect(redactHomePaths(`path=${home}`, home)).toBe("path=~");
+    expect(redactHomePaths(`"${home}"`, home)).toBe('"~"');
+    expect(redactHomePaths(`${home}/`, home)).toBe("~/");
   });
 });

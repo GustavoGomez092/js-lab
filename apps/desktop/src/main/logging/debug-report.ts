@@ -12,10 +12,23 @@ export interface DebugReportInput {
 }
 
 const USERS_PREFIX = /\/Users\/[^/\s"',}\]]+/g;
+const BOUNDARY = String.raw`(?=[/\s"',}\]]|$)`;
 
-/** Writes the home folder, and any other `/Users/<name>` prefix, as `~` (FA-m12). */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Writes the home folder, and any other `/Users/<name>` prefix, as `~` (FA-m12). The home folder is matched only
+ * when it ends at a path boundary (I-1, R-M3-T1-1): a plain `split`/`join` on the literal home string would also
+ * rewrite a longer, unrelated path that merely starts with the same characters (e.g. home `/Users/tester` inside
+ * `/Users/testers/x`), corrupting text `USERS_PREFIX` can no longer repair once `/Users/` is gone. Anything that
+ * isn't an exact home match still falls through to `USERS_PREFIX` below.
+ */
 export function redactHomePaths(text: string, home: string): string {
-  const withoutHome = home.length > 1 ? text.split(home).join("~") : text;
+  const trimmedHome = home.endsWith("/") ? home.slice(0, -1) : home;
+  const withoutHome =
+    trimmedHome.length > 1 ? text.replace(new RegExp(escapeRegExp(trimmedHome) + BOUNDARY, "g"), "~") : text;
   return withoutHome.replace(USERS_PREFIX, "~");
 }
 

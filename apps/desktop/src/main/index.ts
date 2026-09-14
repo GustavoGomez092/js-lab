@@ -3,9 +3,10 @@ import { mkdir } from "node:fs/promises";
 import { arch } from "node:os";
 import { join } from "node:path";
 import type { MainMessages, MainRequests, ViewMessages } from "@jslab/rpc-schema";
+import { DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
+import { listThemes } from "@jslab/themes";
 import Electrobun, {
   ApplicationMenu,
-  type ApplicationMenuItemConfig,
   BrowserView,
   BrowserWindow,
   PATHS,
@@ -23,7 +24,7 @@ import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
 import { createMainServices } from "./main-services";
 import { resolveMainViewUrl } from "./main-view-url";
-import { buildMenu, commandForMenuAction, type MenuItem } from "./menu";
+import { buildMenu, createMenuController, dispatchMenuAction } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
 import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
 import { relaunchApp } from "./platform/relaunch";
@@ -312,32 +313,32 @@ async function start(): Promise<void> {
     mainWindow.open();
   });
 
-  // `MenuItem` (Task 13) models the shape ApplicationMenu.setApplicationMenu ends up accepting at runtime
-  // (`type: "separator"` is treated identically to "divider", see .hutch/devkit's ApplicationMenu.ts), but its
-  // `type` field isn't a discriminated union, so it doesn't structurally satisfy the devkit's real
-  // `ApplicationMenuItemConfig` union. Adapt it here rather than reshaping menu.ts's own interface (Task 13's file).
-  function toApplicationMenuItems(items: MenuItem[]): ApplicationMenuItemConfig[] {
-    return items.map((item): ApplicationMenuItemConfig => {
-      if (item.type === "separator") return { type: "divider" };
-      const submenu = item.submenu ? toApplicationMenuItems(item.submenu) : undefined;
-      if (item.role) {
-        return {
-          role: item.role,
-          ...(item.label !== undefined ? { label: item.label } : {}),
-          ...(item.accelerator !== undefined ? { accelerator: item.accelerator } : {}),
-          ...(submenu ? { submenu } : {}),
-        };
-      }
-      return {
-        label: item.label ?? "",
-        ...(item.action !== undefined ? { action: item.action } : {}),
-        ...(item.accelerator !== undefined ? { accelerator: item.accelerator } : {}),
-        ...(submenu ? { submenu } : {}),
-      };
+  // `MenuItem` (menu.ts) is the devkit's own `ApplicationMenuItemConfig` shape at its source (final review T14),
+  // proved at compile time by `MENU_IS_DEVKIT_CONFIG`, so a built menu is passed straight to
+  // `ApplicationMenu.setApplicationMenu` with no adapter.
+  const resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, keybindings.rules);
+  const menu = createMenuController({
+    build: () =>
+      buildMenu({
+        settings: settings.current,
+        activeTab: session.session.tabs[session.session.activeTabId] ?? null,
+        bindings: resolvedBindings,
+        themes: listThemes(),
+        canReopen: session.session.closedStack.length > 0,
+      }),
+    apply: (items) => ApplicationMenu.setApplicationMenu(items),
+  });
+  menu.refresh();
+  settings.onChange(() => menu.refresh());
+  session.onChange(() => menu.refresh());
+  ApplicationMenu.on("application-menu-clicked", (event: unknown) => {
+    const action = (event as { data?: { action?: string } }).data?.action;
+    dispatchMenuAction(action, {
+      isOpen: () => mainWindow.isOpen(),
+      open: () => void mainWindow.open(),
+      send: (c) => rpc.send["menu.command"](c),
     });
-  }
-
-  ApplicationMenu.setApplicationMenu(toApplicationMenuItems(buildMenu()));
+  });
   if (e2eEnabled) {
     socketServer = await startSocketServer({
       path: paths.socketPath,
@@ -352,6 +353,7 @@ async function start(): Promise<void> {
           pid: process.pid,
           windowFrame: mainWindow.window?.getFrame() ?? null,
           primaryWorkArea: Screen.getPrimaryDisplay().workArea,
+          menu: menu.current(),
         }),
         uiAvailable: () => mainWindow.isOpen(),
         reopenWindow: () => void mainWindow.open(),
@@ -369,11 +371,6 @@ async function start(): Promise<void> {
     });
     logger.info(strings.log.e2eEnabled(socketServer.path));
   }
-  ApplicationMenu.on("application-menu-clicked", (event: unknown) => {
-    const action = (event as { data?: { action?: string } }).data?.action;
-    const command = action ? commandForMenuAction(action) : null;
-    if (command) rpc.send["menu.command"]({ command });
-  });
 
   // Warm the first runner so the first run is fast (spec §5.3).
   spares.setActiveTab(session.session.activeTabId);
@@ -404,6 +401,7 @@ async function start(): Promise<void> {
     quitting = true;
     e2eBridge.rejectAll("JSLab is quitting");
     socketServer?.close();
+    menu.dispose();
     coordinator.dispose();
     transform.dispose();
     runLock.releaseAll();

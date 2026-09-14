@@ -7,6 +7,7 @@
     "@jslab/rpc-schema": "workspace:*",
     "@jslab/runner-bun": "workspace:*",
     "@jslab/shared": "workspace:*",
+    "@jslab/themes": "workspace:*",
     "@jslab/transform": "workspace:*",
     "source-map-js": "1.2.1",
     "zod": "4.6.4"

@@ -220,8 +220,8 @@ export function App({
         coalescer.flush(tabId);
         store.getState().receiveDiagnostics(runId, diagnostics, tabId);
       }),
-      api.on("menu.command", ({ command }) => {
-        registry.execute(command);
+      api.on("menu.command", ({ command, args }) => {
+        registry.execute(command, args);
       }),
       api.on("settings.changed", ({ settings }) => store.getState().updateSettings(settings)),
       api.on("file.opened", (payload) => void flows.handleOpened(payload)),
@@ -244,6 +244,7 @@ export function App({
       executeCommand: (id, args) => registry.execute(id, args),
       missingEditorActions: () => getEditorHandle()?.missingActions(Object.values(EDITOR_ACTIONS)) ?? [],
       editorOptions: () => getEditorHandle()?.getOptions() ?? null,
+      registeredCommands: () => registry.list().map((spec) => spec.id),
       regions: () => ({
         toolbar: document.querySelector(".toolbar") !== null,
         activityBar: document.querySelector(".activity-bar") !== null,

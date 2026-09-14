@@ -220,7 +220,7 @@ export type ViewMessages = {
   "run.events": { tabId: string; runId: string; events: RunEvent[] };
   "run.state": { tabId: string; runId: string; state: RunState; activeHandles?: number };
   "run.diagnostics": { tabId: string; runId: string; diagnostics: DiagnosticPayload[] };
-  "menu.command": { command: CommandId };
+  "menu.command": { command: CommandId; args?: unknown };
   "e2e.request": E2ERequest;
   "settings.changed": { settings: Settings };
   "file.opened": FileOpened;

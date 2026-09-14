@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { resolveAppPaths, runnerEnvironment } from "../src/main/app-paths";
-import { buildMenu, commandForMenuAction, type MenuItem } from "../src/main/menu";
 
 const input = {
   resourcesFolder: "/Applications/JSLab.app/Contents/Resources",
@@ -58,32 +57,5 @@ describe("runnerEnvironment", () => {
       JSLAB: "1",
       NODE_PATH: paths.packagesNodeModules,
     });
-  });
-});
-
-describe("menu", () => {
-  const flatten = (items: MenuItem[]): MenuItem[] => items.flatMap((item) => [item, ...flatten(item.submenu ?? [])]);
-
-  test("every action maps to a command", () => {
-    const actions = flatten(buildMenu()).flatMap((item) => (item.action ? [item.action] : []));
-    expect(actions.map(commandForMenuAction)).toEqual([
-      "output.clear",
-      "editor.clear",
-      "run.start",
-      "run.stop",
-      "run.kill",
-    ]);
-  });
-
-  test("keeps native clipboard roles and registers no accelerators", () => {
-    const items = flatten(buildMenu());
-    for (const role of ["undo", "redo", "cut", "copy", "paste", "selectAll", "quit"]) {
-      expect(items.some((item) => item.role === role)).toBe(true);
-    }
-    expect(items.some((item) => item.accelerator)).toBe(false);
-  });
-
-  test("unknown actions are ignored", () => {
-    expect(commandForMenuAction("jslab:unknown")).toBeNull();
   });
 });

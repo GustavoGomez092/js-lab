@@ -17,6 +17,8 @@ export interface E2EAgentDeps {
   editorOptions?(): Record<string, unknown> | null;
   /** Which layout regions are currently mounted, keyed by name (verification step, Task 16). */
   regions?(): Record<string, boolean>;
+  /** Every command id registered in the UI command registry (Task 22 verification: every menu action is dispatchable). */
+  registeredCommands?(): string[];
 }
 
 /** E2E-only command: clicks a temporary link inside the page, as a user clicking a web link would (R-M1-17(e)). */
@@ -85,6 +87,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
           missingEditorActions: deps.missingEditorActions?.() ?? [],
           editorOptions: deps.editorOptions?.() ?? null,
           regions: deps.regions?.() ?? {},
+          registeredCommands: deps.registeredCommands?.() ?? [],
         };
       case "output":
         return { entries: snapshotOutput(deps.store.getState(), (params as { tabId?: string }).tabId) };

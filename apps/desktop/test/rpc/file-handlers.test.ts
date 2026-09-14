@@ -134,37 +134,41 @@ describe("file handlers", () => {
   test("Save As writes a chosen path, but asks before trusting the default path", async () => {
     const picked = setup();
     picked.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "<a/>" });
-    await flush();
-    expect(picked.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "<a->.tsx", defaultDir: "/Docs" });
-    expect(picked.sent.map((m) => m.name)).toEqual(["file.saved"]);
-    expect(picked.tabs.scratch).toMatchObject({ filePath: "/Other/picked.tsx", lastSavedHash: contentHash("<a/>") });
+    await eventually(() => {
+      expect(picked.deps.saveDialog).toHaveBeenCalledWith({ defaultName: "<a->.tsx", defaultDir: "/Docs" });
+      expect(picked.sent.map((m) => m.name)).toEqual(["file.saved"]);
+      expect(picked.tabs.scratch).toMatchObject({ filePath: "/Other/picked.tsx", lastSavedHash: contentHash("<a/>") });
+    });
 
     const defaulted = setup({ saveResult: "/Docs/<a-" + ">.tsx" });
     defaulted.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "<a/>" });
-    await flush();
+    await eventually(() => {
+      expect(defaulted.sent).toEqual([
+        { name: "file.saveAsConfirm", payload: { token: SAVE_TOKEN, tabId: "scratch", path: "/Docs/<a->.tsx" } },
+      ]);
+    });
     expect(defaulted.deps.files.write).not.toHaveBeenCalled();
-    expect(defaulted.sent).toEqual([
-      { name: "file.saveAsConfirm", payload: { token: SAVE_TOKEN, tabId: "scratch", path: "/Docs/<a->.tsx" } },
-    ]);
     // R-M2-T18-1: a confirmation whose token expired (5-minute TTL) answers the tab's pending Save As.
     defaulted.deps.files.takeSaveAsToken.mockImplementation(() => null);
     defaulted.handlers.messages["file.confirmSaveAs"]({ token: SAVE_TOKEN, confirmed: true });
-    await flush();
-    expect(defaulted.deps.files.write).not.toHaveBeenCalled();
-    expect(defaulted.sent.at(-1)).toEqual({
-      name: "file.saveFailed",
-      payload: { tabId: "scratch", error: "That save request expired. Save again." },
+    await eventually(() => {
+      expect(defaulted.sent.at(-1)).toEqual({
+        name: "file.saveFailed",
+        payload: { tabId: "scratch", error: "That save request expired. Save again." },
+      });
     });
+    expect(defaulted.deps.files.write).not.toHaveBeenCalled();
 
     const cancelled = setup({ saveResult: null });
     cancelled.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "" });
     const failed = setup({ saveResult: new Error("osascript exited with 1") });
     failed.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "" });
-    await flush();
-    expect(cancelled.sent).toEqual([{ name: "file.saveCancelled", payload: { tabId: "scratch" } }]);
-    expect(failed.sent).toEqual([
-      { name: "file.saveFailed", payload: { tabId: "scratch", error: "osascript exited with 1" } },
-    ]);
+    await eventually(() => {
+      expect(cancelled.sent).toEqual([{ name: "file.saveCancelled", payload: { tabId: "scratch" } }]);
+      expect(failed.sent).toEqual([
+        { name: "file.saveFailed", payload: { tabId: "scratch", error: "osascript exited with 1" } },
+      ]);
+    });
   });
 
   test("save-as confirmations, reveal and copy path act only on known tokens and saved tabs", async () => {
@@ -192,19 +196,21 @@ describe("file handlers", () => {
   test("Save As fails without writing when the tab is gone", async () => {
     const missing = setup();
     missing.handlers.messages["file.saveAsDialog"]({ tabId: "ghost", content: "x" });
-    await flush();
-    expect(missing.sent).toEqual([
-      { name: "file.saveFailed", payload: { tabId: "ghost", error: "That tab is no longer open." } },
-    ]);
+    await eventually(() => {
+      expect(missing.sent).toEqual([
+        { name: "file.saveFailed", payload: { tabId: "ghost", error: "That tab is no longer open." } },
+      ]);
+    });
     expect(missing.deps.files.write).not.toHaveBeenCalled();
 
     const closedMidDialog = setup();
     closedMidDialog.handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "<a/>" });
     delete closedMidDialog.tabs.scratch;
-    await flush();
-    expect(closedMidDialog.sent).toEqual([
-      { name: "file.saveFailed", payload: { tabId: "scratch", error: "That tab is no longer open." } },
-    ]);
+    await eventually(() => {
+      expect(closedMidDialog.sent).toEqual([
+        { name: "file.saveFailed", payload: { tabId: "scratch", error: "That tab is no longer open." } },
+      ]);
+    });
     expect(closedMidDialog.deps.files.write).not.toHaveBeenCalled();
   });
 
@@ -259,11 +265,12 @@ describe("file handlers", () => {
   test("Save As refuses to overwrite a path another tab already has open", async () => {
     const { handlers, sent, deps } = setup({ saveResult: "/w/a.ts" });
     handlers.messages["file.saveAsDialog"]({ tabId: "scratch", content: "<a/>" });
-    await flush();
+    await eventually(() => {
+      expect(sent).toEqual([
+        { name: "file.saveFailed", payload: { tabId: "scratch", error: "a.ts is already open in another tab." } },
+      ]);
+    });
     expect(deps.files.write).not.toHaveBeenCalled();
-    expect(sent).toEqual([
-      { name: "file.saveFailed", payload: { tabId: "scratch", error: "a.ts is already open in another tab." } },
-    ]);
   });
 
   // Test 8 (m-7 a, b): the default name reuses the tab's own file name verbatim when it has one; after a

@@ -47,6 +47,13 @@ const clipStdio = (text: string) => {
   return `${kept}${CUT_MARK} [${total - Buffer.byteLength(kept)} bytes not shown]`;
 };
 const send = (message: RunnerToMain) => process.send?.(message);
+// The real exit, captured before user code can see process.exit (FA-I4). JSLab's own exits use it directly.
+const exitProcess = process.exit.bind(process) as (code?: number | string | null) => never;
+/** How long a user process.exit waits for queued IPC to reach Main before exiting anyway. */
+const EXIT_DRAIN_TIMEOUT_MS = 2000;
+/** Thrown by the user-facing process.exit to unwind the caller's remaining code; never reported as an error. */
+const EXIT_SIGNAL = Symbol("jslab.processExit");
+let exiting = false;
 const hooks = {
   peekPromise: (promise: Promise<unknown>) => {
     const state = Bun.peek.status(promise);
@@ -77,14 +84,15 @@ const tracker = new HandleTracker((count) => {
 installHandleTracking(tracker);
 
 function setState(state: RunnerState): void {
-  if (!run) return;
+  // A run that ended with process.exit reports no further state: Main reports the exit itself.
+  if (!run || exiting) return;
   run.state = state;
   run.buffer.flush();
   send({ type: "state", runId: run.runId, state, activeHandles: tracker.count });
 }
 
 function pushError(phase: "runtime" | "unhandledRejection", error: unknown): void {
-  if (!run || run.state === "stopped") return;
+  if (!run || run.state === "stopped" || error === EXIT_SIGNAL) return;
   const e = error as { name?: unknown; message?: unknown; stack?: unknown } | null;
   run.buffer.push({
     kind: "error",
@@ -166,11 +174,32 @@ installStdio((kind, text) => {
 
 process.on("uncaughtException", (error) => pushError("runtime", error));
 process.on("unhandledRejection", (reason) => pushError("unhandledRejection", reason));
-process.on("disconnect", () => process.exit(0));
-// Final review M5: events queued since the last flush (for example `console.log("done"); process.exit(0)`) are sent
-// before the process exits. `exit` listeners run synchronously, before the IPC channel closes. `close()` (M1 fix wave)
-// flushes and then drops anything pushed later.
+process.on("disconnect", () => exitProcess(0));
+// Any other exit path still flushes what is queued. `close()` (M1 fix wave) flushes and then drops anything pushed later.
 process.on("exit", () => run?.buffer.close());
+
+/**
+ * FA-I4 (spec §5.11): Bun drops IPC messages still queued when a process exits, so `console.log("done");
+ * process.exit(0)` lost its tail (and a large final batch lost everything). User code gets a process.exit that
+ * flushes the run's output, stops its handles, and exits only once Bun confirms the queued messages were written
+ * (the send callback), or after EXIT_DRAIN_TIMEOUT_MS. It throws EXIT_SIGNAL so the code after the call doesn't run.
+ */
+process.exit = ((code?: number | string | null) => {
+  if (exiting) throw EXIT_SIGNAL;
+  exiting = true;
+  const exitCode = code ?? process.exitCode;
+  run?.buffer.close();
+  tracker.disposeAll();
+  timers.setTimeout(() => exitProcess(exitCode), EXIT_DRAIN_TIMEOUT_MS);
+  try {
+    // Bun calls this back once the message, and everything queued before it, has been written.
+    process.send?.({ type: "heartbeat" } satisfies RunnerToMain, undefined, undefined, () => exitProcess(exitCode));
+    if (!process.send) exitProcess(exitCode);
+  } catch {
+    exitProcess(exitCode);
+  }
+  throw EXIT_SIGNAL;
+}) as typeof process.exit;
 
 async function startRun(message: Extract<MainToRunner, { type: "run" }>): Promise<void> {
   if (run) return;
@@ -212,7 +241,7 @@ process.on("message", (message: MainToRunner) => {
       send({ type: "expanded", reqId: message.reqId, value: run?.encoder.expand(message.handleId) ?? null });
       return;
     case "dispose":
-      process.exit(0);
+      exitProcess(0);
   }
 });
 

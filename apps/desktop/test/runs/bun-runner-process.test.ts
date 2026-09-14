@@ -76,6 +76,42 @@ test.skipIf(process.platform === "win32")(
   15_000,
 );
 
+test.skipIf(process.platform === "win32")(
+  "a kill racing a natural exit still signals the process group once the exit is observed (FA-m2)",
+  async () => {
+    // A stand-in subprocess: Bun has already recorded its exit code, but the exit callback hasn't run yet. That is
+    // the window a Kill or supersede can land in (a user process.exit racing ⌘R).
+    let resolveExit: (code: number) => void = () => {};
+    const fake = {
+      pid: 424242,
+      exitCode: 0 as number | null,
+      signalCode: null,
+      exited: new Promise<number>((resolve) => (resolveExit = resolve)),
+      stderr: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
+      kill: () => {},
+      send: () => {},
+    };
+    const signalled: [number, unknown][] = [];
+    const originalKill = process.kill;
+    process.kill = ((pid: number, signal?: string | number) => {
+      signalled.push([pid, signal]);
+      return true;
+    }) as typeof process.kill;
+    try {
+      const runner = new (BunRunnerProcess as unknown as new (proc: unknown) => BunRunnerProcess)(fake);
+      runner.kill();
+      // Nothing is signalled for a pid that already exited...
+      expect(signalled).toEqual([]);
+      resolveExit(0);
+      await runner.exited;
+      // ...but its leftover group (processes user code spawned) is still signalled when the exit is observed.
+      expect(signalled).toEqual([[-424242, "SIGKILL"]]);
+    } finally {
+      process.kill = originalKill;
+    }
+  },
+);
+
 test.skipIf(process.platform === "win32")("the runner leads its own process group", async () => {
   const runner = await startRunner();
   expect(pgid(runner.pid)).toBe(runner.pid);

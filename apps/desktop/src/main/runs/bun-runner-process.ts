@@ -14,13 +14,14 @@ const STDERR_TAIL_BYTES = 4096;
  * Signals the runner's whole process group (it is spawned detached, as the group leader), else just the pid. Once the
  * runner has exited its pid, and so its group id, may belong to an unrelated process, so nothing is signalled then.
  */
-function killProcessGroup(proc: Subprocess): void {
-  if (proc.exitCode !== null || proc.signalCode !== null) return;
+function killProcessGroup(proc: Subprocess): boolean {
+  if (proc.exitCode !== null || proc.signalCode !== null) return false;
   try {
     process.kill(-proc.pid, "SIGKILL");
   } catch {
     proc.kill("SIGKILL");
   }
+  return true;
 }
 
 /**
@@ -128,8 +129,9 @@ export class BunRunnerProcess {
    */
   kill(): void {
     if (this.#hasExited) return;
-    this.#killed = true;
-    killProcessGroup(this.#proc);
+    // FA-m2: only a kill that signalled counts. A kill landing after the process exited but before the exit callback
+    // ran sends nothing, so the callback must still signal the leftover group.
+    if (killProcessGroup(this.#proc)) this.#killed = true;
   }
 
   #dispatch(message: RunnerToMain): void {

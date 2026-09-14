@@ -295,6 +295,23 @@ test("an error's message and stack stay bounded outside the value budget (R-M1-1
     expect(Buffer.byteLength(JSON.stringify(message))).toBeLessThanOrEqual(2 * 256 * 1024);
 });
 
+test("process.exit waits until large queued batches reach Main, keeps its code, and stops the code after it (FA-I4)", async () => {
+  const runner = startRunner();
+  // ~250 KB of pending output when exit is called (100 entries, the harness's maxEntries): Bun drops IPC writes still
+  // queued when the process exits.
+  await runner.run(
+    'const row = "x".repeat(2400);\nfor (let i = 0; i < 99; i++) console.log(row);\nconsole.log("last words");\nprocess.exit(3);\nconsole.log("after exit");\n',
+  );
+  expect(await runner.proc.exited).toBe(3);
+  const logged = runner
+    .events()
+    .flatMap((e) => (e.kind === "console" && e.args[0]?.t === "string" ? [e.args[0].v] : []));
+  expect(logged).toHaveLength(100);
+  expect(logged.at(-1)).toBe("last words");
+  // No run state is reported for a run that ended with process.exit: Main reports the exit itself.
+  expect(runner.messages.some((m) => m.type === "state" && m.state !== "evaluating")).toBe(false);
+});
+
 test("events pushed right before process.exit still reach Main (final review M5)", async () => {
   const runner = startRunner();
   await runner.run('console.log("last words");\nprocess.exit(0);\n');

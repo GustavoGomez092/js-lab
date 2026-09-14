@@ -30,6 +30,8 @@ interface HarnessHooks {
   transform?: (source: string, options: TransformOptions) => Promise<TransformResult>;
   /** A stand-in runner script (see fixtures/) instead of the real bootstrap. */
   bootstrapPath?: string;
+  /** Called after each state is recorded, with every event forwarded to the UI so far. */
+  onState?: (runId: string, state: RunState, events: readonly RunEvent[]) => void;
 }
 
 const harnesses: Harness[] = [];
@@ -70,7 +72,10 @@ async function createHarness(overrides: Partial<RunnerSettings> = {}, hooks: Har
       batches.push(batch);
       events.push(...batch);
     },
-    onState: (_tab, runId, state, activeHandles) => states.push({ runId, state, activeHandles }),
+    onState: (_tab, runId, state, activeHandles) => {
+      states.push({ runId, state, activeHandles });
+      hooks.onState?.(runId, state, events);
+    },
     onDiagnostics: (tabId, runId) => hooks.onDiagnostics?.(tabId, runId),
     runLock: {
       add: (id) => {
@@ -494,6 +499,59 @@ describe("RunCoordinator", () => {
       message: expect.stringContaining("signal SIGTERM"),
     });
   }, 15_000);
+
+  test("a clean process.exit(0) while stopping reports stopped, not idle (FA-m3)", async () => {
+    const h = await createHarness({}, { bootstrapPath: join(import.meta.dir, "fixtures/exit-on-stop-runner.ts") });
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1", language: "typescript", logpoints: [] });
+    await h.waitForState("evaluating", runId);
+    h.coordinator.stop("t1");
+    await h.waitForState("stopped", runId, 3000);
+    // Past the 300 ms stop grace, so a kill escalation or a late state would show up here.
+    await Bun.sleep(400);
+    expect(h.states.filter((s) => s.runId === runId).map((s) => s.state)).toEqual([
+      "transpiling",
+      "evaluating",
+      "stopping",
+      "stopped",
+    ]);
+  }, 15_000);
+
+  test("output logged right before process.exit(0) reaches the UI before the run settles, 20 runs plus near-256 KB final flushes (FA-I4, spec §5.11)", async () => {
+    // The text of the last console event the UI had received when each run reported "idle".
+    const lastAtIdle = new Map<string, string | null>();
+    const lastConsoleText = (events: readonly RunEvent[]) => {
+      for (let i = events.length - 1; i >= 0; i--) {
+        const event = events[i];
+        if (event?.kind === "console" && event.args[0]?.t === "string") return event.args[0].v;
+      }
+      return null;
+    };
+    const h = await createHarness(
+      {},
+      { onState: (runId, state, events) => state === "idle" && lastAtIdle.set(runId, lastConsoleText(events)) },
+    );
+    const exitAfter = async (code: string, marker: string) => {
+      const { runId } = h.coordinator.start({ tabId: "t1", code, language: "javascript", logpoints: [] });
+      await h.waitForState("idle", runId);
+      expect(lastAtIdle.get(runId)).toBe(marker);
+    };
+    const started = Date.now();
+    // 300 lines: the first 200 flush early, the rest (and the marker) only in the runner's exit listener.
+    for (let run = 0; run < 20; run++) {
+      await exitAfter(
+        `for (let i = 0; i < 300; i++) console.log("line " + i);\nconsole.log("done ${run}");\nprocess.exit(0);`,
+        `done ${run}`,
+      );
+    }
+    // 180 events of about 1.4 KB each: a final flush of roughly 250 KB, just under the 256 KB early-flush size.
+    for (let run = 0; run < 5; run++) {
+      await exitAfter(
+        `const row = "x".repeat(1300);\nfor (let i = 0; i < 179; i++) console.log(row);\nconsole.log("big ${run}");\nprocess.exit(0);`,
+        `big ${run}`,
+      );
+    }
+    console.info(`[FA-I4] 25 exit runs in ${Date.now() - started} ms`);
+  }, 60_000);
 
   test("a stopped run's runner is recycled once Stop is acknowledged (R-M1-18)", async () => {
     const started: BunRunnerProcess[] = [];

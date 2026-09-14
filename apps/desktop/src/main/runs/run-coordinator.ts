@@ -291,7 +291,8 @@ export class RunCoordinator {
     if (run.expectedExit || !this.#isCurrent(run)) return;
     if (code === 0 && signal === null) {
       // Spec §5.11 reports a crash only for a non-zero exit: a user `process.exit(0)` ends the run (final review M5).
-      this.#setState(run, "idle", 0);
+      // A clean exit while Stop is in progress is the stop the user asked for (FA-m3).
+      this.#setState(run, run.state === "stopping" ? "stopped" : "idle", 0);
       return;
     }
     const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;

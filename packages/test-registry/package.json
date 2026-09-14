@@ -1,0 +1,22 @@
+{
+  "name": "@jslab/test-registry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@jslab/npm": "workspace:*",
+    "@jslab/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "verdaccio": "6.10.3"
+  },
+  "scripts": {
+    "test": "bun test ./test",
+    "test:npm": "bun test ./integration --timeout 120000",
+    "capture": "bun scripts/capture-bun-output.ts",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

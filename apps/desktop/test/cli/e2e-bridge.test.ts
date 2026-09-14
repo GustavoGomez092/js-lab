@@ -98,4 +98,35 @@ describe("createSocketMethods", () => {
     });
     expect(await methods["e2e.state"]?.({})).toEqual({ ui: null, main: { windowOpen: false } });
   });
+
+  test("window: settings routes UI calls to the Settings window bridge", async () => {
+    let settingsOpen = false;
+    const settingsBridge = {
+      request: mock(async (method: string, params: unknown) => ({ settingsWindow: method, params })),
+    };
+    const d = {
+      ...deps(true),
+      settingsBridge,
+      uiAvailable: (window?: string) => window !== "settings" || settingsOpen,
+    };
+    const methods = createSocketMethods(d);
+    expect(await methods["e2e.state"]?.({ window: "settings" })).toEqual({ ui: null, main: { windowOpen: true } });
+    await expect(
+      methods["e2e.command"]?.({ id: "settings.set", window: "settings" }) ?? Promise.resolve(),
+    ).rejects.toThrow("The Settings window is closed");
+    settingsOpen = true;
+    expect(
+      await methods["e2e.command"]?.({
+        id: "settings.set",
+        args: { key: "view.statusBar", value: false },
+        window: "settings",
+      }),
+    ).toEqual({
+      result: {
+        settingsWindow: "command",
+        params: { id: "settings.set", args: { key: "view.statusBar", value: false } },
+      },
+    });
+    expect(d.bridge.request).not.toHaveBeenCalled();
+  });
 });

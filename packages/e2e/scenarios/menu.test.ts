@@ -40,10 +40,9 @@ describe("application menu", () => {
     app = await launchApp();
     const state = await app.state();
     const registered = new Set(state.ui.registeredCommands as string[]);
-    const menuCommands = flatten(state.main.menu as Item[])
-      .flatMap((item) => (item.action?.startsWith("command:") ? [item.action.split(":")[1] as string] : []))
-      // The Settings window arrives in Task 24, which removes this exclusion.
-      .filter((id) => id !== "app.settings");
+    const menuCommands = flatten(state.main.menu as Item[]).flatMap((item) =>
+      item.action?.startsWith("command:") ? [item.action.split(":")[1] as string] : [],
+    );
     expect(menuCommands.filter((id) => !registered.has(id))).toEqual([]);
   });
 });

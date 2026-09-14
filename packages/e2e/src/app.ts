@@ -48,6 +48,9 @@ export interface LaunchedApp {
   relaunch(options?: Omit<LaunchOptions, "userData">): Promise<LaunchedApp>;
   /** Reopens a closed main window (a Dock click) and waits until its UI is ready again. */
   reopenWindow(): Promise<void>;
+  // biome-ignore lint/suspicious/noExplicitAny: settings snapshots are read field by field in scenarios
+  settingsState(): Promise<Record<string, any> | null>;
+  settingsCommand(id: string, args?: unknown): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -200,6 +203,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
         timeoutMs: readyTimeoutMs,
         message: "The reopened window never became ready",
       });
+    },
+    settingsState: async () =>
+      (await client.call<{ ui: Record<string, unknown> | null }>("e2e.state", { window: "settings" })).ui,
+    settingsCommand: async (id, args) => {
+      await client.call("e2e.command", { id, window: "settings", ...(args === undefined ? {} : { args }) });
     },
     dispose: async () => {
       if (app.alive()) await app.quit();

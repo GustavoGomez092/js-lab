@@ -481,6 +481,12 @@ describe("App shell", () => {
     press("KeyP", { shiftKey: true });
     expect(store.getState().modal).toEqual({ kind: "palette", context: "editor" });
   });
+
+  test("⌘, asks Main to open the Settings window", () => {
+    const { api } = renderApp();
+    press("Comma");
+    expect(api.appCommand).toHaveBeenCalledWith("openSettings");
+  });
 });
 
 describe("runStateLabel", () => {

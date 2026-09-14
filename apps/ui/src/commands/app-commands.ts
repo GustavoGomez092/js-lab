@@ -125,6 +125,7 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
     { id: "help.openLogsFolder", run: () => deps.api.appCommand("openLogsFolder") },
     { id: "help.restartSafeMode", run: () => deps.api.appCommand("restartSafeMode") },
     { id: "app.openDataFolder", run: () => deps.api.appCommand("openDataFolder") },
+    { id: "app.settings", run: () => deps.api.appCommand("openSettings") },
     { id: "view.toggleFullScreen", run: () => deps.api.appCommand("toggleFullScreen") },
   ];
 }

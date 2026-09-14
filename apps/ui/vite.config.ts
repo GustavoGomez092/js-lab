@@ -31,6 +31,12 @@ export default defineConfig({
   build: {
     outDir: "../../desktop/dist/mainview",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: resolve(import.meta.dirname, "src/index.html"),
+        settings: resolve(import.meta.dirname, "src/settings.html"),
+      },
+    },
   },
   server: { port: 5173, strictPort: true },
 });

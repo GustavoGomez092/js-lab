@@ -16,6 +16,7 @@ function setup() {
     restartInSafeMode: mock(() => {}),
     toggleFullScreen: mock(() => {}),
     closeWindow: mock(() => {}),
+    openSettings: mock(() => {}),
     redact: createRedactor(),
     log: mock(() => {}),
   } satisfies AppHandlerDeps;
@@ -40,6 +41,7 @@ describe("app.command", () => {
       "restartSafeMode",
       "toggleFullScreen",
       "closeWindow",
+      "openSettings",
     ]) {
       handlers.messages["app.command"]({ action });
     }
@@ -49,6 +51,7 @@ describe("app.command", () => {
     expect(deps.restartInSafeMode).toHaveBeenCalledTimes(1);
     expect(deps.toggleFullScreen).toHaveBeenCalledTimes(1);
     expect(deps.closeWindow).toHaveBeenCalledTimes(1);
+    expect(deps.openSettings).toHaveBeenCalledTimes(1);
   });
 
   test("unknown actions are logged and dropped", () => {

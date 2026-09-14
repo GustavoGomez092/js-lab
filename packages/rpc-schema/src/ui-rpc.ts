@@ -93,6 +93,7 @@ export const APP_ACTIONS = [
   "resetSettings",
   "toggleFullScreen",
   "closeWindow",
+  "openSettings",
 ] as const;
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });
@@ -105,6 +106,25 @@ export type FileSaveParams = z.infer<typeof fileSaveParamsSchema>;
 export type LargeFile = { token: string; path: string; size: number };
 export type FileOpened = { tabs: TabWithContent[]; focusTabId: string | null; large: LargeFile[]; errors: string[] };
 export type FileSaveResult = { ok: true; tab: TabState } | { ok: false; error: string } | { needsSaveAs: true };
+
+export type SystemFontList = { monospace: string[]; other: string[] };
+
+/** Settings window ⇄ Main (spec §7.5): a separate, narrower RPC than the main window's. */
+export type SettingsWindowRequests = {
+  "settings.get": { params: Record<string, never>; response: { settings: Settings; e2e: boolean } };
+  "settings.update": { params: SettingsUpdateParams; response: Settings };
+  "fonts.list": { params: Record<string, never>; response: { fonts: SystemFontList | null; refreshing: boolean } };
+};
+
+export type SettingsWindowMessages = {
+  "app.command": { action: AppAction };
+  "e2e.response": E2EResponse;
+};
+
+export type SettingsViewMessages = {
+  "settings.changed": { settings: Settings };
+  "e2e.request": E2ERequest;
+};
 
 export const STARTUP_NOTICE_IDS = [
   "settingsRecovered",
@@ -190,6 +210,7 @@ export type MainRequests = {
   "tab.create": { params: TabCreateParams; response: { tab: TabState } };
   "tab.close": { params: TabParams; response: TabCloseResult };
   "tab.reopen": { params: Record<string, never>; response: TabWithContent | null };
+  "settings.get": { params: Record<string, never>; response: { settings: Settings; e2e: boolean } };
   "settings.update": { params: SettingsUpdateParams; response: Settings };
   "file.save": { params: FileSaveParams; response: FileSaveResult };
 };

@@ -1,0 +1,41 @@
+import { describe, expect, test } from "bun:test";
+import { defaultSettings, SETTINGS_SECTIONS } from "@jslab/shared";
+import { coerceFieldValue, fieldsFor, SETTINGS_FIELDS, SETTINGS_TABS } from "../src/settings/fields";
+import { strings } from "../src/strings";
+
+describe("settings fields", () => {
+  test("every in-scope §8 key has exactly one field with a label and help text", () => {
+    const settings = defaultSettings() as unknown as Record<string, Record<string, unknown>>;
+    const expected = SETTINGS_SECTIONS.flatMap((section) =>
+      Object.keys(settings[section] ?? {}).map((key) => `${section}.${key}`),
+    ).sort();
+    expect(SETTINGS_FIELDS.map((field): string => field.key).sort()).toEqual(expected);
+    for (const field of SETTINGS_FIELDS) {
+      expect(strings.settings.fields[field.key]?.label.length).toBeGreaterThan(0);
+      expect(strings.settings.fields[field.key]?.help.length).toBeGreaterThan(0);
+      expect(SETTINGS_TABS.map((tab) => tab.id)).toContain(field.tab);
+    }
+    expect(SETTINGS_TABS.map((tab) => tab.id)).toEqual(["general", "editor", "formatting", "appearance", "advanced"]);
+    expect(SETTINGS_FIELDS.find((field) => field.key === "app.uiLanguage")?.restart).toBe(true);
+  });
+
+  test("values are coerced to the key's type and range; invalid input is rejected", () => {
+    const field = (key: string) =>
+      SETTINGS_FIELDS.find((candidate) => candidate.key === key) as (typeof SETTINGS_FIELDS)[number];
+    expect(coerceFieldValue(field("editor.hoverDelayMs"), "5000")).toBe(2000);
+    expect(coerceFieldValue(field("editor.hoverDelayMs"), "12.6")).toBe(100);
+    expect(coerceFieldValue(field("editor.hoverDelayMs"), "abc")).toBeNull();
+    expect(coerceFieldValue(field("appearance.uiScale"), "1.234")).toBe(1.23);
+    expect(coerceFieldValue(field("prettier.trailingComma"), "es5")).toBe("es5");
+    expect(coerceFieldValue(field("prettier.trailingComma"), "some")).toBeNull();
+    expect(coerceFieldValue(field("editor.lineWrap"), false)).toBe(false);
+    expect(coerceFieldValue(field("appearance.font"), "  ")).toBeNull();
+  });
+
+  test("fields filter by tab, or search across tabs by label, help and key", () => {
+    expect(fieldsFor("formatting", "")).toHaveLength(11);
+    expect(fieldsFor(null, "print width").map((field) => field.key)).toEqual(["prettier.printWidth"]);
+    expect(fieldsFor(null, "hoverDelayMs").map((field) => field.key)).toEqual(["editor.hoverDelayMs"]);
+    expect(fieldsFor(null, "ligature").map((field) => field.key)).toEqual(["appearance.fontLigatures"]);
+  });
+});

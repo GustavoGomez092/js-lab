@@ -15,6 +15,7 @@ export interface AppHandlerDeps {
   restartInSafeMode(): void;
   toggleFullScreen(): void;
   closeWindow(): void;
+  openSettings(): void;
   redact: Redactor;
   log: Log;
 }
@@ -55,6 +56,9 @@ export function createAppHandlers(deps: AppHandlerDeps) {
             return;
           case "closeWindow":
             deps.closeWindow();
+            return;
+          case "openSettings":
+            deps.openSettings();
             return;
         }
       }),

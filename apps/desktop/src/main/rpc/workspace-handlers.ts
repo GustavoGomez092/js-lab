@@ -1,6 +1,5 @@
 import {
   emptyParamsSchema,
-  settingsUpdateParamsSchema,
   type TabCloseResult,
   type TabWithContent,
   tabCreateParamsSchema,
@@ -8,11 +7,10 @@ import {
   tabReorderSchema,
   tabViewStateSchema,
 } from "@jslab/rpc-schema";
-import type { DeepPartial, Settings, TabState } from "@jslab/shared";
+import type { TabState } from "@jslab/shared";
 import type { RunCoordinator } from "../runs/run-coordinator";
 import type { SparePool } from "../runs/spare-pool";
 import type { SessionStore } from "../services/session-store";
-import type { SettingsStore } from "../services/settings-store";
 import { createValidators, type Log } from "./validate";
 
 export interface WorkspaceHandlerDeps {
@@ -20,7 +18,6 @@ export interface WorkspaceHandlerDeps {
     SessionStore,
     "session" | "createTab" | "closeTab" | "reopenClosed" | "activateTab" | "reorderTabs" | "setViewState"
   >;
-  settings: Pick<SettingsStore, "update">;
   coordinator: Pick<RunCoordinator, "disposeTab">;
   spares: Pick<SparePool, "setActiveTab">;
   log: Log;
@@ -54,7 +51,7 @@ export function mergeHandlers<T extends Handlers[]>(...groups: T) {
 
 type UnionToIntersection<U> = (U extends unknown ? (x: U) => void : never) extends (x: infer I) => void ? I : never;
 
-/** Tab lifecycle and settings (spec §7.3, §8, §10.1). */
+/** Tab lifecycle (spec §7.3, §10.1). Settings requests live in settings-handlers.ts. */
 export function createWorkspaceHandlers(deps: WorkspaceHandlerDeps) {
   const { parse, message } = createValidators(deps.log);
   return {
@@ -86,10 +83,6 @@ export function createWorkspaceHandlers(deps: WorkspaceHandlerDeps) {
           return reopened;
         });
       },
-      "settings.update": (input: unknown): Promise<Settings> =>
-        deps.settings.update(
-          parse(settingsUpdateParamsSchema, "settings.update", input).patch as DeepPartial<Settings>,
-        ),
     },
     messages: {
       "tab.activate": message(tabParamsSchema, "tab.activate", ({ tabId }) => {

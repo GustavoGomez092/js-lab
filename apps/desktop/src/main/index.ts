@@ -2,7 +2,14 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { arch } from "node:os";
 import { join } from "node:path";
-import type { MainMessages, MainRequests, ViewMessages } from "@jslab/rpc-schema";
+import type {
+  MainMessages,
+  MainRequests,
+  SettingsViewMessages,
+  SettingsWindowMessages,
+  SettingsWindowRequests,
+  ViewMessages,
+} from "@jslab/rpc-schema";
 import { DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
 import { listThemes } from "@jslab/themes";
 import Electrobun, {
@@ -34,6 +41,8 @@ import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
 import { createAppHandlers } from "./rpc/app-handlers";
 import { createFileHandlers } from "./rpc/file-handlers";
+import { createFontHandlers } from "./rpc/font-handlers";
+import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
@@ -61,6 +70,11 @@ declare global {
 type JSLabRPC = {
   bun: RPCSchema<{ requests: MainRequests; messages: MainMessages }>;
   webview: RPCSchema<{ requests: Record<string, never>; messages: ViewMessages }>;
+};
+
+type SettingsRPC = {
+  bun: RPCSchema<{ requests: SettingsWindowRequests; messages: SettingsWindowMessages }>;
+  webview: RPCSchema<{ requests: Record<string, never>; messages: SettingsViewMessages }>;
 };
 
 const APP_VERSION = "0.0.1";
@@ -182,6 +196,35 @@ async function start(): Promise<void> {
   const writeClipboard = (text: string) =>
     e2eEnabled ? writeFileSync(join(paths.dataDir, "e2e-clipboard.txt"), text) : Utils.clipboardWriteText(text);
 
+  // Shared by the main window and the Settings window. `mainWindow` and `settingsWindow` are declared later; the
+  // handlers read them only when invoked, after startup.
+  const appHandlers = createAppHandlers({
+    logTail: (lines) => logger.tail(lines),
+    settings,
+    paths: { dataDir: paths.dataDir, logsDir },
+    versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
+    os: osInfo,
+    redact,
+    log,
+    clipboard: writeClipboard,
+    openPath: (target) =>
+      e2eEnabled ? appendFileSync(join(paths.dataDir, "e2e-opened.txt"), `${target}\n`) : Utils.openPath(target),
+    restartInSafeMode: () => {
+      logger.info(strings.log.restartRequested);
+      requestSafeModeOnNextLaunch(paths.dataDir);
+      // m-6: a relaunch that couldn't be spawned is still reported; either way JSLab quits (the user can
+      // reopen it themselves, and the flag makes the next launch start in Safe Mode regardless).
+      if (!e2eEnabled && !relaunchApp(PATHS.RESOURCES_FOLDER, process.pid)) log(strings.log.relaunchFailed);
+      Utils.quit();
+    },
+    toggleFullScreen: () => {
+      const current = mainWindow.window;
+      if (current) current.setFullScreen(!current.isFullScreen());
+    },
+    closeWindow: () => mainWindow.close(),
+    openSettings: () => void settingsWindow.open(),
+  });
+
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
     handlers: mergeHandlers(
@@ -210,32 +253,9 @@ async function start(): Promise<void> {
           },
         }),
       }),
-      createWorkspaceHandlers({ session, settings, coordinator, spares, log }),
-      createAppHandlers({
-        logTail: (lines) => logger.tail(lines),
-        settings,
-        paths: { dataDir: paths.dataDir, logsDir },
-        versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
-        os: osInfo,
-        redact,
-        log,
-        clipboard: writeClipboard,
-        openPath: (target) =>
-          e2eEnabled ? appendFileSync(join(paths.dataDir, "e2e-opened.txt"), `${target}\n`) : Utils.openPath(target),
-        restartInSafeMode: () => {
-          logger.info(strings.log.restartRequested);
-          requestSafeModeOnNextLaunch(paths.dataDir);
-          // m-6: a relaunch that couldn't be spawned is still reported; either way JSLab quits (the user can
-          // reopen it themselves, and the flag makes the next launch start in Safe Mode regardless).
-          if (!e2eEnabled && !relaunchApp(PATHS.RESOURCES_FOLDER, process.pid)) log(strings.log.relaunchFailed);
-          Utils.quit();
-        },
-        toggleFullScreen: () => {
-          const current = mainWindow.window;
-          if (current) current.setFullScreen(!current.isFullScreen());
-        },
-        closeWindow: () => mainWindow.close(),
-      }),
+      createWorkspaceHandlers({ session, coordinator, spares, log }),
+      createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
+      appHandlers,
       createFileHandlers({
         files: new FileService(nodeFileSystem),
         session,
@@ -349,6 +369,57 @@ async function start(): Promise<void> {
       send: (c) => rpc.send["menu.command"](c),
     });
   });
+
+  // The Settings window (spec §7.5): its own narrower RPC, the same settings/app handlers, and its own E2E bridge.
+  // The bridge sends through `settingsRpc`, defined next; send runs only after startup.
+  const settingsE2E = new E2EBridge((request) => settingsRpc.send["e2e.request"](request));
+  const settingsRpc = BrowserView.defineRPC<SettingsRPC>({
+    maxRequestTime: 60_000,
+    handlers: mergeHandlers(
+      createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
+      createFontHandlers({ fonts: systemFonts, log }),
+      appHandlers,
+      createE2EResponseHandler(settingsE2E, log),
+    ),
+  });
+  const settingsUrl = url.startsWith("views://") ? "views://mainview/settings.html" : `${url}/settings.html`;
+  const settingsWindow = createMainWindowController({
+    create: () => {
+      // The same display-aware restore as the main window (Task 18, spec §10.1).
+      const restored = restoreFrame(
+        session.session.settingsWindow ?? { x: 220, y: 140, width: 760, height: 560 },
+        displays(),
+      );
+      const created = new BrowserWindow({
+        title: "JSLab Settings",
+        url: settingsUrl,
+        frame: restored.frame,
+        // The nav column has a 40px top pad and is the drag region, which is built for the inset title bar (review M13).
+        titleBarStyle: "hiddenInset",
+        rpc: settingsRpc,
+      });
+      // Spec §18 (final review M3): the Settings window is RPC-bridged too, so it gets the same rules as createWindow.
+      // navigationRulesFor(url) allows views:// (which serves settings.html) and, in dev, the dev server.
+      created.webview.setNavigationRules(navigationRulesFor(url));
+      created.webview.on("will-navigate", (event: unknown) => {
+        const link = externalLinkFrom((event as { data?: { detail?: unknown } }).data?.detail);
+        if (link) openExternal(link);
+      });
+      const saveFrame = () => {
+        const frame = created.getFrame();
+        const display = displayForFrame(frame, displays());
+        session.setSettingsWindow({ ...frame, ...(display ? { displayId: String(display.id) } : {}) });
+      };
+      created.on("resize", saveFrame);
+      created.on("move", saveFrame);
+      return created;
+    },
+    onClosed: () => settingsE2E.rejectAll("The Settings window closed"),
+  });
+  settings.onChange((next) => {
+    if (settingsWindow.isOpen()) settingsRpc.send["settings.changed"]({ settings: next });
+  });
+
   if (e2eEnabled) {
     socketServer = await startSocketServer({
       path: paths.socketPath,
@@ -356,6 +427,7 @@ async function start(): Promise<void> {
       methods: createSocketMethods({
         e2eEnabled,
         bridge: e2eBridge,
+        settingsBridge: settingsE2E,
         mainState: () => ({
           safeMode,
           dataDir: paths.dataDir,
@@ -364,13 +436,15 @@ async function start(): Promise<void> {
           windowFrame: mainWindow.window?.getFrame() ?? null,
           primaryWorkArea: Screen.getPrimaryDisplay().workArea,
           menu: menu.current(),
+          settingsWindowOpen: settingsWindow.isOpen(),
         }),
-        uiAvailable: () => mainWindow.isOpen(),
+        uiAvailable: (window = "main") => (window === "main" ? mainWindow.isOpen() : settingsWindow.isOpen()),
         reopenWindow: () => void mainWindow.open(),
-        screenshot: async (name) => {
+        screenshot: async (name, window) => {
           await mkdir(paths.screenshotsDir, { recursive: true });
           const out = join(paths.screenshotsDir, `${name}.png`);
-          const result = await captureWindow(windowNumberOf(mainWindow.window?.ptr ?? null), out, () =>
+          const target = window === "main" ? mainWindow.window : settingsWindow.window;
+          const result = await captureWindow(windowNumberOf(target?.ptr ?? null), out, () =>
             Utils.screenCapture.hasAccess(),
           );
           if ("skipped" in result) log(`Screenshot ${name} skipped: ${result.skipped}`);
@@ -410,6 +484,7 @@ async function start(): Promise<void> {
     event.response = { allow: false };
     quitting = true;
     e2eBridge.rejectAll("JSLab is quitting");
+    settingsE2E.rejectAll("JSLab is quitting");
     socketServer?.close();
     menu.dispose();
     coordinator.dispose();

@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
+import { createTab, defaultSession } from "@jslab/shared";
 import { InvalidPayloadError } from "../../src/main/rpc/validate";
 import {
   createWorkspaceHandlers,
@@ -23,7 +23,6 @@ function setup() {
       reorderTabs: mock(() => {}),
       setViewState: mock(() => {}),
     },
-    settings: { update: mock(async () => defaultSettings()) },
     coordinator: {
       disposeTab: mock((tabId: string) => {
         calls.push(`dispose:${tabId}`);
@@ -56,18 +55,13 @@ describe("workspace handlers", () => {
     expect(deps.spares.setActiveTab).toHaveBeenCalledWith("b");
   });
 
-  test("tab.reopen and settings.update go through validation", async () => {
-    const { handlers, deps } = setup();
+  test("tab.reopen is validated", async () => {
+    const { handlers } = setup();
     expect(await handlers.requests["tab.reopen"]({})).toEqual({
       tab: expect.objectContaining({ id: "old" }),
       content: "x",
     });
     expect(() => handlers.requests["tab.reopen"]("nope")).toThrow(InvalidPayloadError);
-    await handlers.requests["settings.update"]({ patch: { editor: { lineWrap: false } } });
-    expect(deps.settings.update).toHaveBeenCalledWith({ editor: { lineWrap: false } });
-    expect(() => handlers.requests["settings.update"]({ patch: { editor: { lineWrap: [] } } })).toThrow(
-      InvalidPayloadError,
-    );
   });
 
   test("messages are validated; invalid ones are logged and dropped", () => {

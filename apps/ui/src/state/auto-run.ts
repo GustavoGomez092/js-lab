@@ -15,9 +15,15 @@ const defaultTimers: TimerApi = {
  * and nothing runs in Safe Mode (spec §5.14). The guard is re-checked both when scheduling and when the timer
  * fires, and a pending timer is cancelled the moment the guard stops holding (Safe Mode engages, Auto Run is
  * turned off, or `hydrate()` disarms it) so a stale timer never runs code the guard would now reject.
- * Returns an unsubscribe function.
+ * Returns an unsubscribe function that also exposes `cancelPending()` (fix round 1, I-1), so a caller that
+ * already covers a pending edit (for example a manual run that just formatted the code) can cancel the
+ * timer that edit armed without tearing down the subscription.
  */
-export function startAutoRun(store: AppStore, run: () => void, timers: TimerApi = defaultTimers): () => void {
+export function startAutoRun(
+  store: AppStore,
+  run: () => void,
+  timers: TimerApi = defaultTimers,
+): (() => void) & { cancelPending(): void } {
   let pending: unknown = null;
   const cancel = () => {
     if (pending !== null) timers.clearTimeout(pending);
@@ -42,8 +48,11 @@ export function startAutoRun(store: AppStore, run: () => void, timers: TimerApi 
       if (shouldAutoRun(store.getState())) run();
     }, state.settings?.run.autoRunDelayMs ?? 300);
   });
-  return () => {
-    cancel();
-    unsubscribe();
-  };
+  return Object.assign(
+    () => {
+      cancel();
+      unsubscribe();
+    },
+    { cancelPending: cancel },
+  );
 }

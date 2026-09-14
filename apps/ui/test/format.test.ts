@@ -57,6 +57,21 @@ describe("formatCode", () => {
     const mapped = await formatCode("const   a=1", prettierOptions(defaultSettings(), "typescript"), 11);
     expect(mapped.ok && mapped.cursorOffset >= 0 && mapped.cursorOffset <= mapped.formatted.length).toBe(true);
   });
+
+  // Fix round 1 (m-2): Prettier's default endOfLine is "lf", which would make every line of a CRLF
+  // document differ from its formatted output (even lines that needed no change), defeating the minimal
+  // line-level diff. "auto" keeps the document's own line endings.
+  test("CRLF documents keep their line endings, so computeEdits touches only the changed lines", async () => {
+    const options = prettierOptions(defaultSettings(), "javascript");
+    const before = "const a = 1;\r\nconst   b   =   2;\r\n";
+    const result = await formatCode(before, options, 0);
+    expect(result.ok).toBe(true);
+    const after = result.ok ? result.formatted : "";
+    expect(after).toBe("const a = 1;\r\nconst b = 2;\r\n");
+    const edits = computeEdits(before, after);
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.start).toBe("const a = 1;\r\n".length);
+  });
 });
 
 describe("line diff", () => {
@@ -88,6 +103,17 @@ describe("formatter", () => {
     expect(shouldFormatBeforeRun({ ...base, now: 11_001 })).toBe(true);
     expect(shouldFormatBeforeRun({ ...base, editorFocused: false })).toBe(true);
     expect(shouldFormatBeforeRun({ ...base, formatOnRun: false, now: 99_999 })).toBe(false);
+  });
+
+  // Fix round 1 (m-1): a worker that fails to start (a synchronous throw from `createWorker`, inside the
+  // Promise executor) must resolve the pending request instead of leaving it, and every later request,
+  // hanging forever.
+  test("a worker that fails to start resolves the request instead of hanging", async () => {
+    const formatter = createWorkerFormatter(() => {
+      throw new Error("boom");
+    });
+    const options = prettierOptions(defaultSettings(), "javascript");
+    expect(await formatter.format("a", options, 0)).toEqual({ ok: false, error: "boom" });
   });
 
   test("the worker client correlates responses and recovers from a worker error", async () => {
@@ -171,5 +197,39 @@ describe("formatter", () => {
     };
     expect(await actions.formatTab()).toBe(false);
     expect(applied).toHaveLength(1);
+  });
+
+  // Fix round 1 (I-2): the `editor` handle is the single global Monaco editor, captured before the await.
+  // If the active tab changes while Prettier runs, that handle now belongs to a different tab's model, so
+  // formatTab must not read or write through it.
+  test("formatTab returns false and applies no edits when the active tab changed during the format", async () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1", language: "javascript" })),
+      buffers: { t1: "a" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    store.getState().openTab(createTab({ id: "t2", language: "javascript" }), "b", false);
+    const applyOffsetEdits = mock((_edits: OffsetEdit[]) => {});
+    const editor = { getValue: () => "a", getCursorOffset: () => 0, applyOffsetEdits } as unknown as EditorHandle;
+    let release: (outcome: { ok: true; formatted: string; cursorOffset: number }) => void = () => {};
+    const actions = createFormatActions({
+      store,
+      editor: () => editor,
+      formatter: {
+        format: () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+        dispose: () => {},
+      },
+    });
+    const pending = actions.formatTab("t1");
+    store.getState().activateTab("t2");
+    release({ ok: true, formatted: "a;", cursorOffset: 0 });
+    expect(await pending).toBe(false);
+    expect(applyOffsetEdits).not.toHaveBeenCalled();
   });
 });

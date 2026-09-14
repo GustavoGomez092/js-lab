@@ -49,7 +49,14 @@ export function createWorkerFormatter(createWorker: () => WorkerLike): Formatter
       const id = nextId++;
       return new Promise((resolve) => {
         pending.set(id, resolve);
-        ensure().postMessage({ id, code, options, cursorOffset });
+        try {
+          ensure().postMessage({ id, code, options, cursorOffset });
+        } catch (error) {
+          // Fix round 1 (m-1): a worker that fails to start (a synchronous throw, e.g. from `new Worker(...)`)
+          // must resolve this request instead of leaving it (and every later one) hanging forever.
+          pending.delete(id);
+          resolve({ ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
       });
     },
     dispose() {

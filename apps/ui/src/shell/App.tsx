@@ -67,6 +67,10 @@ export function App({
   const tabCount = useStore(store, (s) => s.tabOrder.length);
 
   const lastTypedAt = useRef(0);
+  // I-1: startAutoRun's cancelPending, kept current by the effect below. A format's own edit (applied
+  // through Monaco) can arm a pending auto-run for the very code the run we're about to start already
+  // covers; start() cancels it once the format has settled, before that timer can fire a duplicate run.
+  const cancelPendingAutoRun = useRef<() => void>(() => {});
   const format = useMemo(
     () => (formatter ? createFormatActions({ store, formatter, editor: getEditorHandle }) : null),
     [store, formatter],
@@ -76,22 +80,23 @@ export function App({
     (reason: "auto" | "manual") => {
       const state = store.getState();
       if (!state.tab) return;
+      // I-2: capture the tab this run is for. A format can take a noticeable time (worker cold start), and
+      // the user can switch tabs while it runs; start() must still act on this tab, not whatever is active
+      // once the format settles.
+      const tabId = state.tab.id;
       if (reason === "manual") state.armAutoRun();
       const start = () => {
+        cancelPendingAutoRun.current();
         const fresh = store.getState();
-        if (!fresh.tab) return;
-        if (fresh.code.length > MAX_TEXT_CHARS) {
+        const freshTab = fresh.tabs[tabId];
+        if (!freshTab) return; // the tab closed while formatting; nothing left to run.
+        const code = fresh.buffers[tabId] ?? "";
+        if (code.length > MAX_TEXT_CHARS) {
           // Main would reject a run.start this large (MAX_TEXT_CHARS, Task 13); say so instead of failing silently.
           fresh.setStatusMessage(strings.limits.tooLarge);
           return;
         }
-        void api.startRun({
-          tabId: fresh.tab.id,
-          code: fresh.code,
-          language: fresh.tab.language,
-          logpoints: [],
-          reason,
-        });
+        void api.startRun({ tabId, code, language: freshTab.language, logpoints: [], reason });
       };
       const wantsFormat =
         format !== null &&
@@ -101,7 +106,8 @@ export function App({
           lastTypedAt: lastTypedAt.current,
           now: Date.now(),
         });
-      if (wantsFormat && format) void format.formatTab().then(start);
+      // m-1: a rejected formatTab (for example a worker that fails to start) must not silently drop the run.
+      if (wantsFormat && format) void format.formatTab(tabId).then(start, start);
       else start();
     },
     [store, api, format],
@@ -182,7 +188,14 @@ export function App({
   const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
   const resolver = useMemo(() => new KeybindingResolver(bindings), [bindings]);
 
-  useEffect(() => startAutoRun(store, () => run("auto")), [store, run]);
+  useEffect(() => {
+    const stop = startAutoRun(store, () => run("auto"));
+    cancelPendingAutoRun.current = stop.cancelPending;
+    return () => {
+      stop();
+      cancelPendingAutoRun.current = () => {};
+    };
+  }, [store, run]);
 
   useEffect(
     () =>

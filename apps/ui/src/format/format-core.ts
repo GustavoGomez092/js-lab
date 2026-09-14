@@ -20,6 +20,10 @@ export async function formatCode(
   try {
     const result = await formatWithCursor(code, {
       ...options,
+      // Fix round 1 (m-2): Prettier's default endOfLine is "lf", which would make every line of a CRLF
+      // document differ from the formatted output (even lines that needed no change) and defeat the
+      // minimal line-level diff. "auto" keeps the document's own line endings.
+      endOfLine: "auto",
       cursorOffset: Math.max(0, Math.min(cursorOffset, code.length)),
       plugins,
     });

@@ -238,4 +238,72 @@ describe("file flows", () => {
     expect(beforeSave).toHaveBeenCalledWith("f");
     expect(api.saveFile).toHaveBeenCalledWith("f", "let x = 1;\n");
   });
+
+  // m-5 (fix round 1): correct the earlier report's claim that formatOnSave was covered on the
+  // needsSaveAs (scratch-tab) path. This exercises `save()` on a fileless tab, whose result is
+  // `needsSaveAs`, and asserts `beforeSave` ran exactly once (no double format on that fallback).
+  test("format on save runs once before a scratch tab falls through to Save As", async () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: mergeSettings(defaultSettings(), { editor: { formatOnSave: true } }),
+      session: defaultSession(() => createTab({ id: "scratch" })),
+      buffers: { scratch: "let x=1" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    // fake-api's default saveFile resolves { needsSaveAs: true }.
+    const { api } = createFakeApi();
+    const tabs = createTabActions(store, api);
+    const beforeSave = mock(async (tabId: string) => {
+      store.getState().editCode("let x = 1;\n", tabId);
+    });
+    const flows = createFileFlows({ store, api, tabs, dialogs: createDialogs(store), beforeSave });
+    const pending = flows.save("scratch");
+    await Bun.sleep(1);
+    expect(beforeSave).toHaveBeenCalledTimes(1);
+    expect(api.saveAsDialog).toHaveBeenCalledWith("scratch", "let x = 1;\n");
+    flows.handleSaveCancelled({ tabId: "scratch" });
+    expect(await pending).toBe(false);
+  });
+
+  // I-3 (fix round 1): formatForSave is always async (even with Format on Save off), so there is a gap
+  // between saveAs's leading finishSave and its waiters.set. A second saveAs for the same tab, arriving
+  // during that gap, must settle the first call instead of silently dropping it.
+  test("a second Save As for the same tab settles the first one even with Format on Save off (I-3)", async () => {
+    const { flows, api } = setup();
+    const first = flows.saveAs("saved");
+    const second = flows.saveAs("saved");
+    expect(await first).toBe(false);
+    expect(api.saveAsDialog).toHaveBeenCalledTimes(2);
+    flows.handleSaveCancelled({ tabId: "saved" });
+    expect(await second).toBe(false);
+  });
+
+  test("a second Save As for the same tab settles the first one while a slow format is running (I-3)", async () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: mergeSettings(defaultSettings(), { editor: { formatOnSave: true } }),
+      session: defaultSession(() => createTab({ id: "f", filePath: "/w/f.ts", lastSavedHash: "old" })),
+      buffers: { f: "let x=1" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const { api } = createFakeApi();
+    const tabs = createTabActions(store, api);
+    // Both saveAs calls await the same gate, so they resolve (and their .then continuations run) in the
+    // order they were made -- exactly the "format still running" race I-3 is about.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const beforeSave = mock(() => gate);
+    const flows = createFileFlows({ store, api, tabs, dialogs: createDialogs(store), beforeSave });
+    const first = flows.saveAs("f");
+    const second = flows.saveAs("f");
+    release();
+    expect(await first).toBe(false);
+    expect(api.saveAsDialog).toHaveBeenCalledTimes(2);
+    flows.handleSaveCancelled({ tabId: "f" });
+    expect(await second).toBe(false);
+  });
 });

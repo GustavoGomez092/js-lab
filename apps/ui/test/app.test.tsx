@@ -7,10 +7,15 @@ import {
   type KeybindingRule,
   MAX_CLOSED_TABS,
   mergeSettings,
+  type Settings,
 } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentType } from "react";
 import type { MainApi } from "../src/api";
+import { type EditorHandle, type OffsetEdit, setEditorHandle } from "../src/editor/editor-handle";
+import type { FormatOutcome } from "../src/format/format-core";
+import type { Formatter } from "../src/format/formatter";
+import { applyEdits } from "../src/format/line-diff";
 import * as OutputPanelModule from "../src/output/OutputPanel";
 import { runStateLabel } from "../src/shell/labels";
 import { type AppStore, createAppStore } from "../src/state/store";
@@ -27,7 +32,12 @@ afterAll(() => {
   mock.module("../src/output/OutputPanel", () => ({ OutputPanel: RealOutputPanel }));
 });
 
-let App: ComponentType<{ store: AppStore; api: MainApi; scheduleFrame?: (callback: () => void) => void }>;
+let App: ComponentType<{
+  store: AppStore;
+  api: MainApi;
+  scheduleFrame?: (callback: () => void) => void;
+  formatter?: Formatter;
+}>;
 beforeAll(async () => {
   ({ App } = await import("../src/shell/App"));
 });
@@ -36,10 +46,11 @@ function renderApp(
   safeMode: BootstrapPayload["safeMode"] = { active: false, reason: null },
   keybindings: KeybindingRule[] = [],
   scheduleFrame: (callback: () => void) => void = (callback) => callback(),
+  options: { formatter?: Formatter; settings?: Settings } = {},
 ) {
   const store = createAppStore();
   store.getState().hydrate({
-    settings: defaultSettings(),
+    settings: options.settings ?? defaultSettings(),
     session: defaultSession(() => createTab({ id: "t1" })),
     buffers: { t1: "1 + 1" },
     safeMode,
@@ -47,12 +58,44 @@ function renderApp(
     versions: { app: "0.0.1", bun: "1.3.13" },
   });
   const { api, emit } = createFakeApi();
-  render(<App store={store} api={api} scheduleFrame={scheduleFrame} />);
+  render(<App store={store} api={api} scheduleFrame={scheduleFrame} formatter={options.formatter} />);
   return { store, api, emit };
 }
 
 const press = (code: string, modifiers: { shiftKey?: boolean; altKey?: boolean } = {}) =>
   fireEvent.keyDown(window, { code, metaKey: true, ...modifiers });
+
+/** A Formatter whose `format` calls stay pending until `release` is called with the outcome. */
+function gatedFormatter() {
+  let releaseNext: ((outcome: FormatOutcome) => void) | null = null;
+  const formatter: Formatter = {
+    format: () =>
+      new Promise((resolve) => {
+        releaseNext = resolve;
+      }),
+    dispose: () => {},
+  };
+  return { formatter, release: (outcome: FormatOutcome) => releaseNext?.(outcome) };
+}
+
+/**
+ * A minimal EditorHandle backed by the store's buffer for `tabId`, whose `applyOffsetEdits` mirrors
+ * Monaco's real content-change listener: it writes back through `editCode` synchronously (fix round 1,
+ * I-1/I-2/m-4 setups).
+ */
+function fakeEditor(store: AppStore, tabId: string, focused = true) {
+  const applyOffsetEdits = mock((edits: OffsetEdit[]) => {
+    const next = applyEdits(store.getState().buffers[tabId] ?? "", edits);
+    store.getState().editCode(next, tabId);
+  });
+  const handle = {
+    getValue: () => store.getState().buffers[tabId] ?? "",
+    getCursorOffset: () => 0,
+    hasFocus: () => focused,
+    applyOffsetEdits,
+  } as unknown as EditorHandle;
+  return { handle, applyOffsetEdits };
+}
 
 describe("App shell", () => {
   test("Cmd+R starts a manual run with the current code", () => {
@@ -72,9 +115,96 @@ describe("App shell", () => {
   test("Cmd+R on a tab larger than MAX_TEXT_CHARS reports the limit instead of starting a run", () => {
     const { store, api } = renderApp();
     act(() => store.getState().editCode("a".repeat(MAX_TEXT_CHARS + 1)));
+    // m-3 (fix round 1): editCode above already sets this message through the buffer subscription
+    // (App.tsx's MAX_TEXT_CHARS guard on buffer changes), so clear it first -- otherwise the assertion
+    // below can't tell whether the run guard itself ran.
+    act(() => store.getState().setStatusMessage(null));
     press("KeyR");
     expect(api.startRun).not.toHaveBeenCalled();
     expect(store.getState().statusMessage).toBe(strings.limits.tooLarge);
+  });
+
+  // I-1 (fix round 1): with Auto Run and Format on Run both on, a format that edits the code arms a
+  // pending auto-run for the identical, already-formatted code. That pending run must not survive past
+  // the manual run it duplicates.
+  test("format on run does not double-run when Auto Run is also on (I-1)", async () => {
+    const settings = mergeSettings(defaultSettings(), {
+      run: { autoRun: true, formatOnRun: true, autoRunDelayMs: 50 },
+    });
+    const { formatter, release } = gatedFormatter();
+    const { store, api } = renderApp(undefined, [], (callback) => callback(), { formatter, settings });
+    const { handle } = fakeEditor(store, "t1");
+    setEditorHandle(handle);
+    try {
+      press("KeyR");
+      await act(async () => {
+        release({ ok: true, formatted: "2;\n", cursorOffset: 0 });
+        await Bun.sleep(1);
+      });
+      expect(api.startRun.mock.calls).toHaveLength(1);
+      expect(api.startRun.mock.calls[0]?.[0]).toMatchObject({ tabId: "t1", code: "2;\n", reason: "manual" });
+      // Long enough for the auto-run timer the format's own edit armed to have fired, if it wasn't cancelled.
+      await act(async () => {
+        await Bun.sleep(150);
+      });
+      expect(api.startRun.mock.calls).toHaveLength(1);
+    } finally {
+      setEditorHandle(null);
+    }
+  });
+
+  // I-2 (fix round 1): a tab switch while Format on Run's format is in flight must not run the newly
+  // active tab; the run started must still be the tab that was active at Cmd+R, with its own code.
+  test("switching tabs during format on run still runs the tab that was active at Cmd+R (I-2)", async () => {
+    const settings = mergeSettings(defaultSettings(), { run: { autoRun: false, formatOnRun: true } });
+    const { formatter, release } = gatedFormatter();
+    const { store, api } = renderApp(undefined, [], (callback) => callback(), { formatter, settings });
+    const { handle } = fakeEditor(store, "t1");
+    setEditorHandle(handle);
+    try {
+      press("KeyR");
+      act(() => store.getState().openTab(createTab({ id: "t2" }), "other()", true));
+      await act(async () => {
+        release({ ok: true, formatted: "2;\n", cursorOffset: 0 });
+        await Bun.sleep(1);
+      });
+      expect(api.startRun.mock.calls).toHaveLength(1);
+      expect(api.startRun.mock.calls[0]?.[0]).toMatchObject({ tabId: "t1", code: "1 + 1", reason: "manual" });
+    } finally {
+      setEditorHandle(null);
+    }
+  });
+
+  // m-4 (fix round 1): dedicated App-level coverage for the Format on Run wiring itself (format.document's
+  // isEnabled, the flows beforeSave spread and wantsFormat/lastTypedAt were previously only exercised by
+  // E2E). Shares I-1/I-2's fake editor and gated-formatter shapes.
+  test("format on run skips while typing and formats once the 1 second window has passed (m-4)", async () => {
+    const settings = mergeSettings(defaultSettings(), { run: { autoRun: false, formatOnRun: true } });
+    const formatSpy = mock(async (code: string) => ({ ok: true as const, formatted: `${code};`, cursorOffset: 0 }));
+    const formatter: Formatter = { format: (code) => formatSpy(code), dispose: () => {} };
+    const { store, api } = renderApp(undefined, [], (callback) => callback(), { formatter, settings });
+    const { handle } = fakeEditor(store, "t1");
+    setEditorHandle(handle);
+    try {
+      // An edit immediately followed by Cmd+R: still typing (within 1s), so the format is skipped.
+      act(() => store.getState().editCode("1+1", "t1"));
+      press("KeyR");
+      expect(formatSpy).not.toHaveBeenCalled();
+      expect(api.startRun.mock.calls).toHaveLength(1);
+
+      // Past the 1s window, the same edit is stale, so Cmd+R formats before running.
+      await act(async () => {
+        await Bun.sleep(1050);
+      });
+      press("KeyR");
+      await act(async () => {
+        await Bun.sleep(1);
+      });
+      expect(formatSpy).toHaveBeenCalledTimes(1);
+      expect(api.startRun.mock.calls).toHaveLength(2);
+    } finally {
+      setEditorHandle(null);
+    }
   });
 
   test("Cmd+Shift+R stops and Cmd+Alt+R kills", () => {

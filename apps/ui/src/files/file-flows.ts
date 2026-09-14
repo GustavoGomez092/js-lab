@@ -59,6 +59,11 @@ export function createFileFlows(deps: {
     return formatForSave(tabId).then(
       () =>
         new Promise<boolean>((resolve) => {
+          // Fix round 1 (I-3): formatForSave is always async (even with Format on Save off), so there is a
+          // gap between the leading finishSave above and this waiters.set. A second saveAs (or a save whose
+          // result is needsSaveAs) for the same tab can register its own waiter during that gap; settle it
+          // before this call claims the slot, so it never hangs forever.
+          finishSave(tabId, false);
           waiters.set(tabId, resolve);
           api.saveAsDialog(tabId, s().buffers[tabId] ?? "");
         }),

@@ -101,6 +101,26 @@ describe("startAutoRun", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  // Fix round 1 (I-1): a caller that already covers a pending edit (for example a manual run that just
+  // formatted the code) needs to cancel the timer that edit armed, without tearing down the subscription.
+  test("cancelPending stops a scheduled run without unsubscribing", () => {
+    const store = hydratedStore();
+    const run = mock(() => {});
+    const clock = manualTimers();
+    const stop = startAutoRun(store, run, clock.timers);
+    store.getState().editCode("1 + 2");
+    expect(clock.pending.size).toBe(1);
+    stop.cancelPending();
+    expect(clock.pending.size).toBe(0);
+    clock.fireAll();
+    expect(run).not.toHaveBeenCalled();
+    // Still subscribed: a later edit can schedule again.
+    store.getState().editCode("1 + 3");
+    expect(clock.pending.size).toBe(1);
+    clock.fireAll();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   test("a pending auto-run does not fire once the guard no longer holds", () => {
     // Case A: Safe Mode engages during the debounce window.
     const store = hydratedStore();

@@ -20,6 +20,10 @@ export function createFormatActions(deps: { store: AppStore; formatter: Formatte
         prettierOptions(state.settings, tab.language),
         editor?.getCursorOffset() ?? 0,
       );
+      // Fix round 1 (I-2): `editor` is the single global Monaco editor, captured before the await above. If
+      // the active tab changed while Prettier ran, that handle now belongs to a different tab's model, so
+      // never read or write through it.
+      if (editor && deps.store.getState().activeTabId !== id) return false;
       if (!outcome.ok) {
         deps.store.getState().setStatusMessage(strings.format.failed(outcome.error.split("\n")[0] ?? outcome.error));
         return false;

@@ -82,6 +82,6 @@ describe("app store", () => {
     store.getState().hydrate(payload());
     store.getState().setEditorSize(99);
     store.getState().toggleOrientation();
-    expect(store.getState().tab?.layout).toEqual({ orientation: "vertical", editorSize: 90 });
+    expect(store.getState().tab?.layout).toEqual({ orientation: "vertical", editorSize: 90, outputVisible: true });
   });
 });

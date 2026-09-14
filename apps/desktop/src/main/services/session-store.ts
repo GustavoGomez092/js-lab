@@ -17,6 +17,9 @@ import { createDebouncedWriter, type DebouncedWriter, loadJson, type Recovery } 
 
 export type TabPatch = Partial<Pick<TabState, "title" | "language">> & { layout?: Partial<TabState["layout"]> };
 
+/** A repaired tab's old buffer is moved only when its old id can't escape the buffers folder. */
+const isPlainFileName = (name: string) => /^[^/\\\0]+$/.test(name) && name !== "." && name !== "..";
+
 /** Owns session.json and the per-tab buffer files (spec §10.1). */
 export class SessionStore {
   #session: Session;
@@ -73,11 +76,20 @@ export class SessionStore {
       newerVersion,
       report?.droppedTabs ?? [],
     );
-    // No backup here: `session.json` still holds the corrupt/stale primary at this point, and backing it up
-    // would clobber a good `.bak` that recovery just read from (ruling I1). A newer file is never rewritten (I4).
-    if (recovered !== "none" && newerVersion === null) {
+    // R-M1-18: a repaired tab keeps its content when its old id is a plain file name.
+    const repairedTabIds = report?.repairedTabIds ?? [];
+    for (const [from, to] of repairedTabIds) {
+      const tab = session.tabs[to];
+      if (!tab || !isPlainFileName(from)) continue;
+      const oldPath = join(dataDir, "buffers", bufferFileName({ id: from, language: tab.language }));
+      await rename(oldPath, join(dataDir, "buffers", bufferFileName(tab))).catch(() => {});
+    }
+    // No backup after a recovery: `session.json` still holds the corrupt/stale primary, and backing it up would clobber
+    // a good `.bak` that recovery just read from (ruling I1). A repair of a valid file keeps its backup. A newer file
+    // is never rewritten (I4).
+    if ((recovered !== "none" || repairedTabIds.length > 0) && newerVersion === null) {
       await writeFileAtomic(join(dataDir, "session.json"), `${JSON.stringify(session, null, 2)}\n`, {
-        backup: false,
+        backup: recovered === "none",
       });
     }
     return store;

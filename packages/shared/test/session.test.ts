@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
   bufferFileName,
+  closedBufferFileName,
   createTab,
   defaultSession,
+  MAX_CLOSED_TABS,
   normalizeSession,
   parseSession,
   SESSION_VERSION,
   sessionParser,
   sessionSchema,
+  TAB_ID_PATTERN,
 } from "../src/session";
 import { defaultSettings } from "../src/settings";
 
@@ -83,5 +86,59 @@ describe("session", () => {
     ]);
     expect((newer.session as Record<string, unknown>).workspaces).toEqual([{ id: "w" }]);
     expect(() => sessionParser.parse([])).toThrow("session.json must contain an object");
+  });
+
+  test("M2 tab fields default, and the closed stack drops invalid entries and keeps at most 20", () => {
+    const s = sessionSchema.parse({
+      tabs: { a: { id: "a" } },
+      closedStack: [
+        { tab: { id: "c1" }, closedAt: 5 },
+        { tab: {} },
+        ...Array.from({ length: 30 }, (_, i) => ({ tab: { id: `x${i}` }, closedAt: i })),
+      ],
+    });
+    expect(s.tabs.a).toMatchObject({
+      filePath: null,
+      lastSavedHash: null,
+      workingDirectory: null,
+      gistId: null,
+      viewState: null,
+      layout: { orientation: "horizontal", editorSize: 55, outputVisible: true },
+    });
+    expect(s.closedStack).toHaveLength(MAX_CLOSED_TABS);
+    expect(s.closedStack[0]?.tab.id).toBe("c1");
+    expect([s.settingsWindow, s.lastDirectory]).toEqual([null, null]);
+    expect(closedBufferFileName({ id: "c1", language: "jsx" })).toBe("closed/c1.jsx");
+    const frame = { x: 1, y: 2, width: 800, height: 600 };
+    expect(sessionSchema.parse({ window: frame }).window).toEqual(frame);
+    expect(sessionSchema.parse({ window: { ...frame, displayId: "2", fullscreen: true } }).window).toEqual({
+      ...frame,
+      displayId: "2",
+      fullscreen: true,
+    });
+    expect(sessionSchema.parse({ window: { ...frame, displayId: 7, fullscreen: "yes" } }).window).toEqual(frame);
+  });
+
+  test("normalize drops tabs stored under a key that is not their id", () => {
+    const s = normalizeSession(sessionSchema.parse({ tabOrder: ["a", "b"], tabs: { a: tab("a"), b: tab("zzz") } }));
+    expect(s.tabOrder).toEqual(["a"]);
+  });
+
+  test("hand-edited tab ids outside the safe id format get fresh ids everywhere they are referenced (R-M1-18)", () => {
+    const { session, repairedTabIds } = parseSession({
+      version: 2,
+      tabOrder: ["ok", "my tab", "../x"],
+      activeTabId: "my tab",
+      tabs: { ok: tab("ok"), "my tab": tab("my tab"), "../x": tab("../x") },
+    });
+    const [first, spaced = "", dotted = ""] = session.tabOrder;
+    expect(first).toBe("ok");
+    for (const id of session.tabOrder) expect(id).toMatch(TAB_ID_PATTERN);
+    expect(session.activeTabId).toBe(spaced);
+    expect(session.tabs[spaced]?.id).toBe(spaced);
+    expect(repairedTabIds).toEqual([
+      ["my tab", spaced],
+      ["../x", dotted],
+    ]);
   });
 });

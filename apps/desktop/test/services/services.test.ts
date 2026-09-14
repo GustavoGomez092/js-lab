@@ -177,6 +177,21 @@ describe("recovery preserves backups", () => {
     await store.flush();
     expect(await readFile(path, "utf8")).toBe(text);
   });
+
+  test("a hand-edited tab id outside the safe format is repaired on load and keeps its buffer (R-M1-18)", async () => {
+    await mkdir(join(dir, "buffers"), { recursive: true });
+    await writeFile(join(dir, "buffers", "my tab.ts"), "kept");
+    await writeFile(
+      join(dir, "session.json"),
+      JSON.stringify({ version: 2, tabOrder: ["my tab"], activeTabId: "my tab", tabs: { "my tab": { id: "my tab" } } }),
+    );
+    const store = await SessionStore.open(dir, { delayMs: 10 });
+    const [id = ""] = store.session.tabOrder;
+    expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(await store.readBuffers()).toEqual({ [id]: "kept" });
+    expect(existsSync(join(dir, "buffers", "my tab.ts"))).toBe(false);
+    expect(JSON.parse(await readFile(join(dir, "session.json"), "utf8")).tabOrder).toEqual([id]);
+  });
 });
 
 describe("safe mode", () => {

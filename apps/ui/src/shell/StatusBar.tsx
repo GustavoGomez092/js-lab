@@ -5,9 +5,13 @@ import { strings } from "../strings";
 import { LANGUAGE_LABELS, RUNTIME_LABELS, runStateKind, runStateLabel } from "./labels";
 
 export function StatusBar({ store, onToggleLayout }: { store: AppStore; onToggleLayout(): void }) {
-  const tab = useStore(store, (s) => s.tab);
   // As built (M1 T18 fix round): primitive selectors only. `s.output` is a new object on every run.events batch,
-  // and selecting it would re-render the status bar on every batch.
+  // and selecting it would re-render the status bar on every batch. Likewise `s.tab` is replaced by every view-state
+  // commit (FB-I2).
+  const hasTab = useStore(store, (s) => s.tab !== null);
+  const runtime = useStore(store, (s) => s.tab?.runtime);
+  const language = useStore(store, (s) => s.tab?.language);
+  const orientation = useStore(store, (s) => s.tab?.layout.orientation);
   const runState = useStore(store, (s) => s.output.runState);
   const activeHandles = useStore(store, (s) => s.output.activeHandles);
   const safeMode = useStore(store, (s) => s.safeMode.active);
@@ -15,7 +19,7 @@ export function StatusBar({ store, onToggleLayout }: { store: AppStore; onToggle
   const cursor = useStore(store, (s) => s.cursor);
   const vimMode = useStore(store, (s) => s.vimMode);
   const message = useStore(store, (s) => s.statusMessage);
-  if (!tab) return null;
+  if (!hasTab) return null;
   const label = runStateLabel({ state: runState, activeHandles, autoRunArmed, safeMode });
   return (
     <footer className="status-bar">
@@ -30,7 +34,7 @@ export function StatusBar({ store, onToggleLayout }: { store: AppStore; onToggle
       <div className="status-right">
         <select
           aria-label={strings.shell.runtime}
-          value={tab.runtime}
+          value={runtime}
           onChange={(event) => store.getState().setRuntime(event.target.value as Runtime)}
         >
           {RUNTIMES.map((runtime) => (
@@ -46,7 +50,7 @@ export function StatusBar({ store, onToggleLayout }: { store: AppStore; onToggle
         </select>
         <select
           aria-label={strings.shell.language}
-          value={tab.language}
+          value={language}
           onChange={(event) => store.getState().setLanguage(event.target.value as Language)}
         >
           {LANGUAGES.map((language) => (
@@ -56,7 +60,7 @@ export function StatusBar({ store, onToggleLayout }: { store: AppStore; onToggle
           ))}
         </select>
         <button type="button" className="status-item" onClick={onToggleLayout}>
-          {tab.layout.orientation === "horizontal" ? strings.shell.split.horizontal : strings.shell.split.vertical}
+          {orientation === "horizontal" ? strings.shell.split.horizontal : strings.shell.split.vertical}
         </button>
         {vimMode && <span className="status-vim">{vimMode.toUpperCase()}</span>}
         {cursor && <span>{strings.shell.cursor(cursor.line, cursor.column)}</span>}

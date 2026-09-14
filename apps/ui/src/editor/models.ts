@@ -16,6 +16,11 @@ export class ModelCache<M extends ModelLike> {
     return this.#entries.get(tabId)?.model;
   }
 
+  /** True when `ensure(tabId, language, …)` would return the existing model unchanged. */
+  matches(tabId: string, language: Language): boolean {
+    return this.#entries.get(tabId)?.language === language;
+  }
+
   /** Returns the tab's model; a language change recreates it from the current model's content. */
   ensure(tabId: string, language: Language, value: string): { model: M; recreated: boolean } {
     const entry = this.#entries.get(tabId);

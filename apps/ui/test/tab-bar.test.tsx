@@ -1,11 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
-import { contentHash, createTab, defaultSession, defaultSettings } from "@jslab/shared";
+import { contentHash, createTab, defaultSession, defaultSettings, type TabState } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createAppStore } from "../src/state/store";
 import { RenameDialog } from "../src/tabs/RenameDialog";
 import { reorderByDrop } from "../src/tabs/reorder";
 import { TabBar } from "../src/tabs/TabBar";
 import type { TabActions } from "../src/tabs/tab-actions";
+import { createTabSummaryCache } from "../src/tabs/tab-summary";
 import { createFakeApi } from "./fake-api";
 
 function setup() {
@@ -45,6 +46,28 @@ function setup() {
   render(<TabBar store={store} tabs={tabs} api={api} />);
   return { store, tabs, api };
 }
+
+describe("tab summaries (FB-I2)", () => {
+  test("title and dirty state are computed once per buffer string, and again only when the buffer or tab changes", () => {
+    const title = mock((_tab: TabState, code: string) => `t:${code.length}`);
+    const dirty = mock((_tab: TabState, code: string) => code !== "saved");
+    const cache = createTabSummaryCache({ title, dirty });
+    const file = createTab({ id: "f", filePath: "/work/a.ts", lastSavedHash: contentHash("saved") });
+    const big = "x".repeat(10_000);
+    expect([cache.title(file, big), cache.dirty(file, big)]).toEqual(["t:10000", true]);
+    // A second render with the same buffer string, and a tab object replaced by a view-state commit, are hits.
+    const committed: TabState = { ...file, viewState: { top: 1 } };
+    expect([cache.title(committed, big), cache.dirty(file, big)]).toEqual(["t:10000", true]);
+    expect([title.mock.calls.length, dirty.mock.calls.length]).toEqual([1, 1]);
+    // An edit (a new buffer string) or a save (a new lastSavedHash) recomputes.
+    cache.dirty(file, "saved");
+    cache.dirty({ ...file, lastSavedHash: contentHash("other") }, "saved");
+    expect(dirty.mock.calls.length).toBe(3);
+    cache.retain(new Set());
+    cache.title(file, "saved");
+    expect(title.mock.calls.length).toBe(2);
+  });
+});
 
 describe("tab bar", () => {
   test("drops place the dragged tab before or after the target", () => {

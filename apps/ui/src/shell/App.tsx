@@ -1,6 +1,6 @@
 import { appNoticeSchema, MAX_TEXT_CHARS } from "@jslab/rpc-schema";
-import { commandMeta, DEFAULT_KEYBINDINGS, deriveTitle, resolveKeybindings } from "@jslab/shared";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { commandMeta, DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { createAppCommands } from "../commands/app-commands";
@@ -25,6 +25,7 @@ import { strings } from "../strings";
 import { RenameDialog } from "../tabs/RenameDialog";
 import { TabBar } from "../tabs/TabBar";
 import { createTabActions } from "../tabs/tab-actions";
+import { createTabSummaryCache } from "../tabs/tab-summary";
 import { startThemeSync } from "../themes/apply";
 import { startAppearanceSync } from "../themes/fonts";
 import { createThemeCommands } from "../themes/theme-commands";
@@ -63,7 +64,15 @@ export function App({
   scheduleFrame?: (callback: () => void) => void;
   formatter?: Formatter;
 }) {
-  const tab = useStore(store, (s) => s.tab);
+  // FB-I2: primitives only. `s.tab` is replaced by every view-state commit (cursor or scroll), and selecting it
+  // re-rendered the whole shell about every 500 ms while the cursor moved.
+  const tabId = useStore(store, (s) => s.tab?.id ?? null);
+  const orientation = useStore(store, (s) => s.tab?.layout.orientation ?? "horizontal");
+  const editorSize = useStore(store, (s) => s.tab?.layout.editorSize ?? 50);
+  const outputVisible = useStore(store, (s) => s.tab?.layout.outputVisible ?? true);
+  // FB-m9: the single-tab toolbar title follows edits; the summary cache keeps this selector cheap per keystroke.
+  const [titles] = useState(createTabSummaryCache);
+  const toolbarTitle = useStore(store, (s) => (s.tab ? titles.title(s.tab, s.code) : ""));
   const runState = useStore(store, (s) => s.output.runState);
   const safeMode = useStore(store, (s) => s.safeMode);
   const notices = useStore(store, (s) => s.notices);
@@ -354,8 +363,7 @@ export function App({
     [store, registry],
   );
 
-  if (!tab || !settings) return null;
-  const tabId = tab.id;
+  if (!tabId || !settings) return null;
   const busy = runState !== null && BUSY_STATES.has(runState);
 
   return (
@@ -386,7 +394,7 @@ export function App({
         {tabCount > 1 || settings.view.tabBarForSingleTab ? (
           <TabBar store={store} tabs={tabs} api={api} />
         ) : (
-          <span className="toolbar-title">{deriveTitle(tab, store.getState().code)}</span>
+          <span className="toolbar-title">{toolbarTitle}</span>
         )}
       </Toolbar>
       {safeMode.active && <SafeModeBanner reason={safeMode.reason} />}
@@ -406,9 +414,9 @@ export function App({
         )}
         {settings.view.sideBar && <SideBar panel={sideBarPanel} />}
         <SplitPane
-          orientation={tab.layout.orientation}
-          size={tab.layout.editorSize}
-          secondVisible={tab.layout.outputVisible}
+          orientation={orientation}
+          size={editorSize}
+          secondVisible={outputVisible}
           onResize={(size) => store.getState().setEditorSize(size)}
           onReset={() => store.getState().resetEditorSize()}
           first={<Editor store={store} api={api} onLargePaste={flows.confirmLargePaste} />}

@@ -144,9 +144,7 @@ export function Editor({ store, api, onLargePaste }: EditorProps) {
         contentSubscription?.dispose();
         contentSubscription = null;
         if (!tabId || !model) return;
-        contentSubscription = model.onDidChangeContent(() => {
-          if (!view.applyingExternal) store.getState().editCode(model.getValue(), tabId);
-        });
+        contentSubscription = model.onDidChangeContent(() => view.pushContent(tabId, model));
         reportCursor();
         // A new model starts with no markers or decorations (as built in M1): reapply both.
         applyMarkers(store.getState());

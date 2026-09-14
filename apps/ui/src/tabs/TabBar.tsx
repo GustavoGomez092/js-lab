@@ -1,4 +1,3 @@
-import { deriveTitle, isDirty } from "@jslab/shared";
 import { useCallback, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
@@ -7,6 +6,7 @@ import { strings } from "../strings";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { reorderByDrop } from "./reorder";
 import type { TabActions } from "./tab-actions";
+import { createTabSummaryCache } from "./tab-summary";
 
 const DRAG_TYPE = "application/x-jslab-tab";
 
@@ -20,6 +20,9 @@ export function TabBar(props: {
   const byId = useStore(store, (s) => s.tabs);
   const buffers = useStore(store, (s) => s.buffers);
   const activeId = useStore(store, (s) => s.activeTabId);
+  // FB-I2: the bar re-renders on every edit; only the tab whose buffer changed recomputes its title and dirty dot.
+  const [summaries] = useState(createTabSummaryCache);
+  summaries.retain(new Set(order));
   const [menu, setMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -53,9 +56,9 @@ export function TabBar(props: {
         const tab = byId[id];
         if (!tab) return null;
         const code = buffers[id] ?? "";
-        const title = deriveTitle(tab, code);
+        const title = summaries.title(tab, code);
         const active = id === activeId;
-        const dirty = isDirty(tab, code);
+        const dirty = summaries.dirty(tab, code);
         const dropClass = dropTarget?.id === id ? (dropTarget.after ? " drop-after" : " drop-before") : "";
         return (
           <div

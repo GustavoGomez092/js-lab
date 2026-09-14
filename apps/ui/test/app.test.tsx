@@ -10,7 +10,7 @@ import {
   type Settings,
 } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { ComponentType } from "react";
+import { type ComponentType, Profiler } from "react";
 import type { MainApi } from "../src/api";
 import { type EditorHandle, type OffsetEdit, setEditorHandle } from "../src/editor/editor-handle";
 import type { FormatOutcome } from "../src/format/format-core";
@@ -491,6 +491,38 @@ describe("App shell", () => {
     screen.getByRole("button", { name: /Auto Run/ }).focus();
     press("KeyP", { shiftKey: true });
     expect(store.getState().modal).toEqual({ kind: "palette", context: "editor" });
+  });
+
+  // FB-m9: with the tab bar hidden for one tab, the toolbar title follows edits.
+  test("the single-tab toolbar title updates as the code is edited (FB-m9)", () => {
+    const settings = mergeSettings(defaultSettings(), { view: { tabBarForSingleTab: false } });
+    const { store } = renderApp(undefined, [], undefined, { settings });
+    expect(document.querySelector(".toolbar-title")?.textContent).toBe("1 + 1");
+    act(() => store.getState().editCode("\n  const renamed = 2\n", "t1"));
+    expect(document.querySelector(".toolbar-title")?.textContent).toBe("const renamed = 2");
+  });
+
+  // FB-I2: a view-state commit (cursor or scroll, every ~500 ms) replaces the tab object. The shell selects
+  // primitives, so it doesn't re-render for that.
+  test("a view-state commit doesn't re-render the shell (FB-I2)", () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: mergeSettings(defaultSettings(), { view: { tabBarForSingleTab: false } }),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "1 + 1" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0.0.1", bun: "1.3.13" },
+    });
+    const { api } = createFakeApi();
+    let commits = 0;
+    render(
+      <Profiler id="shell" onRender={() => commits++}>
+        <App store={store} api={api} scheduleFrame={(callback) => callback()} />
+      </Profiler>,
+    );
+    commits = 0;
+    act(() => store.getState().setViewState("t1", { cursor: 3 }));
+    expect(commits).toBe(0);
   });
 
   test("⌘, asks Main to open the Settings window", () => {

@@ -27,22 +27,26 @@ export interface TabViewDeps<M extends ModelLike, V> {
   timers?: TimerApi;
 }
 
-export interface TabView {
+export interface TabView<M = ModelLike> {
   show(state: AppState): void;
   readonly activeId: string | null;
   /** True while `show` copies store content into a model, so the content listener can ignore that change. */
   readonly applyingExternal: boolean;
+  /** The model's content listener: writes the model's content to the store, unless `show` is applying store content. */
+  pushContent(tabId: string, model: M): void;
   saveActive(): void;
   cancel(tabId: string): void;
   flush(): void;
 }
 
 /** One model per tab, with per-tab view state (spec §6.1, §10.1). Framework-free, so it is unit-tested. */
-export function createTabView<M extends ModelLike, V>(deps: TabViewDeps<M, V>): TabView {
+export function createTabView<M extends ModelLike, V>(deps: TabViewDeps<M, V>): TabView<M> {
   let activeId: string | null = null;
   let applyingExternal = false;
   let showing = false;
   let rerun = false;
+  /** The model content the listener last wrote to the store. Always equal to that model's content while set. */
+  let pushed: { model: M; value: string } | null = null;
 
   const saver = createViewStateSaver(
     (tabId, viewState) => {
@@ -73,7 +77,12 @@ export function createTabView<M extends ModelLike, V>(deps: TabViewDeps<M, V>): 
     }
     activeId = id;
     const previousModel = deps.models.get(id);
-    const carried = previousModel && deps.editor.getModel() === previousModel ? deps.editor.saveViewState() : null;
+    // The view state is carried across a language change only (the model is recreated). An unchanged model keeps its
+    // own view state, so don't save one on every keystroke (T12-m5, FB-I2).
+    const carried =
+      previousModel && !deps.models.matches(id, tab.language) && deps.editor.getModel() === previousModel
+        ? deps.editor.saveViewState()
+        : null;
     const { model } = deps.models.ensure(id, tab.language, state.buffers[id] ?? "");
     if (deps.editor.getModel() !== model) {
       deps.editor.setModel(model);
@@ -82,7 +91,11 @@ export function createTabView<M extends ModelLike, V>(deps: TabViewDeps<M, V>): 
       deps.onShown(id, model);
     }
     const code = state.buffers[id] ?? "";
-    if (model.getValue() !== code) {
+    // FB-I2: the buffer is usually the exact string the content listener just read from this model, so the model
+    // already holds it and a full-buffer compare can be skipped.
+    const justPushed = pushed !== null && pushed.model === model && pushed.value === code;
+    if (!justPushed && model.getValue() !== code) {
+      pushed = null;
       applyingExternal = true;
       try {
         (deps.applyExternal ?? ((target: M, value: string) => target.setValue(value)))(model, code);
@@ -116,6 +129,12 @@ export function createTabView<M extends ModelLike, V>(deps: TabViewDeps<M, V>): 
     },
     get applyingExternal() {
       return applyingExternal;
+    },
+    pushContent(tabId, model) {
+      if (applyingExternal) return;
+      const value = model.getValue();
+      pushed = { model, value };
+      deps.store.getState().editCode(value, tabId);
     },
     saveActive() {
       if (activeId) saver.schedule(activeId, deps.editor.saveViewState());

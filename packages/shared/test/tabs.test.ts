@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createTab } from "../src/session";
 import {
   adjacentTabId,
@@ -35,6 +35,53 @@ describe("tab helpers", () => {
     expect(deriveTitle(base, "const aVeryLongVariableName = somethingElse()")).toBe("const aVeryLongVariableName =…");
     expect(deriveTitle(base, "const aVeryLongVariableName = somethingElse()")).toHaveLength(30);
     expect(deriveTitle(base, "  \n ")).toBe("Untitled");
+  });
+
+  // FB-I2: the title scan stops at the first non-blank line instead of splitting the whole buffer into lines, with
+  // results identical to the split-based definition.
+  test("the derived title matches the split-based definition and never splits the buffer (FB-I2)", () => {
+    const base = { title: "x", titleIsCustom: false, filePath: null };
+    const reference = (code: string) => {
+      const first = code
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line.length > 0);
+      if (!first) return "Untitled";
+      return first.length > 30 ? `${first.slice(0, 29).trimEnd()}…` : first;
+    };
+    const alphabet = [" ", "\t", "\n", "\r", "\r\n", "a", "b", "é", " ", " ", "; ", "x".repeat(12)];
+    let seed = 7;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    const cases = [
+      "",
+      "\n",
+      "a",
+      " \r\n\t x \r\n",
+      `${"a".repeat(30)}`,
+      `${"a".repeat(30)}   `,
+      `${"a".repeat(31)}`,
+      `${"a".repeat(28)} b`,
+      `${"a".repeat(29)} b`,
+      `${"a".repeat(28)}  b`,
+      `  ${"a".repeat(30)} \n b`,
+      `${"a".repeat(30)} b`,
+    ];
+    for (let index = 0; index < 3000; index++) {
+      const length = Math.floor(random() * 24);
+      cases.push(Array.from({ length }, () => alphabet[Math.floor(random() * alphabet.length)]).join(""));
+    }
+    for (const code of cases) expect([code, deriveTitle(base, code)]).toEqual([code, reference(code)]);
+
+    const split = spyOn(String.prototype, "split");
+    try {
+      deriveTitle(base, `\n\nconst first = 1\n${"line\n".repeat(1000)}`);
+      expect(split).not.toHaveBeenCalled();
+    } finally {
+      split.mockRestore();
+    }
   });
 
   test("content hashes are stable and only saved-file tabs get dirty", () => {

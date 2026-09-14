@@ -114,4 +114,65 @@ describe("tab view", () => {
     expect(applied).toEqual([["const a = 10", true]]);
     expect([editor.model?.getValue(), view.applyingExternal]).toEqual(["const a = 10", false]);
   });
+
+  // FB-I2 / T12-m5: typing pushes the model's content into the store, and the store update calls show() again.
+  // That show must not read the whole model back to compare, nor save a view state it never uses.
+  test("a buffer the content listener just pushed skips the model compare, and an unchanged model skips saveViewState (FB-I2)", () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: normalizeSession(
+        sessionSchema.parse({ tabOrder: ["a"], activeTabId: "a", tabs: { a: createTab({ id: "a" }) } }),
+      ),
+      buffers: { a: "const a = 1" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    let reads = 0;
+    class CountingModel extends FakeModel {
+      override getValue() {
+        reads++;
+        return this.value;
+      }
+    }
+    let saves = 0;
+    class CountingEditor extends FakeEditor {
+      override saveViewState() {
+        saves++;
+        return { value: "view" };
+      }
+    }
+    const editor = new CountingEditor();
+    const applied: string[] = [];
+    const view = createTabView({
+      store,
+      editor,
+      models: new ModelCache((_id, language: Language, value: string) => new CountingModel(value, language)),
+      persist: () => {},
+      onShown: () => {},
+      applyExternal: (model, value) => {
+        applied.push(value);
+        model.setValue(value);
+      },
+      timers: { setTimeout: () => 0, clearTimeout: () => {} },
+    });
+    view.show(store.getState());
+    const model = editor.model as FakeModel;
+
+    // Typing: the model changes, the listener pushes it, and the store update shows the tab again.
+    model.value = "const a = 12";
+    [reads, saves] = [0, 0];
+    view.pushContent("a", model);
+    view.show(store.getState());
+    expect([store.getState().buffers.a, reads, saves, applied]).toEqual(["const a = 12", 1, 0, []]);
+
+    // A store-driven change is still compared and applied, and afterwards the old pushed string is forgotten.
+    store.getState().editCode("const a = 1", "a");
+    view.show(store.getState());
+    expect([applied, model.value]).toEqual([["const a = 1"], "const a = 1"]);
+    model.value = "typed";
+    store.getState().editCode("const a = 12", "a");
+    view.show(store.getState());
+    expect(model.value).toBe("const a = 12");
+  });
 });

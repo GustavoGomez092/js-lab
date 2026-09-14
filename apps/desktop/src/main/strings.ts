@@ -8,6 +8,13 @@ export const strings = {
     relaunchFailed: "Could not relaunch JSLab after Restart in Safe Mode; quitting without reopening",
     fatalError: "Unhandled error; quitting",
   },
+  files: {
+    tooLarge: (name: string) => `${name} is larger than 50 MB and can't be opened.`,
+    notText: (name: string) => `${name} isn't a text file.`,
+    unreadable: (name: string) => `${name} couldn't be read.`,
+    expired: "That file request expired. Open the file again.",
+    tabGone: "That tab is no longer open.",
+  },
   notices: {
     copySaved: (file: string) => ` A copy was saved as ${file}`,
     settingsReset: "Settings were reset because the file was unreadable.",

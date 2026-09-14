@@ -3,6 +3,9 @@ import {
   appCommandSchema,
   bufferChangedSchema,
   e2eResponseSchema,
+  fileConfirmLargeSchema,
+  fileConfirmSaveAsSchema,
+  fileSaveParamsSchema,
   MAX_OPEN_FILE_BYTES,
   MAX_TEXT_CHARS,
   runExpandParamsSchema,
@@ -114,5 +117,12 @@ describe("inbound validators", () => {
   test("app.command accepts only known actions", () => {
     expect(appCommandSchema.safeParse({ action: "copyDebugLog" }).success).toBe(true);
     expect(appCommandSchema.safeParse({ action: "exec" }).success).toBe(false);
+  });
+
+  test("file payloads cap content and token lists", () => {
+    expect(fileSaveParamsSchema.safeParse({ tabId: "t", content: "x" }).success).toBe(true);
+    expect(fileSaveParamsSchema.safeParse({ tabId: "t", content: "x".repeat(MAX_TEXT_CHARS + 1) }).success).toBe(false);
+    expect(fileConfirmLargeSchema.safeParse({ tokens: Array.from({ length: 101 }, () => "t") }).success).toBe(false);
+    expect(fileConfirmSaveAsSchema.safeParse({ token: "t", confirmed: "yes" }).success).toBe(false);
   });
 });

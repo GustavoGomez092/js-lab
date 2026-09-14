@@ -17,16 +17,20 @@ import { resolveAppPaths } from "./app-paths";
 import { E2EBridge } from "./cli/e2e-bridge";
 import { createSocketMethods } from "./cli/socket-methods";
 import { type SocketServer, startSocketServer } from "./cli/socket-server";
+import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-service";
 import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
 import { createMainServices } from "./main-services";
 import { resolveMainViewUrl } from "./main-view-url";
 import { buildMenu, commandForMenuAction, type MenuItem } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
+import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
 import { relaunchApp } from "./platform/relaunch";
+import { saveDialog } from "./platform/save-dialog";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
 import { createAppHandlers } from "./rpc/app-handlers";
+import { createFileHandlers } from "./rpc/file-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
@@ -161,6 +165,9 @@ async function start(): Promise<void> {
   const e2eBridge = new E2EBridge((request) => rpc.send["e2e.request"](request));
   let socketServer: SocketServer | null = null;
 
+  const writeClipboard = (text: string) =>
+    e2eEnabled ? writeFileSync(join(paths.dataDir, "e2e-clipboard.txt"), text) : Utils.clipboardWriteText(text);
+
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
     handlers: mergeHandlers(
@@ -198,8 +205,7 @@ async function start(): Promise<void> {
         os: osInfo,
         redact,
         log,
-        clipboard: (text) =>
-          e2eEnabled ? writeFileSync(join(paths.dataDir, "e2e-clipboard.txt"), text) : Utils.clipboardWriteText(text),
+        clipboard: writeClipboard,
         openPath: (target) =>
           e2eEnabled ? appendFileSync(join(paths.dataDir, "e2e-opened.txt"), `${target}\n`) : Utils.openPath(target),
         restartInSafeMode: () => {
@@ -211,6 +217,35 @@ async function start(): Promise<void> {
           Utils.quit();
         },
         toggleFullScreen: () => window.setFullScreen(!window.isFullScreen()),
+      }),
+      createFileHandlers({
+        files: new FileService(nodeFileSystem),
+        session,
+        documentsDir: Utils.paths.documents,
+        openDialog: ({ startingFolder }) =>
+          e2eEnabled
+            ? readE2EOpenDialog(paths.dataDir)
+            : Utils.openFileDialog({
+                startingFolder,
+                allowedFileTypes: OPEN_EXTENSIONS.join(","),
+                canChooseFiles: true,
+                canChooseDirectory: false,
+                allowsMultipleSelection: true,
+              }),
+        saveDialog: (options) => (e2eEnabled ? readE2ESaveDialog(paths.dataDir) : saveDialog(options)),
+        revealInFinder: (path) =>
+          e2eEnabled
+            ? appendFileSync(join(paths.dataDir, "e2e-opened.txt"), `${path}\n`)
+            : Utils.showItemInFolder(path),
+        clipboard: writeClipboard,
+        send: {
+          opened: (payload) => rpc.send["file.opened"](payload),
+          saved: (payload) => rpc.send["file.saved"](payload),
+          saveAsConfirm: (payload) => rpc.send["file.saveAsConfirm"](payload),
+          saveCancelled: (payload) => rpc.send["file.saveCancelled"](payload),
+          saveFailed: (payload) => rpc.send["file.saveFailed"](payload),
+        },
+        log,
       }),
     ),
   });

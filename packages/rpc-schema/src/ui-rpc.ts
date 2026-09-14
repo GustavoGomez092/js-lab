@@ -95,6 +95,15 @@ export const APP_ACTIONS = [
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });
 
+export const fileSaveParamsSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });
+export const fileConfirmLargeSchema = z.object({ tokens: z.array(z.uuid()).min(1).max(100) });
+export const fileConfirmSaveAsSchema = z.object({ token: z.uuid(), confirmed: z.boolean() });
+
+export type FileSaveParams = z.infer<typeof fileSaveParamsSchema>;
+export type LargeFile = { token: string; path: string; size: number };
+export type FileOpened = { tabs: TabWithContent[]; focusTabId: string | null; large: LargeFile[]; errors: string[] };
+export type FileSaveResult = { ok: true; tab: TabState } | { ok: false; error: string } | { needsSaveAs: true };
+
 export const STARTUP_NOTICE_IDS = [
   "settingsRecovered",
   "sessionRecovered",
@@ -180,6 +189,7 @@ export type MainRequests = {
   "tab.close": { params: TabParams; response: TabCloseResult };
   "tab.reopen": { params: Record<string, never>; response: TabWithContent | null };
   "settings.update": { params: SettingsUpdateParams; response: Settings };
+  "file.save": { params: FileSaveParams; response: FileSaveResult };
 };
 
 /** Messages received by Main, sent by the UI. */
@@ -195,6 +205,12 @@ export type MainMessages = {
   "tab.reorder": TabReorder;
   "tab.viewState": TabViewState;
   "app.command": { action: AppAction };
+  "file.openDialog": Record<string, never>;
+  "file.confirmLarge": { tokens: string[] };
+  "file.saveAsDialog": FileSaveParams;
+  "file.confirmSaveAs": { token: string; confirmed: boolean };
+  "tab.revealInFinder": TabParams;
+  "tab.copyPath": TabParams;
 };
 
 /** Messages received by the UI, sent by Main. */
@@ -205,4 +221,9 @@ export type ViewMessages = {
   "menu.command": { command: CommandId };
   "e2e.request": E2ERequest;
   "settings.changed": { settings: Settings };
+  "file.opened": FileOpened;
+  "file.saved": { tabId: string; tab: TabState };
+  "file.saveAsConfirm": { token: string; tabId: string; path: string };
+  "file.saveCancelled": { tabId: string };
+  "file.saveFailed": { tabId: string; error: string };
 };

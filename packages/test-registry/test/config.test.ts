@@ -10,6 +10,9 @@ describe("test registry config", () => {
     expect(yaml).toContain("uplinks: {}");
     expect(yaml).not.toContain("proxy:");
     expect(yaml).toContain("enable: false");
+    expect(yaml).toContain("middlewares:");
+    expect(yaml).toContain("  audit:");
+    expect(yaml).toContain("    enabled: false");
   });
 
   test("finds a loopback port that can be bound", () => {

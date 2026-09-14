@@ -51,8 +51,14 @@ describe("appearance", () => {
     // The editor mounts after hydrate, so wait for Vim to report its mode (review M10).
     await waitFor(async () => (await (app as LaunchedApp).state()).ui.vimMode === "normal" || null);
     await app.type("6 * 7");
-    await Bun.sleep(500);
-    expect(activeTab(await app.state()).entryCount).toBe(0);
+    // FA-m10: wait for the edit itself, then for the auto-run delay from settings plus a margin. The window is what
+    // this negative check is about (Auto Run is off, so nothing may run); it is no longer a guess at a debounce.
+    const typed = await waitFor(async () => {
+      const s = await (app as LaunchedApp).state();
+      return activeTab(s).code === "6 * 7" ? s : null;
+    });
+    await Bun.sleep(Number(typed.ui.settings?.run?.autoRunDelayMs ?? 300) + 1_500);
+    expect(activeTab(await app.state())).toMatchObject({ entryCount: 0, runState: null });
     await app.key("cmd+r");
     await app.waitForOutput((all) => all.some((e) => e.text === "42"));
   });

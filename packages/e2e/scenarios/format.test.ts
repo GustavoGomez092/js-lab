@@ -30,7 +30,10 @@ describe("formatting", () => {
   test("format on run formats before a manual run when not typing (ED-23)", async () => {
     app = await launchApp({ settings: { version: 2, run: { autoRun: false, formatOnRun: true } } });
     await app.type("1+1");
-    await Bun.sleep(1200);
+    await codeIs("1+1");
+    // Semantically required (FA-m10): format-on-run skips formatting within 1 s of the last keystroke
+    // (apps/ui/src/format/formatter.ts). Wait well past that window, so a slow machine can't run unformatted code.
+    await Bun.sleep(2_000);
     await app.key("cmd+r");
     await codeIs("1 + 1;\n");
     await app.waitForOutput((all) => all.some((e) => e.text === "2"));

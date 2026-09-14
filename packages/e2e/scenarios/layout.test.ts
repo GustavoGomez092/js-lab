@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { activeTab, type LaunchedApp, launchApp, waitFor } from "../src";
+
+// biome-ignore lint/suspicious/noExplicitAny: persisted JSON is read field by field
+const readJson = async (path: string): Promise<Record<string, any>> => JSON.parse(await readFile(path, "utf8"));
 
 let apps: LaunchedApp[] = [];
 afterEach(async () => {
@@ -34,7 +39,24 @@ describe("layout", () => {
     expect(toggled.toolbar).toBe(true);
     expect(activeTab(await app.state()).layout).toMatchObject({ orientation: "vertical", outputVisible: false });
     await app.screenshot("layout-toggled");
-    await Bun.sleep(700);
+    // FA-m10: wait until the toggles are on disk (settings.json for the regions, session.json for the tab layout)
+    // instead of sleeping past the UI's 500 ms debounce.
+    await waitFor(
+      async () => {
+        const view = (await readJson(join(app.userData, "settings.json"))).view;
+        const session = await readJson(join(app.userData, "session.json"));
+        const layout = session.tabs?.[session.activeTabId]?.layout;
+        return (
+          (view?.statusBar === false &&
+            view?.activityBar === false &&
+            view?.sideBar === true &&
+            layout?.orientation === "vertical" &&
+            layout?.outputVisible === false) ||
+          null
+        );
+      },
+      { timeoutMs: 10_000, message: "the layout toggles were never persisted" },
+    );
     await app.quit();
 
     const again = await launchApp({ userData: app.userData });

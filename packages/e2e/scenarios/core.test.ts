@@ -45,7 +45,14 @@ describe("M1 core", () => {
     await app.command("run.stop");
     expect(await app.waitForRunState(["stopped"])).toBe("stopped");
     const afterStop = activeTab(await app.state()).entryCount;
+    // The resumed code would log from about 400 ms after the run started, every 50 ms, so this window is what the
+    // negative check is about. FA-m10 sentinel: a status bar toggle is answered by Main on the same channel as run
+    // events, so once it has applied, every event Main sent during the window has reached the UI too.
     await Bun.sleep(1000);
+    await app.command("view.toggleStatusBar");
+    await waitFor(async () => ((await app.state()).ui.regions as Record<string, boolean>).statusBar === false || null, {
+      message: "the status bar sentinel never applied",
+    });
     expect(activeTab(await app.state()).entryCount).toBe(afterStop);
 
     // Final review I3: a child process spawned by user code dies with its runner.
@@ -95,7 +102,13 @@ describe("M1 core", () => {
     const state = await second.state();
     expect(state.ui.safeMode).toEqual({ active: true, reason: "crashLoop" });
     await second.type("1 + 1");
-    await Bun.sleep(1500);
+    // FA-m10: wait until the edit has armed auto-run (which Safe Mode must then refuse), then for the auto-run delay
+    // from settings plus a margin; never less than the 1.5 s this check used before.
+    const armed = await waitFor(async () => {
+      const tab = activeTab(await second.state());
+      return tab.code === "1 + 1" && tab.autoRunArmed ? await second.state() : null;
+    });
+    await Bun.sleep(Math.max(1_500, Number(armed.ui.settings?.run?.autoRunDelayMs ?? 300) + 1_200));
     expect((await second.output()).some((e) => e.kind === "result")).toBe(false);
     await second.command("run.start");
     await second.waitForOutput((all) => all.some((e) => e.kind === "result" && e.text === "2"));

@@ -60,7 +60,12 @@ describe("keybindings", () => {
     await app.type("40 + 2");
     await app.waitForOutput((all) => all.length === 1);
     await app.key("cmd+k");
-    await Bun.sleep(300);
+    // FA-m10 sentinel: ⌘= goes through the same key dispatch right after ⌘K and has its own visible effect (zoom,
+    // answered by Main). Once it has applied, ⌘K has been handled too, so the unchanged count is a real negative check.
+    await app.key("cmd+=");
+    await waitFor(async () => ((await app.state()).ui.settings?.appearance?.uiScale ?? 1) > 1 || null, {
+      message: "the ⌘= sentinel never applied",
+    });
     expect(activeTab(await app.state()).entryCount).toBe(1);
     await app.key("cmd+shift+k");
     await waitFor(async () => activeTab(await app.state()).entryCount === 0 || null);

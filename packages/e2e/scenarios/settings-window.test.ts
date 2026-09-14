@@ -77,4 +77,15 @@ describe("Settings window", () => {
     await waitFor(async () => (await current().state()).ui.settings?.editor.lineWrap === true || null);
     await waitFor(async () => (await current().settingsState())?.settings?.editor.lineWrap === true || null);
   });
+
+  test("the NPM and Build tabs show their fields and apply live (ST-01, LB-05)", async () => {
+    app = await launchApp();
+    await openSettings();
+    await current().settingsCommand("settings.tab", { tab: "build" });
+    await waitFor(async () => (await current().settingsState())?.fieldCount === 7 || null);
+    await current().settingsCommand("settings.set", { key: "build.pipelineOperator", value: true });
+    await waitFor(async () => (await current().state()).ui.settings?.build?.pipelineOperator === true || null);
+    await current().settingsCommand("settings.tab", { tab: "npm" });
+    await waitFor(async () => (await current().settingsState())?.fieldCount === 2 || null);
+  });
 });

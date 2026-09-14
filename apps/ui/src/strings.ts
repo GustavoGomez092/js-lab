@@ -180,6 +180,8 @@ export const strings = {
       editor: "Editor",
       formatting: "Formatting",
       appearance: "Appearance",
+      npm: "NPM",
+      build: "Build",
       advanced: "Advanced",
     },
     groups: {
@@ -305,6 +307,33 @@ export const strings = {
         label: "Update Channel",
         help: "Stable releases, or canary builds with the newest changes.",
       },
+      "npm.allowInstallScripts": {
+        label: "Allow Install Scripts",
+        help: "Run packages' install scripts. Each package is added to trustedDependencies; scripts run with your permissions.",
+      },
+      "npm.autoInstallTypes": {
+        label: "Install Types Automatically",
+        help: "Install @types/<package> automatically when an installed package has no types of its own.",
+      },
+      "build.decorators": {
+        label: "Decorators",
+        help: "Decorator syntax: 2023-11 (the standard), Legacy (TypeScript experimentalDecorators) or None.",
+      },
+      "build.pipelineOperator": { label: "Pipeline Operator", help: "Hack-style |> with % as the topic token." },
+      "build.doExpressions": { label: "Do Expressions", help: "do { … } blocks that produce a value." },
+      "build.throwExpressions": {
+        label: "Throw Expressions",
+        help: "throw as an expression, for example value ?? throw new Error().",
+      },
+      "build.functionSent": { label: "function.sent", help: "The value last passed to a generator's next()." },
+      "build.regexpModifiers": {
+        label: "RegExp Modifiers",
+        help: "Inline flags such as (?i:a) in regular expressions.",
+      },
+      "build.optionalChainingAssign": {
+        label: "Optional Chaining Assignment",
+        help: "a?.b = c assigns only when a is not null or undefined.",
+      },
     } as Record<string, { label: string; help: string }>,
     options: {
       runtime: { "browser-node": "Browser & Node APIs", bun: "Bun", browser: "Browser" },
@@ -315,6 +344,7 @@ export const strings = {
       arrowParens: { always: "Always", avoid: "Avoid" },
       layout: { horizontal: "Horizontal", vertical: "Vertical" },
       channel: { stable: "Stable", canary: "Canary" },
+      decorators: { none: "None", "2023-11": "2023-11 (standard)", legacy: "Legacy (experimentalDecorators)" },
     },
   },
 } as const;

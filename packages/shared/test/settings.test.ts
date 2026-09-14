@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildSettings,
   defaultSettings,
   effectiveRuntime,
   isRuntimeAvailable,
@@ -73,12 +74,13 @@ describe("settings", () => {
       loopProtectionMaxIterations: 2000,
       maxEntries: 10_000,
       unresponsiveTimeoutMs: 3000,
+      build: buildSettings(defaultSettings()),
     });
   });
 
   test("the M2 sections match spec §8 defaults", () => {
     const s = defaultSettings();
-    expect(s.version).toBe(2);
+    expect(s.version).toBe(3);
     expect(s.run.formatOnRun).toBe(false);
     expect(s.tabs).toEqual({ confirmClose: false });
     expect(s.app).toEqual({ uiLanguage: "system" });
@@ -144,5 +146,21 @@ describe("settings", () => {
     expect(readSetting(defaultSettings(), "editor.nope")).toBeUndefined();
     expect(settingPatch("view.statusBar", false)).toEqual({ view: { statusBar: false } });
     expect(mergeSettings(defaultSettings(), settingPatch("view.statusBar", false)).view.statusBar).toBe(false);
+  });
+
+  test("v3 adds the NPM and Build sections with the spec §8 defaults", () => {
+    const s = defaultSettings();
+    expect(s.npm).toEqual({ allowInstallScripts: false, autoInstallTypes: false });
+    expect(s.build).toEqual({
+      decorators: "2023-11",
+      pipelineOperator: false,
+      doExpressions: false,
+      throwExpressions: false,
+      functionSent: false,
+      regexpModifiers: true,
+      optionalChainingAssign: true,
+    });
+    expect(settingsSchema.parse({ build: { decorators: "stage-1" } }).build.decorators).toBe("2023-11");
+    expect(runnerSettings(s).build).toEqual(buildSettings(s));
   });
 });

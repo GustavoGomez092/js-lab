@@ -17,6 +17,8 @@ export const SETTINGS_MIGRATIONS: Record<number, (raw: RawSettings) => RawSettin
     }
     return next;
   },
+  // v2 (M2) → v3 (M3): the npm and build sections are filled by the schema's defaults; every v2 value is kept.
+  2: (raw) => ({ ...raw, version: 3 }),
 };
 
 export function migrateSettings(input: unknown): unknown {

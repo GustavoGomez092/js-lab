@@ -19,7 +19,7 @@ test("Copy Debug Log produces a redacted report and logs rotate under logs/ (ST-
   const report = JSON.parse(await waitFor(() => (existsSync(clip) ? readFileSync(clip, "utf8") : null)));
   expect(readFileSync(clip, "utf8")).not.toContain(homedir());
   expect(report).toMatchObject({ electrobunVersion: "2.0.1", arch: "arm64" });
-  expect(report.settings.version).toBe(2);
+  expect(report.settings.version).toBe(3);
   expect(Array.isArray(report.log)).toBe(true);
   expect(existsSync(join(app.userData, "logs", "main.log"))).toBe(true);
   await app.command("help.openLogsFolder");

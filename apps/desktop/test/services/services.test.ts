@@ -3,7 +3,14 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTab, defaultSession, defaultSettings, sessionSchema, settingsSchema } from "@jslab/shared";
+import {
+  createTab,
+  defaultSession,
+  defaultSettings,
+  SETTINGS_VERSION,
+  sessionSchema,
+  settingsSchema,
+} from "@jslab/shared";
 import {
   consumeSafeModeFlag,
   detectSafeMode,
@@ -61,7 +68,7 @@ describe("SettingsStore", () => {
     expect(store.recovered).toBe("none");
     expect(store.current.appearance).toMatchObject({ theme: "graphite", fontSize: 16 });
     expect(store.current.run.autoRun).toBe(false);
-    expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).version).toBe(2);
+    expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).version).toBe(SETTINGS_VERSION);
   });
 
   test("reset restores defaults, persists them and notifies listeners", async () => {

@@ -1,6 +1,6 @@
 import { getTheme } from "@jslab/themes";
 import type * as Monaco from "monaco-editor";
-import { useEffect, useRef } from "react";
+import { type RefObject, useEffect, useRef } from "react";
 import type { MainApi } from "../api";
 import type { AppState, AppStore } from "../state/store";
 import { setEditorHandle } from "./editor-handle";
@@ -8,7 +8,7 @@ import { type EditorOptions, editorOptionsFor } from "./editor-options";
 import { createMarkerTracker, type EditorMarker, markersFor } from "./markers";
 import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
-import { installPasteGuard } from "./paste-guard";
+import { installPasteGuard, pasteInto } from "./paste-guard";
 import { createTabView } from "./tab-view";
 import { defineClipboardRegister, startVim, type VimController } from "./vim";
 import { createVimStatusNode } from "./vim-status";
@@ -17,6 +17,8 @@ interface EditorProps {
   store: AppStore;
   api: Pick<MainApi, "saveViewState">;
   onLargePaste?(bytes: number): Promise<boolean>;
+  /** The React-owned `.vim-slot` before the status bar, where the Vim status node goes (T16-rr1). */
+  vimSlot?: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -30,8 +32,12 @@ function toMonacoOptions(options: EditorOptions): Omit<Monaco.editor.IEditorOpti
   return { ...options, hover: { enabled: options.hover.enabled ? "on" : "off", delay: options.hover.delay } };
 }
 
-export function Editor({ store, api, onLargePaste }: EditorProps) {
+export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
+  // FB-m10: the paste confirm is read through a ref, so a new callback identity (for example `flows` rebuilt after a
+  // formatter change) never disposes and recreates Monaco, which would lose undo history and Vim state.
+  const largePaste = useRef(onLargePaste);
+  largePaste.current = onLargePaste;
 
   useEffect(() => {
     const monaco = setupMonaco();
@@ -62,13 +68,12 @@ export function Editor({ store, api, onLargePaste }: EditorProps) {
     let vim: VimController | null = null;
     // The status node is visible while Vim is on (review I-1): monaco-vim focuses an `<input>` inside it for
     // `:`/`/`, so it's created and removed with Vim itself rather than kept mounted (and hidden) permanently.
-    // It's anchored from the editor's own container so createVimStatusNode can find `.app`/`.status-bar` and
-    // insert it as a normal flex child that reserves its own layout space (review N-1, fix round 2).
+    // It goes into App's React-owned `.vim-slot` before the status bar (T16-rr1).
     let vimStatus: HTMLDivElement | null = null;
     const syncVim = (enabled: boolean) => {
       if (enabled && !vim) {
         defineClipboardRegister();
-        vimStatus = createVimStatusNode(editorContainer);
+        vimStatus = createVimStatusNode(vimSlot?.current ?? null);
         vim = startVim(editor, vimStatus, (mode) => store.getState().setVimMode(mode));
       } else if (!enabled && vim) {
         vim.dispose();
@@ -241,13 +246,13 @@ export function Editor({ store, api, onLargePaste }: EditorProps) {
       },
     });
 
+    // T18-m-paste: the model attached at paste time is captured, and the text goes in only if it is still attached
+    // after the confirm, into every selection, as one undo step.
     const removePasteGuard = installPasteGuard(
       editorContainer,
-      (bytes) => onLargePaste?.(bytes) ?? Promise.resolve(true),
-      (text) => {
-        const selection = editor.getSelection();
-        if (selection) editor.executeEdits("paste", [{ range: selection, text }]);
-      },
+      (bytes) => largePaste.current?.(bytes) ?? Promise.resolve(true),
+      () => editor.getModel(),
+      (text, model) => void pasteInto(editor, model, text),
     );
 
     const unsubscribe = store.subscribe((state, previous) => {
@@ -296,7 +301,7 @@ export function Editor({ store, api, onLargePaste }: EditorProps) {
       editor.dispose();
       models.disposeAll();
     };
-  }, [store, api, onLargePaste]);
+  }, [store, api, vimSlot]);
 
   return <div ref={host} className="editor" data-testid="editor" />;
 }

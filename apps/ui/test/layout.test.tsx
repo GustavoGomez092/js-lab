@@ -101,6 +101,11 @@ describe("layout", () => {
     expect(store.getState().tab?.layout).toMatchObject({ outputVisible: false, orientation: "vertical" });
     commands.get("view.toggleLayout")?.run();
     expect(store.getState().tab?.layout.orientation).toBe("horizontal");
+    // T16-m1: view.layoutHorizontal sets the orientation rather than toggling it.
+    commands.get("view.layoutVertical")?.run();
+    commands.get("view.layoutHorizontal")?.run();
+    commands.get("view.layoutHorizontal")?.run();
+    expect(store.getState().tab?.layout.orientation).toBe("horizontal");
     expect(api.updateSettings).toHaveBeenCalledTimes(updateSettingsCallsBefore);
   });
 });

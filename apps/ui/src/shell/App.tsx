@@ -81,6 +81,8 @@ export function App({
   const tabCount = useStore(store, (s) => s.tabOrder.length);
 
   const lastTypedAt = useRef(0);
+  // T16-rr1: the React-owned slot the Editor puts the Vim status node into, always rendered before the status bar.
+  const vimSlot = useRef<HTMLDivElement>(null);
   // I-1: startAutoRun's cancelPending, kept current by the effect below. A format's own edit (applied
   // through Monaco) can arm a pending auto-run for the very code the run we're about to start already
   // covers; start() cancels it once the format has settled, before that timer can fire a duplicate run.
@@ -434,10 +436,11 @@ export function App({
           secondVisible={outputVisible}
           onResize={(size) => store.getState().setEditorSize(size)}
           onReset={() => store.getState().resetEditorSize()}
-          first={<Editor store={store} api={api} onLargePaste={flows.confirmLargePaste} />}
+          first={<Editor store={store} api={api} onLargePaste={flows.confirmLargePaste} vimSlot={vimSlot} />}
           second={<OutputPanel store={store} api={api} runKeys={keycaps.run} />}
         />
       </div>
+      <div className="vim-slot" ref={vimSlot} />
       {settings.view.statusBar && (
         <StatusBar store={store} onToggleLayout={() => registry.execute("view.toggleLayout")} />
       )}

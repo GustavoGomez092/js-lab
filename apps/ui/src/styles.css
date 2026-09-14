@@ -425,8 +425,14 @@ button:disabled {
   color: inherit;
 }
 
-/* Vim mode indicator and `:`/`/` prompt (review I-1, fix round 1). A normal flex child of `.app`, inserted
-   directly before `.status-bar` (fix round 2, review N-1), so it reserves its own layout space instead of
+/* T16-rr1: React renders this slot directly before the status bar; the Editor puts the Vim status node inside it.
+   `display: contents` keeps that node a flex child of `.app`. */
+.vim-slot {
+  display: contents;
+}
+
+/* Vim mode indicator and `:`/`/` prompt (review I-1, fix round 1). A flex child of `.app` through `.vim-slot`,
+   just above the status bar (fix round 2, review N-1), so it reserves its own layout space instead of
    covering the editor/output with `position: fixed`. Never `.visually-hidden`: monaco-vim focuses a real
    `<input>` inside it. */
 .vim-status {

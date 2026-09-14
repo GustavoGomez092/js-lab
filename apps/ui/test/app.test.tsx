@@ -18,10 +18,12 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { type ComponentType, Profiler } from "react";
 import type { MainApi } from "../src/api";
 import { type EditorHandle, type OffsetEdit, setEditorHandle } from "../src/editor/editor-handle";
+import { createVimStatusNode } from "../src/editor/vim-status";
 import type { FormatOutcome } from "../src/format/format-core";
 import type { Formatter } from "../src/format/formatter";
 import { applyEdits } from "../src/format/line-diff";
 import * as OutputPanelModule from "../src/output/OutputPanel";
+import { ActivityBar } from "../src/shell/ActivityBar";
 import { runStateLabel } from "../src/shell/labels";
 import { type AppStore, createAppStore } from "../src/state/store";
 import { strings } from "../src/strings";
@@ -31,6 +33,10 @@ import { createFakeApi } from "./fake-api";
 // mock.module replaces a module for the whole `bun test` process, so keep the real panel (a plain const: import
 // bindings are live and would see the mock) and put it back afterwards for output-panel.test.tsx.
 const RealOutputPanel = OutputPanelModule.OutputPanel;
+// T19A-mock (parked to M3): the Editor mock is never restored. Restoring needs the real Editor module, which imports
+// Monaco and Vite `?worker` modules that can't load under `bun test`, and no ui test imports the real Editor, so the
+// mock can't leak into another file's assertions. Isolate this file or restore the mock once M3 adds a Monaco-capable
+// test setup.
 mock.module("../src/editor/Editor", () => ({ Editor: () => <div data-testid="editor" /> }));
 mock.module("../src/output/OutputPanel", () => ({ OutputPanel: () => <div data-testid="output" /> }));
 afterAll(() => {
@@ -557,6 +563,74 @@ describe("App shell", () => {
     // A new run id is accepted only in `transpiling` (state/output.ts); that state is busy, so Stop shows.
     await emit("run.state", { tabId: "t1", runId: "r1", state: "transpiling" });
     expect(document.querySelector(".toolbar .tb-btn.run .kbd")?.textContent).toBe("⇧⌘R");
+  });
+
+  // T16-rr1: the Vim status node lives in a React-owned slot before the status bar, so turning the status bar off
+  // and on again can't move the Vim prompt below it.
+  test("the Vim status slot stays directly before the status bar when the status bar remounts (T16-rr1)", async () => {
+    const { store, emit } = renderApp();
+    const slot = document.querySelector(".app > .vim-slot");
+    if (!slot) throw new Error("expected a .vim-slot in .app");
+    expect(slot.nextElementSibling?.classList.contains("status-bar")).toBe(true);
+    const node = createVimStatusNode(slot);
+    const settings = (patch: Parameters<typeof mergeSettings>[1]) => ({
+      settings: mergeSettings(store.getState().settings ?? defaultSettings(), patch),
+    });
+    await emit("settings.changed", settings({ view: { statusBar: false } }));
+    expect(document.querySelector(".status-bar")).toBeNull();
+    await emit("settings.changed", settings({ view: { statusBar: true } }));
+    expect(document.querySelector(".app > .vim-slot")).toBe(slot);
+    expect(node.parentElement).toBe(slot as HTMLElement);
+    expect(slot.nextElementSibling?.classList.contains("status-bar")).toBe(true);
+  });
+
+  // T16-m1-part: togglePanel opens the side bar on a panel, switches panels while open, and closes on the open one.
+  test("activity bar panels open, switch and close the side bar, and NPM stays disabled (T16-m1-part)", async () => {
+    const { store, api } = renderApp();
+    api.updateSettings.mockImplementation(async (patch: unknown) =>
+      mergeSettings(store.getState().settings ?? defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+    );
+    const click = (name: string) =>
+      act(async () => {
+        fireEvent.click(screen.getByRole("button", { name }));
+        await Bun.sleep(1);
+      });
+    const state = () => [
+      document.querySelector(".side-bar") !== null,
+      store.getState().sideBarPanel,
+      api.updateSettings.mock.calls.length,
+    ];
+    expect(state()).toEqual([false, "snippets", 0]);
+    await click(strings.shell.aiChat);
+    expect(state()).toEqual([true, "ai", 1]);
+    expect(screen.getByRole("button", { name: strings.shell.aiChat }).getAttribute("aria-pressed")).toBe("true");
+    await click(strings.shell.snippets);
+    expect(state()).toEqual([true, "snippets", 1]);
+    await click(strings.shell.snippets);
+    expect(state()).toEqual([false, "snippets", 2]);
+    const npm = screen.getByRole("button", { name: strings.shell.npm }) as HTMLButtonElement;
+    expect([npm.disabled, npm.title]).toEqual([true, strings.shell.laterMilestone]);
+    expect((screen.getByRole("button", { name: strings.shell.settings }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("the activity bar disables Settings, with a later-version tooltip, when it can't open (T16-m1-part)", () => {
+    render(
+      <ActivityBar
+        busy={false}
+        sideBarOpen={false}
+        panel="snippets"
+        canOpenSettings={false}
+        runKeys="⌘R"
+        stopKeys="⇧⌘R"
+        settingsKeys="⌘,"
+        onRun={() => {}}
+        onStop={() => {}}
+        onPanel={() => {}}
+        onSettings={() => {}}
+      />,
+    );
+    const settings = screen.getByRole("button", { name: strings.shell.settings }) as HTMLButtonElement;
+    expect([settings.disabled, settings.title]).toEqual([true, strings.shell.laterMilestone]);
   });
 
   test("⌘, asks Main to open the Settings window", () => {

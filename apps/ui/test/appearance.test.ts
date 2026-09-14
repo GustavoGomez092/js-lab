@@ -183,54 +183,25 @@ describe("vim status node", () => {
   // find module 'monaco-editor/esm/vs/editor/editor.api'"). So the node creation lives in its own module,
   // editor/vim-status.ts, with no monaco-vim dependency, and this test pins that helper instead.
   test("is visible (not `.visually-hidden`), carries `.vim-status`, and is removable", () => {
-    const node = createVimStatusNode(document.body);
+    const node = createVimStatusNode(null);
     expect(document.body.contains(node)).toBe(true);
     expect(node.classList.contains("vim-status")).toBe(true);
     expect(node.classList.contains("visually-hidden")).toBe(false);
     node.remove();
     expect(document.body.contains(node)).toBe(false);
 
-    // Fix round 2 (review N-1): a `position: fixed` bar covered the last 28px of the editor/output while Vim
-    // was on, because it sat outside `.app`'s flex column. Inside a real `.app`/`.status-bar` pair, the node
-    // must become a normal flex sibling placed immediately before `.status-bar` (option a), so `.app-main`
-    // shrinks to make room instead of being covered.
-    const app = document.createElement("div");
-    app.className = "app";
-    const appMain = document.createElement("div");
-    appMain.className = "app-main";
-    const statusBar = document.createElement("footer");
-    statusBar.className = "status-bar";
-    app.append(appMain, statusBar);
-    document.body.appendChild(app);
-
-    const appNode = createVimStatusNode(appMain);
-    expect(appNode.classList.contains("vim-status")).toBe(true);
-    expect(appNode.classList.contains("visually-hidden")).toBe(false);
-    expect(appNode.parentElement).toBe(app);
-    expect(appNode.nextElementSibling).toBe(statusBar);
-    appNode.remove();
-    expect(app.contains(appNode)).toBe(false);
-    // The reservation is entirely the node's own flex-box footprint (no separate class/property to clear):
-    // removing it hands the space straight back to `.app-main`.
-    expect(app.children.length).toBe(2);
-
-    app.remove();
-
-    // Fix round 1 (review I-1): with `view.statusBar: false` there's no `.status-bar` at all. The node must
-    // still land inside `.app`, as its last flex child, rather than falling back to `document.body` -- the
-    // real fallback is invisible (`.app { height: 100% }` inside an `overflow: hidden` root), so a monaco-vim
-    // `:`/`/` prompt focused there would take keystrokes the user can never see.
-    const appNoStatusBar = document.createElement("div");
-    appNoStatusBar.className = "app";
-    const appMainOnly = document.createElement("div");
-    appMainOnly.className = "app-main";
-    appNoStatusBar.append(appMainOnly);
-    document.body.appendChild(appNoStatusBar);
-
-    const noStatusBarNode = createVimStatusNode(appMainOnly);
-    expect(noStatusBarNode.parentElement).toBe(appNoStatusBar);
-    expect(appNoStatusBar.lastElementChild).toBe(noStatusBarNode);
-    noStatusBarNode.remove();
-    appNoStatusBar.remove();
+    // T16-rr1 (replaces fix round 2's hand insertion before `.status-bar`): the node goes into the React-owned
+    // `.vim-slot`, which App renders directly before the status bar (`display: contents`, so the node is still a
+    // flex child of `.app` and reserves its own row). App-level placement across a status bar remount is covered in
+    // app.test.tsx.
+    const slot = document.createElement("div");
+    slot.className = "vim-slot";
+    document.body.appendChild(slot);
+    const slotted = createVimStatusNode(slot);
+    expect(slotted.parentElement).toBe(slot);
+    expect(slotted.classList.contains("visually-hidden")).toBe(false);
+    slotted.remove();
+    expect(slot.children.length).toBe(0);
+    slot.remove();
   });
 });

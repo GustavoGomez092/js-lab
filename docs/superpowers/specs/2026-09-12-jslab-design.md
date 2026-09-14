@@ -59,7 +59,7 @@ JSLab is free and MIT licensed. Every feature RunJS keeps behind a paid license 
 
 - Windows and Linux builds. The code stays cross-platform, but they aren't shipped or QA'd.
 - Intel Macs. Electrobun doesn't publish an x64 build.
-- Multi-file projects, a file tree, debugger or breakpoints, run selection, a command palette, watching files for external changes, and a web playground. All of these are on the post-v1 roadmap (§27).
+- Multi-file projects, a file tree, debugger or breakpoints, run selection, watching files for external changes, and a web playground. All of these are on the post-v1 roadmap (§27).
 - Node.js or Deno as a runtime. The adapter interface exists, but only Bun ships.
 - A URL scheme or deep links. RunJS's deep link was a remote-code-execution hole (RunJS #500).
 - Telemetry or crash-reporting services.
@@ -229,15 +229,18 @@ session.json           tabs, order, layout, window state (+ .bak)
 keybindings.json       user keybinding overrides
 env.json               environment variables (file mode 0600)
 snippets.json          snippet library
-buffers/<tabId>.<ext>  auto-saved tab contents
+buffers/<tabId>.<ext>  auto-saved tab contents (closed tabs: buffers/closed/)
 themes/                user-imported themes (*.jslab-theme.json)
 packages/              shared npm project: package.json, bun.lock, .npmrc, node_modules/
 npm-home/              empty HOME for npm operations; never holds an .npmrc (§11.3)
 runs/<tabId>/          generated entry files + source maps for the current run
-cache/                 transform + browser vendor bundle caches
+cache/                 transform + browser vendor bundle caches; system-fonts.json (systemFonts adapter)
 ai/conversation.json   current AI conversation
 jslab.sock             CLI socket (0600)
 run.lock               present while a run is active; used for crash-loop detection
+safe-mode.next         written by Help → Restart in Safe Mode; consumed at the next launch
+e2e-screenshots/       JSLAB_E2E=1 launches only: window screenshots
+e2e-*.json, e2e-*.txt  JSLAB_E2E=1 launches only: scripted dialog answers, clipboard, opened paths and external links
 logs/                  main.log (rotating, 5 × 5 MB)
 ```
 
@@ -439,6 +442,8 @@ The encoding is JSON-safe and tagged. The full type is in Appendix B. Rules:
 | String preview | 10,000 chars; full text through a handle, up to 1 MB |
 | Per-event encoded size | 256 KB; beyond that, the root becomes a handle with a preview |
 
+**Text bounds (M2, R-M2-T19B-1/2):** a single stdout/stderr write larger than about 256 KB is shown truncated, ending with `…` and the number of bytes not shown. Error messages are clipped at 16 KB and error names at 1 KB, each ending with `…`.
+
 Special cases:
 - **Getters:** own accessors on plain objects and class prototypes are shown as `(...)` and evaluated on expand. The exception is the native side-effect-free getter allowlist (`Map.size`, `ArrayBuffer.byteLength`, `URL.*`, `Response.status`, …), which is evaluated eagerly.
 - **Promises:**
@@ -556,7 +561,7 @@ Special cases:
   - Any logpoint change triggers Auto Run.
 - **Output hover link.** Hovering an output entry highlights its source line with a line decoration.
 - **Inline error decoration** marks the throwing line (§5.11).
-- **Vim:** `monaco-vim` when `editor.vimKeys` is on; the mode shows in the status bar. `Cmd+R` runs in every Vim mode (fixes RunJS #652). The Vim clipboard register `"+` maps to the system clipboard.
+- **Vim:** `monaco-vim` when `editor.vimKeys` is on; the mode shows in the status bar. `Cmd+R` runs in every Vim mode (fixes RunJS #652). The Vim clipboard register `"+` maps to the system clipboard. Writes to `"+` go through the same clipboard path as Output → Copy All (M2, R-M2-PF3).
 - **Pastes over 5 MB** show a confirmation: "Pasting 12.4 MB may make JSLab slow. Continue?"
 - **Hover delay** is set by `editor.hoverDelayMs`, default 400.
 - `F1` shows hover info at the cursor, and `Cmd+F1` shows the diagnostic at the cursor. Monaco's F1 command palette is disabled in v1.
@@ -577,6 +582,7 @@ Special cases:
 - **Command registry.** Every action is a `CommandId`, e.g. `run.start` or `tab.reopenClosed`, with a handler, a `when` context (`editorFocus`, `outputFocus`, `vimNormal`, …), and a default binding.
 - **One resolver in the UI owns keyboard dispatch.** Native menu items dispatch the same `CommandId` through the `menu.command` message.
 - **User overrides** are stored in `keybindings.json` as `[{ "key": "cmd+shift+enter", "command": "run.start", "when": "editorFocus" }, { "key": "cmd+k", "command": "-output.clear" }]`. The format is VS Code-style; a leading `-` removes a binding.
+- **Command palette** (⌘⇧P): a context-sensitive list of every command, grouped by category, with match highlighting, inline state descriptions and keycaps. It was pulled into v1 by the M2 UI decision ("Graphite with a spice of Daylight Rail").
 - **Settings → Keybindings:**
   - A searchable table: Command, Keybinding, When, Source (Default/User).
   - A key-capture editor that warns on conflicts.
@@ -649,26 +655,20 @@ Special cases:
 - **Activity bar** (toggle `view.activityBar`): Run, Stop, Snippets, NPM Packages, AI Chat; Settings at the bottom. It shows the run-state badge.
 - **Side bar** (toggle `view.sideBar`): hosts the AI Chat or Snippets panel. Resizable, 240–600 px.
 - **Tab bar:** hidden when there's one tab and `view.tabBarForSingleTab` is off.
+- **Toolbar row:** the title-bar row (38 px, the window drag region) holds the traffic lights, the tabs, and on the right the Auto Run toggle and the Run/Stop button.
 - **Editor/output split:**
   - Horizontal (side by side, default) or vertical (stacked).
-  - The divider is draggable; the default is 55/45, stored per tab.
+  - The divider is draggable; the default is 55/45, stored per tab. Double-clicking the divider resets the split to 50/50.
   - Status bar "Split" toggles the orientation, and View → Output toggles the output area.
 - **Output area tiles:** Console and Web View. Tiles are arranged by dragging their headers (stacked or side by side, stored per tab). The Web View tile is unavailable in the `bun` runtime.
-- **Status bar** (toggle `view.statusBar`), left to right:
-  - runtime selector
-  - language selector
-  - Web View toggle
-  - Split orientation toggle
-  - WD chip (click → change/clear; tooltip shows the full path)
-  - run state
-  - Safe Mode badge
-  - Vim mode
-  - cursor position
+- **Status bar** (toggle `view.statusBar`, 28 px):
+  - Left: run state (dot and label), Safe Mode badge, status message.
+  - Right: runtime selector, language selector, Web View toggle (M4), Split orientation toggle, WD chip (M3; click → change/clear; tooltip shows the full path), Vim mode, cursor position.
 
 ### 7.2 Output panel
 
 - **List:** virtualized (`@tanstack/react-virtual`). While scrolled to the bottom it auto-scrolls to the newest entry; scrolling up pins the position.
-- **Entry anatomy:** level icon (warn/error styled), the value renderer, and an `L<n>` badge on the right. Clicking the badge moves the caret to that line and focuses the editor; hovering highlights the editor line.
+- **Entry anatomy:** a 3 px level stripe (result, log, info, warn or error; only error rows are tinted), the value renderer, and a right-edge `:n` line anchor whose accessible name is `L<n>`. Clicking the anchor moves the caret to that line and focuses the editor; hovering the entry highlights the editor line.
 - **Value tree:**
   - Expandable nodes, with "Expand all" in the entry menu.
   - Nested objects and `[[Prototype]]` start collapsed.
@@ -679,6 +679,8 @@ Special cases:
 - **Panel context menu:** Copy (when text is selected), Copy All, Clear.
 - **Syntax highlighting of values** uses theme tokens and is controlled by `output.highlighting`, default on.
 - **Line-number badges:** `output.showLineNumbers`, default on.
+- **Filter chips** above the list: All, Results, Logs, Errors.
+- **Copy All is filtered (M2, R-M2-T19A-1):** Copy All copies the entries visible under the current filter chip, not the whole output. This intentionally changes the M1 behavior, which copied every entry.
 
 ### 7.3 Tabs
 
@@ -694,7 +696,7 @@ Special cases:
 - **Confirm Close** (`tabs.confirmClose`) asks before closing any tab. Separately, a saved file with changes always prompts "Save changes to x.ts?" with Save, Don't Save, and Cancel.
 - Tabs reorder by dragging, and a saved-file tab's tooltip shows the full path.
 - **Closing the last tab** opens a fresh empty tab. `Cmd+W` on a single empty tab closes the window; the app stays in the Dock, and clicking the Dock icon reopens it.
-- **Dropped files** open in new tabs, one per file, rejecting non-text or files over 5 MB (after confirmation). A dropped folder sets the current tab's WD.
+- **Dropped files** open in new tabs, one per file. Non-text files and files over 50 MB are rejected, and files over 5 MB open only after confirmation. A dropped folder sets the current tab's WD.
 
 ### 7.4 Application menu
 
@@ -710,7 +712,9 @@ Menu items dispatch `CommandId`s. Items without a native accelerator show their 
 - **Window:** Minimize · Zoom · Bring All to Front
 - **Help:** Documentation · Bun vs Node Differences · What's New · Report Issue · Copy Debug Log · Open Logs Folder · Restart in Safe Mode
 
-The Edit menu uses Electrobun roles (`undo`, `redo`, `cut`, `copy`, `paste`, `selectAll`) so clipboard shortcuts work in WKWebView.
+Each milestone adds the items whose features it ships; M2 ships File (New Tab, Open, Save, Save As, Reopen, Close Tab, Close Window), Edit, Actions (Run/Stop/Kill, Format, Runtime, Language), View, Themes, Window and Help (Copy Debug Log, Open Logs Folder, Restart in Safe Mode).
+
+The Edit menu uses Electrobun roles (`undo`, `redo`, `cut`, `copy`, `paste`, `selectAll`) so clipboard shortcuts work in WKWebView. The Edit menu has no `delete` role: Electrobun 2.0.1 gives that role the unmodified Delete key as its key equivalent, which takes Backspace away from Monaco. The JSLab menu has no Services item, because Electrobun 2.0.1's menu roles (`menuRoles.ts`) include no services role.
 
 **Show Transpiled Output** opens a read-only side tab with the latest Babel output for the current tab. It updates on each run, and a toggle hides the instrumentation calls.
 
@@ -727,6 +731,8 @@ The Edit menu uses Electrobun roles (`undo`, `redo`, `cut`, `copy`, `paste`, `se
 | About | Native-style modal: version, Bun version, Electrobun version, license, credits (open-source notices) |
 | What's New | Opens after an update with that release's notes (bundled Markdown) |
 | First run | A welcome tab with sample code showing Auto Log, `//?`, logpoints, fetch, and a React snippet |
+
+The Settings window buffers messages that arrive before its view subscribes (the latest 32 per message name), so an early message is never lost (M2, R-M2-T24-4).
 
 ---
 
@@ -769,9 +775,9 @@ The Settings window has these tabs: **General · Editor · Formatting · Appeara
 | Formatting | `prettier.bracketSpacing` | bool | `true` | |
 | Formatting | `prettier.bracketSameLine` | bool | `false` | |
 | Formatting | `prettier.arrowParens` | enum | `always` | `always`, `avoid` |
-| Appearance | `appearance.theme` | string | `dracula` | Theme id |
+| Appearance | `appearance.theme` | string | `graphite` | Theme id |
 | Appearance | `appearance.followSystem` | bool | `false` | Use the light/dark theme pair below |
-| Appearance | `appearance.lightTheme` / `darkTheme` | string | `github-light` / `dracula` | |
+| Appearance | `appearance.lightTheme` / `darkTheme` | string | `graphite-light` / `graphite` | |
 | Appearance | `appearance.font` | string | `JetBrains Mono` | Bundled or system font |
 | Appearance | `appearance.fontSize` | int 8–72 | `14` | Editor and output |
 | Appearance | `appearance.fontLigatures` | bool | `true` | |
@@ -828,14 +834,15 @@ The Settings window has these tabs: **General · Editor · Formatting · Appeara
 }
 ```
 
-UI colors are applied as CSS variables. The output value renderer uses the `output*` tokens.
+UI colors are applied as CSS variables. From M2 on, built-in themes are semantic token sets from `@jslab/themes` rather than the `ui` object sketched above: `bg.canvas`, `bg.chrome`, `bg.elevated`, `bg.hover`, `bg.selection`, `bg.activeRow`, `bg.errorRow`, `bg.lineHover`, `bg.lineHighlight`, `bg.accentMuted`, `bg.scrim`; `border.default`, `border.muted`, `border.accent`; `fg.default`, `fg.muted`, `fg.accent`, `fg.onAccent`, `fg.success`, `fg.warn`, `fg.error`, `fg.info`; `console.result`, `console.log`, `console.info`, `console.warn`, `console.error`; and `syntax.comment`, `syntax.keyword`, `syntax.string`, `syntax.number`, `syntax.type`, `syntax.function`. Each token is a CSS variable (`bg.canvas` → `--bg-canvas`), the Monaco theme is built from the same tokens, and every text token meets WCAG AA on each surface it is drawn on. The output value renderer uses the `console.*` and `syntax.*` tokens. The M5 VS Code importer and `*.jslab-theme.json` files map onto this token set.
 
 ### 9.2 Built-in themes
 
 All built-in themes are free. Each is built from a publicly licensed palette, and license notices are listed in About → Credits.
 
-- **Dark:** Dracula (default), One Dark, Monokai, Material Darker, Ayu Dark, Ayu Mirage, SynthWave '84, Shades of Purple, Nord, Night Owl, Catppuccin Mocha, GitHub Dark, Solarized Dark, Tomorrow Night
-- **Light:** GitHub Light, Solarized Light, Catppuccin Latte, Ayu Light, Visual Studio Light (a VS-style palette)
+- **Default pair:** Graphite (dark, default) and Graphite Light: JSLab's own semantic token palettes. Every text/background pair meets WCAG AA.
+- **Dark:** Graphite (default), Dracula, One Dark, Monokai, Material Darker, Ayu Dark, Ayu Mirage, SynthWave '84, Shades of Purple, Nord, Night Owl, Catppuccin Mocha, GitHub Dark, Solarized Dark, Tomorrow Night
+- **Light:** Graphite Light (default light theme), GitHub Light, Solarized Light, Catppuccin Latte, Ayu Light, Visual Studio Light (a VS-style palette)
 
 ### 9.3 VS Code theme importer
 
@@ -853,7 +860,7 @@ Invalid files produce a readable error.
 ### 9.4 Fonts
 
 - **Bundled** (OFL/Apache licensed): JetBrains Mono (default), Fira Code, DejaVu Sans Mono, Hack, Ubuntu Mono, Source Code Pro.
-- **System fonts** come from the `systemFonts` adapter, monospace first, then all. They're listed after a separator in the font picker.
+- **System fonts** come from the `systemFonts` adapter, monospace first, then all. They're listed after a separator in the font picker. A failed installed-font scan isn't retried for 10 minutes, and the Font picker says "Couldn't load installed fonts" (M2, R-M2-T24-6).
 - If a font fails to load, JSLab falls back to the default and shows a notice.
 
 ---
@@ -885,7 +892,7 @@ Invalid files produce a readable error.
 - **Save** writes to `filePath`, or runs Save As when the tab has none. Format on save applies first if enabled.
 - **Save As** uses the `saveDialog` adapter. The default name is the title plus the language extension, in the last-used folder.
 - **Encoding and line endings:** UTF-8, keeping the line endings detected on open.
-- **Files over 5 MB** show a confirmation before opening.
+- **Files over 5 MB** show a confirmation before opening, and files over 50 MB are refused. A tab's text is capped at 64 MB: above that, JSLab stops auto-saving and running the tab and says so in the status bar, so an edit is never dropped silently.
 - **File associations:** see §4.6. Opening a file from Finder (the `open-url` event with `file://`) opens it in a new tab.
 
 ### 10.3 Window behavior
@@ -1106,7 +1113,8 @@ jslab --version | --help
 - **If the app isn't running**, the CLI runs `open -b dev.jslab.app`, polls for the socket for up to 10 s, then sends the request. It never relies on process arguments, which avoids Electrobun #540.
 - **Paths are made absolute by the CLI** before sending.
 - **Code runs only when `--run` is passed.**
-- **E2E automation** (`JSLAB_E2E=1` at app launch only) adds `e2e.*` methods on the same socket (§22.3). They are never available in normal launches.
+- **E2E automation** (`JSLAB_E2E=1` at app launch only) adds `e2e.*` methods on the same socket (§22.3). They are never available in normal launches. The harness also uses `e2e.quit` and `e2e.reopen`. UI methods, `e2e.state` and `e2e.screenshot` accept `window: "main" | "settings"`.
+- **Reply queue (M2, R-M2-T2-1):** the `jslab.sock` server queues replies until the socket drains, so large replies arrive whole instead of being cut off.
 
 ---
 
@@ -1126,7 +1134,7 @@ jslab --version | --help
 
 | Area | Measure |
 |---|---|
-| UI webview | CSP: `default-src 'self' views:; script-src 'self' views: 'wasm-unsafe-eval'; worker-src 'self' views: blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'`. Navigation rules block every non-`views://` navigation; links open in the default browser through `Utils.openExternal`. |
+| UI webview | CSP: `default-src 'self' views:; script-src 'self' views: 'wasm-unsafe-eval'; worker-src 'self' views: blob:; style-src 'self' views: 'unsafe-inline'; img-src 'self' views: data: blob:; font-src 'self' views: data:; connect-src 'self' views: ws://127.0.0.1:* ws://localhost:*; base-uri 'self'; form-action 'none'`. The `views:` sources serve the bundled assets, remote (`https:`) images are not allowed, and `connect-src` allows Electrobun's local RPC WebSocket (see the risk register). The Settings window page uses the same policy. Navigation rules block every non-`views://` navigation; links open in the default browser through `Utils.openExternal`. |
 | RPC boundary | Every inbound payload is zod-validated in Main; path parameters are normalized; there is no generic "exec" or "read any file" endpoint for the UI. The file operations are open dialog, save to a user-chosen path, and read/write of a tab's own file path. |
 | Web runners | Separate partition per tab; a narrower RPC schema (`runner.*`, `nodeBridge.*` for `browser-node` only); no access to settings, secrets, or other tabs. |
 | User code | Runs with the user's OS permissions, like a terminal. JSLab guarantees process isolation and killability, not a sandbox. The docs say this plainly. |
@@ -1228,6 +1236,7 @@ jslab --version | --help
   - `e2e.type`, `e2e.key`, `e2e.command`, `e2e.state` (serialized UI store snapshot), `e2e.output`, `e2e.screenshot` (window capture through `screencapture -l <windowId>`).
 - Scenario suites map to the parity checklist: first run, typing → results, magic comments, logpoints, npm install + import, TS diagnostics visible, browser runtime renders DOM, Stop/Kill, safe launch after a forced hang, save/open, snippets, theme import, keybinding override, CLI open/run, Gist (fixture server).
 - Runs on CI on the macOS arm64 runner for every PR touching `apps/` (a smoke subset) and nightly (the full set).
+- From M2 on, every user-visible task adds scenarios under `packages/e2e/scenarios/`. They run locally against a dev build (`hutch run build:dev`, then `bun run e2e`) and against the packaged canary at each milestone exit (ruling R-GOAL-1).
 
 ### 22.4 Parity acceptance
 
@@ -1318,7 +1327,7 @@ Each milestone gets its own implementation plan in `docs/superpowers/plans/`, an
 1. Windows and Linux builds (signing, installers, WebView2/WebKitGTK QA, CLI transports)
 2. Run selection / current line / block (RunJS #235)
 3. Node.js and Deno runtime adapters (user-supplied binary paths)
-4. Command palette
+4. Command palette extensions (a Quick Open for files and snippets). The command palette itself ships in v1 (M2).
 5. Watching saved files for external changes (RunJS #724)
 6. Multi-file projects / side bar file tree
 7. Debugger (breakpoints, stepping) using the Bun inspector

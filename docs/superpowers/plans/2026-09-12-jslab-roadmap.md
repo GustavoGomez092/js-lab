@@ -31,7 +31,7 @@ These apply to every milestone plan:
 |---|---|---|
 | M0 Spikes | `2026-09-12-jslab-m0-spikes.md` | Done (report: `docs/spikes/2026-09-m0-report.md`) |
 | M1 Core scratchpad | `2026-09-12-jslab-m1-core-scratchpad.md` (rulings: `2026-09-12-jslab-m1-rulings.md`) | Done: 268 tests, lint/typecheck clean, dev and packaged canary boot verified by script; manual QA Q1–Q16 pending (`docs/qa/m1-checklist.md`) |
-| M2 Workspace | `2026-09-13-jslab-m2-workspace.md` | In progress |
+| M2 Workspace | `2026-09-13-jslab-m2-workspace.md` | Complete (manual QA items pending user) |
 | M3 Language & packages | to be written at M2 completion | Not started |
 | M4 Browser runtimes | to be written at M3 completion | Not started |
 | M5 Productivity & extras | to be written at M4 completion | Not started |
@@ -89,6 +89,7 @@ M5 depends on M3 because snippets autocomplete, AI context and the CLI all use t
   9. Help → Copy Debug Log, Open Logs Folder, Restart in Safe Mode; rotating logs with redaction.
 - **Parity rows:** EX-13, EX-23, EX-24, ED-01..ED-07, ED-15..ED-25, ED-27, OU-16, TF-01..TF-19, TF-21, ST-01..ST-07, ST-10, XT-05, XT-11.
 - **Exit:** E2E-style manual script covering tabs, files, settings and shortcuts passes.
+- **Delivered beyond the original list:** the E2E harness (pulled forward from M5 by ruling R-GOAL-1; M5's CLI reuses `jslab.sock`), the Graphite semantic themes and the command palette (UI decision "Graphite with a spice of Daylight Rail").
 
 ## M3: Language & packages
 
@@ -131,7 +132,7 @@ M5 depends on M3 because snippets autocomplete, AI context and the CLI all use t
   2. Snippets panel, completion provider, import/export.
   3. AI chat: provider adapters, streaming proxy, Keychain secrets, Explain Result.
   4. Gist: device flow, publish/update, open.
-  5. CLI: socket server, `jslab` binary, install/uninstall menu, E2E automation methods.
+  5. CLI: `jslab` binary and the socket `open` method on the existing `jslab.sock` server (M2), install/uninstall menu.
   6. VS Code theme importer.
   7. Keybindings settings UI.
   8. Show Transpiled Output, first-run welcome tab.

@@ -1,17 +1,48 @@
+/* Graphite shell. Colors come only from theme tokens (themes/apply.ts); the :root values below are the
+   Graphite fallbacks so the first paint, before JavaScript runs, is already the dark theme. */
 :root {
-  --bg: #21222c;
-  --bg-elevated: #282a36;
-  --fg: #f8f8f2;
-  --fg-muted: #6272a4;
-  --border: #191a21;
-  --accent: #bd93f9;
-  --danger: #ff5555;
-  --warning: #f1fa8c;
-  --selection: #44475a;
-  --string: #f1fa8c;
-  --number: #bd93f9;
-  --key: #8be9fd;
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --toolbar-height: 38px;
+  --tabbar-height: 34px;
+  --statusbar-height: 28px;
+  --activity-width: 48px;
+  --radius: 6px;
+
+  --bg-canvas: #1b1e23;
+  --bg-chrome: #16191d;
+  --bg-elevated: #20252d;
+  --bg-hover: #252b35;
+  --bg-selection: #2a3a5e;
+  --bg-activeRow: #243152;
+  --bg-errorRow: #2a1d21;
+  --bg-lineHover: #233049;
+  --bg-lineHighlight: #20252d;
+  --bg-accentMuted: #2a3a5e;
+  --bg-scrim: #0a0c0f;
+  --border-default: #262a31;
+  --border-muted: #22262d;
+  --border-accent: #6f9bff;
+  --fg-default: #d7dce3;
+  --fg-muted: #8a929d;
+  --fg-accent: #6f9bff;
+  --fg-onAccent: #e4ecff;
+  --fg-success: #5cc28a;
+  --fg-warn: #e5c07b;
+  --fg-error: #f07178;
+  --fg-info: #7fd1c7;
+  --console-result: #6f9bff;
+  --console-log: #8a93a0;
+  --console-info: #7fd1c7;
+  --console-warn: #e5c07b;
+  --console-error: #f07178;
+  --syntax-comment: #9198a1;
+  --syntax-keyword: #8fb4ff;
+  --syntax-string: #c3e88d;
+  --syntax-number: #f5a97f;
+  --syntax-type: #7fd1c7;
+  --syntax-function: #ffd580;
+
   color-scheme: dark;
 }
 
@@ -24,26 +55,39 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font:
-    13px / 1.4 -apple-system,
-    BlinkMacSystemFont,
-    sans-serif;
+  overflow: hidden;
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  font: 13px / 1.4 var(--ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
 }
 
 button {
-  font: inherit;
-  color: inherit;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius);
   cursor: pointer;
 }
 
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
 button:disabled {
-  opacity: 0.4;
+  color: var(--fg-muted);
   cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 1px;
 }
 
 .visually-hidden {
@@ -52,8 +96,10 @@ button:disabled {
   height: 1px;
   overflow: hidden;
   clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
+/* ---------- app frame ---------- */
 .app {
   display: flex;
   flex-direction: column;
@@ -66,25 +112,39 @@ button:disabled {
   min-height: 0;
 }
 
+/* ---------- activity bar (48px, Graphite) ---------- */
 .activity-bar {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  width: 40px;
-  padding: 6px 4px;
-  background: var(--border);
+  align-items: center;
+  gap: 6px;
+  width: var(--activity-width);
+  padding-top: 10px;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border-default);
 }
 
 .activity-bar button {
-  height: 32px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: var(--fg-muted);
+}
+
+.activity-bar button[aria-pressed="true"] {
+  color: var(--fg-onAccent);
+  background: var(--bg-hover);
+  box-shadow: inset 2px 0 0 var(--fg-accent);
 }
 
 .activity-spinner {
   width: 16px;
   height: 16px;
   margin: 4px auto;
-  border: 2px solid var(--fg-muted);
-  border-top-color: var(--accent);
+  border: 2px solid var(--border-default);
+  border-top-color: var(--fg-accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -95,6 +155,13 @@ button:disabled {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .activity-spinner {
+    animation: none;
+  }
+}
+
+/* ---------- editor / output split ---------- */
 .split {
   display: flex;
   flex: 1;
@@ -117,13 +184,38 @@ button:disabled {
 }
 
 .split-divider {
-  flex: 0 0 4px;
-  background: var(--border);
+  position: relative;
+  flex: 0 0 6px;
+  background: var(--bg-chrome);
+  border-inline: 1px solid var(--border-default);
   cursor: col-resize;
 }
 
+.split-divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 1px;
+  width: 2px;
+  height: 28px;
+  margin-top: -14px;
+  border-radius: 2px;
+  background: var(--border-default);
+}
+
 .split-vertical .split-divider {
+  border-inline: none;
+  border-block: 1px solid var(--border-default);
   cursor: row-resize;
+}
+
+.split-vertical .split-divider::after {
+  top: 1px;
+  left: 50%;
+  width: 28px;
+  height: 2px;
+  margin-top: 0;
+  margin-left: -14px;
 }
 
 .editor {
@@ -131,22 +223,24 @@ button:disabled {
 }
 
 .line-hover {
-  background: var(--selection);
+  background: var(--bg-lineHover);
 }
 
+/* ---------- output ---------- */
 .output {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-elevated);
+  background: var(--bg-canvas);
 }
 
 .output-toolbar {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border);
+  height: var(--tabbar-height);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-default);
 }
 
 .output-title {
@@ -163,12 +257,13 @@ button:disabled {
 .entry {
   display: flex;
   gap: 8px;
-  padding: 2px 8px;
-  border-bottom: 1px solid #ffffff08;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border-muted);
+  font: 12.5px / 19px var(--mono);
 }
 
 .entry-stale {
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .entry-body {
@@ -181,16 +276,17 @@ button:disabled {
 .entry-line {
   align-self: flex-start;
   color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .entry-console-warn {
-  background: #f1fa8c14;
+  color: var(--fg-warn);
 }
 
 .entry-console-error,
 .entry-error {
-  background: #ff555514;
-  color: var(--danger);
+  background: var(--bg-errorRow);
+  color: var(--fg-error);
 }
 
 .entry-frame {
@@ -216,21 +312,25 @@ button:disabled {
 .entry-table th,
 .entry-table td {
   padding: 1px 6px;
-  border: 1px solid var(--selection);
+  border: 1px solid var(--border-default);
 }
 
 .v-string {
-  color: var(--string);
+  color: var(--syntax-string);
 }
 
 .v-number,
 .v-bigint,
 .v-boolean {
-  color: var(--number);
+  color: var(--syntax-number);
 }
 
 .v-key {
-  color: var(--key);
+  color: var(--syntax-keyword);
+}
+
+.v-function {
+  color: var(--syntax-function);
 }
 
 .v-toggle {
@@ -239,62 +339,114 @@ button:disabled {
 }
 
 .v-children {
-  padding-left: 16px;
+  padding-left: 18px;
 }
 
 .v-hole,
-.v-expired {
+.v-expired,
+.v-null,
+.v-undefined {
   color: var(--fg-muted);
 }
 
 .output-truncated {
-  padding: 6px 8px;
-  color: var(--warning);
+  padding: 6px 12px;
+  color: var(--fg-warn);
 }
 
-.status-bar {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 2px 8px;
-  background: var(--border);
+/* ---------- as-built M1 value and output states (T16/T17 fix rounds) ---------- */
+.v-more {
+  margin-left: 6px;
+  padding: 0 4px;
+  color: var(--fg-accent);
+}
+
+.v-loading,
+.output-copy-status,
+.entry-internal {
   color: var(--fg-muted);
 }
 
+.v-error {
+  color: var(--fg-error);
+}
+
+/* ---------- status bar (28px) ---------- */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: var(--statusbar-height);
+  padding: 0 12px;
+  background: var(--bg-chrome);
+  border-top: 1px solid var(--border-default);
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
 .status-bar select {
-  color: inherit;
   background: transparent;
   border: none;
+  color: inherit;
 }
 
 .status-run {
   margin-left: auto;
 }
 
+/* ---------- banners and dialogs ---------- */
 .banner {
   display: block;
   padding: 6px 12px;
+  border-bottom: 1px solid var(--border-default);
 }
 
 .banner-warning {
-  background: #f1fa8c22;
-  color: var(--warning);
+  background: var(--bg-elevated);
+  color: var(--fg-warn);
+}
+
+/* Startup notices (Task 9, spec §20). */
+.notices {
+  display: flex;
+  flex-direction: column;
+}
+
+.banner-dismiss {
+  float: right;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: inherit;
 }
 
 .dialog-backdrop {
   position: fixed;
   inset: 0;
+  z-index: 50;
   display: grid;
   place-items: center;
-  background: #0008;
+  background: color-mix(in srgb, var(--bg-scrim) 55%, transparent);
 }
 
 .dialog {
-  max-width: 420px;
+  max-width: 440px;
   padding: 16px 20px;
   background: var(--bg-elevated);
-  border: 1px solid var(--selection);
-  border-radius: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow: 0 28px 70px -20px color-mix(in srgb, var(--bg-scrim) 85%, transparent);
+}
+
+.dialog h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.dialog p {
+  margin: 0 0 16px;
+  color: var(--fg-muted);
 }
 
 .dialog-actions {
@@ -305,10 +457,34 @@ button:disabled {
 
 .dialog-actions button {
   padding: 4px 12px;
-  border-color: var(--selection);
+  border-color: var(--border-default);
+}
+
+.dialog-actions .primary {
+  background: var(--bg-accentMuted);
+  color: var(--fg-onAccent);
 }
 
 .dialog-actions .danger {
-  background: var(--danger);
-  color: var(--bg);
+  background: var(--bg-errorRow);
+  color: var(--fg-error);
+}
+
+/* Startup failure (review finding: Task 9's failure screen had no styles). */
+.startup-failure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-default);
+  background: var(--bg-canvas);
+}
+
+.startup-failure button {
+  padding: 6px 16px;
+  border: 1px solid var(--border-default);
 }

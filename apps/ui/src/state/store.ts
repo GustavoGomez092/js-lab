@@ -49,6 +49,7 @@ export interface AppState {
   statusMessage: string | null;
   cursor: { line: number; column: number } | null;
   vimMode: string | null;
+  themeId: string;
 
   // Mirrors of the active tab, so M1 components keep reading a single tab.
   tab: TabState | null;
@@ -97,6 +98,7 @@ export interface AppState {
   setStatusMessage(message: string | null): void;
   setCursor(cursor: { line: number; column: number } | null): void;
   setVimMode(mode: string | null): void;
+  setThemeId(themeId: string): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -168,6 +170,7 @@ export function createAppStore() {
       statusMessage: null,
       cursor: null,
       vimMode: null,
+      themeId: "graphite",
       tab: null,
       code: "",
       autoRunArmed: false,
@@ -382,6 +385,10 @@ export function createAppStore() {
 
       setVimMode(vimMode) {
         set({ vimMode });
+      },
+
+      setThemeId(themeId) {
+        if (themeId !== get().themeId) set({ themeId });
       },
     };
   });

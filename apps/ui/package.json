@@ -6,6 +6,7 @@
   "dependencies": {
     "@jslab/rpc-schema": "workspace:*",
     "@jslab/shared": "workspace:*",
+    "@jslab/themes": "workspace:*",
     "@tanstack/react-virtual": "3.14.12",
     "monaco-editor": "0.56.0",
     "react": "19.3.0",

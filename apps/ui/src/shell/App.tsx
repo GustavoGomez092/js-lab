@@ -15,6 +15,8 @@ import { startAutoRun } from "../state/auto-run";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { createTabActions } from "../tabs/tab-actions";
+import { startThemeSync } from "../themes/apply";
+import { createThemeCommands } from "../themes/theme-commands";
 import { ActivityBar, SafeModeBanner, SplitPane, StartupNotices, StatusBar, UnresponsiveDialog } from "./parts";
 
 const UI_HEARTBEAT_MS = 2000;
@@ -49,6 +51,7 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
     created.register(
       ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle }),
       ...createEditorCommands(getEditorHandle),
+      ...createThemeCommands(store, api),
     );
     return created;
   }, [store, api, tabs, run]);
@@ -59,6 +62,15 @@ export function App({ store, api, e2e = false }: { store: AppStore; api: MainApi
   );
 
   useEffect(() => startAutoRun(store, () => run("auto")), [store, run]);
+
+  useEffect(
+    () =>
+      startThemeSync(store, {
+        root: document.documentElement,
+        media: typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null,
+      }),
+    [store],
+  );
 
   useEffect(() => {
     const unsubscribers = [

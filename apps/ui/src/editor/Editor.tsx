@@ -1,3 +1,4 @@
+import { getTheme } from "@jslab/themes";
 import type * as Monaco from "monaco-editor";
 import { useEffect, useRef } from "react";
 import type { MainApi } from "../api";
@@ -26,7 +27,7 @@ export function Editor({ store, api }: EditorProps) {
     );
     const editor = monaco.editor.create(host.current, {
       model: null,
-      theme: "jslab-dark",
+      theme: getTheme(initial.themeId).id,
       automaticLayout: true,
       fontFamily: `"${initial.settings.appearance.font}", ui-monospace, Menlo, monospace`,
       fontSize: initial.settings.appearance.fontSize,
@@ -37,6 +38,13 @@ export function Editor({ store, api }: EditorProps) {
       fixedOverflowWidgets: true,
       scrollBeyondLastLine: false,
     });
+
+    const applyMonacoTheme = (themeId: string) => {
+      const theme = getTheme(themeId);
+      monaco.editor.defineTheme(theme.id, theme.monaco as Monaco.editor.IStandaloneThemeData);
+      monaco.editor.setTheme(theme.id);
+    };
+    applyMonacoTheme(initial.themeId);
 
     let contentSubscription: Monaco.IDisposable | null = null;
     const hover = editor.createDecorationsCollection();
@@ -184,6 +192,7 @@ export function Editor({ store, api }: EditorProps) {
     });
 
     const unsubscribe = store.subscribe((state, previous) => {
+      if (state.themeId !== previous.themeId) applyMonacoTheme(state.themeId);
       if (
         state.activeTabId !== previous.activeTabId ||
         state.tabs !== previous.tabs ||

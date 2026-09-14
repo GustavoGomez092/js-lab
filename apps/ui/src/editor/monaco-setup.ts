@@ -43,12 +43,6 @@ export function setupMonaco(): typeof monaco {
     });
   }
 
-  monaco.editor.defineTheme("jslab-dark", {
-    base: "vs-dark",
-    inherit: true,
-    rules: [],
-    colors: { "editor.background": "#282A36", "editor.lineHighlightBackground": "#44475A55" },
-  });
   return monaco;
 }
 

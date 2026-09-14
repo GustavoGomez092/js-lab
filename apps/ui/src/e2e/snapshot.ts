@@ -37,6 +37,7 @@ export interface UiSnapshot {
   statusMessage: string | null;
   cursor: AppState["cursor"];
   notices: AppState["notices"];
+  themeId: string;
 }
 
 export interface OutputSnapshotEntry {
@@ -88,6 +89,7 @@ export function snapshotState(state: AppState): UiSnapshot {
     statusMessage: state.statusMessage,
     cursor: state.cursor,
     notices: state.notices,
+    themeId: state.themeId,
   };
 }
 

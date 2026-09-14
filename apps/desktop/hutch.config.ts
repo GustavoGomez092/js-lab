@@ -15,6 +15,8 @@ export default {
     // `bunx` is a separate real-Bun binary (not shadowed by Cottontail), so it works unchanged.
     "build:ui": "cd ../ui && bunx vite build",
     "build:bundles": bundles,
+    "build:dev":
+      "hutch electrobun prepare && hutch run build:ui && hutch run build:bundles && hutch electrobun build --env=dev",
     dev: "hutch electrobun prepare && hutch run build:ui && hutch run build:bundles && hutch electrobun dev",
     build:
       "hutch electrobun prepare && hutch run build:ui && hutch run build:bundles && hutch electrobun build --env=canary",

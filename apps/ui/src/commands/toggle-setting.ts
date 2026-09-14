@@ -1,13 +1,13 @@
-import type { SettingsUpdateParams } from "@jslab/rpc-schema";
-import { readSetting, type SettingKey, settingPatch } from "@jslab/shared";
+import type { SettingKey } from "@jslab/shared";
 import type { MainApi } from "../api";
 import type { AppStore } from "../state/store";
 import type { CommandSpec } from "./registry";
+import { writeSetting } from "./settings-writer";
 
 /**
- * A command that reads one boolean Settings field, flips it, and persists the patch through Main. Shared by
- * app-commands.ts's run/output toggles and view-commands.ts's view toggles, which were previously two copies
- * of the same read/negate/patch/updateSettings logic (fix round 1, review m-3).
+ * A command that flips one boolean Settings field and persists the patch through Main. Shared by app-commands.ts's
+ * run/output toggles and view-commands.ts's view toggles (fix round 1, review m-3). Rapid repeats each flip, and a
+ * late response never undoes a newer broadcast (FB-m6, settings-writer.ts).
  */
 export function toggleSettingCommand(
   id: CommandSpec["id"],
@@ -18,12 +18,7 @@ export function toggleSettingCommand(
 ): CommandSpec {
   return {
     id,
-    run: async () => {
-      const current = store.getState().settings;
-      if (!current) return;
-      const patch = settingPatch(key, !readSetting(current, key)) as SettingsUpdateParams["patch"];
-      store.getState().updateSettings(await api.updateSettings(patch));
-    },
+    run: () => writeSetting(store, api, key, (value) => !value),
     ...(description ? { description } : {}),
   };
 }

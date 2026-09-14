@@ -88,8 +88,15 @@ export function buildTheme(input: ThemeInput): ThemeDefinition {
     "syntax.number": p.number,
     "syntax.type": p.type,
     "syntax.function": p.fn,
+    // Derived below from the final error-row and line-hover colors, so overrides of either carry through.
+    "bg.errorRowHover": "",
     ...input.overrides,
   };
+  // FB-m7: a hovered error row was a CSS color-mix (40% line hover over the error tint). As a token it's a real surface
+  // the contrast pass below covers.
+  if (!input.overrides?.["bg.errorRowHover"]) {
+    tokens["bg.errorRowHover"] = mix(tokens["bg.errorRow"], tokens["bg.lineHover"], 0.4);
+  }
   for (const name of Object.keys(tokens) as TokenName[]) tokens[name] = normalize(tokens[name]);
   for (const [fg, surfaces] of Object.entries(TEXT_SURFACES) as [TokenName, TokenName[]][]) {
     tokens[fg] = ensureContrast(

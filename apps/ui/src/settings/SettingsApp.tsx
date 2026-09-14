@@ -40,9 +40,18 @@ export function SettingsApp({ api, initial, e2e = false }: { api: SettingsApi; i
   useEffect(() => api.on("settings.changed", ({ settings: next }) => setSettings(next)), [api]);
 
   useEffect(() => {
-    const systemDark =
-      typeof window.matchMedia === "function" && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    applyThemeVariables(getTheme(resolveThemeId(settings.appearance, systemDark)), document.documentElement);
+    const media = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+    const apply = () =>
+      applyThemeVariables(
+        getTheme(resolveThemeId(settings.appearance, media?.matches ?? false)),
+        document.documentElement,
+      );
+    apply();
+    // FB-m4: while following the system, a macOS appearance change applies here too, as startThemeSync does in the
+    // main window.
+    if (!media || !settings.appearance.followSystem) return;
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
   }, [settings.appearance]);
 
   useEffect(() => {

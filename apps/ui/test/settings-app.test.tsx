@@ -128,6 +128,35 @@ describe("SettingsApp", () => {
     expect(api.get).toHaveBeenCalledTimes(1);
   });
 
+  // FB-m4: with Follow System on, the Settings window follows a macOS appearance change like the main window does.
+  test("with Follow System on, the Settings window follows macOS appearance changes until unmounted (FB-m4)", () => {
+    const listeners = new Set<() => void>();
+    const media = {
+      matches: true,
+      addEventListener: (_type: "change", listener: () => void) => listeners.add(listener),
+      removeEventListener: (_type: "change", listener: () => void) => listeners.delete(listener),
+    };
+    const realMatchMedia = window.matchMedia;
+    window.matchMedia = (() => media) as unknown as typeof window.matchMedia;
+    try {
+      const { api } = fakeSettingsApi();
+      const initial = mergeSettings(defaultSettings(), {
+        appearance: { followSystem: true, lightTheme: "github-light", darkTheme: "dracula" },
+      });
+      const { unmount } = render(<SettingsApp api={api} initial={initial} />);
+      expect(document.documentElement.dataset.theme).toBe("dracula");
+      act(() => {
+        media.matches = false;
+        for (const listener of [...listeners]) listener();
+      });
+      expect(document.documentElement.dataset.theme).toBe("github-light");
+      unmount();
+      expect(listeners.size).toBe(0);
+    } finally {
+      window.matchMedia = realMatchMedia;
+    }
+  });
+
   test("the Settings window E2E agent reports state, runs settings commands and types into fields", async () => {
     const input = document.createElement("input");
     document.body.appendChild(input);

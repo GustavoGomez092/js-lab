@@ -32,6 +32,8 @@ export type Modal =
 export interface AppState {
   ready: boolean;
   settings: Settings | null;
+  /** Counts `settings.changed` broadcasts, so a response sent before the latest one is recognized as stale. */
+  settingsRevision: number;
   safeMode: BootstrapPayload["safeMode"];
   versions: BootstrapPayload["versions"] | null;
   e2e: boolean;
@@ -99,6 +101,8 @@ export interface AppState {
   setClosedCount(count: number): void;
 
   updateSettings(settings: Settings): void;
+  /** A `settings.changed` broadcast from Main: applied, and it makes in-flight update responses stale (FB-m6). */
+  receiveSettings(settings: Settings): void;
   setFocus(focus: FocusArea): void;
   openModal(modal: Modal): void;
   closeModal(): void;
@@ -188,6 +192,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
     return {
       ready: false,
       settings: null,
+      settingsRevision: 0,
       safeMode: { active: false, reason: null },
       versions: null,
       e2e: false,
@@ -401,6 +406,10 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       updateSettings(settings) {
         set({ settings });
+      },
+
+      receiveSettings(settings) {
+        set({ settings, settingsRevision: get().settingsRevision + 1 });
       },
 
       setFocus(focus) {

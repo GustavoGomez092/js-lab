@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
+import { createTab, defaultSession, defaultSettings, mergeSettings, nextZoom, type Settings } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createViewCommands } from "../src/commands/view-commands";
 import { runStateKind } from "../src/shell/labels";
@@ -19,6 +19,67 @@ function hydrated() {
   });
   return store;
 }
+
+describe("settings commands under rapid input (FB-m6)", () => {
+  /** An updateSettings whose responses stay pending until released, like a slow settings.json write. */
+  function deferredApi(store: ReturnType<typeof hydrated>) {
+    const { api } = createFakeApi();
+    const pending: { patch: Parameters<typeof mergeSettings>[1]; release(result?: Settings): void }[] = [];
+    api.updateSettings.mockImplementation(
+      (patch: unknown) =>
+        new Promise((resolve) => {
+          const typed = patch as Parameters<typeof mergeSettings>[1];
+          pending.push({
+            patch: typed,
+            release: (result) =>
+              resolve(result ?? mergeSettings(store.getState().settings ?? defaultSettings(), typed)),
+          });
+        }),
+    );
+    return { api, pending };
+  }
+
+  test("two quick ⌘= presses give two zoom steps, and a double toggle flips twice", async () => {
+    const store = hydrated();
+    const { api, pending } = deferredApi(store);
+    const commands = new Map(createViewCommands(store, api).map((spec) => [spec.id, spec]));
+    const first = commands.get("view.zoomIn")?.run();
+    const second = commands.get("view.zoomIn")?.run();
+    const one = nextZoom(1, 1);
+    const two = nextZoom(one, 1);
+    expect(pending.map((request) => request.patch)).toEqual([
+      { appearance: { uiScale: one } },
+      { appearance: { uiScale: two } },
+    ]);
+    const secondResult = mergeSettings(defaultSettings(), { appearance: { uiScale: two } });
+    pending[0]?.release(mergeSettings(defaultSettings(), { appearance: { uiScale: one } }));
+    pending[1]?.release(secondResult);
+    await Promise.all([first, second]);
+    expect(store.getState().settings?.appearance.uiScale).toBe(two);
+
+    const toggleA = commands.get("view.toggleStatusBar")?.run();
+    const toggleB = commands.get("view.toggleStatusBar")?.run();
+    expect(pending.slice(2).map((request) => request.patch)).toEqual([
+      { view: { statusBar: false } },
+      { view: { statusBar: true } },
+    ]);
+    for (const request of pending.slice(2)) request.release();
+    await Promise.all([toggleA, toggleB]);
+    expect(store.getState().settings?.view.statusBar).toBe(true);
+  });
+
+  test("a late settings.update response doesn't roll back a newer settings.changed broadcast", async () => {
+    const store = hydrated();
+    const { api, pending } = deferredApi(store);
+    const commands = new Map(createViewCommands(store, api).map((spec) => [spec.id, spec]));
+    const toggle = commands.get("view.toggleActivityBar")?.run();
+    const broadcast = mergeSettings(defaultSettings(), { view: { activityBar: false }, appearance: { fontSize: 20 } });
+    store.getState().receiveSettings(broadcast);
+    pending[0]?.release(mergeSettings(defaultSettings(), { view: { activityBar: false } }));
+    await toggle;
+    expect(store.getState().settings).toBe(broadcast);
+  });
+});
 
 describe("layout", () => {
   test("run states map to status dot kinds", () => {

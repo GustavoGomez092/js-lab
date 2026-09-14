@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
-import { getTheme } from "@jslab/themes";
+import { getTheme, toCssVariables } from "@jslab/themes";
 import { createAppStore } from "../src/state/store";
 import { applyThemeVariables, startThemeSync } from "../src/themes/apply";
 import { createThemeCommands } from "../src/themes/theme-commands";
@@ -43,6 +45,29 @@ function fakeMedia(matches: boolean) {
     },
   };
 }
+
+describe("first-paint fallback (FB-m8)", () => {
+  const css = readFileSync(join(import.meta.dir, "../src/styles.css"), "utf8");
+
+  test("the :root fallback colors in styles.css equal the Graphite theme tokens", () => {
+    const root = /:root\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    const fallback = Object.fromEntries(
+      [...root.matchAll(/(--(?:bg|border|fg|console|syntax)-[A-Za-z]+):\s*([^;]+);/g)].map(([, name, value]) => [
+        name,
+        value?.trim().toLowerCase(),
+      ]),
+    );
+    const expected = Object.fromEntries(
+      Object.entries(toCssVariables(getTheme("graphite").tokens)).map(([name, value]) => [name, value.toLowerCase()]),
+    );
+    expect(fallback).toEqual(expected);
+  });
+
+  test("hovered error rows paint the bg.errorRowHover token, not a color-mix (FB-m7)", () => {
+    const rule = /\.entry-level-error:hover\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(rule.trim()).toBe("background: var(--bg-errorRowHover);");
+  });
+});
 
 describe("theme application", () => {
   test("writes every token as a CSS variable with color-scheme and data-theme", () => {

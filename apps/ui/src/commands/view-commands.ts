@@ -3,6 +3,7 @@ import type { MainApi } from "../api";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import type { CommandSpec } from "./registry";
+import { writeSetting } from "./settings-writer";
 import { toggleSettingCommand } from "./toggle-setting";
 
 type ViewKey = keyof Pick<Settings["view"], "activityBar" | "statusBar" | "sideBar" | "tabBarForSingleTab">;
@@ -11,12 +12,9 @@ type ViewKey = keyof Pick<Settings["view"], "activityBar" | "statusBar" | "sideB
 export function createViewCommands(store: AppStore, api: Pick<MainApi, "updateSettings">): CommandSpec[] {
   const s = () => store.getState();
 
-  const zoom = (direction: -1 | 0 | 1) => async () => {
-    const settings = s().settings;
-    if (!settings) return;
-    const uiScale = nextZoom(settings.appearance.uiScale, direction);
-    s().updateSettings(await api.updateSettings({ appearance: { uiScale } }));
-  };
+  // FB-m6, T15-m5: each press steps from the last requested zoom, so rapid presses aren't lost.
+  const zoom = (direction: -1 | 0 | 1) => () =>
+    writeSetting(store, api, "appearance.uiScale", (uiScale) => nextZoom(Number(uiScale), direction));
 
   const toggleView = (id: CommandSpec["id"], key: ViewKey): CommandSpec =>
     toggleSettingCommand(id, `view.${key}`, store, api, () => strings.commands.onOff(Boolean(s().settings?.view[key])));

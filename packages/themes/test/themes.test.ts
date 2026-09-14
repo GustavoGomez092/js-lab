@@ -68,6 +68,27 @@ describe("built-in themes", () => {
     expect(failures).toEqual([]);
   });
 
+  // FB-m7: hovered rows are real surfaces. Warn and info text sit on bg.lineHover, and a hovered error row paints a
+  // dedicated bg.errorRowHover (no CSS color-mix), so the AA check covers both.
+  test("hovered output rows are covered: bg.errorRowHover and bg.lineHover are in the contrast set (FB-m7)", () => {
+    expect(TOKEN_NAMES).toContain("bg.errorRowHover");
+    const pairs = CONTRAST_PAIRS.map(([fg, bg]) => `${fg} on ${bg}`);
+    for (const pair of [
+      "fg.error on bg.errorRowHover",
+      "fg.muted on bg.errorRowHover",
+      "fg.accent on bg.errorRowHover",
+      "fg.warn on bg.lineHover",
+      "fg.info on bg.lineHover",
+      "fg.default on bg.lineHover",
+      "fg.accent on bg.lineHover",
+    ]) {
+      expect(pairs).toContain(pair);
+    }
+    for (const theme of BUILTIN_THEMES) {
+      expect(theme.tokens["bg.errorRowHover"]).not.toBe(theme.tokens["bg.errorRow"]);
+    }
+  });
+
   test("every theme defines every token as #RRGGBB and a matching Monaco theme", () => {
     for (const theme of BUILTIN_THEMES) {
       for (const name of TOKEN_NAMES) expect(theme.tokens[name]).toMatch(/^#[0-9A-F]{6}$/);

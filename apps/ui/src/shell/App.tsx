@@ -249,7 +249,7 @@ export function App({
       api.on("menu.command", ({ command, args }) => {
         registry.execute(command, args);
       }),
-      api.on("settings.changed", ({ settings }) => store.getState().updateSettings(settings)),
+      api.on("settings.changed", ({ settings }) => store.getState().receiveSettings(settings)),
       api.on("file.opened", (payload) => void flows.handleOpened(payload)),
       api.on("file.saved", (payload) => flows.handleSaved(payload)),
       api.on("file.saveCancelled", (payload) => flows.handleSaveCancelled(payload)),

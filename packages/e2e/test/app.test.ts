@@ -39,6 +39,11 @@ describe("launchApp teardown (FA-I2)", () => {
       const appPath = join(root, "Fake.app");
       const launcher = join(appPath, "Contents", "MacOS", "launcher");
       mkdirSync(join(appPath, "Contents", "MacOS"), { recursive: true });
+      mkdirSync(join(appPath, "Contents", "Resources"), { recursive: true });
+      // Canary teardown gap (item 4): launchApp now refuses to spawn an unextracted bundle, so this fake bundle
+      // needs the self-extraction markers to stay a valid launch target for this pre-existing FA-I2 test.
+      writeFileSync(join(appPath, "Contents", "MacOS", "bun"), "", { mode: 0o755 });
+      writeFileSync(join(appPath, "Contents", "Resources", "main.js"), "");
       writeFileSync(
         launcher,
         [
@@ -81,5 +86,36 @@ describe("launchApp teardown (FA-I2)", () => {
       }
     },
     20_000,
+  );
+
+  test.skipIf(process.platform !== "darwin")(
+    "an unextracted bundle (no Contents/MacOS/bun or Contents/Resources/main.js) is refused before spawning (R-M2-FINAL-8 A)",
+    async () => {
+      // A canary copy that hasn't self-extracted yet is "only a launcher plus .tar.zst" (M0 report). If launched, the
+      // self-extractor relaunches the real app outside the harness's process tree, so it can never be torn down.
+      // launchApp must refuse before Bun.spawn, so nothing is ever started.
+      const appPath = join(root, "Unextracted.app");
+      const launcher = join(appPath, "Contents", "MacOS", "launcher");
+      mkdirSync(join(appPath, "Contents", "MacOS"), { recursive: true });
+      writeFileSync(
+        launcher,
+        ["#!/bin/sh", 'UD="$JSLAB_USER_DATA"', 'echo $$ > "$UD/launcher.pid"', "sleep 30", ""].join("\n"),
+        { mode: 0o755 },
+      );
+      const userData = join(root, "ud-unextracted");
+      mkdirSync(userData);
+
+      const previousApp = process.env.JSLAB_E2E_APP;
+      process.env.JSLAB_E2E_APP = appPath;
+      try {
+        await expect(launchApp({ userData, readyTimeoutMs: 1_000 })).rejects.toThrow(/hasn't self-extracted/);
+        // Nothing was spawned: no launcher.pid was ever written.
+        expect(existsSync(join(userData, "launcher.pid"))).toBe(false);
+      } finally {
+        if (previousApp === undefined) delete process.env.JSLAB_E2E_APP;
+        else process.env.JSLAB_E2E_APP = previousApp;
+      }
+    },
+    10_000,
   );
 });

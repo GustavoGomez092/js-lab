@@ -78,6 +78,18 @@ export function launcherPath(appPath: string): string {
   return launcher;
 }
 
+/**
+ * A packaged (canary) bundle ships as "only a launcher plus .tar.zst" (M0 spike report) until it is launched once
+ * and self-extracts, replacing its own bundle with the real app. A dev build (`hutch run build:dev`) is never
+ * packaged this way, so it always passes this check.
+ */
+export function isSelfExtracted(appPath: string): boolean {
+  return (
+    existsSync(join(appPath, "Contents", "MacOS", "bun")) &&
+    existsSync(join(appPath, "Contents", "Resources", "main.js"))
+  );
+}
+
 export function createUserData(): Promise<string> {
   return mkdtemp(join(process.env.JSLAB_E2E_TMPDIR ?? tmpdir(), "jl-"));
 }
@@ -93,6 +105,16 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
   // (a relaunch scenario) must never name a PID for this launch.
   const mainPidFile = join(userData, "e2e-main.pid");
   rmSync(mainPidFile, { force: true });
+
+  // Canary teardown gap (R-M2-FINAL-8 A): an unextracted copy's self-extractor relaunches the real app outside this
+  // process's tree and without JSLAB_E2E/JSLAB_USER_DATA, so the harness can never track or tear it down, and the
+  // relaunch likely runs against the real canary data folder. Refuse before spawning anything.
+  if (!isSelfExtracted(appPath)) {
+    throw new Error(
+      `This canary copy hasn't self-extracted yet: ${appPath}. Launch it once with the M2 checklist's warm-up ` +
+        "step, quit it, then rerun the suite.",
+    );
+  }
 
   const proc = Bun.spawn([launcherPath(appPath)], {
     // R-M1-14: the launched app must not inherit a cwd on an external volume (this worktree may be on one), or Bun

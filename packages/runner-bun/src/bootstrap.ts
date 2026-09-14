@@ -2,7 +2,14 @@ import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { types } from "node:util";
 import type { MainToRunner, RunnerState, RunnerToMain } from "@jslab/rpc-schema";
-import { DEFAULT_LIMITS, Encoder, HandleRegistry, parseStack } from "@jslab/serializer";
+import {
+  clipToJsonBytes,
+  DEFAULT_LIMITS,
+  Encoder,
+  HandleRegistry,
+  jsonStringBytes,
+  parseStack,
+} from "@jslab/serializer";
 import { installConsole, installStdio } from "./console-hook";
 import { EventBuffer } from "./event-buffer";
 import { HandleTracker, installHandleTracking } from "./handles";
@@ -14,18 +21,23 @@ const timers = {
   setInterval: globalThis.setInterval,
 };
 const heartbeatMs = Number(process.env.JSLAB_HEARTBEAT_MS ?? 500);
+// An error event's text sits beside its budgeted `value` (R-M1-17(a)): bound it the same way.
+const MAX_ERROR_MESSAGE_BYTES = 16 * 1024;
+const MAX_ERROR_FRAMES = 50;
+const MAX_FRAME_TEXT_BYTES = 1024;
+const MAX_ERROR_NAME_BYTES = 1024;
+/** One stdout/stderr chunk fits one event's 256 KB value budget, with room left for the event's other fields. */
+const MAX_STDIO_TEXT_BYTES = DEFAULT_LIMITS.maxEncodedBytes - 1024;
+const CUT_MARK = "…";
 /**
- * Error names and messages are capped where they are created. A ReferenceError for a 6 MB identifier otherwise
- * carries the whole identifier, and rendering that one output row freezes the UI (Task 18, R-M2-T18-2). Task 19's
- * exact-byte error-text budgets refine this.
+ * Cuts text to at most `maxBytes` of JSON UTF-8 bytes, marked with "…", never between the halves of a surrogate pair.
+ * A ReferenceError for a 6 MB identifier otherwise carries the whole identifier, and rendering that one output row
+ * freezes the UI (Task 18, R-M2-T18-2; fix round 1, m-2). Task 19 measures the cap in exact bytes.
  */
-const MAX_ERROR_TEXT_CHARS = 10_000;
-const capErrorText = (text: string) => {
-  if (text.length <= MAX_ERROR_TEXT_CHARS) return text;
-  // Never cut between the halves of a surrogate pair (fix round 1, m-2).
-  const last = text.charCodeAt(MAX_ERROR_TEXT_CHARS - 1);
-  return `${text.slice(0, last >= 0xd800 && last <= 0xdbff ? MAX_ERROR_TEXT_CHARS - 1 : MAX_ERROR_TEXT_CHARS)}…`;
-};
+const clipText = (text: string, maxBytes: number) =>
+  jsonStringBytes(text) <= maxBytes
+    ? text
+    : `${clipToJsonBytes(text, maxBytes - jsonStringBytes(CUT_MARK))}${CUT_MARK}`;
 const send = (message: RunnerToMain) => process.send?.(message);
 const hooks = {
   peekPromise: (promise: Promise<unknown>) => {
@@ -69,9 +81,15 @@ function pushError(phase: "runtime" | "unhandledRejection", error: unknown): voi
   run.buffer.push({
     kind: "error",
     phase,
-    name: capErrorText(typeof e?.name === "string" ? e.name : "Error"),
-    message: capErrorText(typeof e?.message === "string" ? e.message : String(error)),
-    stack: parseStack(typeof e?.stack === "string" ? e.stack : ""),
+    name: clipText(typeof e?.name === "string" ? e.name : "Error", MAX_ERROR_NAME_BYTES),
+    message: clipText(typeof e?.message === "string" ? e.message : String(error), MAX_ERROR_MESSAGE_BYTES),
+    stack: parseStack(typeof e?.stack === "string" ? e.stack : "")
+      .slice(0, MAX_ERROR_FRAMES)
+      .map((frame) => ({
+        ...frame,
+        ...(frame.fn ? { fn: clipToJsonBytes(frame.fn, MAX_FRAME_TEXT_BYTES) } : {}),
+        ...(frame.file ? { file: clipToJsonBytes(frame.file, MAX_FRAME_TEXT_BYTES) } : {}),
+      })),
     value: run.encoder.encode(error),
   });
 }
@@ -134,7 +152,8 @@ installConsole({
   entryBase: () => run?.entryBase ?? null,
 });
 installStdio((kind, text) => {
-  run?.buffer.push({ kind, text });
+  // One huge write must not become a multi-megabyte event: stdio text has no value budget of its own (R-M1-17(a)).
+  run?.buffer.push({ kind, text: clipText(text, MAX_STDIO_TEXT_BYTES) });
 });
 
 process.on("uncaughtException", (error) => pushError("runtime", error));

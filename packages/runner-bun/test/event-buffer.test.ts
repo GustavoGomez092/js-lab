@@ -101,6 +101,14 @@ test("early flushes keep the output cap and its truncation marker", () => {
   expect(Math.max(...sent.map((batch) => batch.length))).toBeLessThanOrEqual(200);
 });
 
+test("the size-based flush counts UTF-8 bytes, not characters (R-M1-17(a))", () => {
+  const { sent, buffer } = setup(10_000);
+  const text = "€".repeat(1000); // 1,000 characters, 3,000 bytes
+  for (let i = 0; i < 90; i++) buffer.push({ kind: "stdout", text });
+  expect(sent).toHaveLength(1);
+  expect(Buffer.byteLength(JSON.stringify(sent[0]))).toBeGreaterThanOrEqual(256 * 1024);
+});
+
 test("never sends empty batches", () => {
   const { sent, buffer } = setup(10);
   buffer.flush();

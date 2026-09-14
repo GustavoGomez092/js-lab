@@ -156,19 +156,22 @@ test("reports errors thrown while evaluating the module", async () => {
 });
 
 // Task 18 (R-M2-T18-2): a ReferenceError for a 6 MB identifier carried the whole identifier in its message, and
-// rendering that one output row froze the UI past the watchdog deadline. Error text is capped where it is created.
-test("an error's message is capped at 10,000 characters", async () => {
+// rendering that one output row froze the UI past the watchdog deadline. Error text is capped where it is created;
+// Task 19 measures the caps in exact JSON bytes (R-M1-17(a)).
+test("an error's name and message are capped in bytes and marked as cut", async () => {
   const runner = startRunner();
-  // The name is over the cap too, with an emoji straddling the cut: no half surrogate pair may remain (m-2).
+  // The name is over its 1 KB cap too, with an emoji straddling the cut: no half surrogate pair may remain (m-2).
   await runner.run(
-    'const e = new Error("m".repeat(1_000_000));\ne.name = "N".repeat(9_999) + "\\u{1F600}" + "N".repeat(20_000);\nthrow e;\n',
+    'const e = new Error("m".repeat(1_000_000));\ne.name = "N".repeat(1_020) + "\\u{1F600}" + "N".repeat(20_000);\nthrow e;\n',
   );
   await runner.until((m) => m.type === "state" && m.state === "idle");
   const error = runner.events().find((e) => e.kind === "error");
   const message = error?.kind === "error" ? error.message : "";
-  expect([message.length, message.startsWith("mmm"), message.endsWith("…")]).toEqual([10_001, true, true]);
+  expect(Buffer.byteLength(message)).toBeLessThanOrEqual(16 * 1024);
+  expect([message.startsWith("mmm"), message.endsWith("…")]).toEqual([true, true]);
   const name = error?.kind === "error" ? error.name : "";
-  expect([name.length, name.endsWith("N…"), /[\uD800-\uDFFF]/.test(name)]).toEqual([10_000, true, false]);
+  expect(Buffer.byteLength(name)).toBeLessThanOrEqual(1024);
+  expect([name.endsWith("N…"), /[\uD800-\uDFFF]/.test(name)]).toEqual([true, false]);
 });
 
 test("stop does not report errors from work it aborted", async () => {
@@ -261,6 +264,25 @@ test("the runner exits when its parent dies", async () => {
   }
 
   expect(exited).toBe(true);
+});
+
+test("an error's message and stack stay bounded outside the value budget (R-M1-17(a))", async () => {
+  const runner = startRunner();
+  // One huge stdout/stderr chunk is bounded the same way: no single event, or run.events message, is megabytes.
+  await runner.run(
+    'process.stdout.write("s".repeat(1_000_000));\nprocess.stderr.write("€".repeat(1_000_000));\nthrow new Error("m".repeat(1_000_000));\n',
+  );
+  await runner.until((m) => m.type === "state" && m.state === "idle");
+  const error = runner.events().find((e) => e.kind === "error") as { message: string; value: unknown } | undefined;
+  expect(error?.value).toMatchObject({ t: "handle" });
+  expect(Buffer.byteLength(error?.message ?? "")).toBeLessThanOrEqual(16 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(error))).toBeLessThanOrEqual(256 * 1024);
+  const stdio = runner.events().filter((e) => e.kind === "stdout" || e.kind === "stderr");
+  expect(stdio.map((e) => e.kind)).toEqual(["stdout", "stderr"]);
+  for (const event of stdio) expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThanOrEqual(256 * 1024);
+  const messages = runner.messages.filter((m) => m.type === "events");
+  for (const message of messages)
+    expect(Buffer.byteLength(JSON.stringify(message))).toBeLessThanOrEqual(2 * 256 * 1024);
 });
 
 test("events pushed right before process.exit still reach Main (final review M5)", async () => {

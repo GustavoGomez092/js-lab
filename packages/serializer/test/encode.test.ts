@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { types } from "node:util";
 import type { EncodedValue } from "@jslab/rpc-schema";
 import fc from "fast-check";
-import { DEFAULT_LIMITS, Encoder, HandleRegistry, parseStack } from "../src/encode";
+import {
+  clipToJsonBytes,
+  DEFAULT_LIMITS,
+  Encoder,
+  HandleRegistry,
+  jsonStringBytes,
+  MAX_EXPAND_BYTES,
+  parseStack,
+} from "../src/encode";
 
 const make = (limits = DEFAULT_LIMITS) => {
   const registry = new HandleRegistry();
@@ -325,6 +333,57 @@ describe("per-event size budget", () => {
     expect(second).toMatchObject({ t: "handle", preview: "Array(600)" });
     expect(small).toEqual({ t: "number", v: "1" });
     expect(bytes([first, second, small])).toBeLessThanOrEqual(CAP);
+  });
+
+  test("the budget counts exact JSON bytes, so escaped and non-ASCII text stays under the cap (R-M1-17(a), R-M1-18)", () => {
+    const sample = 'a"\\\né€😀 ';
+    expect(jsonStringBytes(sample)).toBe(Buffer.byteLength(JSON.stringify(sample)) - 2);
+    expect(jsonStringBytes("\ud800")).toBe(Buffer.byteLength(JSON.stringify("\ud800")) - 2);
+    expect(clipToJsonBytes("€€€", 7)).toBe("€€");
+    expect(clipToJsonBytes("a😀b", 4)).toBe("a");
+    // The re-review's escape-inflation repro: 800 × 240 U+0001 went out as 1.17 MB.
+    const control = Array.from({ length: 800 }, () => "".repeat(240));
+    const euro = Array.from({ length: 1000 }, () => "€".repeat(240));
+    for (const value of [control, euro]) {
+      const out = make().encodeMany([value, value, "tail"]);
+      expect(bytes(out)).toBeLessThanOrEqual(CAP);
+      expect(out[2]).toEqual({ t: "string", v: "tail" });
+    }
+  });
+
+  test("summaries are bounded too: a flood of oversized values ends with one marker, and huge bigints and symbols are cut (R-M1-18)", () => {
+    const big = Array.from({ length: 1000 }, () => "x".repeat(10_000));
+    const out = make().encodeMany([...Array<unknown>(10_000).fill(big), 1]);
+    expect(bytes(out)).toBeLessThanOrEqual(CAP);
+    expect(out[0]).toMatchObject({ t: "handle", preview: "Array(1000)" });
+    expect(out.length).toBeLessThan(10_001);
+    expect(out.at(-1)).toEqual({ t: "string", v: `[${10_001 - (out.length - 1)} more values not shown]` });
+    const small = { ...DEFAULT_LIMITS, maxEncodedBytes: 2048 };
+    const [bigint, symbol] = make(small).encodeMany([BigInt("7".repeat(5000)), Symbol("s".repeat(5000))]);
+    expect(bigint).toMatchObject({ t: "string", v: "7".repeat(100), truncated: { total: 5000 } });
+    expect(symbol).toEqual({ t: "symbol", desc: "s".repeat(100) });
+  });
+
+  test("an expand reply stays under MAX_EXPAND_BYTES and pages the rest behind a handle (R-M1-17(b))", () => {
+    const e = make();
+    const rows = Array.from({ length: 2000 }, (_, i) => `${i}:${"x".repeat(10_000)}`);
+    const { handle } = e.encode(rows) as { handle: string };
+    const expanded = e.expand(handle) as {
+      t: string;
+      length: number;
+      items: unknown[];
+      more?: number;
+      handle?: string;
+    };
+    expect(bytes(expanded)).toBeLessThanOrEqual(MAX_EXPAND_BYTES);
+    expect(expanded).toMatchObject({ t: "array", length: 2000 });
+    expect(expanded.items.length).toBeGreaterThan(0);
+    expect(expanded.items.length + (expanded.more ?? 0)).toBe(2000);
+    expect(typeof expanded.handle).toBe("string");
+    const { truncated } = e.encode("".repeat(1_000_000)) as { truncated: { handle: string } };
+    const text = e.expand(truncated.handle) as { v: string; truncated?: { total: number } };
+    expect(bytes(text)).toBeLessThanOrEqual(MAX_EXPAND_BYTES);
+    expect(text.truncated?.total).toBe(1_000_000);
   });
 });
 

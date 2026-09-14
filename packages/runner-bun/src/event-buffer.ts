@@ -43,7 +43,8 @@ export class EventBuffer {
     const seq = ++this.#seq;
     const event = { ...body, seq, t: Date.now() } as RawRunEvent;
     this.#queue.push(event);
-    this.#pendingBytes += JSON.stringify(event).length;
+    // Exact UTF-8 bytes (R-M1-17(a)): escaped and non-ASCII text used to exceed the 256 KB flush size on the wire.
+    this.#pendingBytes += Buffer.byteLength(JSON.stringify(event));
     if (this.#queue.length >= this.maxBatchEvents || this.#pendingBytes >= this.maxBatchBytes) this.flush();
     else this.#schedule();
     return seq;

@@ -34,7 +34,20 @@ export function startThemeSync(store: AppStore, options: ThemeSyncOptions): () =
   apply();
   options.media?.addEventListener("change", onSystemChange);
   const unsubscribe = store.subscribe((state, previous) => {
-    if (state.settings?.appearance !== previous.settings?.appearance) apply();
+    const next = state.settings?.appearance;
+    const prev = previous.settings?.appearance;
+    // `mergeSettings` re-parses the whole settings object, so every `settings.changed` gets a new `appearance`
+    // object even when only an unrelated section changed (review I-1). Compare the theme-affecting fields
+    // themselves, not object identity, so an unrelated settings update doesn't reapply ~34 CSS properties.
+    if (
+      next !== prev &&
+      (next?.theme !== prev?.theme ||
+        next?.followSystem !== prev?.followSystem ||
+        next?.lightTheme !== prev?.lightTheme ||
+        next?.darkTheme !== prev?.darkTheme)
+    ) {
+      apply();
+    }
   });
   return () => {
     unsubscribe();

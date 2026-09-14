@@ -18,6 +18,17 @@ function hydrated() {
   return store;
 }
 
+/** `spyOn` doesn't intercept happy-dom's `CSSStyleDeclaration.setProperty`; wrap it manually instead. */
+function countSetProperty(root: HTMLElement) {
+  const counter = { calls: 0 };
+  const original = root.style.setProperty.bind(root.style);
+  root.style.setProperty = (...args: Parameters<typeof original>) => {
+    counter.calls++;
+    return original(...args);
+  };
+  return counter;
+}
+
 function fakeMedia(matches: boolean) {
   const listeners = new Set<() => void>();
   return {
@@ -64,6 +75,20 @@ describe("theme application", () => {
     stop();
     system.change(false);
     expect(store.getState().themeId).toBe("graphite");
+  });
+
+  test("only reapplies theme variables when a theme-related appearance field changes (review I-1)", () => {
+    const store = hydrated();
+    const root = document.createElement("div");
+    const stop = startThemeSync(store, { root, media: null });
+    const counter = countSetProperty(root);
+    // A fresh settings object (new appearance identity) whose theme-related fields are unchanged must not reapply.
+    store.getState().updateSettings(mergeSettings(defaultSettings(), { run: { autoRun: true } }));
+    expect(counter.calls).toBe(0);
+    // Changing a theme-related field must still reapply.
+    store.getState().updateSettings(mergeSettings(defaultSettings(), { appearance: { theme: "nord" } }));
+    expect(counter.calls).toBeGreaterThan(0);
+    stop();
   });
 
   test("theme commands persist the choice through Main", async () => {

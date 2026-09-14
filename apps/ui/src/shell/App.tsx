@@ -412,7 +412,14 @@ export function App({
         )}
       </Toolbar>
       {safeMode.active && <SafeModeBanner reason={safeMode.reason} />}
-      <StartupNotices notices={notices} onDismiss={(id) => store.getState().dismissNotice(id)} />
+      <StartupNotices
+        notices={notices}
+        onDismiss={(id) => store.getState().dismissNotice(id)}
+        // Spec §20: an unexpected Main error after startup offers Copy Debug Log in its banner.
+        actions={{
+          unexpectedError: { label: strings.notices.copyDebugLog, run: () => api.appCommand("copyDebugLog") },
+        }}
+      />
       <div className="app-main">
         {settings.view.activityBar && (
           <ActivityBar

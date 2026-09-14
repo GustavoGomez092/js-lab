@@ -8,7 +8,7 @@ import type {
 } from "@jslab/rpc-schema";
 import type { Settings } from "@jslab/shared";
 import { Electroview, type RPCSchema } from "electrobun/view";
-import { createMessageHub } from "./message-hub";
+import { createMessageHub } from "../message-hub";
 
 type SettingsRPC = {
   bun: RPCSchema<{ requests: SettingsWindowRequests; messages: SettingsWindowMessages }>;

@@ -483,6 +483,14 @@ button:disabled {
   flex-direction: column;
 }
 
+/* A notice's action button, such as Copy Debug Log (spec §20). */
+.banner-action {
+  margin-left: 12px;
+  padding: 0 8px;
+  border-color: var(--border-default);
+  color: var(--fg-default);
+}
+
 .banner-dismiss {
   float: right;
   width: 20px;

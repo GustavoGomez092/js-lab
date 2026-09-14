@@ -302,6 +302,16 @@ describe("App shell", () => {
     expect(screen.queryByTestId("startup-notices")).toBeNull();
   });
 
+  // Spec §20 (R-M2-FINAL-5): the unexpected-error notice offers Copy Debug Log right in the banner.
+  test("the unexpected-error notice's Copy Debug Log button sends the app command (§20)", async () => {
+    const { api, emit } = renderApp();
+    await emit("app.notice", { id: "unexpectedError", message: "Something went wrong." });
+    fireEvent.click(screen.getByRole("button", { name: strings.notices.copyDebugLog }));
+    expect(api.appCommand.mock.calls).toEqual([["copyDebugLog"]]);
+    await emit("app.notice", { id: "settingsNewer", message: "Settings were written by a newer JSLab." });
+    expect(screen.getAllByRole("button", { name: strings.notices.copyDebugLog })).toHaveLength(1);
+  });
+
   test("tab commands create, switch and close tabs through Main", async () => {
     const { store, api, emit } = renderApp();
     api.createTab.mockImplementation(async () => ({ tab: createTab({ id: "t2" }) }));

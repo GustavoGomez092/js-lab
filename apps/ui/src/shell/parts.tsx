@@ -29,14 +29,30 @@ export function SafeModeBanner({ reason }: { reason: "crashLoop" | "manual" | "s
   );
 }
 
-/** Startup notices from Main (spec §20): recovered files, newer files, skipped tabs. Each can be dismissed. */
-export function StartupNotices(props: { notices: readonly StartupNotice[]; onDismiss(id: StartupNotice["id"]): void }) {
+/** A button a notice offers next to its message, such as Copy Debug Log (spec §20, R-M2-FINAL-5). */
+export interface NoticeAction {
+  label: string;
+  run(): void;
+}
+
+/** Notices from Main (spec §20): recovered files, newer files, skipped tabs, unexpected errors. Each can be dismissed. */
+export function StartupNotices(props: {
+  notices: readonly StartupNotice[];
+  onDismiss(id: StartupNotice["id"]): void;
+  /** Optional per-notice actions, by notice id. */
+  actions?: Partial<Record<StartupNotice["id"], NoticeAction>>;
+}) {
   if (props.notices.length === 0) return null;
   return (
     <div className="notices" data-testid="startup-notices">
       {props.notices.map((notice) => (
         <output key={notice.id} className="banner banner-warning">
           {notice.message}
+          {props.actions?.[notice.id] && (
+            <button type="button" className="banner-action" onClick={() => props.actions?.[notice.id]?.run()}>
+              {props.actions[notice.id]?.label}
+            </button>
+          )}
           <button
             type="button"
             className="banner-dismiss"

@@ -1,9 +1,34 @@
 import { describe, expect, test } from "bun:test";
-import { createMessageHub } from "../src/settings/message-hub";
+import { createMessageHub } from "../src/message-hub";
+import { createViewMessageRouter, VIEW_MESSAGES } from "../src/view-messages";
+
+describe("main window message router (T24-hub-main)", () => {
+  test("messages Main sends before App subscribes are delivered once, including app.notice", () => {
+    const router = createViewMessageRouter();
+    expect(Object.keys(router.handlers).sort()).toEqual([...VIEW_MESSAGES].sort());
+
+    router.handlers["menu.command"]?.({ command: "run.start" });
+    router.handlers["app.notice"]?.({ id: "unexpectedError", message: "Something went wrong." });
+
+    const commands: unknown[] = [];
+    router.on("menu.command", (payload) => commands.push(payload));
+    const notices: unknown[] = [];
+    router.on("app.notice", (payload) => notices.push(payload));
+    expect([commands, notices]).toEqual([
+      [{ command: "run.start" }],
+      [{ id: "unexpectedError", message: "Something went wrong." }],
+    ]);
+
+    const late: unknown[] = [];
+    router.on("menu.command", (payload) => late.push(payload));
+    router.handlers["menu.command"]?.({ command: "run.stop" });
+    expect([commands.length, late]).toEqual([2, [{ command: "run.stop" }]]);
+  });
+});
 
 type Messages = { tick: { n: number }; other: { s: string } };
 
-describe("settings message hub", () => {
+describe("message hub", () => {
   test("queues messages until the first listener (capped at 32), never redelivers, and queues again after the last unsubscribe", () => {
     const hub = createMessageHub<Messages>();
     const tick = hub.dispatch("tick");

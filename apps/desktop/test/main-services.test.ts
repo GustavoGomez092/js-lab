@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +38,8 @@ describe("main services (composition root)", () => {
       transformHost: { transform: () => Promise.reject(new Error("no transforms in this test")), dispose: () => {} },
     });
     expect(services.safeMode).toEqual({ active: false, reason: null });
+    expect(existsSync(paths.packagesJson)).toBe(true);
+    expect(services.env.variables).toEqual({});
     const logged: string[] = [];
     const handlers = createRpcHandlers({
       coordinator: services.coordinator,

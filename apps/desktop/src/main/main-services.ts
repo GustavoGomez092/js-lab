@@ -4,6 +4,8 @@ import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
 import { RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
 import { SparePool } from "./runs/spare-pool";
+import { EnvStore } from "./services/env-store";
+import { ensurePackagesProject } from "./services/packages-project";
 import { consumeSafeModeFlag, detectSafeMode, type SafeModeState } from "./services/safe-mode";
 import { SessionStore } from "./services/session-store";
 import { SettingsStore } from "./services/settings-store";
@@ -29,6 +31,7 @@ export interface MainServicesOptions {
 export interface MainServices {
   settings: SettingsStore;
   session: SessionStore;
+  env: EnvStore;
   runLock: RunLock;
   safeMode: SafeModeState;
   transform: TransformHost;
@@ -56,6 +59,8 @@ export async function createMainServices(options: MainServicesOptions): Promise<
       layout: { orientation: settings.current.view.layout, editorSize: 55, outputVisible: true },
     }),
   });
+  await ensurePackagesProject(paths, log);
+  const env = await EnvStore.open(paths.envFile);
   const safeMode = await detectSafeMode({
     uncleanPreviousExit: runLock.uncleanPreviousExit,
     manualRequested: consumeSafeModeFlag(paths.dataDir),
@@ -81,6 +86,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   return {
     settings,
     session,
+    env,
     runLock,
     safeMode,
     transform,

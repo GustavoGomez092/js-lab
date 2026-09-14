@@ -15,6 +15,12 @@ export interface AppPaths {
   runsDir: string;
   runLock: string;
   packagesNodeModules: string;
+  packagesDir: string;
+  packagesJson: string;
+  packagesNpmrc: string;
+  /** The empty HOME of npm operations (spec §11.3, M0-S8). */
+  npmHome: string;
+  envFile: string;
   socketPath: string;
   screenshotsDir: string;
   runnerBootstrap: string;
@@ -37,6 +43,11 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     runsDir: join(dataDir, "runs"),
     runLock: join(dataDir, "run.lock"),
     packagesNodeModules: join(dataDir, "packages", "node_modules"),
+    packagesDir: join(dataDir, "packages"),
+    packagesJson: join(dataDir, "packages", "package.json"),
+    packagesNpmrc: join(dataDir, "packages", ".npmrc"),
+    npmHome: join(dataDir, "npm-home"),
+    envFile: join(dataDir, "env.json"),
     socketPath: join(dataDir, "jslab.sock"),
     screenshotsDir: join(dataDir, "e2e-screenshots"),
     runnerBootstrap: input.env.JSLAB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "bootstrap.js"),

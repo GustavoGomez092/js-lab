@@ -22,6 +22,8 @@ export const strings = {
     /** RR1-m2: a settings write that hung. */
     settingsWriteTimedOut: (timeoutMs: number) => `settings.json write did not finish within ${timeoutMs} ms`,
     settingsWriteFailed: "Couldn't save settings.json",
+    npmHomeNpmrcMoved: (path: string) =>
+      `Moved an .npmrc found in npm-home to ${path}; npm operations never read one there`,
   },
   dialogs: {
     startupFailed: (message: string) => `JSLab couldn't start: ${message}`,

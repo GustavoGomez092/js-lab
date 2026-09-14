@@ -279,6 +279,16 @@ test("an error's message and stack stay bounded outside the value budget (R-M1-1
   expect(Buffer.byteLength(JSON.stringify(error))).toBeLessThanOrEqual(256 * 1024);
   const stdio = runner.events().filter((e) => e.kind === "stdout" || e.kind === "stderr");
   expect(stdio.map((e) => e.kind)).toEqual(["stdout", "stderr"]);
+  // A clipped write says how many UTF-8 bytes were dropped: 1,000,000 "s" and 1,000,000 "€" (3,000,000 bytes).
+  const written = { stdout: 1_000_000, stderr: 3_000_000 };
+  for (const event of stdio) {
+    const text = event.kind === "stdout" || event.kind === "stderr" ? event.text : "";
+    const suffix = /… \[(\d+) bytes not shown\]$/.exec(text);
+    expect(suffix).not.toBeNull();
+    const kept = text.slice(0, suffix?.index ?? 0);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(kept) + Number(suffix?.[1])).toBe(written[event.kind as keyof typeof written]);
+  }
   for (const event of stdio) expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThanOrEqual(256 * 1024);
   const messages = runner.messages.filter((m) => m.type === "events");
   for (const message of messages)

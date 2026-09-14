@@ -510,6 +510,11 @@ describe("RunCoordinator", () => {
     const pid = logged?.kind === "console" && logged.args[0]?.t === "string" ? Number(logged.args[0].v) : 0;
     const runner = started.find((candidate) => candidate.pid === pid);
     expect(runner).toBeDefined();
+    // Kill in the window between the "stopped" message and the runner's exit must not turn "stopped" into "killed".
+    // This listener runs right after the coordinator's own handler for the same message.
+    runner?.onMessage((message) => {
+      if (message.type === "state" && message.state === "stopped") h.coordinator.kill("t1");
+    });
     h.coordinator.stop("t1");
     await h.waitForState("stopped", runId);
     const outcome = await Promise.race([runner?.exited.then(() => "exited"), Bun.sleep(2000).then(() => "alive")]);

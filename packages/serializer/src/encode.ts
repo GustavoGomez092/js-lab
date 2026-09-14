@@ -112,11 +112,19 @@ function ctorName(obj: object): string | null {
 
 const MAX_PREVIEW = 100;
 
+/** `text.slice(0, end)`, one unit shorter when the cut would keep only the high half of a surrogate pair. */
+function slicePairSafe(text: string, end: number): string {
+  if (end >= text.length) return text;
+  const last = text.charCodeAt(end - 1);
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end);
+}
+
+/** Inspects `obj`, so it can run Proxy traps and throw: never call it with a Proxy. */
 function preview(obj: object): string {
   if (Array.isArray(obj)) return `Array(${obj.length})`;
   if (obj instanceof Map) return `Map(${obj.size})`;
   if (obj instanceof Set) return `Set(${obj.size})`;
-  return `${(ctorName(obj) ?? "Object").slice(0, MAX_PREVIEW)} {…}`;
+  return `${slicePairSafe(ctorName(obj) ?? "Object", MAX_PREVIEW)} {…}`;
 }
 
 const utf8 = new TextEncoder();
@@ -226,7 +234,10 @@ export class Encoder {
     switch (target.kind) {
       case "string": {
         const full = target.value;
-        const shown = clipToJsonBytes(full.slice(0, this.limits.maxFullString), MAX_EXPAND_BYTES - 2 * MARKER_BYTES);
+        const shown = clipToJsonBytes(
+          slicePairSafe(full, this.limits.maxFullString),
+          MAX_EXPAND_BYTES - 2 * MARKER_BYTES,
+        );
         return shown.length < full.length
           ? { t: "string", v: shown, truncated: { total: full.length, handle } }
           : { t: "string", v: shown };
@@ -246,7 +257,7 @@ export class Encoder {
           try {
             source = Function.prototype.toString.call(target.value);
           } catch {}
-          return { t: "string", v: source.slice(0, this.limits.maxFunctionSource) };
+          return { t: "string", v: slicePairSafe(source, this.limits.maxFunctionSource) };
         }
         return this.#expandValue(target.value);
     }
@@ -296,7 +307,7 @@ export class Encoder {
       case "string":
         return {
           t: "string",
-          v: value.slice(0, MAX_PREVIEW),
+          v: slicePairSafe(value, MAX_PREVIEW),
           truncated: { total: value.length, handle: this.registry.register({ kind: "string", value }) },
         };
       case "bigint": {
@@ -310,15 +321,29 @@ export class Encoder {
         };
       }
       case "symbol":
-        return { t: "symbol", desc: (value.description ?? "").slice(0, MAX_PREVIEW) };
+        return { t: "symbol", desc: slicePairSafe(value.description ?? "", MAX_PREVIEW) };
       case "object":
       case "function":
         if (value !== null) {
-          return { t: "handle", handle: this.registry.register({ kind: "value", value }), preview: preview(value) };
+          const shown = this.#summaryPreview(value);
+          return { t: "handle", handle: this.registry.register({ kind: "value", value }), preview: shown };
         }
     }
     // undefined, null, booleans and numbers encode to at most 45 bytes.
     return this.#encode(value, 0, new Set());
+  }
+
+  /**
+   * A summary's preview. A Proxy is named without touching its target, so none of its traps run (final review M6), and
+   * a value whose inspection throws gets a generic preview: a summary never throws into user code.
+   */
+  #summaryPreview(obj: object): string {
+    if (this.hooks.isProxy?.(obj)) return "Proxy";
+    try {
+      return preview(obj);
+    } catch {
+      return "Object {…}";
+    }
   }
 
   /** One expansion level, halving the collection and string limits until the reply fits MAX_EXPAND_BYTES. */
@@ -415,7 +440,7 @@ export class Encoder {
       this.#chargeText(v);
       return { t: "string", v };
     }
-    const shown = v.slice(0, maxString);
+    const shown = slicePairSafe(v, maxString);
     this.#chargeText(shown);
     return {
       t: "string",

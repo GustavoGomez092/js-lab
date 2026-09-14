@@ -114,6 +114,8 @@ export class RunCoordinator {
     run.expectedExit = true;
     run.runner.kill();
     this.deps.runLock.remove(run.runId);
+    // A stopped run is already being recycled (R-M1-18): its runner is gone either way, and it stays "stopped".
+    if (run.state === "stopped") return;
     this.#setState(run, "killed");
   }
 

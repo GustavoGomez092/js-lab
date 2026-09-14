@@ -38,6 +38,14 @@ const clipText = (text: string, maxBytes: number) =>
   jsonStringBytes(text) <= maxBytes
     ? text
     : `${clipToJsonBytes(text, maxBytes - jsonStringBytes(CUT_MARK))}${CUT_MARK}`;
+/** Clips one stdout/stderr write to its event budget and says how many UTF-8 bytes were dropped (R-M2-T19B-1). */
+const clipStdio = (text: string) => {
+  if (jsonStringBytes(text) <= MAX_STDIO_TEXT_BYTES) return text;
+  const total = Buffer.byteLength(text);
+  // Room for the suffix is reserved first, sized for the largest count it can show.
+  const kept = clipToJsonBytes(text, MAX_STDIO_TEXT_BYTES - jsonStringBytes(`${CUT_MARK} [${total} bytes not shown]`));
+  return `${kept}${CUT_MARK} [${total - Buffer.byteLength(kept)} bytes not shown]`;
+};
 const send = (message: RunnerToMain) => process.send?.(message);
 const hooks = {
   peekPromise: (promise: Promise<unknown>) => {
@@ -153,7 +161,7 @@ installConsole({
 });
 installStdio((kind, text) => {
   // One huge write must not become a multi-megabyte event: stdio text has no value budget of its own (R-M1-17(a)).
-  run?.buffer.push({ kind, text: clipText(text, MAX_STDIO_TEXT_BYTES) });
+  run?.buffer.push({ kind, text: clipStdio(text) });
 });
 
 process.on("uncaughtException", (error) => pushError("runtime", error));

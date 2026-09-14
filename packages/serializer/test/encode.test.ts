@@ -362,6 +362,48 @@ describe("per-event size budget", () => {
     const [bigint, symbol] = make(small).encodeMany([BigInt("7".repeat(5000)), Symbol("s".repeat(5000))]);
     expect(bigint).toMatchObject({ t: "string", v: "7".repeat(100), truncated: { total: 5000 } });
     expect(symbol).toEqual({ t: "symbol", desc: "s".repeat(100) });
+    // An emoji straddling a cut is dropped whole: no summary or truncated string ends in half a surrogate pair.
+    const straddling = `${"a".repeat(99)}😀${"b".repeat(5000)}`;
+    const [cutString, cutSymbol] = make(small).encodeMany([straddling, Symbol(straddling)]);
+    expect(cutString).toMatchObject({ t: "string", v: "a".repeat(99), truncated: { total: 5101 } });
+    expect(cutSymbol).toEqual({ t: "symbol", desc: "a".repeat(99) });
+    expect(make({ ...DEFAULT_LIMITS, maxString: 100 }).encode(straddling)).toMatchObject({ v: "a".repeat(99) });
+  });
+
+  test("summaries never run proxy traps or throw, even with the budget nearly spent (final review M6)", () => {
+    // The first value leaves room for a summary but not for the proxy's full encoding.
+    const small = { ...DEFAULT_LIMITS, maxEncodedBytes: 1024 };
+    const trapCalls: string[] = [];
+    const recording = new Proxy(function target() {}, {
+      get: (_target, key) => {
+        trapCalls.push(`get ${String(key)}`);
+        return undefined;
+      },
+      getOwnPropertyDescriptor: () => {
+        trapCalls.push("getOwnPropertyDescriptor");
+        return undefined;
+      },
+      getPrototypeOf: () => {
+        trapCalls.push("getPrototypeOf");
+        return null;
+      },
+    });
+    const [, fnSummary] = make(small).encodeMany(["x".repeat(880), recording]);
+    expect(trapCalls).toEqual([]);
+    expect(fnSummary).toMatchObject({ t: "handle", preview: "Proxy" });
+    const throwing = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("trap threw");
+        },
+      },
+    );
+    let out: EncodedValue[] = [];
+    expect(() => {
+      out = make(small).encodeMany(["x".repeat(880), throwing]);
+    }).not.toThrow();
+    expect(out[1]).toMatchObject({ t: "handle", preview: "Proxy" });
   });
 
   test("an expand reply stays under MAX_EXPAND_BYTES and pages the rest behind a handle (R-M1-17(b))", () => {

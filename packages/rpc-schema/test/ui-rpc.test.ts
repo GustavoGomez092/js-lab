@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   appCommandSchema,
+  appNoticeSchema,
   bufferChangedSchema,
   e2eResponseSchema,
   fileConfirmLargeSchema,
@@ -10,6 +11,7 @@ import {
   MAX_TEXT_CHARS,
   runExpandParamsSchema,
   runStartParamsSchema,
+  settingsAppCommandSchema,
   settingsUpdateParamsSchema,
   tabCreateParamsSchema,
   tabParamsSchema,
@@ -88,6 +90,12 @@ describe("inbound validators", () => {
     );
   });
 
+  test("settings.update accepts at most 64 keys per section (FA-m7)", () => {
+    const keys = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, i) => [`key${i}`, true]));
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { editor: keys(64), view: keys(64) } }).success).toBe(true);
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { editor: keys(65) } }).success).toBe(false);
+  });
+
   test("workspace payloads: tab.create, widened tab.patch, tab.reorder, size-capped view state and one text cap", () => {
     expect(MAX_TEXT_CHARS).toBeGreaterThan(MAX_OPEN_FILE_BYTES);
     const large = "x".repeat(6 * 1024 * 1024);
@@ -117,6 +125,21 @@ describe("inbound validators", () => {
   test("app.command accepts only known actions", () => {
     expect(appCommandSchema.safeParse({ action: "copyDebugLog" }).success).toBe(true);
     expect(appCommandSchema.safeParse({ action: "exec" }).success).toBe(false);
+  });
+
+  test("the Settings window's app.command accepts only the Settings actions (FA-m11)", () => {
+    for (const action of ["resetSettings", "openDataFolder", "restartSafeMode"]) {
+      expect(settingsAppCommandSchema.safeParse({ action }).success).toBe(true);
+    }
+    for (const action of ["closeWindow", "toggleFullScreen", "openSettings", "copyDebugLog", "exec"]) {
+      expect(settingsAppCommandSchema.safeParse({ action }).success).toBe(false);
+    }
+  });
+
+  test("app.notice carries a known notice id and bounded text (FA-I3)", () => {
+    expect(appNoticeSchema.safeParse({ id: "unexpectedError", message: "Something went wrong." }).success).toBe(true);
+    expect(appNoticeSchema.safeParse({ id: "exec", message: "x" }).success).toBe(false);
+    expect(appNoticeSchema.safeParse({ id: "unexpectedError", message: "x".repeat(2001) }).success).toBe(false);
   });
 
   test("file payloads cap content and token lists", () => {

@@ -145,6 +145,21 @@ describe("magic comments", () => {
     expect(r.ok && r.diagnostics).toEqual([expect.objectContaining({ code: "magic-comment-no-value", line: 2 })]);
   });
 
+  test("warnings are capped at 500, followed by one summary of the rest (FA-m8)", () => {
+    const source = Array.from({ length: 700 }, () => "if (true) {\n} //?").join("\n");
+    const r = transform(source, baseOptions);
+    expect(r.ok).toBe(true);
+    expect(r.diagnostics).toHaveLength(501);
+    expect(r.diagnostics.slice(0, 500).every((d) => d.code === "magic-comment-no-value")).toBe(true);
+    expect(r.diagnostics[500]).toEqual({
+      severity: "warning",
+      code: "too-many-warnings",
+      message: "200 more warnings not shown",
+      line: 1002,
+      column: 3,
+    });
+  });
+
   test("an invalid $ expression warns and still logs the raw value", async () => {
     const { calls, result } = await runInstrumented("1 //? $.(");
     expect(calls).toEqual([{ kind: "mc", line: 1, value: 1 }]);

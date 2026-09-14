@@ -127,8 +127,6 @@ function preview(obj: object): string {
   return `${slicePairSafe(ctorName(obj) ?? "Object", MAX_PREVIEW)} {…}`;
 }
 
-const utf8 = new TextEncoder();
-
 /** Exact UTF-8 size of `text` as a JSON string body (without the quotes), as JSON.stringify writes it. */
 export function jsonStringBytes(text: string): number {
   let bytes = 0;
@@ -169,7 +167,8 @@ export function clipToJsonBytes(text: string, maxBytes: number): string {
 
 /** Exact size of `value` serialized with JSON.stringify, in UTF-8 bytes. */
 export function jsonBytes(value: unknown): number {
-  return utf8.encode(JSON.stringify(value)).length;
+  // Exact: JSON.stringify already escapes lone surrogates, so its UTF-8 length is the wire size (FA-m13).
+  return Buffer.byteLength(JSON.stringify(value) ?? "");
 }
 
 /** Replaces the values of an event that no longer fit even as summaries. */

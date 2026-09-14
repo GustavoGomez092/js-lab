@@ -40,11 +40,43 @@ export function transform(source: string, options: TransformOptions): TransformR
       parserOpts: { allowAwaitOutsideFunction: true },
     });
     if (!out) throw new Error("Babel returned no output");
-    return { ok: true, code: out.code ?? "", map: out.map as RawSourceMap, diagnostics };
+    return { ok: true, code: out.code ?? "", map: out.map as RawSourceMap, diagnostics: capWarnings(diagnostics) };
   } catch (error) {
     diagnostics.push(toDiagnostic(error));
-    return { ok: false, diagnostics };
+    return { ok: false, diagnostics: capWarnings(diagnostics) };
   }
+}
+
+/** Most warnings one transform reports (FA-m8): each becomes a run.diagnostics entry and a Monaco marker. */
+export const MAX_WARNINGS = 500;
+
+/**
+ * Keeps every error and the first MAX_WARNINGS warnings, in order, then one warning that counts the rest (placed at
+ * the first hidden warning). A source full of misplaced `//?` markers can't flood the UI with markers.
+ */
+export function capWarnings(diagnostics: Diagnostic[]): Diagnostic[] {
+  const kept: Diagnostic[] = [];
+  let warnings = 0;
+  let firstHidden: Diagnostic | null = null;
+  let hidden = 0;
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.severity === "error" || warnings < MAX_WARNINGS) {
+      if (diagnostic.severity === "warning") warnings++;
+      kept.push(diagnostic);
+      continue;
+    }
+    firstHidden ??= diagnostic;
+    hidden++;
+  }
+  if (!firstHidden) return diagnostics;
+  kept.push({
+    severity: "warning",
+    code: "too-many-warnings",
+    message: `${hidden} more ${hidden === 1 ? "warning" : "warnings"} not shown`,
+    line: firstHidden.line,
+    column: firstHidden.column,
+  });
+  return kept;
 }
 
 interface BabelLikeError {

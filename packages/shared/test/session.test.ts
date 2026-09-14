@@ -55,8 +55,14 @@ describe("session", () => {
     expect(s.tabs.a).toMatchObject({ language: "typescript", layout: { orientation: "horizontal", editorSize: 55 } });
   });
 
-  test("an invalid window frame becomes null", () => {
-    expect(sessionSchema.parse({ window: { x: 0, y: 0, width: 10, height: 10 } }).window).toBeNull();
+  test("a window frame below 400×300 is clamped to that size instead of forgotten; a malformed one becomes null (FA-m6)", () => {
+    expect(sessionSchema.parse({ window: { x: 5, y: 6, width: 10, height: 10 } }).window).toEqual({
+      x: 5,
+      y: 6,
+      width: 400,
+      height: 300,
+    });
+    expect(sessionSchema.parse({ window: { x: "0", y: 0, width: 800, height: 600 } }).window).toBeNull();
   });
 
   test("buffer file names use the language extension", () => {
@@ -122,6 +128,21 @@ describe("session", () => {
   test("normalize drops tabs stored under a key that is not their id", () => {
     const s = normalizeSession(sessionSchema.parse({ tabOrder: ["a", "b"], tabs: { a: tab("a"), b: tab("zzz") } }));
     expect(s.tabOrder).toEqual(["a"]);
+  });
+
+  test("closed-stack entries with unsafe ids are dropped even when no open tab needs a repair (FA-m1)", () => {
+    const { session, repairedTabIds } = parseSession({
+      version: 2,
+      tabOrder: ["ok"],
+      activeTabId: "ok",
+      tabs: { ok: tab("ok") },
+      closedStack: [
+        { tab: tab("../../escape"), closedAt: 2 },
+        { tab: tab("kept"), closedAt: 1 },
+      ],
+    });
+    expect(repairedTabIds).toEqual([]);
+    expect(session.closedStack.map((entry) => entry.tab.id)).toEqual(["kept"]);
   });
 
   test("hand-edited tab ids outside the safe id format get fresh ids everywhere they are referenced (R-M1-18)", () => {

@@ -52,8 +52,9 @@ export const windowStateSchema = z
   .object({
     x: z.number(),
     y: z.number(),
-    width: z.number().min(400),
-    height: z.number().min(300),
+    // FA-m6: no minimum window size is set natively, so a smaller frame is clamped rather than forgotten.
+    width: z.number().transform((width) => Math.max(400, width)),
+    height: z.number().transform((height) => Math.max(300, height)),
     // Spec §10.1 / Appendix C: the display the frame was on (Electrobun `Display.id`, stored as a string) and whether
     // the window was full screen. Optional in the type, so `BrowserWindow#getFrame()` results still fit `setWindow`.
     displayId: z.string().min(1).max(100).optional().catch(undefined),
@@ -143,7 +144,13 @@ export function repairTabIds(session: Session): { session: Session; repairedTabI
   for (const [key, tab] of Object.entries(session.tabs)) {
     if (tab.id === key && !TAB_ID_PATTERN.test(key)) renames.set(key, crypto.randomUUID());
   }
-  if (renames.size === 0) return { session, repairedTabIds: [] };
+  // FA-m1: closed-stack ids name files under buffers/closed/, so an unsafe one is dropped whether or not any open tab
+  // needs a repair.
+  const closedStack = session.closedStack.filter((entry) => TAB_ID_PATTERN.test(entry.tab.id));
+  if (renames.size === 0) {
+    const safe = closedStack.length === session.closedStack.length ? session : { ...session, closedStack };
+    return { session: safe, repairedTabIds: [] };
+  }
   const rename = (id: string) => renames.get(id) ?? id;
   const tabs: Record<string, TabState> = {};
   for (const [key, tab] of Object.entries(session.tabs)) {
@@ -156,7 +163,7 @@ export function repairTabIds(session: Session): { session: Session; repairedTabI
       tabs,
       tabOrder: session.tabOrder.map(rename),
       activeTabId: rename(session.activeTabId),
-      closedStack: session.closedStack.filter((entry) => TAB_ID_PATTERN.test(entry.tab.id)),
+      closedStack,
     },
     repairedTabIds: [...renames],
   };

@@ -13,7 +13,8 @@ export type DiagnosticCode =
   | "reserved-identifier"
   | "magic-comment-no-value"
   | "magic-comment-invalid-expression"
-  | "logpoint-no-value";
+  | "logpoint-no-value"
+  | "too-many-warnings";
 
 export interface Diagnostic {
   severity: "error" | "warning";

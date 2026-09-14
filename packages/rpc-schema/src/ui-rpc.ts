@@ -98,6 +98,15 @@ export const APP_ACTIONS = [
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });
 
+/** The only app actions the Settings window sends (spec §7.5, FA-m11): it can't close or resize the main window. */
+export const SETTINGS_APP_ACTIONS = [
+  "resetSettings",
+  "openDataFolder",
+  "restartSafeMode",
+] as const satisfies readonly AppAction[];
+export type SettingsAppAction = (typeof SETTINGS_APP_ACTIONS)[number];
+export const settingsAppCommandSchema = z.object({ action: z.enum(SETTINGS_APP_ACTIONS) });
+
 export const fileSaveParamsSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });
 export const fileConfirmLargeSchema = z.object({ tokens: z.array(z.uuid()).min(1).max(100) });
 export const fileConfirmSaveAsSchema = z.object({ token: z.uuid(), confirmed: z.boolean() });
@@ -117,7 +126,7 @@ export type SettingsWindowRequests = {
 };
 
 export type SettingsWindowMessages = {
-  "app.command": { action: AppAction };
+  "app.command": { action: SettingsAppAction };
   "e2e.response": E2EResponse;
 };
 
@@ -132,22 +141,39 @@ export const STARTUP_NOTICE_IDS = [
   "settingsNewer",
   "sessionNewer",
   "tabsDropped",
+  "unexpectedError",
 ] as const;
 
-/** Something Main wants the user to know at startup (spec §20): recovered files, newer files, skipped tabs. */
+/**
+ * Something Main wants the user to know (spec §20): at startup, recovered files, newer files and skipped tabs; later,
+ * an unexpected Main error (FA-I3), sent as an `app.notice` message.
+ */
 export interface StartupNotice {
   id: (typeof STARTUP_NOTICE_IDS)[number];
   message: string;
 }
 
+/** `app.notice` (Main → UI): validated by the UI before it is shown (FA-I3). */
+export const appNoticeSchema = z.object({ id: z.enum(STARTUP_NOTICE_IDS), message: z.string().min(1).max(2000) });
+
 const settingValue = z.union([z.boolean(), z.number().finite(), z.string().max(200)]);
 
+/** Most keys one `settings.update` section may carry (FA-m7): loose sections keep unknown keys, so this bounds junk. */
+export const MAX_SETTINGS_PATCH_KEYS = 64;
+
 /**
- * `settings.update` patch: known sections only, scalar values only. Out-of-range values are repaired by
- * mergeSettings, never rejected.
+ * `settings.update` patch: known sections only, scalar values only, at most 64 keys per section. Out-of-range values
+ * are repaired by mergeSettings, never rejected.
  */
 export const settingsUpdateParamsSchema = z.object({
-  patch: z.partialRecord(z.enum(SETTINGS_SECTIONS), z.record(z.string().min(1).max(64), settingValue)),
+  patch: z.partialRecord(
+    z.enum(SETTINGS_SECTIONS),
+    z
+      .record(z.string().min(1).max(64), settingValue)
+      .refine((section) => Object.keys(section).length <= MAX_SETTINGS_PATCH_KEYS, {
+        message: `A settings section patch may set at most ${MAX_SETTINGS_PATCH_KEYS} keys`,
+      }),
+  ),
 });
 export type SettingsUpdateParams = z.infer<typeof settingsUpdateParamsSchema>;
 
@@ -249,4 +275,5 @@ export type ViewMessages = {
   "file.saveAsConfirm": { token: string; tabId: string; path: string };
   "file.saveCancelled": { tabId: string };
   "file.saveFailed": { tabId: string; error: string };
+  "app.notice": StartupNotice;
 };

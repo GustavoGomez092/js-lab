@@ -157,7 +157,8 @@ export const localTypesParamsSchema = z.object({
         .string()
         .min(2)
         .max(1024)
-        .regex(/^\.\.?\/[^\0-\x20\\]*$/),
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: the class intentionally excludes control characters
+        .regex(/^\.\.?\/[^\0-\x1f\\]*$/),
     )
     .min(1)
     .max(200),

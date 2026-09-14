@@ -61,11 +61,13 @@ describe("M3 contracts", () => {
     expect(ok(packageTypesParamsSchema, { tabId: "t1", packages: Array.from({ length: 51 }, (_, i) => `p${i}`) })).toBe(
       false,
     );
-    expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["./util", "../lib/x.js"] })).toBe(true);
+    expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["./util", "../lib/x.js", "./my file.js"] })).toBe(
+      true,
+    );
     expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["zod"] })).toBe(false);
     expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["/etc/passwd"] })).toBe(false);
     expect(ok(localTypesParamsSchema, { tabId: "../x", specifiers: ["./a"] })).toBe(false);
-    expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["./a b"] })).toBe(false);
+    expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: [`./a${String.fromCharCode(0)}b`] })).toBe(false);
     expect(ok(localTypesParamsSchema, { tabId: "t1", specifiers: ["./a\\b"] })).toBe(false);
   });
 

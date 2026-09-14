@@ -93,6 +93,7 @@ export function TabBar(props: {
               setDropTarget({ id, after: event.clientX > rect.left + rect.width / 2 });
             }}
             onDragLeave={() => setDropTarget(null)}
+            onDragEnd={() => setDropTarget(null)}
             onDrop={(event) => {
               const dragged = event.dataTransfer.getData(DRAG_TYPE);
               const after = dropTarget?.id === id ? dropTarget.after : false;

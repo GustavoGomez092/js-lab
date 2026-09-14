@@ -72,6 +72,21 @@ describe("tab bar", () => {
     expect(tabs.newTab).toHaveBeenCalledTimes(1);
   });
 
+  test("a drag that ends without a drop clears the drop indicator (I-1)", () => {
+    setup();
+    const all = screen.getAllByRole("tab");
+    const dataTransfer = new DataTransfer();
+    fireEvent.dragStart(all[0] as HTMLElement, { dataTransfer });
+    fireEvent.dragOver(all[1] as HTMLElement, { dataTransfer, clientX: 0 });
+    expect(all[1]?.className).toContain("drop-before");
+    // Escape mid-drag, or releasing over the editor/output/"+" button, fires dragend without a drop.
+    fireEvent.dragEnd(all[0] as HTMLElement, { dataTransfer });
+    const classes = screen.getAllByRole("tab").map((tab) => tab.className);
+    expect(classes.some((className) => className.includes("drop-before") || className.includes("drop-after"))).toBe(
+      false,
+    );
+  });
+
   test("the context menu enables file actions only for saved files and runs the chosen action", () => {
     const { tabs, api, store } = setup();
     const [first, second] = screen.getAllByRole("tab");
@@ -113,9 +128,16 @@ describe("tab bar", () => {
     fireEvent.change(input, { target: { value: "sums" } });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
     expect([store.getState().tab?.title, store.getState().modal]).toEqual(["sums", null]);
+    // m-1: rename returns focus to whatever had it before the dialog opened (here, a tab button)
+    // instead of stranding it on the (now unmounted) dialog.
+    const tabButton = document.createElement("button");
+    document.body.appendChild(tabButton);
+    tabButton.focus();
     act(() => store.getState().openModal({ kind: "rename", tabId: "a" }));
     fireEvent.change(screen.getByLabelText("Tab name"), { target: { value: "ignored" } });
     fireEvent.keyDown(screen.getByLabelText("Tab name"), { key: "Escape" });
     expect([store.getState().tab?.title, store.getState().modal]).toEqual(["sums", null]);
+    expect(document.activeElement).toBe(tabButton);
+    tabButton.remove();
   });
 });

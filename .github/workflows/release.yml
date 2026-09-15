@@ -55,7 +55,7 @@ jobs:
         working-directory: apps/desktop
         shell: bash
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           # R-M3-CI-HDIUTIL-2: hdiutil's disk-image creation flakes as "Resource busy" on the runner; retry once.
           log1="$RUNNER_TEMP/canary-build-1.log"
           hutch run build 2>&1 | tee "$log1"

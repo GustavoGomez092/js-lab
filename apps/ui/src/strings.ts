@@ -207,6 +207,9 @@ export const strings = {
     reveal: (key: string) => `Show value of ${key}`,
     hide: (key: string) => `Hide value of ${key}`,
     remove: (key: string) => `Remove ${key}`,
+    // Fix round 1 (M-6): New value is masked by default, with its own toggle (no key to name yet).
+    revealNew: "Show new value",
+    hideNew: "Hide new value",
     newKey: "New key",
     newValue: "New value",
     add: "Add",

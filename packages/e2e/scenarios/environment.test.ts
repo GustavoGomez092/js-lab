@@ -37,5 +37,10 @@ test("Environment Variables: add, save to a 0600 env.json, read in the next run,
   await current.command("help.copyDebugLog");
   const clip = join(current.userData, "e2e-clipboard.txt");
   const report = await waitFor(() => (existsSync(clip) ? readFileSync(clip, "utf8") : null));
+  // Fix round 1 (N-4): a positive control, so an empty or truncated report couldn't pass the absence check
+  // below by accident.
+  const parsed = JSON.parse(report);
+  expect(typeof parsed.version).toBe("string");
+  expect(Array.isArray(parsed.log)).toBe(true);
   expect(report).not.toContain("hello-from-env");
 });

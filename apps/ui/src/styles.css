@@ -622,6 +622,13 @@ button:disabled {
   font-size: 11px;
 }
 
+/* Fix round 1 (M-2): the paste-result info line, kept apart from .sheet-status's role="alert" error text. */
+.env-info {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
 /* Startup failure (review finding: Task 9's failure screen had no styles). */
 .startup-failure {
   display: flex;

@@ -14,6 +14,10 @@ export const VIEW_MESSAGES = [
   "file.saveCancelled",
   "file.saveFailed",
   "app.notice",
+  "npm.op",
+  "npm.log",
+  "npm.changed",
+  "wd.changed",
 ] as const satisfies readonly (keyof ViewMessages)[];
 
 // Type-level exhaustiveness check: a ViewMessages key missing from VIEW_MESSAGES fails typecheck here (m-5).

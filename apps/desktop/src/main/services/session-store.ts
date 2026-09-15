@@ -313,6 +313,15 @@ export class SessionStore {
     });
   }
 
+  /** Spec §12.2: the tab's working directory, or null to clear it. Returns the updated tab. */
+  setWorkingDirectory(tabId: string, workingDirectory: string | null): TabState | null {
+    const tab = this.#session.tabs[tabId];
+    if (!tab) return null;
+    const next: TabState = { ...tab, workingDirectory };
+    this.#commit({ ...this.#session, tabs: { ...this.#session.tabs, [tabId]: next } });
+    return next;
+  }
+
   findTabByPath(path: string): TabState | null {
     return Object.values(this.#session.tabs).find((tab) => tab.filePath === path) ?? null;
   }

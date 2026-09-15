@@ -32,9 +32,13 @@ describe("main services (composition root)", () => {
       paths,
       env: {},
       shiftHeld: Promise.resolve(false),
+      realHome: join(dir, "home"),
       onEvents: () => {},
       onState: () => {},
       onDiagnostics: () => {},
+      onNpmOperation: () => {},
+      onNpmLog: () => {},
+      onNpmChanged: () => {},
       startRunner: () => Promise.reject(new Error("no runners in this test")),
       transformHost: { transform: () => Promise.reject(new Error("no transforms in this test")), dispose: () => {} },
     });
@@ -72,9 +76,13 @@ describe("main services (composition root)", () => {
       paths,
       env: {},
       shiftHeld: Promise.resolve(false),
+      realHome: join(dir, "home"),
       onEvents: () => {},
       onState: () => {},
       onDiagnostics: () => {},
+      onNpmOperation: () => {},
+      onNpmLog: () => {},
+      onNpmChanged: () => {},
       startRunner: async (config: RunnerSpawnConfig) => {
         const kill = mock(() => {});
         started.push({ env: config.env, kill });
@@ -91,5 +99,44 @@ describe("main services (composition root)", () => {
     expect(started[0]?.kill).toHaveBeenCalledTimes(1);
     expect(started).toHaveLength(2);
     expect(started[1]?.env.API_TOKEN).toBe("v2");
+  });
+
+  test("npm and types services are composed; saving env.json recycles spares", async () => {
+    const paths = resolveAppPaths({
+      resourcesFolder: join(dir, "Resources"),
+      userData: dir,
+      execPath: process.execPath,
+      env: {},
+    });
+    const started: string[] = [];
+    services = await createMainServices({
+      paths,
+      env: {},
+      shiftHeld: Promise.resolve(false),
+      realHome: join(dir, "home"),
+      onEvents: () => {},
+      onState: () => {},
+      onDiagnostics: () => {},
+      onNpmOperation: () => {},
+      onNpmLog: () => {},
+      onNpmChanged: () => {},
+      startRunner: (config) => {
+        started.push(config.cwd);
+        return Promise.reject(new Error("no runners in this test"));
+      },
+      transformHost: { transform: () => Promise.reject(new Error("no transforms")), dispose: () => {} },
+    });
+    expect((await services.npm.list({ refreshOutdated: false })).installed).toEqual([]);
+    expect(await services.types.local(services.session.session.activeTabId, ["./x"])).toEqual({
+      files: [],
+      packages: [],
+      truncated: false,
+    });
+    services.spares.setActiveTab(services.session.session.activeTabId);
+    await Bun.sleep(0);
+    const before = started.length;
+    await services.env.save({ A: "1" });
+    await Bun.sleep(0);
+    expect(started.length).toBe(before + 1);
   });
 });

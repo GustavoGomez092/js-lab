@@ -314,6 +314,11 @@ export class NpmService {
     return this.deps.spawn(argv, { cwd: this.deps.paths.packagesDir, env, signal, onOutput });
   }
 
+  /** Settings → NPM changed `.npmrc`: the cached outdated result may name another registry's versions. */
+  resetOutdated(): void {
+    this.onSucceeded();
+  }
+
   /** Called after each successful change, before the new list is reported: a change invalidates the outdated cache. */
   protected onSucceeded(): void {
     this.#outdated = null;

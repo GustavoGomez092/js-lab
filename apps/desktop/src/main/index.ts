@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { arch } from "node:os";
+import { mkdir, stat } from "node:fs/promises";
+import { arch, homedir } from "node:os";
 import { join } from "node:path";
 import type {
   MainMessages,
@@ -42,9 +42,14 @@ import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
 import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } from "./rpc/app-handlers";
+import { createEnvHandlers } from "./rpc/env-handlers";
 import { createFileHandlers } from "./rpc/file-handlers";
 import { createFontHandlers } from "./rpc/font-handlers";
+import { createNpmHandlers } from "./rpc/npm-handlers";
+import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
+import { createTypesHandlers } from "./rpc/types-handlers";
+import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
@@ -121,7 +126,9 @@ async function start(): Promise<void> {
     env: process.env,
   });
 
-  const redact = createRedactor();
+  // Spec §18: env.json values are masked in logs and the debug report once the env store is open.
+  let envSecrets: () => readonly string[] = () => [];
+  const redact = createRedactor(() => envSecrets());
   const logsDir = join(paths.dataDir, "logs");
   const logger = new RotatingLog({ dir: logsDir, debug: process.env.JSLAB_DEBUG === "1", redact });
   log = (message, detail) => logger.warn(message, detail);
@@ -164,8 +171,17 @@ async function start(): Promise<void> {
     onState: (tabId, runId, state, activeHandles) =>
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
     onDiagnostics: (tabId, runId, diagnostics) => rpc.send["run.diagnostics"]({ tabId, runId, diagnostics }),
+    realHome: homedir(),
+    ...(process.env.JSLAB_E2E === "1" && process.env.JSLAB_E2E_BUN_CACHE_DIR
+      ? { bunCacheDirOverride: process.env.JSLAB_E2E_BUN_CACHE_DIR }
+      : {}),
+    onNpmOperation: (operation) => rpc.send["npm.op"](operation),
+    // R-M3-T18-LOGCAP-1: a pass-through; the log drawer (Task 26) keeps the newest MAX_NPM_LOG_CHARS per operation.
+    onNpmLog: (opId, text) => rpc.send["npm.log"]({ opId, text }),
+    onNpmChanged: (list) => rpc.send["npm.changed"](list),
   });
-  const { settings, session, runLock, safeMode, transform, spares, coordinator } = services;
+  const { settings, session, env, npm, types, runLock, safeMode, transform, spares, coordinator } = services;
+  envSecrets = () => env.secrets();
   if (settings.recovered !== "none") log(`settings.json recovered from ${settings.recovered}`);
   if (session.recovered !== "none") log(`session.json recovered from ${session.recovered}`);
   if (settings.newerVersion !== null) {
@@ -258,6 +274,34 @@ async function start(): Promise<void> {
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
+      createNpmHandlers({ npm, log }),
+      createEnvHandlers({ env, log }),
+      createTypesHandlers({ types, log }),
+      createWorkingDirectoryHandlers({
+        session,
+        documentsDir: Utils.paths.documents,
+        pickFolder: async ({ startingFolder }) =>
+          e2eEnabled
+            ? ((await readE2EOpenDialog(paths.dataDir))[0] ?? null)
+            : ((
+                await Utils.openFileDialog({
+                  startingFolder,
+                  allowedFileTypes: "*",
+                  canChooseFiles: false,
+                  canChooseDirectory: true,
+                  allowsMultipleSelection: false,
+                })
+              )[0] ?? null),
+        isDirectory: (path) =>
+          stat(path).then(
+            (info) => info.isDirectory(),
+            () => false,
+          ),
+        spares,
+        types,
+        send: { changed: (payload) => rpc.send["wd.changed"](payload) },
+        log,
+      }),
       appHandlers,
       createFileHandlers({
         files: new FileService(nodeFileSystem),
@@ -387,6 +431,7 @@ async function start(): Promise<void> {
     handlers: mergeHandlers(
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createFontHandlers({ fonts: systemFonts, log }),
+      createNpmrcHandlers({ path: paths.packagesNpmrc, onSaved: () => npm.resetOutdated(), log }),
       createSettingsAppHandlers(appHandlerDeps),
       createE2EResponseHandler(settingsE2E, log),
     ),

@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
 import { effectiveRuntime, runnerSettings } from "@jslab/shared";
 import type { AppPaths } from "./app-paths";
 import { RunLock } from "./persistence/run-lock";
@@ -6,10 +8,13 @@ import { RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator"
 import { createRunnerConfig } from "./runs/runner-config";
 import { SparePool } from "./runs/spare-pool";
 import { EnvStore } from "./services/env-store";
+import { NpmService } from "./services/npm-service";
+import { createBunSpawn, type NpmSpawn } from "./services/npm-spawn";
 import { ensurePackagesProject } from "./services/packages-project";
 import { consumeSafeModeFlag, detectSafeMode, type SafeModeState } from "./services/safe-mode";
 import { SessionStore } from "./services/session-store";
 import { SettingsStore } from "./services/settings-store";
+import { TypesService } from "./services/types-service";
 import { strings } from "./strings";
 import { CachingTransformHost, type TransformHost, WorkerTransformHost } from "./transform/transform-host";
 
@@ -27,12 +32,23 @@ export interface MainServicesOptions {
   transformHost?: TransformHost;
   /** Main's log (index.ts passes the rotating log). Defaults to console.error. */
   log?: (message: string, detail?: unknown) => void;
+  /** The user's real home folder (for the Bun cache location, spec §11.3). */
+  realHome: string;
+  /** E2E only: a temp Bun cache for npm operations instead of the user's. */
+  bunCacheDirOverride?: string;
+  npmSpawn?: NpmSpawn;
+  npmFetch?: typeof fetch;
+  onNpmOperation(operation: NpmOperation): void;
+  onNpmLog(opId: string, text: string): void;
+  onNpmChanged(list: NpmListResult): void;
 }
 
 export interface MainServices {
   settings: SettingsStore;
   session: SessionStore;
   env: EnvStore;
+  npm: NpmService;
+  types: TypesService;
   runLock: RunLock;
   safeMode: SafeModeState;
   transform: TransformHost;
@@ -89,10 +105,40 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   });
   // Spec §12.1: saving env.json recycles every tab's spare, so the next run gets the new values.
   env.onChange(() => spares.invalidateAll());
+  const workingDirectoryFor = (tabId: string) => session.session.tabs[tabId]?.workingDirectory ?? null;
+  const types = new TypesService({
+    workingDirectoryFor,
+    nodeModulesDirsFor: (tabId) => {
+      const workingDirectory = workingDirectoryFor(tabId);
+      return workingDirectory
+        ? [join(workingDirectory, "node_modules"), paths.packagesNodeModules]
+        : [paths.packagesNodeModules];
+    },
+  });
+  const npm = new NpmService({
+    paths,
+    baseEnv: () => options.env,
+    realHome: options.realHome,
+    ...(options.bunCacheDirOverride ? { cacheDirOverride: options.bunCacheDirOverride } : {}),
+    settings: () => settings.current.npm,
+    spawn: options.npmSpawn ?? createBunSpawn(paths.bunBinary),
+    ...(options.npmFetch ? { fetch: options.npmFetch } : {}),
+    onOperation: options.onNpmOperation,
+    onLog: options.onNpmLog,
+    onChanged: options.onNpmChanged,
+    // Spec §11.3: after any change, spares are recycled and the type cache is invalidated (web vendor caches: M4).
+    afterChange: () => {
+      spares.invalidateAll();
+      types.invalidate();
+    },
+    log,
+  });
   return {
     settings,
     session,
     env,
+    npm,
+    types,
     runLock,
     safeMode,
     transform,

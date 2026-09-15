@@ -259,6 +259,9 @@ export type SettingsWindowRequests = {
   "settings.get": { params: Record<string, never>; response: { settings: Settings; e2e: boolean } };
   "settings.update": { params: SettingsUpdateParams; response: Settings };
   "fonts.list": { params: Record<string, never>; response: { fonts: SystemFontList | null; refreshing: boolean } };
+  "npmrc.get": { params: Record<string, never>; response: { content: string } };
+  "npmrc.save": { params: { content: string }; response: SaveResult };
+  "npmrc.reset": { params: Record<string, never>; response: { content: string } };
 };
 
 export type SettingsWindowMessages = {
@@ -375,6 +378,12 @@ export type MainRequests = {
   "settings.get": { params: Record<string, never>; response: { settings: Settings; e2e: boolean } };
   "settings.update": { params: SettingsUpdateParams; response: Settings };
   "file.save": { params: FileSaveParams; response: FileSaveResult };
+  "npm.list": { params: { refreshOutdated: boolean }; response: NpmListResult };
+  "npm.search": { params: { query: string }; response: NpmSearchResponse };
+  "types.package": { params: { tabId: string; packages: string[] }; response: { packages: PackageTypesResult[] } };
+  "types.local": { params: { tabId: string; specifiers: string[] }; response: LocalTypesResult };
+  "env.get": { params: Record<string, never>; response: { variables: EnvVars } };
+  "env.save": { params: { variables: EnvVars }; response: SaveResult };
 };
 
 /** Messages received by Main, sent by the UI. */
@@ -396,6 +405,12 @@ export type MainMessages = {
   "file.confirmSaveAs": { token: string; confirmed: boolean };
   "tab.revealInFinder": TabParams;
   "tab.copyPath": TabParams;
+  "npm.install": { spec: string };
+  "npm.remove": { name: string };
+  "npm.update": { name: string };
+  "npm.updateAll": Record<string, never>;
+  "wd.pick": TabParams;
+  "wd.clear": TabParams;
 };
 
 /** Messages received by the UI, sent by Main. */
@@ -412,4 +427,8 @@ export type ViewMessages = {
   "file.saveCancelled": { tabId: string };
   "file.saveFailed": { tabId: string; error: string };
   "app.notice": StartupNotice;
+  "npm.op": NpmOperation;
+  "npm.log": { opId: string; text: string };
+  "npm.changed": NpmListResult;
+  "wd.changed": { tabId: string; tab: TabState };
 };

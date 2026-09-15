@@ -51,10 +51,10 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | EX-27 | `console.time*`, `console.assert`, `console.clear`, `console.table` | CL 1.10–2.3 | All console methods incl. `group*`, `trace`, `count`, `dir` | §5.6, §5.10 | M1 | U, I | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/output.test.ts` |
 | EX-28 | stdout/stderr output | #273 | `stdout`/`stderr` events | §5.6 | M1 | I | ✅ `packages/runner-bun/test/bootstrap.test.ts`, `packages/runner-bun/test/event-buffer.test.ts` |
 | EX-29 | Loading spinner while running | CL 1.12.0 | Run state indicators | §5.7 | M1 | E | ✅ `apps/ui/test/logic.test.ts`, `apps/ui/test/app.test.tsx` |
-| EX-30 | Working directory: Set Working Directory…, relative import/require/fs | Docs, CL 1.3.0, 1.5.1 | Per tab; relative imports and local `.ts` run natively | §5.3, §12.2 | M3 | I, E | ⬜ |
-| EX-31 | `__dirname` / `__filename` / `module` scoped to the WD | CL 2.7.5, #519 | Same | §5.3 | M3 | I | ⬜ |
-| EX-32 | `.env` files in the WD load | Docs, CL 3.2.0 | Same; Bun auto-load disabled | §5.3 | M3 | I | ⬜ |
-| EX-33 | Tab label shows the WD name | #99 | Suffix "· dirname" | §12.2 | M3 | E | ⬜ |
+| EX-30 | Working directory: Set Working Directory…, relative import/require/fs | Docs, CL 1.3.0, 1.5.1 | Per tab; relative imports and local `.ts` run natively | §5.3, §12.2 | M3 | I, E | ✅ |
+| EX-31 | `__dirname` / `__filename` / `module` scoped to the WD | CL 2.7.5, #519 | Same | §5.3 | M3 | I | ✅ |
+| EX-32 | `.env` files in the WD load | Docs, CL 3.2.0 | Same; Bun auto-load disabled | §5.3 | M3 | I | ✅ |
+| EX-33 | Tab label shows the WD name | #99 | Suffix "· dirname" | §12.2 | M3 | E | ✅ |
 | EX-34 | `fetch` works without CORS blocking | CL 2.7.5, #513 | `bun`: native; `browser-node`: proxied; `browser`: real CORS | §5.12 | M4 | I | 📝 `browser` runtime enforces CORS (true browser semantics) |
 | EX-35 | Audio indicator + mute toggle | CL 1.9.0, Strings | Speaker icon on tab, click to mute | §5.12 | M4 | M | ⬜ |
 | EX-36 | Safe recovery from hanging code on launch (Edit → Clear workaround) | #252, #548, #6 | Restored tabs never auto-run; crash-loop Safe Mode; Clear Editor | §5.14 | M1 | E | ✅ `apps/desktop/test/services/services.test.ts`, `apps/ui/test/app.test.tsx`, `apps/ui/test/logic.test.ts` |
@@ -68,9 +68,9 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | LB-02 | Default Language setting | Docs | `run.defaultLanguage` | §8 | M2 | U | ✅ `packages/e2e/scenarios/settings.test.ts` |
 | LB-03 | TypeScript compiled before running; types don't block execution | Docs | Babel preset-typescript | §5.4 | M1 | U | ⬜ |
 | LB-04 | JSX/TSX automatic runtime (no React import) | Docs | `runtime: "automatic"` | §5.4 | M1 | U | ⬜ |
-| LB-05 | Syntax proposals (decorators, pipeline, do-expressions, throw expressions, partial application, function.sent, regexp modifiers, optional chaining assignment, async do) | Docs (v3, archived), CL 1.10–2.10 | Build settings tab, except partial application and async do expressions (Babel 8 removed both plugins) | §8 | M3 | U | 📝 |
+| LB-05 | Syntax proposals (decorators, pipeline, do-expressions, throw expressions, partial application, function.sent, regexp modifiers, optional chaining assignment, async do) | Docs (v3, archived), CL 1.10–2.10 | Build settings tab, except partial application and async do expressions (Babel 8 removed both plugins) | §8 | M3 | U | 📝 partial application and async do expressions removed in Babel 8; the other proposals implemented (M3) |
 | LB-06 | Bundling for ESM imports | CL 2.6.0 | Not needed for `bun` (native ESM); `Bun.build` for browser runtimes | §5.3, §5.12 | M1/M4 | I | 📝 no toggle needed |
-| LB-07 | `declare` fields (#526), legacy TS decorators (#574) | #526, #574 | `allowDeclareFields`; `build.decorators: legacy` | §5.4, §8 | M3 | U | ⬜ |
+| LB-07 | `declare` fields (#526), legacy TS decorators (#574) | #526, #574 | `allowDeclareFields`; `build.decorators: legacy` | §5.4, §8 | M3 | U | ✅ |
 
 ## 3. Editor
 
@@ -83,13 +83,13 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | ED-05 | Line Numbers | Docs | `editor.lineNumbers` | §8 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q19) |
 | ED-06 | Invisibles | Docs | `editor.invisibles` | §8 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q19) |
 | ED-07 | Active Line | Docs | `editor.activeLine` | §8 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q19) |
-| ED-08 | Autocomplete (case-insensitive, with icons), Ctrl+Space | Docs, CL 2.5, 2.7.3, 2.12 | Monaco suggestions | §6.1 | M3 | E | ⬜ |
-| ED-09 | Linting (TypeScript diagnostics inline) | Docs | `editor.linting` | §6.1 | M3 | E | ⬜ |
-| ED-10 | Hover info (type + docs), F1 | Docs, CL 2.4.0, 4.0.0 | `editor.hoverInfo`, configurable delay (#705) | §6.3 | M3 | E | ⬜ |
-| ED-11 | Signatures (parameter hints) | Docs | `editor.signatures` | §8 | M3 | M | ⬜ |
-| ED-12 | Lint tooltip (Cmd/Ctrl+F1) | CL 4.0.0 | Show Diagnostic | §6.5 | M3 | M | ⬜ |
-| ED-13 | Types from installed packages and `@types/*` | Docs | Type feeder | §6.2 | M3 | I, E | ⬜ |
-| ED-14 | Node types available | CL 4.0.2 | Built-in `@types/node` + `bun-types` | §6.2 | M3 | E | ⬜ |
+| ED-08 | Autocomplete (case-insensitive, with icons), Ctrl+Space | Docs, CL 2.5, 2.7.3, 2.12 | Monaco suggestions | §6.1 | M3 | E | ✅ |
+| ED-09 | Linting (TypeScript diagnostics inline) | Docs | `editor.linting` | §6.1 | M3 | E | ✅ |
+| ED-10 | Hover info (type + docs), F1 | Docs, CL 2.4.0, 4.0.0 | `editor.hoverInfo`, configurable delay (#705) | §6.3 | M3 | E | 🚧 pending user manual QA (docs/qa/m3-checklist.md Q10) |
+| ED-11 | Signatures (parameter hints) | Docs | `editor.signatures` | §8 | M3 | M | 🚧 pending user manual QA (docs/qa/m3-checklist.md Q10) |
+| ED-12 | Lint tooltip (Cmd/Ctrl+F1) | CL 4.0.0 | Show Diagnostic | §6.5 | M3 | M | 🚧 pending user manual QA (docs/qa/m3-checklist.md Q10) |
+| ED-13 | Types from installed packages and `@types/*` | Docs | Type feeder | §6.2 | M3 | I, E | ✅ |
+| ED-14 | Node types available | CL 4.0.2 | Built-in `@types/node` + `bun-types` | §6.2 | M3 | E | ✅ |
 | ED-15 | Find / Replace | CL 1.11.0, Docs | Monaco find widget | §6.5 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q17) |
 | ED-16 | Go to line | Strings | `Ctrl+G` | §6.5 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q17) |
 | ED-17 | Toggle line/block comment | CL 2.3.0 | Same | §6.5 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q17) |
@@ -101,7 +101,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | ED-23 | Auto Format on run | Docs | `run.formatOnRun` | §6.4 | M2 | E | ✅ `packages/e2e/scenarios/format.test.ts` |
 | ED-24 | Formatting options (print width, tab width, semicolons, quotes, quote props, JSX quotes, trailing commas, bracket spacing, arrow parens) | Docs | All `prettier.*` + Use Tabs (#728) + bracketSameLine | §8 | M2 | U | ✅ `packages/e2e/scenarios/format.test.ts` |
 | ED-25 | Large paste guard | CL 2.6.0 | 5 MB confirmation | §6.3 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q15) |
-| ED-26 | Install assist for missing imports | CL 1.10.0, 2.7.4 | Code action + runtime error fix | §11.4 | M3 | E | ⬜ |
+| ED-26 | Install assist for missing imports | CL 1.10.0, 2.7.4 | Code action + runtime error fix | §11.4 | M3 | E | ✅ |
 | ED-27 | Zoom (Cmd =/−/0) scales editor, output and sidebar | Docs, CL 3.2.0 | `appearance.uiScale` | §6.5 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q5) |
 
 ## 4. Output
@@ -151,15 +151,15 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | TF-08 | Confirm Close | CL 2.4.0, Docs | `tabs.confirmClose` | §7.3 | M2 | E | ✅ `packages/e2e/scenarios/files.test.ts` |
 | TF-09 | Prompt to save a modified file on close | CL 2.7.1 | Same | §7.3 | M2 | E | ✅ `packages/e2e/scenarios/files.test.ts` |
 | TF-10 | Open / Save / Save As | Docs | Open dialog + `saveDialog` adapter | §10.2 | M2 | E | ✅ `packages/e2e/scenarios/files.test.ts` |
-| TF-11 | Drag and drop files opens new tabs | CL 2.7.1, 3.2.0 | New tabs as unsaved scratch copies named after the file, with no file path; folder sets WD | §7.3 | M2 | M | 📝 deviation until native drop (M3); drops pending user manual QA (docs/qa/m2-checklist.md Q14) |
+| TF-11 | Drag and drop files opens new tabs | CL 2.7.1, 3.2.0 | New tabs as unsaved scratch copies named after the file, with no file path; folder sets WD | §7.3 | M2 | M | 📝 deviation: dropped files open as scratch copies and a dropped folder shows the Set Working Directory notice; Electrobun 2.0.1 delivers no dropped paths (R-M3-SPIKE-1); drops pending user manual QA (docs/qa/m2-checklist.md Q14, docs/qa/m3-checklist.md Q15) |
 | TF-12 | Large file open guard | CL 2.6.0 | 5 MB confirmation | §10.2 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q15) |
 | TF-13 | Auto-save tab contents on change; restore on restart | CL 2.11.0, #590 | Buffers + session | §10.1 | M1/M2 | I | ✅ `apps/desktop/test/persistence/persistence.test.ts`, `packages/shared/test/session.test.ts`, `packages/e2e/scenarios/tabs.test.ts`, `packages/e2e/scenarios/view-state.test.ts` (M2) |
 | TF-14 | Window size/position remembered | CL 1.6.0 | Same | §10.1 | M1 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q34); the off-screen restore scenario (`packages/e2e/scenarios/files.test.ts`) covers only the clamp, and M1 evidence: `apps/desktop/test/services/services.test.ts` ("persists the window frame and ignores invalid frames"), `packages/shared/test/session.test.ts` |
 | TF-15 | Tab tooltip shows file path | #644 | Same + Reveal in Finder | §7.3 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q8) |
 | TF-16 | Horizontal/vertical layout; draggable divider | Docs, CL 2.1.0 | Same, per tab | §7.1 | M2 | E | 🚧 orientation ✅ (`packages/e2e/scenarios/layout.test.ts`); divider drag pending Q3 (docs/qa/m2-checklist.md) |
 | TF-17 | Toggle Output, Side Bar, Activity Bar, Status Bar, Full Screen | Docs, Strings | View menu | §7.4 | M2 | E | 🚧 Full Screen pending Q1 (docs/qa/m2-checklist.md); the other toggles ✅ `packages/e2e/scenarios/layout.test.ts`, `packages/e2e/scenarios/menu.test.ts` |
-| TF-18 | Activity bar: Run, Stop, Snippets, NPM, AI Chat, Settings | Docs | Same | §7.1 | M2 | E | 🚧 Run/Stop/Settings in M2; Snippets/AI panels M5, NPM M3; side bar resizing (240–600 px, spec §7.1) arrives with the first side-bar panel in M5 |
-| TF-19 | Status bar: runtime, language, web view toggle, split toggle | Docs | Same + WD chip, run state, vim mode | §7.1 | M2 | E | 🚧 runtime/language/split in M2; Web View toggle M4, WD chip M3 |
+| TF-18 | Activity bar: Run, Stop, Snippets, NPM, AI Chat, Settings | Docs | Same | §7.1 | M2 | E | 🚧 Run/Stop/Settings in M2, NPM in M3; Snippets/AI panels M5; side bar resizing M5 |
+| TF-19 | Status bar: runtime, language, web view toggle, split toggle | Docs | Same + WD chip, run state, vim mode | §7.1 | M2 | E | 🚧 runtime/language/split in M2, WD chip in M3; Web View toggle M4 |
 | TF-20 | File associations js/jsx/ts/tsx | #620 | + mjs/cjs/mts/cts via Info.plist patch | §4.6 | M6 | M | ⬜ |
 | TF-21 | Closing last tab quits the app | #650 | Opens a fresh tab instead | §7.3 | M2 | E | 📝 intentional improvement; implemented (M2) |
 
@@ -167,7 +167,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
-| ST-01 | Settings window with tabs (General, Editor, Formatting, Appearance, AI, NPM, Advanced) | Docs, Strings | + Keybindings, Build | §8 | M2 | E | 🚧 General/Editor/Formatting/Appearance/Advanced in M2; Keybindings/AI M5, NPM/Build M3 |
+| ST-01 | Settings window with tabs (General, Editor, Formatting, Appearance, AI, NPM, Advanced) | Docs, Strings | + Keybindings, Build | §8 | M2 | E | 🚧 General/Editor/Formatting/Appearance/Advanced in M2, NPM/Build in M3; Keybindings/AI M5 |
 | ST-02 | Tooltips/help text on options | CL 2.5.0 | Help text per setting | §8, §17 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q24) |
 | ST-03 | Theme picker + Themes menu with icons | Docs, CL 2.2.2 | Themes menu + Appearance tab | §9 | M2 | E | ✅ `packages/e2e/scenarios/themes.test.ts`, `packages/e2e/scenarios/menu.test.ts` |
 | ST-04 | Themes (Dracula default, others) | Docs | Graphite pair + 19 built-in themes, all free | §9.2 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q25) |
@@ -184,17 +184,17 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
-| TL-01 | NPM Packages panel (Cmd/Ctrl+I, Tools, activity bar) | Docs | Same | §11.2 | M3 | E | ⬜ |
-| TL-02 | Registry search as you type | Docs | Debounced registry search | §11.3 | M3 | I | ⬜ |
-| TL-03 | Install a specific version (`name@1.2.3`, ranges) | Docs, #585 | Same + git/tarball specs (#236) | §11.2 | M3 | I | ⬜ |
-| TL-04 | Scoped packages and `@types/*` | Docs, CL 1.12.0 | Same | §11 | M3 | I | ⬜ |
-| TL-05 | Packages shared across tabs, available without restart | Docs | Shared project; spares recycled | §11.1, §11.3 | M3 | I | ⬜ |
-| TL-06 | Installed table: Name, Installed, Latest + update, Remove | Docs, CL 2.9.0 | Same + Update all | §11.2 | M3 | E | ⬜ |
-| TL-07 | Allow install scripts option | CL 4.1.0 | `npm.allowInstallScripts` → `trustedDependencies` | §11.3 | M3 | I | ⬜ |
-| TL-08 | Native modules install | CL 3.0.3 | Bun N-API, scripts when allowed | §11 | M3 | M | ⬜ |
-| TL-09 | npm errors logged | CL 1.4.0 | Classified errors + log drawer | §11.3 | M3 | I | ⬜ |
-| TL-10 | `.npmrc` editor in Settings (Reset/Save); global `~/.npmrc` ignored | Docs, CL 2.8.0, 3.2.0, #535 | Same | §11.5 | M3 | I | ⬜ |
-| TL-11 | Environment Variables panel (add/edit/save/remove, shared, persisted, strings) | Docs | Same, `env.json` 0600, masked values | §12.1 | M3 | E | ⬜ |
+| TL-01 | NPM Packages panel (Cmd/Ctrl+I, Tools, activity bar) | Docs | Same | §11.2 | M3 | E | ✅ |
+| TL-02 | Registry search as you type | Docs | Debounced registry search | §11.3 | M3 | I | ✅ |
+| TL-03 | Install a specific version (`name@1.2.3`, ranges) | Docs, #585 | Same + git/tarball specs (#236) | §11.2 | M3 | I | 🚧 versions and ranges verified (I); git and tarball specs pending user manual QA (docs/qa/m3-checklist.md Q3) |
+| TL-04 | Scoped packages and `@types/*` | Docs, CL 1.12.0 | Same | §11 | M3 | I | ✅ |
+| TL-05 | Packages shared across tabs, available without restart | Docs | Shared project; spares recycled | §11.1, §11.3 | M3 | I | ✅ |
+| TL-06 | Installed table: Name, Installed, Latest + update, Remove | Docs, CL 2.9.0 | Same + Update all | §11.2 | M3 | E | ✅ |
+| TL-07 | Allow install scripts option | CL 4.1.0 | `npm.allowInstallScripts` → `trustedDependencies` | §11.3 | M3 | I | ✅ |
+| TL-08 | Native modules install | CL 3.0.3 | Bun N-API, scripts when allowed | §11 | M3 | M | 🚧 pending user manual QA (docs/qa/m3-checklist.md Q5) |
+| TL-09 | npm errors logged | CL 1.4.0 | Classified errors + log drawer | §11.3 | M3 | I | ✅ |
+| TL-10 | `.npmrc` editor in Settings (Reset/Save); global `~/.npmrc` ignored | Docs, CL 2.8.0, 3.2.0, #535 | Same | §11.5 | M3 | I | ✅ |
+| TL-11 | Environment Variables panel (add/edit/save/remove, shared, persisted, strings) | Docs | Same, `env.json` 0600, masked values | §12.1 | M3 | E | ✅ |
 | TL-12 | Snippets window (Name as trigger, Description, body) | Docs | Snippets panel | §13.1 | M5 | E | ⬜ |
 | TL-13 | Insert / Insert in New Tab / Copy / Search / Delete with confirm | Docs, CL 2.12.0 | Same | §13.1 | M5 | E | ⬜ |
 | TL-14 | Create Snippet… from editor context menu | Docs, Strings | Same | §13.1 | M5 | E | ⬜ |
@@ -234,14 +234,14 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | XT-09 | Safe Mode + crash-loop detection | #6, #178, #416 | §5.14 | M1 | E | ✅ `apps/desktop/test/services/services.test.ts`, `apps/ui/test/app.test.tsx` |
 | XT-10 | Configurable Auto Run delay, loop limit, output cap, hover delay | #419, #683, #567, #705 | §8 | M1–M3 | U | ⬜ |
 | XT-11 | Formatting preserves folds, scroll, cursor | #639, #654 | §6.4 | M2 | E | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q22): folds/scroll; the cursor is kept in `packages/e2e/scenarios/format.test.ts` |
-| XT-12 | Auto-install `@types` option | #629 | §11.4 | M3 | I | ⬜ |
+| XT-12 | Auto-install `@types` option | #629 | §11.4 | M3 | I | ✅ |
 
 ## Deviation notes
 
 - **EX-22 / D2:** RunJS's "Node.js" runtime is replaced by Bun (Node-compatible). Known differences are documented in `docs/user/bun-vs-node.md` (spec §26). In "Browser & Node APIs", synchronous `fs`/`child_process` APIs aren't available; errors explain this and offer to switch the tab to Bun.
 - **EX-34:** the `browser` runtime enforces CORS, as a real browser does. `browser-node` and `bun` don't.
 - **OU-07:** user-defined getters are evaluated only when expanded, to avoid side effects during logging.
-- **TF-11:** the webview doesn't get a dropped file's path, so a dropped file opens as an unsaved scratch copy titled with the file's name. ⌘S asks Save As, and Reveal in Finder and Copy Path are disabled. A Main-side native drop that keeps the path is planned for M3.
+- **TF-11:** the webview doesn't get a dropped item's path on Electrobun 2.0.1 (R-M3-SPIKE-1). A dropped file opens as an unsaved scratch copy titled with the file's name; a dropped folder shows a notice pointing at Actions → Set Working Directory…. Revisit when Electrobun adds native drop paths.
 - **TF-21:** closing the last tab keeps the app open with a fresh tab.
 - **PL-02:** Windows and Linux follow v1.
 - **PL-05:** there's no licensing; JSLab is MIT and fully free.

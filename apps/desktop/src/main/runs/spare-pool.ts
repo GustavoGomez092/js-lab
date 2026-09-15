@@ -23,6 +23,7 @@ export class SparePool {
 
   prepare(tabId: string): void {
     if (this.#disposed) return;
+    if (!this.#generation.has(tabId)) this.#generation.set(tabId, 0);
     const config = this.configFor(tabId);
     const key = String(Bun.hash(JSON.stringify([config.bunPath, config.bootstrapPath, config.cwd, config.env])));
     const existing = this.#spares.get(tabId);
@@ -90,6 +91,13 @@ export class SparePool {
     const existing = this.#spares.get(tabId);
     if (existing) this.#discard(existing);
     this.#spares.delete(tabId);
+  }
+
+  /** env.json or package changes recycle every tab's spare; only the active tab is re-warmed (spec §11.3, §12.1). */
+  invalidateAll(): void {
+    if (this.#disposed) return;
+    for (const tabId of new Set([...this.#spares.keys(), ...this.#generation.keys()])) this.invalidate(tabId);
+    if (this.#activeTabId !== null) this.prepare(this.#activeTabId);
   }
 
   dispose(): void {

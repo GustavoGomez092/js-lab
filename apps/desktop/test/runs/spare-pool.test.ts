@@ -32,4 +32,17 @@ describe("SparePool", () => {
     expect(started.map((runner) => runner.cwd)).toEqual(["/runs/a", "/runs/b", "/runs/a", "/runs/b"]);
     pool.dispose();
   });
+
+  test("invalidateAll recycles every tab's spare and re-warms only the active tab (spec §11.3, §12.1)", async () => {
+    const { pool, started } = fakePool();
+    pool.prepare("a");
+    pool.setActiveTab("b");
+    await Bun.sleep(0);
+    pool.invalidateAll();
+    await Bun.sleep(0);
+    expect(started.map((runner) => runner.cwd)).toEqual(["/runs/a", "/runs/b", "/runs/b"]);
+    expect(started[1]?.kill).toHaveBeenCalledTimes(1);
+    expect(started[2]?.kill).not.toHaveBeenCalled();
+    pool.dispose();
+  });
 });

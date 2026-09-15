@@ -30,6 +30,8 @@ export const strings = {
     npmManifestUnreadable: (path: string) => `npm's package.json at ${path} could not be read as JSON`,
     /** Fix round 1 (M-1): an onOperation subscriber threw; the queue's own bookkeeping must still proceed. */
     npmOperationEventFailed: "npm operation event could not be delivered",
+    loginShellFailed: (reason: string) =>
+      `Couldn't read the login shell environment (${reason}); using the app's environment`,
   },
   dialogs: {
     startupFailed: (message: string) => `JSLab couldn't start: ${message}`,

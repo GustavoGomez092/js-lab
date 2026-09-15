@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { EnvVars } from "@jslab/shared";
 
 export interface AppPathsInput {
   /** Electrobun `PATHS.RESOURCES_FOLDER` (the bundle's Resources folder). */
@@ -56,13 +57,34 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
   };
 }
 
-/** Environment for runner processes (spec §5.3). The login-shell environment and `.env` loading arrive in M3. */
-export function runnerEnvironment(paths: AppPaths, base: Record<string, string | undefined>): Record<string, string> {
+export interface RunnerEnvironmentInput {
+  /** The login-shell environment (spec §4.6). */
+  base: Record<string, string | undefined>;
+  /** env.json (spec §12.1). */
+  variables?: EnvVars;
+  /** The WD's .env, parsed by JSLab (spec §5.3). */
+  dotenv?: Record<string, string>;
+  workingDirectory?: string | null;
+}
+
+/**
+ * Environment for runner processes (spec §5.3): login shell → env.json → the WD's .env → JSLAB=1, later layers winning.
+ * JSLAB_* keys never reach a runner, and JSLab always sets NODE_PATH: the WD's node_modules first, then app packages.
+ */
+export function runnerEnvironment(
+  paths: Pick<AppPaths, "packagesNodeModules">,
+  input: RunnerEnvironmentInput,
+): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(base)) {
+  for (const [key, value] of Object.entries(input.base)) {
     if (value !== undefined && !key.startsWith("JSLAB_")) env[key] = value;
   }
+  for (const layer of [input.variables ?? {}, input.dotenv ?? {}]) {
+    for (const [key, value] of Object.entries(layer)) if (!key.startsWith("JSLAB_")) env[key] = value;
+  }
   env.JSLAB = "1";
-  env.NODE_PATH = paths.packagesNodeModules;
+  env.NODE_PATH = input.workingDirectory
+    ? `${join(input.workingDirectory, "node_modules")}:${paths.packagesNodeModules}`
+    : paths.packagesNodeModules;
   return env;
 }

@@ -1,8 +1,9 @@
 import { effectiveRuntime, runnerSettings } from "@jslab/shared";
-import { type AppPaths, runnerEnvironment } from "./app-paths";
+import type { AppPaths } from "./app-paths";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
 import { RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
+import { createRunnerConfig } from "./runs/runner-config";
 import { SparePool } from "./runs/spare-pool";
 import { EnvStore } from "./services/env-store";
 import { ensurePackagesProject } from "./services/packages-project";
@@ -67,12 +68,15 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     shiftHeld: () => options.shiftHeld,
   });
   const transform = options.transformHost ?? new CachingTransformHost(new WorkerTransformHost(paths.transformWorker));
-  const spares = new SparePool(options.startRunner ?? ((config) => BunRunnerProcess.start(config)), () => ({
-    bunPath: paths.bunBinary,
-    bootstrapPath: paths.runnerBootstrap,
-    cwd: paths.dataDir,
-    env: runnerEnvironment(paths, options.env),
-  }));
+  const spares = new SparePool(
+    options.startRunner ?? ((config) => BunRunnerProcess.start(config)),
+    createRunnerConfig({
+      paths,
+      baseEnv: () => options.env,
+      envVars: () => env.variables,
+      workingDirectory: (tabId) => session.session.tabs[tabId]?.workingDirectory ?? null,
+    }),
+  );
   const coordinator = new RunCoordinator({
     transform: (source, transformOptions) => transform.transform(source, transformOptions),
     spares,
@@ -83,6 +87,8 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     onDiagnostics: options.onDiagnostics,
     runLock,
   });
+  // Spec §12.1: saving env.json recycles every tab's spare, so the next run gets the new values.
+  env.onChange(() => spares.invalidateAll());
   return {
     settings,
     session,

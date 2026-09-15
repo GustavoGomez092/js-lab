@@ -56,7 +56,9 @@ describe("runnerEnvironment", () => {
   test("sets JSLAB and NODE_PATH, drops undefined values and JSLab overrides", () => {
     const paths = resolveAppPaths(input);
     expect(
-      runnerEnvironment(paths, { PATH: "/usr/bin", EMPTY: undefined, JSLAB_BUN_PATH: "/x", NODE_PATH: "/old" }),
+      runnerEnvironment(paths, {
+        base: { PATH: "/usr/bin", EMPTY: undefined, JSLAB_BUN_PATH: "/x", NODE_PATH: "/old" },
+      }),
     ).toEqual({
       PATH: "/usr/bin",
       JSLAB: "1",

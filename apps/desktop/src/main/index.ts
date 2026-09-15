@@ -35,6 +35,7 @@ import { resolveMainViewUrl } from "./main-view-url";
 import { buildMenu, createMenuController, dispatchMenuAction } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
 import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
+import { mergeLoginEnv, readLoginShellEnv } from "./platform/login-shell-env";
 import { relaunchApp } from "./platform/relaunch";
 import { saveDialog } from "./platform/save-dialog";
 import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
@@ -149,10 +150,14 @@ async function start(): Promise<void> {
 
   // Read the modifier keys as early as possible: the user may release Shift while stores load.
   const shiftHeld = isShiftHeld();
+  // Spec §4.6 loginShellEnv: a GUI app lacks the shell PATH. E2E launches skip it, so no scenario runs the user's
+  // shell profile.
+  const loginEnv = process.env.JSLAB_E2E === "1" ? null : await readLoginShellEnv({ shell: process.env.SHELL, log });
+  const baseEnv = mergeLoginEnv(process.env, loginEnv);
   // The composition root builds everything that doesn't need Electrobun (main-services.ts, tested without it).
   const services = await createMainServices({
     paths,
-    env: process.env,
+    env: baseEnv,
     shiftHeld,
     log,
     onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),

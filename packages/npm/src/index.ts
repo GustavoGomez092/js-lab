@@ -4,3 +4,4 @@ export * from "./npmrc";
 export * from "./output";
 export * from "./queue";
 export * from "./specifiers";
+export * from "./type-closure";

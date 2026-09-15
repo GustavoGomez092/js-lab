@@ -1,0 +1,471 @@
+import type { BootstrapPayload, DiagnosticPayload, RunEvent, RunState, StartupNotice } from "@jslab/rpc-schema";
+import {
+  type KeybindingRule,
+  type Language,
+  type Runtime,
+  type Settings,
+  type TabState,
+  tabAfterClose,
+} from "@jslab/shared";
+import { createStore } from "zustand/vanilla";
+import type { TimerApi } from "./auto-run";
+import { applyRunEvents, applyRunState, initialOutput, type OutputState } from "./output";
+import { clampEditorSize, EDITOR_SIZE_RESET, insertAfterActive, isPermutation, renamePatch } from "./workspace";
+
+export interface TabRuntime {
+  output: OutputState;
+  diagnostics: DiagnosticPayload[];
+  /** Restored tabs never auto-run until edited or run manually (spec §5.14). */
+  autoRunArmed: boolean;
+}
+
+export const newRuntime = (): TabRuntime => ({ output: initialOutput, diagnostics: [], autoRunArmed: false });
+
+export type FocusArea = "editor" | "output" | "other";
+export type OutputFilter = "all" | "results" | "logs" | "errors";
+export type ConfirmButton = { id: string; label: string; role?: "primary" | "danger" | "cancel" };
+export type Modal =
+  | { kind: "palette"; context: "editor" | "output" }
+  | { kind: "confirm"; id: string; title: string; message: string; buttons: ConfirmButton[] }
+  | { kind: "rename"; tabId: string };
+
+export interface AppState {
+  ready: boolean;
+  settings: Settings | null;
+  /** Counts `settings.changed` broadcasts, so a response sent before the latest one is recognized as stale. */
+  settingsRevision: number;
+  safeMode: BootstrapPayload["safeMode"];
+  versions: BootstrapPayload["versions"] | null;
+  e2e: boolean;
+  keybindings: KeybindingRule[];
+
+  tabs: Record<string, TabState>;
+  tabOrder: string[];
+  activeTabId: string | null;
+  buffers: Record<string, string>;
+  runtimes: Record<string, TabRuntime>;
+  closedCount: number;
+
+  focus: FocusArea;
+  modal: Modal | null;
+  outputFilter: OutputFilter;
+  statusMessage: string | null;
+  statusSticky: boolean;
+  cursor: { line: number; column: number } | null;
+  vimMode: string | null;
+  themeId: string;
+  /** True when `appearance.font` failed to load and JetBrains Mono is in use instead (spec §9.4). */
+  fontFallback: boolean;
+  /** Which panel the side bar shows when open (Task 16). Snippets and AI Chat arrive in M5. */
+  sideBarPanel: "snippets" | "ai";
+
+  // Mirrors of the active tab, so M1 components keep reading a single tab.
+  tab: TabState | null;
+  code: string;
+  autoRunArmed: boolean;
+  output: OutputState;
+  diagnostics: DiagnosticPayload[];
+
+  hoveredLine: number | null;
+  revealRequest: { line: number; nonce: number } | null;
+  /** Startup notices from Main (Task 9, spec §20). */
+  notices: StartupNotice[];
+
+  hydrate(payload: BootstrapPayload): void;
+  dismissNotice(id: StartupNotice["id"]): void;
+  /** A notice Main sends after startup (`app.notice`, FA-I3): shown once per id, at most MAX_NOTICES at a time. */
+  addNotice(notice: StartupNotice): void;
+  editCode(code: string, tabId?: string): void;
+  armAutoRun(): void;
+  setLanguage(language: Language): void;
+  setRuntime(runtime: Runtime): void;
+  setEditorSize(size: number): void;
+  resetEditorSize(): void;
+  toggleOrientation(): void;
+  setOrientation(orientation: TabState["layout"]["orientation"]): void;
+  toggleOutputVisible(): void;
+  receiveEvents(runId: string, events: RunEvent[], tabId?: string): void;
+  receiveState(runId: string, state: RunState, activeHandles?: number, tabId?: string): void;
+  receiveDiagnostics(runId: string, diagnostics: DiagnosticPayload[], tabId?: string): void;
+  clearOutput(tabId?: string): void;
+  setHoveredLine(line: number | null): void;
+  reveal(line: number): void;
+
+  openTab(tab: TabState, content: string, activate?: boolean): void;
+  removeTab(tabId: string, nextActiveId?: string | null): void;
+  activateTab(tabId: string): void;
+  reorderTabs(order: string[]): void;
+  renameTab(tabId: string, title: string): void;
+  applyTabUpdate(tab: TabState): void;
+  setViewState(tabId: string, viewState: unknown): void;
+  setClosedCount(count: number): void;
+
+  updateSettings(settings: Settings): void;
+  /** A `settings.changed` broadcast from Main: applied, and it makes in-flight update responses stale (FB-m6). */
+  receiveSettings(settings: Settings): void;
+  setFocus(focus: FocusArea): void;
+  openModal(modal: Modal): void;
+  closeModal(): void;
+  setOutputFilter(filter: OutputFilter): void;
+  /**
+   * Shows a status-bar message (FB-m5). A non-sticky message clears after STATUS_MESSAGE_MS, on the next edit, or when
+   * a run starts; a sticky one (a busy indicator, a font fallback) stays until replaced or cleared.
+   */
+  setStatusMessage(message: string | null, options?: { sticky?: boolean }): void;
+  /** Clears the status message unless it is sticky. */
+  clearTransientStatus(): void;
+  setCursor(cursor: { line: number; column: number } | null): void;
+  setVimMode(mode: string | null): void;
+  setThemeId(themeId: string): void;
+  setFontFallback(value: boolean): void;
+  setSideBarPanel(panel: "snippets" | "ai"): void;
+}
+
+export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
+  return Boolean(state.settings?.run.autoRun) && !state.safeMode.active && state.autoRunArmed;
+}
+
+const NO_DIAGNOSTICS: DiagnosticPayload[] = [];
+
+/** Most notices shown at once; the oldest is dropped first (FA-I3). */
+export const MAX_NOTICES = 5;
+
+/** How long a non-sticky status message stays (FB-m5). */
+export const STATUS_MESSAGE_MS = 5000;
+
+const defaultTimers: TimerApi = {
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+function mirrorOf(state: Pick<AppState, "tabs" | "activeTabId" | "buffers" | "runtimes">) {
+  const id = state.activeTabId;
+  const runtime = id ? state.runtimes[id] : undefined;
+  return {
+    tab: id ? (state.tabs[id] ?? null) : null,
+    code: id ? (state.buffers[id] ?? "") : "",
+    autoRunArmed: runtime?.autoRunArmed ?? false,
+    output: runtime?.output ?? initialOutput,
+    diagnostics: runtime?.diagnostics ?? NO_DIAGNOSTICS,
+  };
+}
+
+export function createAppStore(options: { timers?: TimerApi } = {}) {
+  const timers = options.timers ?? defaultTimers;
+  let statusTimer: unknown = null;
+  const cancelStatusTimer = () => {
+    if (statusTimer === null) return;
+    timers.clearTimeout(statusTimer);
+    statusTimer = null;
+  };
+  return createStore<AppState>()((set, get) => {
+    /** Applies a patch and recomputes the active-tab mirrors (unless there is no active tab: M1's legacy path). */
+    const commit = (patch: Partial<AppState>) => {
+      const previous = get();
+      const merged = { ...previous, ...patch };
+      // A hover from the tab being left must never highlight a line in the tab being shown (m-3).
+      const switchedTabs = merged.activeTabId !== previous.activeTabId;
+      set(
+        merged.activeTabId ? { ...patch, ...mirrorOf(merged), ...(switchedTabs ? { hoveredLine: null } : {}) } : patch,
+      );
+    };
+
+    const resolve = (tabId?: string | null) => {
+      const id = tabId ?? get().activeTabId;
+      return id && get().tabs[id] ? id : null;
+    };
+
+    const updateTab = (tabId: string | null | undefined, update: (tab: TabState) => TabState) => {
+      const id = resolve(tabId);
+      const tab = id ? get().tabs[id] : undefined;
+      if (!id || !tab) return;
+      commit({ tabs: { ...get().tabs, [id]: update(tab) } });
+    };
+
+    const updateRuntime = (id: string, update: (runtime: TabRuntime) => TabRuntime) => {
+      commit({ runtimes: { ...get().runtimes, [id]: update(get().runtimes[id] ?? newRuntime()) } });
+    };
+
+    const updateLayout = (update: (layout: TabState["layout"]) => Partial<TabState["layout"]>) =>
+      updateTab(null, (tab) => ({ ...tab, layout: { ...tab.layout, ...update(tab.layout) } }));
+
+    return {
+      ready: false,
+      settings: null,
+      settingsRevision: 0,
+      safeMode: { active: false, reason: null },
+      versions: null,
+      e2e: false,
+      keybindings: [],
+      tabs: {},
+      tabOrder: [],
+      activeTabId: null,
+      buffers: {},
+      runtimes: {},
+      closedCount: 0,
+      focus: "editor",
+      modal: null,
+      outputFilter: "all",
+      statusMessage: null,
+      statusSticky: false,
+      cursor: null,
+      vimMode: null,
+      themeId: "graphite",
+      fontFallback: false,
+      sideBarPanel: "snippets",
+      tab: null,
+      code: "",
+      autoRunArmed: false,
+      output: initialOutput,
+      diagnostics: NO_DIAGNOSTICS,
+      hoveredLine: null,
+      revealRequest: null,
+      notices: [],
+
+      hydrate(payload) {
+        const { session } = payload;
+        const activeTabId = session.tabs[session.activeTabId] ? session.activeTabId : (session.tabOrder[0] ?? null);
+        commit({
+          ready: true,
+          settings: payload.settings,
+          safeMode: payload.safeMode,
+          versions: payload.versions,
+          notices: payload.notices ?? [],
+          e2e: payload.e2e === true,
+          keybindings: payload.keybindings ?? [],
+          tabs: session.tabs,
+          tabOrder: session.tabOrder,
+          activeTabId,
+          buffers: Object.fromEntries(session.tabOrder.map((id) => [id, payload.buffers[id] ?? ""])),
+          runtimes: Object.fromEntries(session.tabOrder.map((id) => [id, newRuntime()])),
+          closedCount: session.closedStack.length,
+        });
+      },
+
+      dismissNotice(id) {
+        set({ notices: get().notices.filter((notice) => notice.id !== id) });
+      },
+
+      addNotice(notice) {
+        const notices = get().notices;
+        if (notices.some((existing) => existing.id === notice.id)) return;
+        set({ notices: [...notices, notice].slice(-MAX_NOTICES) });
+      },
+
+      editCode(code, tabId) {
+        const id = resolve(tabId);
+        if (!id) {
+          set({ code, autoRunArmed: true });
+          return;
+        }
+        get().clearTransientStatus();
+        commit({
+          buffers: { ...get().buffers, [id]: code },
+          runtimes: { ...get().runtimes, [id]: { ...(get().runtimes[id] ?? newRuntime()), autoRunArmed: true } },
+        });
+      },
+
+      armAutoRun() {
+        const id = resolve();
+        if (!id) set({ autoRunArmed: true });
+        else updateRuntime(id, (runtime) => ({ ...runtime, autoRunArmed: true }));
+      },
+
+      setLanguage(language) {
+        updateTab(null, (tab) => ({ ...tab, language }));
+      },
+
+      setRuntime(runtime) {
+        updateTab(null, (tab) => ({ ...tab, runtime }));
+      },
+
+      setEditorSize(size) {
+        updateLayout(() => ({ editorSize: clampEditorSize(size) }));
+      },
+
+      resetEditorSize() {
+        updateLayout(() => ({ editorSize: EDITOR_SIZE_RESET }));
+      },
+
+      toggleOrientation() {
+        updateLayout((layout) => ({ orientation: layout.orientation === "horizontal" ? "vertical" : "horizontal" }));
+      },
+
+      setOrientation(orientation) {
+        updateLayout(() => ({ orientation }));
+      },
+
+      toggleOutputVisible() {
+        updateLayout((layout) => ({ outputVisible: !layout.outputVisible }));
+      },
+
+      receiveEvents(runId, events, tabId) {
+        const id = tabId ?? get().activeTabId;
+        if (!id) {
+          set({ output: applyRunEvents(get().output, runId, events) });
+          return;
+        }
+        if (!get().tabs[id]) return;
+        updateRuntime(id, (runtime) => ({ ...runtime, output: applyRunEvents(runtime.output, runId, events) }));
+      },
+
+      receiveState(runId, runState, activeHandles, tabId) {
+        const id = tabId ?? get().activeTabId;
+        if (!id) {
+          const previousRunId = get().output.runId;
+          const output = applyRunState(get().output, runId, runState, activeHandles);
+          set(output.runId !== previousRunId ? { output, diagnostics: [] } : { output });
+          return;
+        }
+        if (!get().tabs[id]) return;
+        updateRuntime(id, (runtime) => {
+          const output = applyRunState(runtime.output, runId, runState, activeHandles);
+          return output.runId !== runtime.output.runId
+            ? { ...runtime, output, diagnostics: [] }
+            : { ...runtime, output };
+        });
+      },
+
+      receiveDiagnostics(runId, diagnostics, tabId) {
+        const id = tabId ?? get().activeTabId;
+        if (!id) {
+          if (runId === get().output.runId) set({ diagnostics });
+          return;
+        }
+        const runtime = get().runtimes[id];
+        if (runtime && runId === runtime.output.runId) updateRuntime(id, (current) => ({ ...current, diagnostics }));
+      },
+
+      clearOutput(tabId) {
+        const clear = (output: OutputState): OutputState => ({ ...output, entries: [], stale: false, truncated: 0 });
+        const id = resolve(tabId);
+        if (!id) set({ output: clear(get().output) });
+        else updateRuntime(id, (runtime) => ({ ...runtime, output: clear(runtime.output) }));
+      },
+
+      setHoveredLine(line) {
+        set({ hoveredLine: line });
+      },
+
+      reveal(line) {
+        set({ revealRequest: { line, nonce: (get().revealRequest?.nonce ?? 0) + 1 } });
+      },
+
+      openTab(tab, content, activate = true) {
+        if (get().tabs[tab.id]) {
+          if (activate) commit({ activeTabId: tab.id });
+          return;
+        }
+        commit({
+          tabs: { ...get().tabs, [tab.id]: tab },
+          tabOrder: insertAfterActive(get().tabOrder, get().activeTabId, tab.id),
+          buffers: { ...get().buffers, [tab.id]: content },
+          runtimes: { ...get().runtimes, [tab.id]: newRuntime() },
+          activeTabId: activate || !get().activeTabId ? tab.id : get().activeTabId,
+        });
+      },
+
+      removeTab(tabId, nextActiveId) {
+        if (!get().tabs[tabId]) return;
+        const { [tabId]: _tab, ...tabs } = get().tabs;
+        const { [tabId]: _buffer, ...buffers } = get().buffers;
+        const { [tabId]: _runtime, ...runtimes } = get().runtimes;
+        const current = get().activeTabId;
+        const fallback = current ? tabAfterClose(get().tabOrder, tabId, current) : null;
+        const activeTabId = nextActiveId && tabs[nextActiveId] ? nextActiveId : fallback;
+        const patch = { tabs, buffers, runtimes, tabOrder: get().tabOrder.filter((id) => id !== tabId), activeTabId };
+        if (activeTabId) commit(patch);
+        else set({ ...patch, ...mirrorOf(patch), hoveredLine: null });
+      },
+
+      activateTab(tabId) {
+        if (!get().tabs[tabId] || get().activeTabId === tabId) return;
+        // commit() clears hoveredLine itself whenever activeTabId changes (m-3).
+        commit({ activeTabId: tabId });
+      },
+
+      reorderTabs(order) {
+        if (isPermutation(get().tabOrder, order)) commit({ tabOrder: [...order] });
+      },
+
+      renameTab(tabId, title) {
+        updateTab(tabId, (tab) => ({ ...tab, ...renamePatch(title) }));
+      },
+
+      applyTabUpdate(tab) {
+        updateTab(tab.id, (current) => ({ ...tab, viewState: current.viewState }));
+      },
+
+      setViewState(tabId, viewState) {
+        updateTab(tabId, (tab) => ({ ...tab, viewState: viewState ?? null }));
+      },
+
+      setClosedCount(count) {
+        set({ closedCount: Math.max(0, count) });
+      },
+
+      updateSettings(settings) {
+        set({ settings });
+      },
+
+      receiveSettings(settings) {
+        set({ settings, settingsRevision: get().settingsRevision + 1 });
+      },
+
+      setFocus(focus) {
+        set({ focus });
+      },
+
+      openModal(modal) {
+        set({ modal });
+      },
+
+      closeModal() {
+        set({ modal: null });
+      },
+
+      setOutputFilter(outputFilter) {
+        set({ outputFilter });
+      },
+
+      setStatusMessage(statusMessage, options) {
+        cancelStatusTimer();
+        const sticky = statusMessage !== null && options?.sticky === true;
+        set({ statusMessage, statusSticky: sticky });
+        if (statusMessage === null || sticky) return;
+        statusTimer = timers.setTimeout(() => {
+          statusTimer = null;
+          if (get().statusMessage === statusMessage && !get().statusSticky) set({ statusMessage: null });
+        }, STATUS_MESSAGE_MS);
+      },
+
+      clearTransientStatus() {
+        if (get().statusMessage === null || get().statusSticky) return;
+        cancelStatusTimer();
+        set({ statusMessage: null });
+      },
+
+      setCursor(cursor) {
+        set({ cursor });
+      },
+
+      setVimMode(vimMode) {
+        set({ vimMode });
+      },
+
+      setThemeId(themeId) {
+        if (themeId !== get().themeId) set({ themeId });
+      },
+
+      setFontFallback(fontFallback) {
+        if (fontFallback !== get().fontFallback) set({ fontFallback });
+      },
+
+      setSideBarPanel(sideBarPanel) {
+        set({ sideBarPanel });
+      },
+    };
+  });
+}
+
+export type AppStore = ReturnType<typeof createAppStore>;

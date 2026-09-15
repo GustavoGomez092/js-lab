@@ -1,0 +1,150 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useStore } from "zustand";
+import type { MainApi } from "../api";
+import { visibleEntries } from "../state/output";
+import type { AppStore } from "../state/store";
+import { strings } from "../strings";
+import { copyEntriesToClipboard } from "./copy";
+import { EntryRow } from "./EntryRow";
+import { FilterChips } from "./FilterChips";
+import { applyFilter, filterCounts } from "./filters";
+import { entryIsStale, lastSuccessfulRunLabel } from "./stale";
+import { entryToText } from "./text";
+
+const COPY_STATUS_DURATION_MS = 2000;
+
+interface OutputPanelProps {
+  store: AppStore;
+  api: MainApi;
+  /** The Run keycap from the effective keybindings, for the empty state (review rec 2). */
+  runKeys?: string | null;
+}
+
+export function OutputPanel({ store, api, runKeys = null }: OutputPanelProps) {
+  const output = useStore(store, (s) => s.output);
+  const showUndefined = useStore(store, (s) => s.settings?.run.showUndefined ?? false);
+  const highlighting = useStore(store, (s) => s.settings?.output.highlighting ?? true);
+  const showLineNumbers = useStore(store, (s) => s.settings?.output.showLineNumbers ?? true);
+  const filter = useStore(store, (s) => s.outputFilter);
+  const tabId = useStore(store, (s) => s.activeTabId);
+
+  const visible = useMemo(() => visibleEntries(output, { showUndefined }), [output, showUndefined]);
+  const counts = useMemo(() => filterCounts(visible), [visible]);
+  const entries = useMemo(() => applyFilter(visible, filter), [visible, filter]);
+  const staleLabel = lastSuccessfulRunLabel(output);
+
+  const scroller = useRef<HTMLDivElement>(null);
+  const pinnedToBottom = useRef(true);
+  // As built (M1 T17 fix round): Copy All reports "Copied" or "Couldn't copy" for two seconds.
+  const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(null);
+  const copyStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
+    },
+    [],
+  );
+  const virtualizer = useVirtualizer({
+    count: entries.length,
+    getScrollElement: () => scroller.current,
+    estimateSize: () => 30,
+    overscan: 20,
+  });
+
+  useEffect(() => {
+    if (pinnedToBottom.current && entries.length > 0) virtualizer.scrollToIndex(entries.length - 1, { align: "end" });
+  }, [entries.length, virtualizer]);
+
+  const expand = (handle: string) =>
+    tabId && output.runId ? api.expand({ tabId, runId: output.runId, handleId: handle }) : Promise.resolve(null);
+
+  const copyAll = () => {
+    const text = entries.map((entry) => entryToText(entry.event)).join("\n");
+    void copyEntriesToClipboard(text).then((status) => {
+      if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
+      setCopyStatus(status);
+      copyStatusTimer.current = setTimeout(() => setCopyStatus(null), COPY_STATUS_DURATION_MS);
+    });
+  };
+
+  return (
+    <section
+      className={`output${highlighting ? "" : " output-plain"}`}
+      aria-label={strings.output.region}
+      onFocusCapture={() => store.getState().setFocus("output")}
+    >
+      <header className="output-toolbar">
+        <FilterChips counts={counts} filter={filter} onChange={(next) => store.getState().setOutputFilter(next)} />
+        {staleLabel && <span className="output-stale-label">{staleLabel}</span>}
+        <span className="output-spacer" />
+        {copyStatus && (
+          <span className="output-copy-status">
+            {copyStatus === "copied" ? strings.output.copied : strings.output.copyFailed}
+          </span>
+        )}
+        <button type="button" onClick={copyAll} disabled={entries.length === 0}>
+          {strings.output.copyAll}
+        </button>
+        <button type="button" onClick={() => store.getState().clearOutput()} disabled={visible.length === 0}>
+          {strings.output.clear}
+        </button>
+      </header>
+      <div
+        ref={scroller}
+        className="output-scroller"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the output list is keyboard-focusable so ⌘K and the palette get output context
+        tabIndex={0}
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+        }}
+      >
+        <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+          {virtualizer.getVirtualItems().map((item) => {
+            const entry = entries[item.index];
+            if (!entry) return null;
+            return (
+              <div
+                key={entry.key}
+                data-index={item.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${item.start}px)`,
+                }}
+              >
+                <EntryRow
+                  entry={entry}
+                  stale={entryIsStale(output, entry.event)}
+                  expand={expand}
+                  showLineNumbers={showLineNumbers}
+                  onReveal={(line) => store.getState().reveal(line)}
+                  onHover={(line) => store.getState().setHoveredLine(line)}
+                />
+              </div>
+            );
+          })}
+        </div>
+        {output.truncated > 0 && <div className="output-truncated">{strings.output.truncated(output.truncated)}</div>}
+        {/* T19A-m3, review rec 2: quiet, centered empty states instead of a blank scroller. */}
+        {visible.length > 0 && entries.length === 0 && (
+          <div className="output-empty" data-testid="output-empty">
+            <span>{strings.output.noMatches}</span>
+            <button type="button" onClick={() => store.getState().setOutputFilter("all")}>
+              {strings.output.showAll}
+            </button>
+          </div>
+        )}
+        {visible.length === 0 && output.runId === null && output.truncated === 0 && (
+          <div className="output-empty" data-testid="output-empty">
+            {strings.output.noOutput(runKeys)}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}

@@ -1,0 +1,8 @@
+.hutch/
+node_modules/
+build/
+dist/
+artifacts/
+*.tsbuildinfo
+# S3 (R9 eval): downloaded separately-pinned Bun 1.3.13 binary, not committed (~60 MB).
+runner/bun-bin/

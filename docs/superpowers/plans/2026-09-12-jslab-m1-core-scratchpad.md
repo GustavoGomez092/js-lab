@@ -10,7 +10,7 @@
 - **Mapping and UI:** Main maps generated positions to source lines and forwards events over Electrobun RPC. The React + Monaco UI in WKWebView renders them.
 
 **Tech Stack:**
-- Bun 1.3.13 for development, running the Bun that Electrobun bundles
+- Bun: develop locally with Bun ≥1.3.13; CI and the packaged app use Bun 1.4.0 (the Bun Electrobun 2.0.1 bundles). Runner IPC uses `serialization: "json"`, so parent/child version skew is safe.
 - Electrobun 2.0.1 + Hutch
 - TypeScript 7.0.2, Biome 2.5.13
 - `@babel/standalone` 8.0.5, `source-map-js` 1.2.1, zod 4.6.4
@@ -25,6 +25,7 @@
 
 - Clean room: never read RunJS binaries, `app.asar` or bundled JS (spec §0).
 - MIT license. No GPL-family dependencies.
+- Develop locally with Bun ≥1.3.13; CI and the packaged app use Bun 1.4.0. Runner IPC uses `serialization: "json"`, so parent/child version skew is safe.
 - Pin every dependency to the exact version listed under Tech Stack. Never use `^` or `~`.
 - User code never runs in the Main process (spec §4.1).
 - Every UI → Main payload is validated with the zod schemas in `@jslab/rpc-schema` before use (spec §18).
@@ -214,7 +215,7 @@ JSLab is MIT licensed and under active development. See `docs/superpowers/specs/
 
 ## Development
 
-Requirements: macOS (arm64), [Bun](https://bun.sh) 1.3.13 or newer.
+Requirements: macOS (arm64), [Bun](https://bun.sh) 1.3.13 or newer. CI and the packaged app use Bun 1.4.0.
 
 ```bash
 bun install
@@ -246,7 +247,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.13
+          bun-version: 1.4.0
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
@@ -1231,6 +1232,19 @@ describe("collections", () => {
     });
     expect(make().encode(new Uint8Array([1, 2]).buffer)).toEqual({ t: "arrayBuffer", byteLength: 2, preview: [1, 2] });
   });
+
+  test("keeps special numbers in typed arrays exact through JSON", () => {
+    const encoded = make().encode(
+      new Float64Array([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0, 1.5]),
+    );
+    expect(encoded).toEqual({
+      t: "typedArray",
+      ctor: "Float64Array",
+      length: 5,
+      items: ["NaN", "Infinity", "-Infinity", "-0", 1.5],
+    });
+    expect(JSON.parse(JSON.stringify(encoded))).toEqual(encoded);
+  });
 });
 
 describe("special objects", () => {
@@ -1599,7 +1613,11 @@ export class Encoder {
     const items: (number | string)[] = [];
     for (let i = 0; i < limit; i++) {
       const x = view[i] as number | bigint;
-      items.push(typeof x === "bigint" ? x.toString() : x);
+      // JSON has no NaN, ±Infinity or -0, so those items are strings, like scalar numbers. The UI reads the
+      // item type from `ctor` (Big* arrays hold bigints), never from typeof.
+      if (typeof x === "bigint") items.push(x.toString());
+      else if (Number.isFinite(x) && !Object.is(x, -0)) items.push(x);
+      else items.push(Object.is(x, -0) ? "-0" : String(x));
     }
     return {
       t: "typedArray",
@@ -1723,7 +1741,7 @@ export * from "./encode";
 - [ ] **Step 5: Run the tests and typecheck**
 
 Run: `cd packages/serializer && bun test && bun run typecheck`
-Expected: `19 pass`, `0 fail` (the property test runs 300 random values), then typecheck exits 0.
+Expected: `20 pass`, `0 fail` (the property test runs 300 random values), then typecheck exits 0.
 
 - [ ] **Step 6: Commit**
 
@@ -3200,6 +3218,8 @@ function startRunner() {
     stdout: "ignore",
     stderr: "inherit",
     ipc: (message) => messages.push(message as RunnerToMain),
+    // Same wire format as production (Task 9), so values that don't survive JSON fail here.
+    serialization: "json",
   });
   procs.push(proc);
   const until = async (predicate: (message: RunnerToMain) => boolean, timeoutMs = 5000) => {
@@ -3956,6 +3976,9 @@ export class BunRunnerProcess {
         ipc: (message) => {
           if (runner) runner.#dispatch(message as RunnerToMain);
         },
+        // M0-S3: the default "advanced" IPC serializer breaks across Bun versions. Values survive JSON because the
+        // serializer sends NaN, ±Infinity, -0 and bigints as strings, typed-array items included (Task 4).
+        serialization: "json",
       });
       runner = new BunRunnerProcess(proc);
       const started = runner;
@@ -5583,7 +5606,7 @@ git commit -m "feat(desktop): settings/session stores, safe mode detection and v
 **Files:**
 - Create: `apps/desktop/electrobun.config.ts`, `apps/desktop/hutch.config.ts`
 - Create: `apps/desktop/src/main/app-paths.ts`, `apps/desktop/src/main/menu.ts`
-- Modify: `apps/desktop/tsconfig.json`
+- Modify: `apps/desktop/tsconfig.json`, `apps/desktop/package.json`, `.github/workflows/ci.yml`
 - Test: `apps/desktop/test/shell.test.ts`
 
 **Interfaces:**
@@ -5598,9 +5621,15 @@ git commit -m "feat(desktop): settings/session stores, safe mode detection and v
   - `dist/runner/bootstrap.js`: the runner
   - `dist/workers/transform-worker.js`: the transform worker
 
-**Before starting:** open `docs/spikes/2026-09-m0-report.md`.
-- Use the Hutch install and init commands recorded under S1.
-- Use the copy-destination formula recorded under S3. If it differs from `Resources/app/<dir>`, change only `resolveAppPaths` and its test.
+**Before starting:** M0 results (`docs/spikes/2026-09-m0-report.md`) are already applied to this task:
+- **Toolchain (S1).** Hutch must be exactly 0.24.3, because `electrobun@2.0.1` rejects any other Hutch. Install it with `curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o install.sh && sh install.sh --version 0.24.3`.
+  - The installer adds `~/.hutch/bin` to `PATH` in `~/.zshrc`.
+  - `~/.hutch` must be absent or already a Hutch home.
+  - Never run `hutch upgrade`.
+  - `hutch.config.ts` pins `electrobun: { version: "2.0.1" }`.
+  - With `packageManager: "bun"`, `hutch pm exec -- <bin>` fails (`bun: command not found`). Use `hutch pm x --no-install <bin>` or a `bun run` script, as the scripts below do.
+- **Bundling (S1).** Hutch bundles only `build.bun.entrypoint` (`src/main/index.ts`), so the runner bootstrap and the transform worker ship as separate `bun build` outputs through `build.copy`. Every `build.copy` source must exist before `hutch electrobun dev`/`build`, or it fails with `CopySourceMissing`.
+- **Copy destination (S1, S3).** Confirmed as `join(PATHS.RESOURCES_FOLDER, "app", <dir>)` (flat files, no ASAR). This matches `resolveAppPaths` and its test as written.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5852,6 +5881,8 @@ const bundles = [
 
 export default {
   packageManager: "bun",
+  // M0-S1: pin Electrobun exactly; without this, `hutch electrobun sync` floats on the stable channel.
+  electrobun: { version: "2.0.1" },
   scripts: {
     "build:ui": "bun run --cwd ../ui build",
     "build:bundles": bundles,
@@ -5880,15 +5911,36 @@ Replace `apps/desktop/tsconfig.json` with:
 
 The order matters. Later entries override earlier ones, so JSLab's base options (for example `types: ["bun"]`) win, while the devkit's `compilerOptions.paths` for `electrobun/*` still apply. If `electrobun/main` still doesn't resolve, open `.hutch/devkit/tsconfig.json` and confirm it defines those `paths`.
 
-Add `"postinstall": "hutch electrobun sync"` to the `scripts` in `apps/desktop/package.json`, so CI and fresh clones generate the devkit before `typecheck`.
+Add a `postinstall` script to the `scripts` in `apps/desktop/package.json`, so CI and fresh clones generate the devkit before `typecheck`. It must fail loudly when Hutch is missing and never skip silently:
+
+```json
+"postinstall": "command -v hutch >/dev/null 2>&1 || { echo 'postinstall: hutch not found. Install Hutch 0.24.3: curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o install.sh && sh install.sh --version 0.24.3' >&2; exit 1; }; hutch electrobun sync"
+```
 
 Run: `cd apps/desktop && bun run typecheck`
 Expected: exit 0.
 
+- [ ] **Step 7b: Install Hutch in CI**
+
+CI runners have no Hutch, so `bun install` would fail at the `postinstall` above. In `.github/workflows/ci.yml` (from Task 1), insert these two steps between `oven-sh/setup-bun@v2` and `bun install --frozen-lockfile`.
+- The install command is the one recorded under S1 in the M0 report.
+- The installer only writes its `PATH` line to `~/.zshrc`, so the step adds `~/.hutch/bin` to `$GITHUB_PATH` itself.
+
+```yaml
+      - name: Install Hutch 0.24.3
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh -o "$RUNNER_TEMP/hutch-install.sh"
+          sh "$RUNNER_TEMP/hutch-install.sh" --version 0.24.3
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+      - run: hutch --version
+```
+
+The `check` job's steps are now, in order: checkout, setup-bun, Install Hutch 0.24.3, `hutch --version`, `bun install --frozen-lockfile`, lint, typecheck, test.
+
 - [ ] **Step 8: Commit**
 
 ```bash
-git add apps/desktop/electrobun.config.ts apps/desktop/hutch.config.ts apps/desktop/tsconfig.json apps/desktop/package.json apps/desktop/src/main/app-paths.ts apps/desktop/src/main/menu.ts apps/desktop/test/shell.test.ts
+git add apps/desktop/electrobun.config.ts apps/desktop/hutch.config.ts apps/desktop/tsconfig.json apps/desktop/package.json apps/desktop/src/main/app-paths.ts apps/desktop/src/main/menu.ts apps/desktop/test/shell.test.ts .github/workflows/ci.yml
 git commit -m "feat(desktop): electrobun project config, app paths and menu model"
 ```
 
@@ -6085,7 +6137,9 @@ Keep the behavior described above.
 
 The UI does not exist yet, so the window will be blank or show a load error. That is expected.
 
-Run: `cd apps/desktop && hutch run build:bundles && JSLAB_RUNNER_BOOTSTRAP="$PWD/dist/runner/bootstrap.js" JSLAB_TRANSFORM_WORKER="$PWD/dist/workers/transform-worker.js" hutch electrobun dev`
+`dist/mainview` must still exist: Electrobun fails with `CopySourceMissing` when a `build.copy` source is absent (M0-S1), so the command creates an empty one. This step runs a dev build from the repository, so the packaged-canary launch procedure (Task 19) does not apply here.
+
+Run: `cd apps/desktop && mkdir -p dist/mainview && hutch run build:bundles && JSLAB_RUNNER_BOOTSTRAP="$PWD/dist/runner/bootstrap.js" JSLAB_TRANSFORM_WORKER="$PWD/dist/workers/transform-worker.js" hutch electrobun dev`
 
 Expected in the terminal:
 - no uncaught exceptions
@@ -7134,11 +7188,14 @@ export function childrenOf(value: EncodedValue): Child[] | null {
         ...(value.stack.length > 0 ? [{ label: "stack", value: text(value.stack.map(formatFrame).join("\n")) }] : []),
         ...(value.cause ? [{ label: "[cause]", value: value.cause }] : []),
       ];
-    case "typedArray":
+    case "typedArray": {
+      // Items are numbers, or strings for bigints and for NaN, ±Infinity and -0; the constructor decides the type.
+      const bigint = value.ctor.startsWith("Big");
       return value.items.map((v, i) => ({
         label: String(i),
-        value: typeof v === "string" ? { t: "bigint", v } : { t: "number", v: String(v) },
+        value: bigint ? { t: "bigint", v: String(v) } : { t: "number", v: String(v) },
       }));
+    }
     case "arrayBuffer":
       return [{ label: "[[Bytes]]", value: text(value.preview.join(" ")) }];
     case "headers":
@@ -7275,7 +7332,7 @@ git commit -m "feat(ui): output reducer, app store, safe auto-run, shortcuts, ma
 import { describe, expect, mock, test } from "bun:test";
 import type { EncodedValue } from "@jslab/rpc-schema";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { tableModel } from "../src/output/format";
+import { childrenOf, tableModel } from "../src/output/format";
 import { ValueView } from "../src/output/ValueView";
 
 const noExpand = async () => null;
@@ -7299,6 +7356,25 @@ describe("ValueView", () => {
   test("renders special numbers exactly", () => {
     render(<ValueView value={num("-0")} expand={noExpand} />);
     expect(screen.getByText("-0")).toBeTruthy();
+  });
+
+  test("renders typed array items by constructor, keeping NaN and -0 exact", () => {
+    const { container } = render(
+      <ValueView
+        value={{ t: "typedArray", ctor: "Float64Array", length: 3, items: ["NaN", "-0", 1.5] }}
+        expand={noExpand}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Float64Array\(3\)/ }));
+    const rows = [...container.querySelectorAll(".v-children > .v")].map((row) => [row.className, row.textContent]);
+    expect(rows).toEqual([
+      ["v v-number", "0: NaN"],
+      ["v v-number", "1: -0"],
+      ["v v-number", "2: 1.5"],
+    ]);
+    expect(childrenOf({ t: "typedArray", ctor: "BigInt64Array", length: 1, items: ["1"] })).toEqual([
+      { label: "0", value: { t: "bigint", v: "1" } },
+    ]);
   });
 
   test("objects start collapsed and expand on click", () => {
@@ -7719,7 +7795,7 @@ function ErrorBody({ event, onReveal }: { event: ErrorEvent; onReveal(line: numb
 - [ ] **Step 4: Run the tests and lint**
 
 Run: `cd apps/ui && bun test test/value-view.test.tsx test/entry-row.test.tsx && cd ../.. && bun run lint`
-Expected: `15 pass`, `0 fail`, then lint exits 0.
+Expected: `16 pass`, `0 fail`, then lint exits 0.
 
 - [ ] **Step 5: Commit**
 
@@ -7760,7 +7836,11 @@ git commit -m "feat(ui): expandable value tree and output entry rows with line l
 
 These components need a real WKWebView layout: Monaco workers and virtualization sizes don't work in happy-dom. They are verified by typecheck here, and by the running app in Task 18 and the QA checklist in Task 19.
 
-**Before starting:** copy the worker import lines recorded under S2 in `docs/spikes/2026-09-m0-report.md` into `monaco-setup.ts`. The code below uses the non-inline variant that S2 tests first.
+**Before starting:** the worker imports in `monaco-setup.ts` below are the ones M0-S2 verified in the packaged app (`docs/spikes/2026-09-m0-report.md`).
+- They are plain, non-inline `?worker` imports; no `&inline` or Blob-URL fallback is needed.
+- The subpath specifiers are `monaco-editor/editor/editor.worker` and `monaco-editor/languages/features/typescript/ts.worker`.
+- Don't use the on-disk `monaco-editor/esm/vs/...` paths. `monaco-editor@0.56.0`'s `exports` map (`"./*": "./esm/vs/*.js"`) already adds `esm/vs/`, so those resolve to a doubled, nonexistent path and the Vite build fails.
+- If the `monaco-editor` version changes, re-derive the specifiers from its `exports` map.
 
 - [ ] **Step 1: Point the UI typecheck at the Electrobun devkit**
 
@@ -7791,8 +7871,8 @@ Expected: exit 0. This shows the devkit resolves; no source files use it yet.
 ```ts
 import type { Language } from "@jslab/shared";
 import * as monaco from "monaco-editor";
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import TsWorker from "monaco-editor/esm/vs/languages/features/typescript/ts.worker?worker";
+import EditorWorker from "monaco-editor/editor/editor.worker?worker";
+import TsWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
 
 let configured = false;
 
@@ -8121,7 +8201,7 @@ export function createRpcApi(): MainApi {
 - [ ] **Step 6: Typecheck, test and lint**
 
 Run: `cd apps/ui && bun run typecheck && bun test && cd ../.. && bun run lint`
-Expected: typecheck exits 0, `40 pass`, `0 fail`, lint exits 0.
+Expected: typecheck exits 0, `41 pass`, `0 fail`, lint exits 0.
 
 If `rpc.ts` fails to typecheck because Electrobun's handler or `request`/`send` signatures differ, adapt the calls to the devkit types. Keep the `MainApi` surface unchanged.
 
@@ -8622,7 +8702,7 @@ export function App({ store, api }: { store: AppStore; api: MainApi }) {
 - [ ] **Step 5: Run the tests**
 
 Run: `cd apps/ui && bun test`
-Expected: `47 pass`, `0 fail`.
+Expected: `48 pass`, `0 fail`.
 
 - [ ] **Step 6: Add the entry point, page, styles and Vite config**
 
@@ -9057,11 +9137,27 @@ git commit -m "feat(ui): app shell with safe auto-run, shortcuts, unresponsive d
 ````markdown
 # M1 Manual QA Checklist
 
-Run against a packaged canary build (`cd apps/desktop && hutch run build`), on macOS arm64, starting from a clean data folder:
+Run against a packaged canary build (`cd apps/desktop && hutch run build`), on macOS arm64, starting from a clean data folder. Launch it the way M0-S1 recorded:
+- The canary `.app` is a self-extracting installer. On first launch it extracts into the data folder below.
+- Copy it to internal disk first. Launched from an external volume (`/Volumes/...`), it stalls on a hidden removable-volume permission prompt.
+- Set `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1`, so the installer panel closes without a click.
+
+From the repository root (the build step above leaves the shell in `apps/desktop`, so return first):
+
+Note: R-M2-T25-1 / final review FB-I3 superseded the `rm -rf` step below with the guarded move used in the QA checklists.
 
 ```bash
-rm -rf ~/Library/Application\ Support/dev.jslab.app/canary
+cd "$(git rev-parse --show-toplevel)"
+QA_DIR="$(mktemp -d)"
+# Move an existing canary data folder into the QA folder instead of deleting it (R-M2-T25-1 / FB-I3).
+[ -d "$HOME/Library/Application Support/dev.jslab.app/canary" ] && mv "$HOME/Library/Application Support/dev.jslab.app/canary" "$QA_DIR/canary-data-backup-$(date +%Y%m%d-%H%M%S)"
+cp -R "apps/desktop/build/canary-macos-arm64/JSLab-canary.app" "$QA_DIR/"
+ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 "$QA_DIR/JSLab-canary.app/Contents/MacOS/launcher" &
 ```
+
+- Use this explicit path. `find build -name '*.app' | head -1` can pick the dev app instead of the canary.
+- Relaunch with the same `launcher` command.
+- To quit from a script, kill by PID (`pkill -f "$QA_DIR/JSLab-canary.app"`), because `osascript -e 'quit app …'` does not quit the app. Items that test a clean quit (Q14) still use ⌘Q.
 
 Each item passes only if the result matches exactly. Record failures as issues and link them in the M1 PR.
 
@@ -9125,19 +9221,19 @@ Expected:
   |---|---|
   | `@jslab/shared` | 12 |
   | `@jslab/rpc-schema` | 5 |
-  | `@jslab/serializer` | 19 |
+  | `@jslab/serializer` | 20 |
   | `@jslab/transform` | 51 |
   | `@jslab/runner-bun` | 17 |
   | `@jslab/desktop` | 52 |
-  | `@jslab/ui` | 47 |
+  | `@jslab/ui` | 48 |
 
-- 203 tests in total, 0 fail
+- 205 tests in total, 0 fail
 
 - [ ] **Step 3: Build a packaged canary app and run the checklist**
 
 Run: `cd apps/desktop && hutch run build`
 
-Open the built `.app` and work through Q1–Q16 in `docs/qa/m1-checklist.md`, ticking each item that passes. Any failing item blocks M1. Fix the failure with a test first where the behavior is unit-testable, then re-run Steps 2–3.
+Launch it with the procedure at the top of `docs/qa/m1-checklist.md`: an internal-disk copy of `build/canary-macos-arm64/JSLab-canary.app`, started with `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1` and quit by PID when scripted (M0-S1). Work through Q1–Q16, ticking each item that passes. Any failing item blocks M1. Fix the failure with a test first where the behavior is unit-testable, then re-run Steps 2–3.
 
 - [ ] **Step 4: Update parity statuses**
 
@@ -9157,7 +9253,7 @@ git commit -m "docs(qa): M1 checklist and parity status"
 git push
 ```
 
-Expected: the CI workflow from Task 1 passes on `macos-14`. If `bun run typecheck` fails in CI because `.hutch/devkit` is missing, confirm that the `postinstall` script added in Task 13 ran. CI must run `bun install` without `--ignore-scripts`.
+Expected: the CI workflow from Task 1 passes on `macos-14`. CI needs the "Install Hutch 0.24.3" step that Task 13 Step 7b added before `bun install`. Without it, the `postinstall` from Task 13 exits with `postinstall: hutch not found`. If `bun run typecheck` fails in CI because `.hutch/devkit` is missing, confirm that both the Hutch step and the `postinstall` ran. CI must run `bun install` without `--ignore-scripts`.
 
 ---
 

@@ -59,7 +59,7 @@ JSLab is free and MIT licensed. Every feature RunJS keeps behind a paid license 
 
 - Windows and Linux builds. The code stays cross-platform, but they aren't shipped or QA'd.
 - Intel Macs. Electrobun doesn't publish an x64 build.
-- Multi-file projects, a file tree, debugger or breakpoints, run selection, a command palette, watching files for external changes, and a web playground. All of these are on the post-v1 roadmap (§27).
+- Multi-file projects, a file tree, debugger or breakpoints, run selection, watching files for external changes, and a web playground. All of these are on the post-v1 roadmap (§27).
 - Node.js or Deno as a runtime. The adapter interface exists, but only Bun ships.
 - A URL scheme or deep links. RunJS's deep link was a remote-code-execution hole (RunJS #500).
 - Telemetry or crash-reporting services.
@@ -148,7 +148,7 @@ flowchart LR
 3. The next step depends on the runtime:
    - **`bun`:** Main writes `entry.<ext>` (§5.3), takes the tab's spare, and sends `run`.
    - **`browser` / `browser-node`:** Main calls `Bun.build` (§5.12), then tells the tab's Web runner to reload and load the bundle.
-4. The runner emits `RunEvent`s. Main maps generated positions to source lines using the source map, batches the events (flushing every 16 ms or every 200 events), and sends `run.events` to the UI.
+4. The runner emits `RunEvent`s. Main maps generated positions to source lines using the source map, batches the events (flushing every 16 ms or every 200 events), and sends `run.events` to the UI. These batch parameters are verified (M0-S7, packaged canary): at 200 events every 16 ms (~11.8k events/s) Electrobun RPC delivered every event with 0 gaps, p95 latency 5 ms and a worst frame of 26 ms. A 1000-event headroom run (~59k events/s) was equally clean, so there is no reason to change the defaults. S7 verified transport only: each synthetic event was a sequence number plus a 180-character string, and the spike measured receipt timing, not the rendering of real run events (encoded values, the output tree). M1 must not treat 16 ms / 200 events as a render budget.
 5. The runner enforces the per-run output cap (§5.10), so a flood never crosses IPC. Main tracks run state (§5.7).
 
 ### 4.3 RPC contracts
@@ -157,7 +157,7 @@ All contracts live in `packages/rpc-schema`: TypeScript types plus zod validator
 
 - **UI ⇄ Main** (`JSLabUIRPC`): Electrobun `BrowserView.defineRPC` / `Electroview.defineRPC`.
 - **Web runner ⇄ Main** (`JSLabWebRunnerRPC`): a separate, narrower schema.
-- **Bun runner ⇄ Main** (`RunnerIPC`): Bun's `Bun.spawn({ ipc })` using JSON messages.
+- **Bun runner ⇄ Main** (`RunnerIPC`): Bun's `Bun.spawn({ ipc, serialization: "json" })` using JSON messages. The serializer is set explicitly because Bun's default `"advanced"` serializer is not compatible across Bun versions (M0-S3: a Bun 1.3.13 child crashed deserializing a message from the Bun 1.4.0 main process, and worked with `"json"`).
 
 Rules:
 
@@ -229,14 +229,18 @@ session.json           tabs, order, layout, window state (+ .bak)
 keybindings.json       user keybinding overrides
 env.json               environment variables (file mode 0600)
 snippets.json          snippet library
-buffers/<tabId>.<ext>  auto-saved tab contents
+buffers/<tabId>.<ext>  auto-saved tab contents (closed tabs: buffers/closed/)
 themes/                user-imported themes (*.jslab-theme.json)
 packages/              shared npm project: package.json, bun.lock, .npmrc, node_modules/
+npm-home/              empty HOME for npm operations; never holds an .npmrc (§11.3)
 runs/<tabId>/          generated entry files + source maps for the current run
-cache/                 transform + browser vendor bundle caches
+cache/                 transform + browser vendor bundle caches; system-fonts.json (systemFonts adapter)
 ai/conversation.json   current AI conversation
 jslab.sock             CLI socket (0600)
 run.lock               present while a run is active; used for crash-loop detection
+safe-mode.next         written by Help → Restart in Safe Mode; consumed at the next launch
+e2e-screenshots/       JSLAB_E2E=1 launches only: window screenshots
+e2e-*.json, e2e-*.txt  JSLAB_E2E=1 launches only: scripted dialog answers, clipboard, opened paths and external links
 logs/                  main.log (rotating, 5 × 5 MB)
 ```
 
@@ -248,8 +252,8 @@ Each adapter lives in `apps/desktop/src/main/platform/`, exposes a small interfa
 
 | Adapter | Gap | v1 implementation |
 |---|---|---|
-| `saveDialog` | No save dialog (Electrobun #233) | `osascript -e 'POSIX path of (choose file name default name "…" default location …)'`. NSSavePanel through FFI is a later option. |
-| `fileAssociations` | Can't register existing UTIs (#551) | Hutch post-wrap hook patches `Info.plist` `CFBundleDocumentTypes` before signing |
+| `saveDialog` | No save dialog (Electrobun #233) | `osascript -e 'POSIX path of (choose file name default name "…" default location …)'`, spawned from Main and answered over an RPC message, so the UI stays responsive. Adopted **provisionally** (M0-S6). Verified: escaping, a real "Choose File Name" window, and a responsive UI while it is open. Still pending a manual check: the chosen path, Cancel → `null` through AppleScript's `-128`, names containing quotes, whether the dialog comes to the front, and whether a dialog left untouched for at least 60 s stays open. In M0 an untouched dialog resolved to the default path on its own after a variable delay (6.8 s and 27.6 s in two app runs); the cause is unexplained. If that happens for users, Save As silently returns the default path, so M2 must not trust an unconfirmed result. NSSavePanel through FFI is a later option. |
+| `fileAssociations` | Can't register existing UTIs (#551) | One idempotent patch script (`plutil -remove`, then `-insert`) writes `CFBundleDocumentTypes` with `LSHandlerRank: Alternate` into `Info.plist`. It is wired to **both** the Hutch `postBuild` and `postWrap` hooks. On macOS `postWrap` alone patches only the self-extracting installer stub, because the real app has already been compressed into the install payload by then. M0-S5 proved the patching mechanism, LaunchServices registration for all 8 extensions, and `open-url` delivery. It did **not** prove signing: the as-packaged canary failed `codesign --verify --deep --strict` (exit 1). The cause was not isolated because no unpatched build was checked, so it is unknown whether the patch broke Hutch's signature or the signature was already invalid. An ad-hoc re-sign after patching (`codesign --force --deep -s -`) verifies. The app must be signed after the patch; M6 verifies this. Electrobun 2.0.1's native `app.fileAssociations` config field is untried: evaluate it in M6 before committing to the hook patch. |
 | `systemFonts` | No `queryLocalFonts` in WKWebView | `system_profiler SPFontsDataType -json`, cached, run in the background |
 | `accelerators` | Menu accelerators are single-key with Cmd/Ctrl | Menu shows items; multi-modifier shortcuts are handled by the UI keybinding registry, and the menu label shows the shortcut text |
 | `secrets` | No keychain API | `security add-generic-password` / `find-generic-password` via `Bun.spawn` |
@@ -290,6 +294,7 @@ The default is set by `run.defaultRuntime`. Tabs change runtime from the status 
 
 ### 5.3 Bun runner: module semantics
 
+- **Runner binary:** `process.execPath`, the Bun that Electrobun bundles (1.4.0 in Electrobun 2.0.1), with no separately pinned Bun (M0-S3). In the packaged app it spawns with IPC, resolves packages through `NODE_PATH`, supports top-level `await` and is killable with `SIGKILL`, and it is ready in about 10 ms. Runners are copied files, found at `join(PATHS.RESOURCES_FOLDER, "app", <dir>)`. The IPC channel still sets `serialization: "json"` (§4.3), so a separately pinned runner Bun stays possible later (R9).
 - The entry file is `<appdata>/runs/<tabId>/entry-<runId>.mjs`. It is always `.mjs`: Babel output is plain ESM JavaScript, and a `.ts` extension would make Bun transpile it again. No `sourceMappingURL` comment is written, so Bun reports generated positions and Main does all source mapping.
   - It sits outside the packages project on purpose, so walk-up resolution finds nothing and `NODE_PATH` alone controls package lookup (below).
   - The file is written atomically, and its source map is written beside it.
@@ -299,7 +304,7 @@ The default is set by `run.defaultRuntime`. Tabs change runtime from the status 
   - `import.meta`
   - `require` (Bun allows `require` in ESM)
   - `node:` specifiers
-- **Bare specifier resolution order** is implemented with `NODE_PATH`, set at spawn to `<WD>/node_modules:<appdata>/packages/node_modules` (without the WD entry when no WD is set). Bun's built-ins always resolve first. Verified on Bun 1.3.13 on 2026-09-12: `NODE_PATH` and walk-up resolution both work for a spawned runner, but a preload `Bun.plugin` `onResolve` hook does **not** intercept bare imports of dynamically imported modules, so no runtime plugin is used.
+- **Bare specifier resolution order** is implemented with `NODE_PATH`, set at spawn to `<WD>/node_modules:<appdata>/packages/node_modules` (without the WD entry when no WD is set). Bun's built-ins always resolve first. Verified on Bun 1.3.13 on 2026-09-12: `NODE_PATH` and walk-up resolution both work for a spawned runner, but a preload `Bun.plugin` `onResolve` hook does **not** intercept bare imports of dynamically imported modules, so no runtime plugin is used. M0-S3 re-verified `NODE_PATH` resolution on the bundled Bun 1.4.0; walk-up resolution and the `onResolve` result were not re-checked there.
 - **Relative specifiers** (`./x`, `../x`) resolve against the WD when a WD is set, and against the entry directory otherwise. Local `.ts` and `.tsx` files in the WD run natively through Bun; they are not instrumented.
 - **WD globals.** When a WD is set, `process.cwd()` is the WD. `__dirname` and `import.meta.dir` report the WD, and `__filename` and `import.meta.path` report `<WD>/<tab title>.<ext>`. This is done by defining those identifiers in the transform and passing `cwd` at spawn.
 - **Environment** is built at spawn, in this order (later entries override earlier ones):
@@ -308,7 +313,7 @@ The default is set by `run.defaultRuntime`. Tabs change runtime from the status 
   3. The WD's `.env` (parsed by JSLab).
   4. `JSLAB=1`.
 
-  Bun's own `.env` auto-loading is disabled (`--no-env-file` or equivalent, verified in M0).
+  Bun's own `.env` auto-loading is disabled with `--no-env-file`. The flag is required: in M0-S3 the same child without it loaded the `cwd`'s `.env`.
 - **Spares** are per tab, and a spare is keyed by `(cwd, envHash, runnerSettingsHash)`. Changing the WD, environment variables, or runner-affecting settings recycles the spare.
 
 ### 5.4 Transform pipeline
@@ -375,7 +380,7 @@ The bootstrap is started with `bun --preload <bootstrap> <idle-script>` and conn
 1. Installs `__jl` (`log`, `mc`, and the serializer).
 2. **Hooks `console`**: `log`, `info`, `warn`, `error`, `debug`, `table`, `dir`, `dirxml`, `assert`, `count`, `countReset`, `time`, `timeLog`, `timeEnd`, `group`, `groupCollapsed`, `groupEnd`, `trace`, and `clear`. For each call it records the calling position from a lightweight stack capture (generated line/column; Main maps it to the source line).
 3. **Hooks `process.stdout.write` / `process.stderr.write`**, which produce `stdout` / `stderr` events.
-4. **Tracks active handles** by wrapping `setTimeout`, `setInterval`, `setImmediate`, `Bun.serve`, `net.createServer`, `http.createServer`, `child_process.spawn`/`exec`, `WebSocket`, and `fetch` (through an AbortController registry). `process.getActiveResourcesInfo()` is **not** used: on Bun 1.3.13 it returns `[]` even while a timer is pending (checked 2026-09-12).
+4. **Tracks active handles** by wrapping `setTimeout`, `setInterval`, `setImmediate`, `Bun.serve`, `net.createServer`, `http.createServer`, `child_process.spawn`/`exec`, `WebSocket`, and `fetch` (through an AbortController registry). `process.getActiveResourcesInfo()` is **not** used: on Bun 1.3.13 it returns `[]` even while a timer is pending (checked 2026-09-12; not re-checked on the bundled Bun 1.4.0).
 5. Listens for `uncaughtException` and `unhandledRejection`, which become `error` events.
 6. Sends a heartbeat every 500 ms from the JS thread.
 7. On `run`, applies `cwd` and settings, then `await import(entry)`, then emits the state `settled`, then `idle` once no tracked handles remain.
@@ -437,6 +442,8 @@ The encoding is JSON-safe and tagged. The full type is in Appendix B. Rules:
 | String preview | 10,000 chars; full text through a handle, up to 1 MB |
 | Per-event encoded size | 256 KB; beyond that, the root becomes a handle with a preview |
 
+**Text bounds (M2, R-M2-T19B-1/2):** a single stdout/stderr write larger than about 256 KB is shown truncated, ending with `…` and the number of bytes not shown. Error messages are clipped at 16 KB and error names at 1 KB, each ending with `…`.
+
 Special cases:
 - **Getters:** own accessors on plain objects and class prototypes are shown as `(...)` and evaluated on expand. The exception is the native side-effect-free getter allowlist (`Map.size`, `ArrayBuffer.byteLength`, `URL.*`, `Response.status`, …), which is evaluated eagerly.
 - **Promises:**
@@ -467,13 +474,14 @@ Special cases:
 | Bundle (browser) | Same presentation. Unresolved imports offer "Install <pkg>" (§11.4). |
 | Runtime (thrown / unhandled rejection) | An error entry with name, message, and a source-mapped stack. Frames in user code are clickable (`L12:5`) and move the caret; internal frames are collapsed. The editor adds an inline error decoration on the throwing line. |
 | Runner crash (exit ≠ 0 without `done`) | "Runtime exited unexpectedly (code N / signal S)" plus the stderr tail. The next spare is used on the next run. |
+| User `process.exit` | Not an error. Pending output is flushed, and the runner exits once IPC drains, at most 2 s later. Code after the call doesn't run. |
 
 ### 5.12 Web runners (`browser`, `browser-node`)
 
 - **Web runner creation.** Each browser-mode tab gets one Web runner: an `<electrobun-webview>` embedded in the output area's Web View tile.
   - It uses its own partition, `persist:runner-<tabId>`.
   - It loads `views://runner-web/index.html`, which contains a bare `<div id="root"></div>` page with no stylesheet.
-  - When the tile is hidden, the webview stays alive but collapsed to zero size. This is verified in M0.
+  - When the tile is hidden, the webview stays alive but collapsed to zero size. Verified in M0-S4: collapsed to 0×0 for 10 s, `setInterval` kept 100% and `requestAnimationFrame` 104% of the uncollapsed rate. No throttling was measured, so no 1×1-offscreen fallback is needed.
 - **Bundling.** Uses `Bun.build({ entrypoints:[entry], target:'browser', format:'esm', sourcemap:'external', plugins:[jslabResolve, nodePolyfills(runtime), cssInject] })`.
   - npm packages come from `packages/node_modules`.
   - CSS imports (from packages or the WD) are injected as `<style>`.
@@ -484,7 +492,7 @@ Special cases:
   3. The bootstrap installs `__jl` and the console hooks, and requests the bundle over RPC.
   4. It runs the bundle with `import(URL.createObjectURL(new Blob([code], {type:'text/javascript'})))`.
 - **Heartbeats and handles:** the same heartbeat, handle tracking (timers, `requestAnimationFrame` loops, AudioContexts, WebSockets), and Stop semantics as §5.6. On Stop, rAF loops are cancelled and AudioContexts closed.
-- **Dialogs:** `alert` / `confirm` / `prompt` should be native blocking dialogs, depending on WKWebView UI-delegate support in Electrobun (spike M0-S4). **If that isn't supported,** JSLab shows its own non-blocking dialog: `alert` returns immediately after showing it, `confirm` returns `false` and `prompt` returns `null`, and a console warning explains the limitation.
+- **Dialogs:** inside an embedded `<electrobun-webview>`, `alert` / `confirm` / `prompt` are **not** blocking in Electrobun 2.0.1. M0-S4 found they return `undefined` / `false` / `null` in about 1 ms with no user interaction, so no blocking native panel is shown. JSLab therefore uses the async fallback: it shows its own non-blocking dialog, `alert` returns immediately after showing it, `confirm` returns `false` and `prompt` returns `null`, and a console warning explains the limitation. Still open (a UX detail that doesn't change this design): whether a native panel briefly flashes, which the shim may need to suppress.
 - **`fetch`:**
   - In `browser` it is the native `fetch`, with CORS enforced (true browser behavior).
   - In `browser-node` it is routed through Main (Node-like, no CORS). The response is streamed back, with `Response` semantics preserved.
@@ -518,7 +526,7 @@ Special cases:
 
 ### 6.1 Monaco configuration
 
-- `monaco-editor` is bundled locally. Its workers (editor, ts) are emitted by Vite and loaded from `views://mainview/…` (spike M0-S2; fallback: Blob-URL workers).
+- `monaco-editor` is bundled locally. Its workers (editor, ts) are emitted by Vite and loaded from `views://mainview/…`. Verified in M0-S2 with plain (non-inline) `?worker` imports, so no Blob-URL fallback is needed. The import specifiers are `monaco-editor/editor/editor.worker?worker` and `monaco-editor/languages/features/typescript/ts.worker?worker`. They omit `esm/vs/` because the package's `exports` map (`"./*": "./esm/vs/*.js"`) already adds it.
 - **One model per tab.** URIs are `file:///tab/<tabId>.<ext>`. Models persist view state (cursor, selections, scroll, folding) in the session.
 - **Language by tab:** `typescript` for TS/TSX, `javascript` for JS/JSX. JSX is enabled through compiler options.
 - **TS compiler options per tab runtime:**
@@ -554,7 +562,7 @@ Special cases:
   - Any logpoint change triggers Auto Run.
 - **Output hover link.** Hovering an output entry highlights its source line with a line decoration.
 - **Inline error decoration** marks the throwing line (§5.11).
-- **Vim:** `monaco-vim` when `editor.vimKeys` is on; the mode shows in the status bar. `Cmd+R` runs in every Vim mode (fixes RunJS #652). The Vim clipboard register `"+` maps to the system clipboard.
+- **Vim:** `monaco-vim` when `editor.vimKeys` is on; the mode shows in the status bar. `Cmd+R` runs in every Vim mode (fixes RunJS #652). The Vim clipboard register `"+` maps to the system clipboard. Writes to `"+` go through the same clipboard path as Output → Copy All (M2, R-M2-PF3).
 - **Pastes over 5 MB** show a confirmation: "Pasting 12.4 MB may make JSLab slow. Continue?"
 - **Hover delay** is set by `editor.hoverDelayMs`, default 400.
 - `F1` shows hover info at the cursor, and `Cmd+F1` shows the diagnostic at the cursor. Monaco's F1 command palette is disabled in v1.
@@ -566,7 +574,8 @@ Special cases:
   - Actions → Format Code (`Alt+Shift+F`).
   - Before each run when `run.formatOnRun` is on. Formatting is skipped while the editor has focus and typing happened in the last 1 s, so the cursor doesn't jump.
   - On save when `editor.formatOnSave` is on.
-- **Edits** are applied as a minimal Monaco edit (`pushEditOperations` over a diff), so undo, folding, scroll, and cursor are preserved. This fixes RunJS #639 and #654.
+- **Edits** are applied as a minimal Monaco edit (`executeEdits` over a line diff, bracketed by `pushUndoStop`), so undo, folding, scroll, and cursor are preserved. This fixes RunJS #639 and #654.
+- **Timeout:** a format request fails after 10 s plus 5 s per MB of code, at most 60 s. The worker restarts, the status bar says "Couldn't format", and the run or save goes ahead. A request pending for more than 300 ms shows "Formatting…" in the status bar.
 - **Options:** all `prettier.*` settings (§8).
 - **Failure** (a syntax error) leaves the code unchanged and shows a status-bar message.
 
@@ -575,6 +584,7 @@ Special cases:
 - **Command registry.** Every action is a `CommandId`, e.g. `run.start` or `tab.reopenClosed`, with a handler, a `when` context (`editorFocus`, `outputFocus`, `vimNormal`, …), and a default binding.
 - **One resolver in the UI owns keyboard dispatch.** Native menu items dispatch the same `CommandId` through the `menu.command` message.
 - **User overrides** are stored in `keybindings.json` as `[{ "key": "cmd+shift+enter", "command": "run.start", "when": "editorFocus" }, { "key": "cmd+k", "command": "-output.clear" }]`. The format is VS Code-style; a leading `-` removes a binding.
+- **Command palette** (⌘⇧P): a context-sensitive list of every enabled command except the ones hidden from the palette, grouped by category, with match highlighting, inline state descriptions and keycaps. It was pulled into v1 by the M2 UI decision ("Graphite with a spice of Daylight Rail").
 - **Settings → Keybindings:**
   - A searchable table: Command, Keybinding, When, Source (Default/User).
   - A key-capture editor that warns on conflicts.
@@ -647,26 +657,20 @@ Special cases:
 - **Activity bar** (toggle `view.activityBar`): Run, Stop, Snippets, NPM Packages, AI Chat; Settings at the bottom. It shows the run-state badge.
 - **Side bar** (toggle `view.sideBar`): hosts the AI Chat or Snippets panel. Resizable, 240–600 px.
 - **Tab bar:** hidden when there's one tab and `view.tabBarForSingleTab` is off.
+- **Toolbar row:** the title-bar row (38 px, the window drag region) holds the traffic lights, the tabs, and on the right the Auto Run toggle and the Run/Stop button.
 - **Editor/output split:**
   - Horizontal (side by side, default) or vertical (stacked).
-  - The divider is draggable; the default is 55/45, stored per tab.
+  - The divider is draggable; the default is 55/45, stored per tab. Double-clicking the divider resets the split to 50/50.
   - Status bar "Split" toggles the orientation, and View → Output toggles the output area.
 - **Output area tiles:** Console and Web View. Tiles are arranged by dragging their headers (stacked or side by side, stored per tab). The Web View tile is unavailable in the `bun` runtime.
-- **Status bar** (toggle `view.statusBar`), left to right:
-  - runtime selector
-  - language selector
-  - Web View toggle
-  - Split orientation toggle
-  - WD chip (click → change/clear; tooltip shows the full path)
-  - run state
-  - Safe Mode badge
-  - Vim mode
-  - cursor position
+- **Status bar** (toggle `view.statusBar`, 28 px):
+  - Left: run state (dot and label), Safe Mode badge, status message.
+  - Right: runtime selector, language selector, Web View toggle (M4), Split orientation toggle, WD chip (M3; click → change/clear; tooltip shows the full path), Vim mode, cursor position.
 
 ### 7.2 Output panel
 
 - **List:** virtualized (`@tanstack/react-virtual`). While scrolled to the bottom it auto-scrolls to the newest entry; scrolling up pins the position.
-- **Entry anatomy:** level icon (warn/error styled), the value renderer, and an `L<n>` badge on the right. Clicking the badge moves the caret to that line and focuses the editor; hovering highlights the editor line.
+- **Entry anatomy:** a 3 px level stripe (result, log, info, warn or error; only error rows are tinted), the value renderer, and a right-edge `:n` line anchor whose accessible name is `L<n>`. Clicking the anchor moves the caret to that line and focuses the editor; hovering the entry highlights the editor line.
 - **Value tree:**
   - Expandable nodes, with "Expand all" in the entry menu.
   - Nested objects and `[[Prototype]]` start collapsed.
@@ -677,6 +681,8 @@ Special cases:
 - **Panel context menu:** Copy (when text is selected), Copy All, Clear.
 - **Syntax highlighting of values** uses theme tokens and is controlled by `output.highlighting`, default on.
 - **Line-number badges:** `output.showLineNumbers`, default on.
+- **Filter chips** above the list: All, Results, Logs, Errors.
+- **Copy All is filtered (M2, R-M2-T19A-1):** Copy All copies the entries visible under the current filter chip, not the whole output. This intentionally changes the M1 behavior, which copied every entry.
 
 ### 7.3 Tabs
 
@@ -692,7 +698,7 @@ Special cases:
 - **Confirm Close** (`tabs.confirmClose`) asks before closing any tab. Separately, a saved file with changes always prompts "Save changes to x.ts?" with Save, Don't Save, and Cancel.
 - Tabs reorder by dragging, and a saved-file tab's tooltip shows the full path.
 - **Closing the last tab** opens a fresh empty tab. `Cmd+W` on a single empty tab closes the window; the app stays in the Dock, and clicking the Dock icon reopens it.
-- **Dropped files** open in new tabs, one per file, rejecting non-text or files over 5 MB (after confirmation). A dropped folder sets the current tab's WD.
+- **Dropped files** open in new tabs, one per file. The webview doesn't get a dropped file's path, so each opens as an unsaved scratch copy titled with the file's name and with no file path: ⌘S asks Save As, and Reveal in Finder and Copy Path are disabled. A Main-side native drop that keeps the path is planned for M3. Non-text files and files over 50 MB are rejected, and files over 5 MB open only after confirmation. A dropped folder sets the current tab's WD.
 
 ### 7.4 Application menu
 
@@ -708,7 +714,9 @@ Menu items dispatch `CommandId`s. Items without a native accelerator show their 
 - **Window:** Minimize · Zoom · Bring All to Front
 - **Help:** Documentation · Bun vs Node Differences · What's New · Report Issue · Copy Debug Log · Open Logs Folder · Restart in Safe Mode
 
-The Edit menu uses Electrobun roles (`undo`, `redo`, `cut`, `copy`, `paste`, `selectAll`) so clipboard shortcuts work in WKWebView.
+Each milestone adds the items whose features it ships; M2 ships File (New Tab, Open, Save, Save As, Reopen, Close Tab, Close Window), Edit, Actions (Run/Stop/Kill, Format, Runtime, Language), View, Themes, Window and Help (Copy Debug Log, Open Logs Folder, Restart in Safe Mode).
+
+The Edit menu uses Electrobun roles (`undo`, `redo`, `cut`, `copy`, `paste`, `selectAll`) so clipboard shortcuts work in WKWebView. The Edit menu has no `delete` role: Electrobun 2.0.1 gives that role the unmodified Delete key as its key equivalent, which takes Backspace away from Monaco. The JSLab menu has no Services item, because Electrobun 2.0.1's menu roles (`menuRoles.ts`) include no services role.
 
 **Show Transpiled Output** opens a read-only side tab with the latest Babel output for the current tab. It updates on each run, and a toggle hides the instrumentation calls.
 
@@ -725,6 +733,8 @@ The Edit menu uses Electrobun roles (`undo`, `redo`, `cut`, `copy`, `paste`, `se
 | About | Native-style modal: version, Bun version, Electrobun version, license, credits (open-source notices) |
 | What's New | Opens after an update with that release's notes (bundled Markdown) |
 | First run | A welcome tab with sample code showing Auto Log, `//?`, logpoints, fetch, and a React snippet |
+
+The Settings window buffers messages that arrive before its view subscribes (the latest 32 per message name), so an early message is never lost (M2, R-M2-T24-4).
 
 ---
 
@@ -767,9 +777,9 @@ The Settings window has these tabs: **General · Editor · Formatting · Appeara
 | Formatting | `prettier.bracketSpacing` | bool | `true` | |
 | Formatting | `prettier.bracketSameLine` | bool | `false` | |
 | Formatting | `prettier.arrowParens` | enum | `always` | `always`, `avoid` |
-| Appearance | `appearance.theme` | string | `dracula` | Theme id |
+| Appearance | `appearance.theme` | string | `graphite` | Theme id |
 | Appearance | `appearance.followSystem` | bool | `false` | Use the light/dark theme pair below |
-| Appearance | `appearance.lightTheme` / `darkTheme` | string | `github-light` / `dracula` | |
+| Appearance | `appearance.lightTheme` / `darkTheme` | string | `graphite-light` / `graphite` | |
 | Appearance | `appearance.font` | string | `JetBrains Mono` | Bundled or system font |
 | Appearance | `appearance.fontSize` | int 8–72 | `14` | Editor and output |
 | Appearance | `appearance.fontLigatures` | bool | `true` | |
@@ -826,14 +836,15 @@ The Settings window has these tabs: **General · Editor · Formatting · Appeara
 }
 ```
 
-UI colors are applied as CSS variables. The output value renderer uses the `output*` tokens.
+UI colors are applied as CSS variables. From M2 on, built-in themes are semantic token sets from `@jslab/themes` rather than the `ui` object sketched above: `bg.canvas`, `bg.chrome`, `bg.elevated`, `bg.hover`, `bg.selection`, `bg.activeRow`, `bg.errorRow`, `bg.errorRowHover`, `bg.lineHover`, `bg.lineHighlight`, `bg.accentMuted`, `bg.scrim`; `border.default`, `border.muted`, `border.accent`; `fg.default`, `fg.muted`, `fg.accent`, `fg.onAccent`, `fg.success`, `fg.warn`, `fg.error`, `fg.info`; `console.result`, `console.log`, `console.info`, `console.warn`, `console.error`; and `syntax.comment`, `syntax.keyword`, `syntax.string`, `syntax.number`, `syntax.type`, `syntax.function`. Each token is a CSS variable (`bg.canvas` → `--bg-canvas`), the Monaco theme is built from the same tokens, and every text token meets WCAG AA on each surface it is drawn on. The output value renderer uses the `console.*` and `syntax.*` tokens. The M5 VS Code importer and `*.jslab-theme.json` files map onto this token set.
 
 ### 9.2 Built-in themes
 
 All built-in themes are free. Each is built from a publicly licensed palette, and license notices are listed in About → Credits.
 
-- **Dark:** Dracula (default), One Dark, Monokai, Material Darker, Ayu Dark, Ayu Mirage, SynthWave '84, Shades of Purple, Nord, Night Owl, Catppuccin Mocha, GitHub Dark, Solarized Dark, Tomorrow Night
-- **Light:** GitHub Light, Solarized Light, Catppuccin Latte, Ayu Light, Visual Studio Light (a VS-style palette)
+- **Default pair:** Graphite (dark, default) and Graphite Light: JSLab's own semantic token palettes. Every text/background pair meets WCAG AA.
+- **Dark:** Graphite (default), Dracula, One Dark, Monokai, Material Darker, Ayu Dark, Ayu Mirage, SynthWave '84, Shades of Purple, Nord, Night Owl, Catppuccin Mocha, GitHub Dark, Solarized Dark, Tomorrow Night
+- **Light:** Graphite Light (default light theme), GitHub Light, Solarized Light, Catppuccin Latte, Ayu Light, Visual Studio Light (a VS-style palette)
 
 ### 9.3 VS Code theme importer
 
@@ -851,7 +862,7 @@ Invalid files produce a readable error.
 ### 9.4 Fonts
 
 - **Bundled** (OFL/Apache licensed): JetBrains Mono (default), Fira Code, DejaVu Sans Mono, Hack, Ubuntu Mono, Source Code Pro.
-- **System fonts** come from the `systemFonts` adapter, monospace first, then all. They're listed after a separator in the font picker.
+- **System fonts** come from the `systemFonts` adapter, monospace first, then all. They're listed after a separator in the font picker. A failed installed-font scan isn't retried for 10 minutes, and the Font picker says "Couldn't load installed fonts" (M2, R-M2-T24-6).
 - If a font fails to load, JSLab falls back to the default and shows a notice.
 
 ---
@@ -861,7 +872,7 @@ Invalid files produce a readable error.
 ### 10.1 Session
 
 `session.json` (schema in Appendix C):
-- **Window:** frame and display id. Restored if the display still exists, otherwise centered on the primary display.
+- **Window:** frame and display id. Restored if the display still exists, otherwise centered on the primary display. A restored frame is clamped to at least 400×300.
 - **Tabs:** tab order, active tab id, reopen-closed stack (content stored in `buffers/closed/`).
 - **Per tab:**
   - `id`, `title`, `titleIsCustom`, `language`, `runtime`, `filePath`, `workingDirectory`, `gistId`
@@ -883,14 +894,14 @@ Invalid files produce a readable error.
 - **Save** writes to `filePath`, or runs Save As when the tab has none. Format on save applies first if enabled.
 - **Save As** uses the `saveDialog` adapter. The default name is the title plus the language extension, in the last-used folder.
 - **Encoding and line endings:** UTF-8, keeping the line endings detected on open.
-- **Files over 5 MB** show a confirmation before opening.
+- **Files over 5 MB** show a confirmation before opening, and files over 50 MB are refused. A tab's text is capped at 64 MB: above that, JSLab stops auto-saving and running the tab and says so in the status bar, so an edit is never dropped silently.
 - **File associations:** see §4.6. Opening a file from Finder (the `open-url` event with `file://`) opens it in a new tab.
 
 ### 10.3 Window behavior
 
 - The app runs a single main window in v1.
 - Closing the window keeps the app running (macOS convention), and clicking the Dock icon reopens it.
-- Quitting flushes state, disposes runners, and removes `run.lock`.
+- Quitting flushes state (the session, buffers and `settings.json`), disposes runners, and removes `run.lock`.
 
 ---
 
@@ -919,7 +930,21 @@ Built-in type packages ship inside the app, not in this project.
 
 ### 11.3 Operations
 
-Each operation runs the bundled Bun with `cwd = <appdata>/packages`. The environment is the login-shell environment plus `NPM_CONFIG_USERCONFIG=<packages>/.npmrc` and `BUN_CONFIG_NO_GLOBAL_NPMRC` or an equivalent, so the user's `~/.npmrc` is ignored (exact flags confirmed by spike M0-S8).
+Each operation runs the bundled Bun (`process.execPath`) with `cwd = <appdata>/packages`. The environment is the login-shell environment with two overrides, so the user's `~/.npmrc` is ignored.
+
+- **`HOME=<appdata>/npm-home`:** an app-owned directory that never contains an `.npmrc`. Bun reads the user-level config from `$HOME/.npmrc`. Verified in the packaged app with the bundled Bun 1.4.0 (M0-S8 Run 3):
+  - Setup: an empty project `.npmrc`, and a user-home `.npmrc` whose only line is a dead scoped registry.
+  - The scoped install fails when `HOME` is that home, and succeeds with `HOME=<empty npm-home>`.
+
+  The following do **not** isolate:
+  - `NPM_CONFIG_USERCONFIG`: Bun ignores it (M0-S8, in-app).
+  - `XDG_CONFIG_HOME` and `BUN_CONFIG_NO_GLOBAL_NPMRC=1`: `$HOME/.npmrc` is still read (M0-S8 out-of-app controls with the same bundled Bun).
+  - `BUN_CONFIG_REGISTRY`, or a `registry=` line in the project `.npmrc`: these override only the default registry, and scoped `@scope:registry` keys from `~/.npmrc` still apply (M0-S8 out-of-app controls).
+- **`BUN_INSTALL_CACHE_DIR`:** set to the user's Bun cache, which is the login-shell `BUN_INSTALL_CACHE_DIR` if set. The package cache stays shared and never lands in `npm-home`. `<real HOME>/.bun/install/cache` is not a safe fixed fallback, because a login-shell `BUN_INSTALL` or `XDG_CACHE_HOME` may move the user's cache (not tested in M0). M3 must resolve the path itself and always set `BUN_INSTALL_CACHE_DIR` explicitly, never relying on a default derived from the environment or from the overridden `HOME`. M0-S8 verified that Bun honors this variable while `HOME` is overridden.
+
+With `HOME` overridden, `~/.npmrc` no longer applies, and `<packages>/.npmrc` is the intended source of registry, scoped registry and auth settings; its `registry=` line takes effect (M0-S8). It is not guaranteed to be the only source: the spawn environment is the login-shell environment, and M0-S8 C3 showed Bun honours `BUN_CONFIG_REGISTRY`. M3's npm service must therefore strip inherited `BUN_CONFIG_*`, `NPM_CONFIG_*` and `npm_config_*` variables from the install environment. A login-shell `XDG_CONFIG_HOME` might also point Bun at a global `bunfig.toml` (not tested in M0); M3 checks this and strips or overrides it if so.
+
+Because `HOME` is overridden, git-URL specs and install scripts also see `npm-home`, with no `~/.gitconfig` or `~/.ssh`. M3 must test git-over-SSH specs. If they need something from the real home, pass that specific variable (for example `GIT_SSH_COMMAND`) instead of restoring `HOME`.
 
 | Operation | Command |
 |---|---|
@@ -1090,7 +1115,8 @@ jslab --version | --help
 - **If the app isn't running**, the CLI runs `open -b dev.jslab.app`, polls for the socket for up to 10 s, then sends the request. It never relies on process arguments, which avoids Electrobun #540.
 - **Paths are made absolute by the CLI** before sending.
 - **Code runs only when `--run` is passed.**
-- **E2E automation** (`JSLAB_E2E=1` at app launch only) adds `e2e.*` methods on the same socket (§22.3). They are never available in normal launches.
+- **E2E automation** (`JSLAB_E2E=1` at app launch only) adds `e2e.*` methods on the same socket (§22.3). They are never available in normal launches. The harness also uses `e2e.quit` and `e2e.reopen`. UI methods, `e2e.state` and `e2e.screenshot` accept `window: "main" | "settings"`.
+- **Reply queue (M2, R-M2-T2-1):** the `jslab.sock` server queues replies until the socket drains, so large replies arrive whole instead of being cut off.
 
 ---
 
@@ -1110,7 +1136,7 @@ jslab --version | --help
 
 | Area | Measure |
 |---|---|
-| UI webview | CSP: `default-src 'self' views:; script-src 'self' views: 'wasm-unsafe-eval'; worker-src 'self' views: blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'`. Navigation rules block every non-`views://` navigation; links open in the default browser through `Utils.openExternal`. |
+| UI webview | CSP: `default-src 'self' views:; script-src 'self' views: 'wasm-unsafe-eval'; worker-src 'self' views: blob:; style-src 'self' views: 'unsafe-inline'; img-src 'self' views: data: blob:; font-src 'self' views: data:; connect-src 'self' views: ws://127.0.0.1:* ws://localhost:*; base-uri 'self'; form-action 'none'`. The `views:` sources serve the bundled assets, remote (`https:`) images are not allowed, and `connect-src` allows Electrobun's local RPC WebSocket (see the risk register). The Settings window page uses the same policy. Navigation rules block every non-`views://` navigation; links open in the default browser through `Utils.openExternal`. |
 | RPC boundary | Every inbound payload is zod-validated in Main; path parameters are normalized; there is no generic "exec" or "read any file" endpoint for the UI. The file operations are open dialog, save to a user-chosen path, and read/write of a tab's own file path. |
 | Web runners | Separate partition per tab; a narrower RPC schema (`runner.*`, `nodeBridge.*` for `browser-node` only); no access to settings, secrets, or other tabs. |
 | User code | Runs with the user's OS permissions, like a terminal. JSLab guarantees process isolation and killability, not a sandbox. The docs say this plainly. |
@@ -1127,8 +1153,8 @@ jslab --version | --help
 
 - **Build:** `hutch electrobun build --env=stable|canary` on a GitHub Actions `macos-14` (arm64) runner.
 - **Signing:** `build.mac.codesign: true`, `notarize: true`. Credentials come from CI secrets (`ELECTROBUN_DEVELOPER_ID` and the App Store Connect API key variables).
-  - The post-wrap hook patches `Info.plist` for file associations **before** signing, and M0 verifies the hook order.
-  - Nested binaries (the runner Bun, the `jslab` CLI) are signed with the hardened runtime. Entitlements: `com.apple.security.cs.allow-jit` and `allow-unsigned-executable-memory` (required by JSC/Bun); M0 verifies the minimal set.
+  - The `postBuild` + `postWrap` hook pair (§4.6) patches `Info.plist` for file associations, and the app must be signed after that patch. M0-S5 established only the hook order relative to compression: `postBuild` runs before Hutch compresses the real app into its install payload, and `postWrap` runs after, on the installer stub. It did not establish where signing happens: the as-packaged canary failed `codesign --verify` (cause not isolated; no unpatched build was checked), and only a manual ad-hoc re-sign after patching verified. Signing after the patch, Developer ID signing and notarization with the patched plist are verified in M6.
+  - Nested binaries (the `jslab` CLI) are signed with the hardened runtime. M0-S3 saw Hutch leave loose files under `Resources/app` untouched (a copied Bun kept its upstream signature), but only in a canary build without code signing configured. M6 must not assume this holds for signed release builds, and verifies how the `jslab` CLI ends up signed. Runners use the bundled Bun (§5.3), so no extra runner binary is signed. Entitlements: `com.apple.security.cs.allow-jit` and `allow-unsigned-executable-memory` (required by JSC/Bun). M0 did not test the minimal set; M6 verifies it.
 - **Artifacts:** `JSLab-<version>-macos-arm64.dmg`, the update `.tar.zst`, bsdiff patches, and `stable-macos-arm64-update.json`.
 - **Hosting:**
   - `stable` on GitHub Releases, with `release.baseUrl = https://github.com/<org>/jslab/releases/latest/download`.
@@ -1156,7 +1182,7 @@ jslab --version | --help
 | Settings / session | Corrupt JSON | Load `.bak`; otherwise defaults plus a notice "Settings were reset because the file was unreadable. A copy was saved as settings.corrupt-<ts>.json" |
 | Disk | Write failure (ENOSPC, EACCES) | A toast with the path and error; retried with backoff; no data is lost in memory |
 | RPC | Validation failure | Rejected, logged with the method name; a dev build asserts |
-| Unexpected Main exception | Uncaught | Logged; the user sees a non-blocking toast "Something went wrong. Copy Debug Log"; the app keeps running when possible |
+| Unexpected Main exception | Uncaught exception or unhandled rejection after startup | Logged; the user sees a dismissible notice banner ("Something went wrong…") with a Copy Debug Log button, and the app keeps running. A failure during startup shows one dialog and exits with code 1 |
 
 **Logging.** `logs/main.log` rotates (5 × 5 MB) with levels `error|warn|info|debug`; debug is enabled with `JSLAB_DEBUG=1`. Help → Copy Debug Log copies `{ version, bunVersion, electrobunVersion, macOS, arch, settings (redacted), last 500 log lines }`.
 
@@ -1201,7 +1227,7 @@ jslab --version | --help
   - `.env` precedence, WD relative imports, and resolution order (WD `node_modules` over app packages)
   - output cap
   - handle expansion after the run finishes, and expiry
-- npm service against a local registry (Verdaccio in CI): install, remove, outdated, scripts off/on, `.npmrc` isolation (a `~/.npmrc` with a bad registry must be ignored).
+- npm service against a local registry (Verdaccio in CI): install, remove, outdated, scripts off/on, `.npmrc` isolation: with an empty project `.npmrc` and a bad *scoped* registry key (for example `@scope:registry=http://127.0.0.1:9/`) in the test `HOME`'s `.npmrc`, a scoped install must succeed only with the isolation override. (A bad default `registry=` in `~/.npmrc` doesn't discriminate once the project `.npmrc` sets `registry=`: M0-S8 `projectRegistry`, C5/C8 and Deviation 1.)
 - Session/settings persistence: atomic writes, `.bak` recovery, crash-loop `run.lock` detection.
 - AI adapters against recorded HTTP fixtures (streaming chunks, errors).
 - Gist client against recorded fixtures.
@@ -1212,6 +1238,7 @@ jslab --version | --help
   - `e2e.type`, `e2e.key`, `e2e.command`, `e2e.state` (serialized UI store snapshot), `e2e.output`, `e2e.screenshot` (window capture through `screencapture -l <windowId>`).
 - Scenario suites map to the parity checklist: first run, typing → results, magic comments, logpoints, npm install + import, TS diagnostics visible, browser runtime renders DOM, Stop/Kill, safe launch after a forced hang, save/open, snippets, theme import, keybinding override, CLI open/run, Gist (fixture server).
 - Runs on CI on the macOS arm64 runner for every PR touching `apps/` (a smoke subset) and nightly (the full set).
+- From M2 on, every user-visible task adds scenarios under `packages/e2e/scenarios/`. They run locally against a dev build (`hutch run build:dev`, then `bun run e2e`) and against the packaged canary at each milestone exit (ruling R-GOAL-1).
 
 ### 22.4 Parity acceptance
 
@@ -1220,6 +1247,7 @@ jslab --version | --help
 ### 22.5 CI
 
 GitHub Actions jobs:
+- every job that runs `bun install` installs Hutch 0.24.3 first (the M0-S1 install command). `apps/desktop`'s `postinstall` runs `hutch electrobun sync`, and typecheck needs the generated devkit.
 - lint (Biome), typecheck (`tsc -b`), unit, integration, i18n key check, license check (deny GPL in the dependency tree)
 - a build job on macOS arm64
 - E2E smoke tests
@@ -1251,7 +1279,7 @@ Each milestone gets its own implementation plan in `docs/superpowers/plans/`, an
 
 | Milestone | Scope | Exit criteria |
 |---|---|---|
-| **M0: Spikes** (throwaway code in `spikes/`, a report in `docs/spikes/`) | S1: Electrobun 2.x + `mainProcess: "bun"` window with a React/Vite view. S2: Monaco with editor and TS workers over `views://`. S3: spawn the bundled Bun as a child with IPC plus a preload `onResolve` plugin; confirm the `process.execPath` behavior. S4: WKWebView `alert`/`confirm`/`prompt` in `<electrobun-webview>`; zero-size hidden webview keeps running. S5: Hutch post-wrap `Info.plist` patch plus signing order. S6: `osascript` save dialog. S7: RPC throughput with 5k events/s batched. S8: Bun `.env` auto-load disable flag; `.npmrc` isolation flags; `getActiveResourcesInfo` availability. | A written report with go/fallback decisions for each spike; the spec is updated where results differ |
+| **M0: Spikes** (throwaway code in `spikes/`, a report in `docs/spikes/`) | S1: Electrobun 2.0.1 + `mainProcess: "bun"` window with a React/Vite view, workspace imports from main and view, a Bun `Worker`, and bundle/userData paths. S2: Monaco with editor and TS workers over `views://`. S3: spawn the bundled Bun (`process.execPath`) as a child with IPC, `NODE_PATH` resolution, top-level await, `--no-env-file` (with a control run) and SIGKILL; evaluate a separately pinned runner Bun and IPC serialization across Bun versions. S4: WKWebView `alert`/`confirm`/`prompt` in `<electrobun-webview>`; a zero-size hidden webview keeps timers and rAF running. S5: Hutch `postBuild` + `postWrap` `Info.plist` patch, `codesign --verify` (ad-hoc), LaunchServices registration and `open-url`. S6: `osascript` save dialog. S7: RPC throughput at 200 events every 16 ms (~11.8k events/s), plus a 1000-event headroom run. S8: `Bun.peek` on the bundled Bun; `.npmrc` isolation strategies. | A written report with go/fallback decisions for each spike; the spec is updated where results differ |
 | **M1: Core scratchpad** | Monorepo scaffold, CI (lint/typecheck/unit); Main bootstrap, single window, window-state persistence; UI shell (single tab, editor + output split, status bar skeleton); transform package (Auto Log, magic comments, loop protection); serializer; Bun runner + RunCoordinator (spares, supersede, Stop/Kill, unresponsive dialog); output panel (tree, line badges, hover link, errors with mapped stacks); Auto Run; single-buffer persistence; safe launch + `run.lock` | Typing TS in one tab shows correct results, console output, and errors; infinite loops and hangs are recoverable; semantic test suite green |
 | **M2: Workspace** | Tabs (all §7.3 behaviors) + session persistence; Open/Save/Save As + drag and drop; settings schema + Settings window (General, Editor, Formatting, Appearance, Advanced); application menu + command registry + default keybindings; Prettier worker + format on run/save; built-in themes + fonts + zoom; layout toggles | Daily-driver usable for single-file scratch work |
 | **M3: Language & packages** | Monaco TS config per runtime; built-in types; npm service + panel + `.npmrc` settings; type feeder; install assist; env vars panel; working directory (resolution, `.env`, local types); Build settings tab (proposals, decorators) | Install `zod`, import it with types and autocomplete, and use it from a WD file |
@@ -1266,15 +1294,15 @@ Each milestone gets its own implementation plan in `docs/superpowers/plans/`, an
 | # | Risk | Likelihood / impact | Mitigation |
 |---|---|---|---|
 | R1 | Electrobun is effectively single-maintainer, and the 2.0 churn (Hutch, Cottontail) means breaking changes | High / High | Exact version pins; all gaps isolated in `platform/` adapters; upgrade only through a dedicated PR with the E2E suite; ready to maintain a fork |
-| R2 | Monaco workers fail over `views://` on 2.x | Medium / High | Spike M0-S2; fallback: Blob-URL workers built from inlined worker source |
-| R3 | No blocking dialogs in WKWebView through Electrobun | Medium / Low | Spike M0-S4; fallback: async shim with a console warning (§5.12) |
-| R4 | Post-wrap `Info.plist` patch breaks signing or updates | Medium / Medium | Spike M0-S5; upstream PR for #551; defer file associations to post-1.0 if blocked |
+| R2 | Monaco workers fail over `views://` on 2.x | Medium / High | **Retired (M0-S2):** plain Vite `?worker` workers load and run over `views://` in the packaged app (§6.1). Fallback if a future Monaco/Electrobun upgrade breaks it: Blob-URL workers built from inlined worker source |
+| R3 | No blocking dialogs in WKWebView through Electrobun | Medium / Low | **Retired, risk realized (M0-S4):** embedded-webview dialogs are non-blocking, so the async shim with a console warning (§5.12) is the design, not a fallback |
+| R4 | Build-hook `Info.plist` patch breaks signing or updates | Medium / Medium | **Partly retired (M0-S5):** the `postBuild` + `postWrap` patch (§4.6) reaches the installed app and registers all 8 extensions. **Signing stays open:** the as-packaged canary failed `codesign --verify` (cause not isolated; no unpatched build was checked) and verified only after a manual ad-hoc re-sign after patching. Still open for M6: whether the patch invalidates Hutch's signature, signing after the patch, Developer ID signing/notarization, the update path, and evaluating Electrobun's native `app.fileAssociations`. Upstream PR for #551; defer file associations to post-1.0 if blocked |
 | R5 | Unauthenticated RPC WebSocket (#518) | Medium / Medium | Track upstream; contribute a fix; carry a patch before 1.0 |
 | R6 | WKWebView freezes after sleep (#550) | Medium / Medium | UI watchdog + rehydration (§4.6) |
 | R7 | Bun ≠ Node in edge cases (V8-only APIs, some native addons, `node:vm`/`inspector`) | High / Medium | Runtime adapter interface; `docs/user/bun-vs-node.md`; "Report a Bun incompatibility" template; clear error hints |
 | R8 | `browser-node` lacks sync Node APIs, so libraries using `fs.*Sync` fail in the default runtime | High / Medium | Explicit errors with a one-click "Switch tab to Bun"; **after M4 dogfooding, decide whether `bun` becomes the default runtime** |
-| R9 | The bundled Bun version (pinned by Electrobun, 1.4.0) is tied to Electrobun releases | Medium / Medium | M0-S3 evaluates shipping a separately pinned Bun binary for runners (signed nested executable), which decouples user-runtime upgrades from the shell |
-| R10 | Active-handle tracking misses handles created by native code, so "Settled/Idle" state is wrong | Medium / Low | Wrap every handle-creating API JSLab knows about; the state label is advisory; Stop/Kill always work. (`getActiveResourcesInfo()` is unusable on Bun 1.3.13.) |
+| R9 | The bundled Bun version (pinned by Electrobun, 1.4.0) is tied to Electrobun releases | Medium / Medium | **Decided (M0-S3): no separately pinned runner Bun for now**; runners use `process.execPath` (§5.3). A pinned Bun runs and keeps its upstream signature, but it adds ~63 MB and a separate update story. Revisit when a needed Bun feature is missing from the bundled version. Any mixed-version runner must use `serialization: "json"` IPC (§4.3), which JSLab already sets |
+| R10 | Active-handle tracking misses handles created by native code, so "Settled/Idle" state is wrong | Medium / Low | Wrap every handle-creating API JSLab knows about; the state label is advisory; Stop/Kill always work. (`getActiveResourcesInfo()` returned `[]` with a pending timer when observed on Bun 1.3.13; not re-checked on the bundled Bun 1.4.0, and JSLab does not use it.) |
 | R11 | `@babel/standalone` is too heavy or slow for large files | Low / Medium | Worker + cache; `packages/transform` interface permits swapping to oxc/SWC plus a custom instrument pass later |
 | R12 | No Intel Mac support | Certain / Low | Documented; revisit if Electrobun ships x64 |
 | R13 | Electrobun menu accelerators can't express multi-modifier shortcuts | Certain / Low | UI keybinding registry; shortcut text shown in menu labels |
@@ -1301,7 +1329,7 @@ Each milestone gets its own implementation plan in `docs/superpowers/plans/`, an
 1. Windows and Linux builds (signing, installers, WebView2/WebKitGTK QA, CLI transports)
 2. Run selection / current line / block (RunJS #235)
 3. Node.js and Deno runtime adapters (user-supplied binary paths)
-4. Command palette
+4. Command palette extensions (a Quick Open for files and snippets). The command palette itself ships in v1 (M2).
 5. Watching saved files for external changes (RunJS #724)
 6. Multi-file projects / side bar file tree
 7. Debugger (breakpoints, stepping) using the Bun inspector

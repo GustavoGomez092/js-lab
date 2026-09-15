@@ -1,0 +1,1172 @@
+/* Graphite shell. Colors come only from theme tokens (themes/apply.ts); the :root values below are the
+   Graphite fallbacks so the first paint, before JavaScript runs, is already the dark theme. */
+:root {
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --ui-scale: 1;
+  --toolbar-height: calc(38px * var(--ui-scale));
+  --tabbar-height: calc(34px * var(--ui-scale));
+  --statusbar-height: calc(28px * var(--ui-scale));
+  --activity-width: 48px;
+  --radius: 6px;
+  /* R-M2-USER-1: hiddenInset leaves the native traffic lights floating over the toolbar row. 78px clears the
+     stoplight cluster (macOS's own inset is ~20px from the left edge, the three 12px dots plus their gaps run
+     to about 58px, and a few px of breathing room brings it to 78px) so the first toolbar control never
+     overlaps them. Not scaled by --ui-scale: the traffic lights themselves are a fixed native size. */
+  --toolbar-traffic-inset: 78px;
+
+  --bg-canvas: #1b1e23;
+  --bg-chrome: #16191d;
+  --bg-elevated: #20252d;
+  --bg-hover: #252b35;
+  --bg-selection: #2a3a5e;
+  --bg-activeRow: #243152;
+  --bg-errorRow: #2a1d21;
+  --bg-errorRowHover: #272531;
+  --bg-lineHover: #233049;
+  --bg-lineHighlight: #20252d;
+  --bg-accentMuted: #2a3a5e;
+  --bg-scrim: #0a0c0f;
+  --border-default: #262a31;
+  --border-muted: #22262d;
+  --border-accent: #6f9bff;
+  --fg-default: #d7dce3;
+  --fg-muted: #8a929d;
+  --fg-accent: #6f9bff;
+  --fg-onAccent: #e4ecff;
+  --fg-success: #5cc28a;
+  --fg-warn: #e5c07b;
+  --fg-error: #f07178;
+  --fg-info: #7fd1c7;
+  --console-result: #6f9bff;
+  --console-log: #8a93a0;
+  --console-info: #7fd1c7;
+  --console-warn: #e5c07b;
+  --console-error: #f07178;
+  --syntax-comment: #9198a1;
+  --syntax-keyword: #8fb4ff;
+  --syntax-string: #c3e88d;
+  --syntax-number: #f5a97f;
+  --syntax-type: #7fd1c7;
+  --syntax-function: #ffd580;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  font: calc(13px * var(--ui-scale)) / 1.4 var(--ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+button:disabled {
+  color: var(--fg-muted);
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--fg-accent);
+  outline-offset: 1px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- app frame ---------- */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---------- activity bar (48px, Graphite) ---------- */
+.activity-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: var(--activity-width);
+  padding-top: 10px;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border-default);
+}
+
+.activity-bar button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: var(--fg-muted);
+}
+
+.activity-bar button[aria-pressed="true"] {
+  color: var(--fg-onAccent);
+  background: var(--bg-hover);
+  box-shadow: inset 2px 0 0 var(--fg-accent);
+}
+
+.activity-spacer {
+  flex: 1;
+}
+
+.activity-bar > button:last-child {
+  margin-bottom: 10px;
+}
+
+.activity-spinner {
+  width: 16px;
+  height: 16px;
+  margin: 4px auto;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--fg-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-spinner {
+    animation: none;
+  }
+}
+
+/* ---------- editor / output split ---------- */
+.split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.split-vertical {
+  flex-direction: column;
+}
+
+.split-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.split-pane-rest {
+  flex: 1;
+}
+
+.split-divider {
+  position: relative;
+  flex: 0 0 6px;
+  background: var(--bg-chrome);
+  border-inline: 1px solid var(--border-default);
+  cursor: col-resize;
+}
+
+.split-divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 1px;
+  width: 2px;
+  height: 28px;
+  margin-top: -14px;
+  border-radius: 2px;
+  background: var(--border-default);
+}
+
+.split-vertical .split-divider {
+  border-inline: none;
+  border-block: 1px solid var(--border-default);
+  cursor: row-resize;
+}
+
+.split-vertical .split-divider::after {
+  top: 1px;
+  left: 50%;
+  width: 28px;
+  height: 2px;
+  margin-top: 0;
+  margin-left: -14px;
+}
+
+.editor {
+  height: 100%;
+}
+
+.line-hover {
+  background: var(--bg-lineHover);
+}
+
+/* ---------- output ---------- */
+.output {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-canvas);
+}
+
+.output-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--tabbar-height);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.output-scroller {
+  flex: 1;
+  overflow: auto;
+  font-family: var(--mono);
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 5px 12px 5px 0;
+  border-bottom: 1px solid var(--border-muted);
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1.5 var(--code-font-family, var(--mono));
+  font-variant-ligatures: var(--code-ligatures, normal);
+}
+
+.entry-stale {
+  opacity: 0.5;
+}
+
+.entry-body {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.entry-line {
+  padding: 0 2px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.entry-console-warn {
+  color: var(--fg-warn);
+}
+
+.entry-level-error {
+  background: var(--bg-errorRow);
+  border-bottom-color: color-mix(in srgb, var(--fg-error) 18%, var(--bg-errorRow));
+}
+
+.entry-level-error .entry-body {
+  color: var(--fg-error);
+}
+
+.entry-frame {
+  display: block;
+  color: var(--fg-muted);
+  text-align: left;
+}
+
+.entry-codeframe,
+.entry-stream {
+  margin: 0;
+  font-family: var(--mono);
+}
+
+.entry-args > * + * {
+  margin-left: 8px;
+}
+
+.entry-table {
+  border-collapse: collapse;
+}
+
+.entry-table th,
+.entry-table td {
+  padding: 1px 6px;
+  border: 1px solid var(--border-default);
+}
+
+.v-string {
+  color: var(--syntax-string);
+}
+
+.v-number,
+.v-bigint,
+.v-boolean {
+  color: var(--syntax-number);
+}
+
+.v-key {
+  color: var(--syntax-keyword);
+}
+
+.v-function {
+  color: var(--syntax-function);
+}
+
+.v-toggle {
+  padding: 0;
+  text-align: left;
+}
+
+.v-children {
+  padding-left: 18px;
+}
+
+.v-hole,
+.v-expired,
+.v-null,
+.v-undefined {
+  color: var(--fg-muted);
+}
+
+.output-truncated {
+  padding: 6px 12px;
+  color: var(--fg-warn);
+}
+
+/* Output empty states (T19A-m3, review rec 2): muted text on the canvas, centered, no icon. */
+.output-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 16px;
+  background: var(--bg-canvas);
+  color: var(--fg-muted);
+  font-family: var(--ui);
+  text-align: center;
+}
+
+.output-empty button {
+  padding: 2px 8px;
+  color: var(--fg-accent);
+}
+
+/* ---------- as-built M1 value and output states (T16/T17 fix rounds) ---------- */
+.v-more {
+  margin-left: 6px;
+  padding: 0 4px;
+  color: var(--fg-accent);
+}
+
+.v-loading,
+.output-copy-status,
+.entry-internal {
+  color: var(--fg-muted);
+}
+
+.v-error {
+  color: var(--fg-error);
+}
+
+/* ---------- status bar (28px) ---------- */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: var(--statusbar-height);
+  padding: 0 12px;
+  background: var(--bg-chrome);
+  border-top: 1px solid var(--border-default);
+  color: var(--fg-muted);
+  font-size: calc(11.5px * var(--ui-scale));
+  white-space: nowrap;
+}
+
+.status-bar select {
+  background: transparent;
+  border: none;
+  color: inherit;
+}
+
+/* T16-rr1: React renders this slot directly before the status bar; the Editor puts the Vim status node inside it.
+   `display: contents` keeps that node a flex child of `.app`. */
+.vim-slot {
+  display: contents;
+}
+
+/* Vim mode indicator and `:`/`/` prompt (review I-1, fix round 1). A flex child of `.app` through `.vim-slot`,
+   just above the status bar (fix round 2, review N-1), so it reserves its own layout space instead of
+   covering the editor/output with `position: fixed`. Never `.visually-hidden`: monaco-vim focuses a real
+   `<input>` inside it. */
+.vim-status {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: var(--statusbar-height);
+  padding: 0 12px;
+  background: var(--bg-chrome);
+  border-top: 1px solid var(--border-default);
+  color: var(--fg-default);
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1 var(--code-font-family, var(--mono));
+  white-space: nowrap;
+}
+
+.vim-status input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+}
+
+/* review N-2 (fix round 2): give the ex-command/search input a visible focus state instead of suppressing it. */
+.vim-status input:focus-visible {
+  outline: 1px solid var(--fg-accent);
+  outline-offset: -1px;
+}
+
+/* ---------- banners and dialogs ---------- */
+.banner {
+  display: block;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.banner-warning {
+  background: var(--bg-elevated);
+  color: var(--fg-warn);
+}
+
+/* Startup notices (Task 9, spec §20). */
+.notices {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A notice's action button, such as Copy Debug Log (spec §20). */
+.banner-action {
+  margin-left: 12px;
+  padding: 0 8px;
+  border-color: var(--border-default);
+  color: var(--fg-default);
+}
+
+.banner-dismiss {
+  float: right;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: inherit;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg-scrim) 55%, transparent);
+}
+
+.dialog {
+  max-width: 440px;
+  padding: 16px 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow: 0 28px 70px -20px color-mix(in srgb, var(--bg-scrim) 85%, transparent);
+}
+
+.dialog h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.dialog p {
+  margin: 0 0 16px;
+  color: var(--fg-muted);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog-actions button {
+  padding: 4px 12px;
+  border-color: var(--border-default);
+}
+
+.dialog-actions .primary {
+  background: var(--bg-accentMuted);
+  color: var(--fg-onAccent);
+}
+
+.dialog-actions .danger {
+  background: var(--bg-errorRow);
+  color: var(--fg-error);
+}
+
+/* Startup failure (review finding: Task 9's failure screen had no styles). */
+.startup-failure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-default);
+  background: var(--bg-canvas);
+}
+
+.startup-failure button {
+  padding: 6px 16px;
+  border: 1px solid var(--border-default);
+}
+
+/* ---------- unified toolbar ---------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Fix round 1 (review I-2): the native traffic lights (hiddenInset) are a fixed OS size, not scaled by
+     --ui-scale. A pure var(--toolbar-height) row shrinks below them at low zoom (spilling into whatever sits
+     below) and leaves them stranded above centered controls at high zoom. 38px is the same native minimum the
+     row's unscaled height already was; --toolbar-height still grows the row past that at higher zoom. */
+  height: max(38px, var(--toolbar-height));
+  padding-right: 10px;
+  background: var(--bg-chrome);
+  border-bottom: 1px solid var(--border-default);
+  -webkit-app-region: drag;
+  app-region: drag;
+  user-select: none;
+}
+
+.toolbar-traffic {
+  flex: 0 0 var(--toolbar-traffic-inset);
+  height: 100%;
+}
+
+.toolbar-tabs {
+  display: flex;
+  flex: 1;
+  align-items: stretch;
+  align-self: stretch;
+  min-width: 0;
+}
+
+.toolbar-actions,
+.toolbar button,
+.toolbar input,
+.toolbar [role="tab"] {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.tb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  background: var(--bg-elevated);
+  border-color: var(--border-default);
+  color: var(--fg-default);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.tb-btn.run {
+  background: var(--bg-accentMuted);
+  border-color: var(--border-accent);
+  color: var(--fg-onAccent);
+}
+
+.kbd {
+  font: 500 11px / 1 var(--mono);
+  color: var(--fg-muted);
+}
+
+.tb-btn.run .kbd {
+  color: var(--fg-onAccent);
+}
+
+/* ---------- side bar ---------- */
+.side-bar {
+  width: 280px;
+  min-width: 240px;
+  max-width: 600px;
+  padding: 12px;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border-default);
+  color: var(--fg-muted);
+}
+
+.side-bar h2 {
+  margin: 0 0 8px;
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ---------- status bar parts ---------- */
+.status-left,
+.status-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.status-right {
+  margin-left: auto;
+}
+
+.status-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+
+.state-running .status-dot {
+  background: var(--fg-accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.state-settled .status-dot {
+  background: var(--fg-success);
+}
+
+.state-failed .status-dot {
+  background: var(--fg-error);
+}
+
+.state-warn .status-dot {
+  background: var(--fg-warn);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state-running .status-dot {
+    animation: none;
+  }
+}
+
+.status-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--fg-warn);
+}
+
+.status-message {
+  overflow: hidden;
+  color: var(--fg-default);
+  text-overflow: ellipsis;
+}
+
+.status-vim {
+  color: var(--fg-accent);
+  font-family: var(--mono);
+}
+
+.status-item {
+  padding: 0 4px;
+}
+
+/* ---------- tab bar ---------- */
+.tab-bar {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  padding: 0 8px 0 14px;
+  border-right: 1px solid var(--border-default);
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  cursor: default;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.tab:first-child {
+  border-left: 1px solid var(--border-default);
+}
+
+.tab.on {
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  box-shadow: inset 0 -2px 0 var(--fg-accent);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-dirty {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-accent);
+}
+
+.tab-close {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 16px;
+  color: var(--fg-muted);
+  opacity: 0;
+}
+
+.tab:hover .tab-close,
+.tab.on .tab-close,
+.tab-close:focus-visible {
+  opacity: 1;
+}
+
+.tab.drop-before {
+  box-shadow: inset 2px 0 0 var(--fg-accent);
+}
+
+.tab.drop-after {
+  box-shadow: inset -2px 0 0 var(--fg-accent);
+}
+
+.tab-new {
+  width: 30px;
+  color: var(--fg-muted);
+  font-size: 16px;
+}
+
+.toolbar-title {
+  align-self: center;
+  overflow: hidden;
+  color: var(--fg-default);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- context menu ---------- */
+.context-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: 0 12px 30px -10px color-mix(in srgb, var(--bg-scrim) 80%, transparent);
+}
+
+.context-menu button {
+  padding: 5px 10px;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.context-menu button:hover:not(:disabled),
+.context-menu button:focus-visible {
+  background: var(--bg-activeRow);
+  outline: none;
+}
+
+.dialog-input {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+}
+
+/* ---------- output rows: line anchors, level stripes, filter chips (Task 19) ---------- */
+.entry:hover {
+  background: var(--bg-lineHover);
+}
+
+.entry-level-error:hover {
+  background: var(--bg-errorRowHover);
+}
+
+.entry-stripe {
+  width: 3px;
+  height: 15px;
+  margin: 2px 0 0 4px;
+  border-radius: 2px;
+  background: var(--console-log);
+}
+
+.entry-level-result .entry-stripe {
+  background: var(--console-result);
+}
+
+.entry-level-info .entry-stripe {
+  background: var(--console-info);
+}
+
+.entry-level-warn .entry-stripe {
+  background: var(--console-warn);
+}
+
+.entry-level-error .entry-stripe {
+  background: var(--console-error);
+}
+
+.entry:hover .entry-line {
+  color: var(--fg-accent);
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+}
+
+.chip {
+  padding: 5px 8px;
+  border-radius: 5px;
+  color: var(--fg-muted);
+  font: 500 11.5px / 1 var(--ui);
+}
+
+.chip.on {
+  background: var(--bg-hover);
+  color: var(--fg-default);
+}
+
+.output-spacer {
+  flex: 1;
+}
+
+.output-plain .v-string,
+.output-plain .v-number,
+.output-plain .v-bigint,
+.output-plain .v-boolean,
+.output-plain .v-key,
+.output-plain .v-function {
+  color: inherit;
+}
+
+.output-stale-label {
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font: 500 11px / 1 var(--ui);
+}
+
+/* ---------- command palette (Daylight Rail structure, Graphite skin) ---------- */
+.palette-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: color-mix(in srgb, var(--bg-scrim) 50%, transparent);
+}
+
+.palette {
+  position: fixed;
+  top: calc(var(--toolbar-height) + 26px);
+  left: 50%;
+  z-index: 71;
+  width: min(520px, calc(100vw - 32px));
+  overflow: hidden;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow:
+    0 28px 70px -20px color-mix(in srgb, var(--bg-scrim) 85%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--bg-scrim) 30%, transparent);
+  font-family: var(--ui);
+}
+
+.palette-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.palette-input input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg-default);
+  font-size: 15px;
+  caret-color: var(--fg-accent);
+}
+
+.palette-context {
+  padding: 5px 7px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font: 600 10.5px / 1 var(--ui);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.palette-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.palette-group {
+  padding: 8px 0 6px;
+}
+
+.palette-group + .palette-group {
+  border-top: 1px solid var(--border-muted);
+}
+
+.palette-label {
+  padding: 4px 14px 6px;
+  color: var(--fg-muted);
+  font: 600 10.5px / 1 var(--ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  color: var(--fg-default);
+  font-size: 13px;
+  cursor: default;
+}
+
+.palette-item[aria-selected="true"] {
+  background: var(--bg-activeRow);
+}
+
+.palette-item mark {
+  background: none;
+  color: var(--fg-accent);
+  font-weight: 600;
+}
+
+.palette-desc {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.palette-item[aria-selected="true"] .palette-desc {
+  color: var(--fg-default);
+}
+
+.palette-keys {
+  display: flex;
+  gap: 3px;
+  margin-left: auto;
+}
+
+.palette-keys b,
+.palette-foot b {
+  min-width: 20px;
+  padding: 4px 5px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-default);
+  color: var(--fg-default);
+  font: 500 11px / 1 var(--ui);
+  text-align: center;
+}
+
+.palette-foot {
+  display: flex;
+  gap: 16px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-default);
+  color: var(--fg-muted);
+  font-size: 11.5px;
+}
+
+.palette-foot b {
+  margin-right: 4px;
+  padding: 3px 5px;
+  font-size: 10.5px;
+}
+
+.palette-empty {
+  padding: 14px;
+  color: var(--fg-muted);
+}
+
+/* ---------- settings window ---------- */
+.settings {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  height: 100%;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 40px 10px 10px;
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border-default);
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.settings-nav button {
+  padding: 6px 10px;
+  text-align: left;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.settings-nav button.on {
+  background: var(--bg-activeRow);
+}
+
+.settings-main {
+  overflow-y: auto;
+  padding: 16px 24px 32px;
+}
+
+.settings-main h1 {
+  margin: 12px 0;
+  font-size: 18px;
+}
+
+.settings-search {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+}
+
+.field {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.field-text label {
+  font-weight: 600;
+}
+
+.field-help {
+  margin: 4px 0 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.field-note {
+  margin-left: 8px;
+  color: var(--fg-warn);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.field-control select,
+.field-control input[type="number"] {
+  min-width: 160px;
+  padding: 4px 8px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.settings-actions button {
+  padding: 5px 12px;
+  border-color: var(--border-default);
+}
+
+.settings-actions .danger {
+  background: var(--bg-errorRow);
+  color: var(--fg-error);
+}

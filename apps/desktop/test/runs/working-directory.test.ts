@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,7 +24,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function setup(workingDirectory: string) {
+function setup(workingDirectory: string, options: { directoryExists?: (path: string) => Promise<boolean> } = {}) {
   const paths = resolveAppPaths({
     resourcesFolder: "/R",
     userData: join(dir, "data"),
@@ -35,8 +35,10 @@ function setup(workingDirectory: string) {
   const states: { runId: string; state: RunState }[] = [];
   // The latest spare start, so a test can wait for a pre-warmed runner instead of sleeping.
   let lastStart: Promise<unknown> = Promise.resolve();
+  let starts = 0;
   const spares = new SparePool(
     (config) => {
+      starts++;
       const started = BunRunnerProcess.start(config);
       lastStart = started;
       return started;
@@ -48,9 +50,11 @@ function setup(workingDirectory: string) {
       workingDirectory: () => workingDirectory,
     }),
   );
+  const invalidate = spyOn(spares, "invalidate");
   coordinator = new RunCoordinator({
-    transform: async (source, options) => transform(source, options),
+    transform: async (source, transformOptions) => transform(source, transformOptions),
     spares,
+    ...(options.directoryExists ? { directoryExists: options.directoryExists } : {}),
     runsDir: paths.runsDir,
     settings: () => ({
       autoLog: true,
@@ -76,7 +80,17 @@ function setup(workingDirectory: string) {
     events.flatMap((event) =>
       event.kind === "console" ? event.args.map((arg) => String((arg as { v?: unknown }).v)) : [],
     );
-  return { spares, spareStarted: () => lastStart, events, states, waitFor, consoleText, current: coordinator };
+  return {
+    spares,
+    spareStarted: () => lastStart,
+    starts: () => starts,
+    invalidate,
+    events,
+    states,
+    waitFor,
+    consoleText,
+    current: coordinator,
+  };
 }
 
 describe("working directory runs (spec §5.3, §12.2)", () => {
@@ -131,7 +145,7 @@ describe("working directory runs (spec §5.3, §12.2)", () => {
 
   test("a missing working directory fails the run with WorkingDirectoryError and starts nothing", async () => {
     const missing = join(dir, "gone");
-    const { events, waitFor, current } = setup(missing);
+    const { events, waitFor, current, starts, invalidate } = setup(missing);
     const { runId } = current.start({
       tabId: "t1",
       code: "1",
@@ -149,5 +163,32 @@ describe("working directory runs (spec §5.3, §12.2)", () => {
         message: `Working directory not found: ${missing}`,
       }),
     ]);
+    expect(starts()).toBe(0);
+    expect(invalidate).toHaveBeenCalledWith("t1");
+  }, 20000);
+
+  test("a runner that did not start in the working directory is killed and the run fails with WorkingDirectoryError", async () => {
+    // P4: the check saw the folder, but it was gone by spawn time, so the runner config fell back to the data folder.
+    const missing = join(dir, "deleted-after-check");
+    const { events, states, waitFor, consoleText, current } = setup(missing, { directoryExists: async () => true });
+    const { runId } = current.start({
+      tabId: "t1",
+      code: 'console.log("ran");',
+      language: "typescript",
+      logpoints: [],
+      workingDirectory: missing,
+      scriptName: "x.ts",
+    });
+    await waitFor(runId, ["failed"]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "error",
+        phase: "runner",
+        name: "WorkingDirectoryError",
+        message: `Working directory not found: ${missing}`,
+      }),
+    ]);
+    expect(states.filter((s) => s.runId === runId).at(-1)?.state).toBe("failed");
+    expect(consoleText()).toEqual([]);
   }, 20000);
 });

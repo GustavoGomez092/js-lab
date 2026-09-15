@@ -141,4 +141,7 @@ test("scriptFileName names __filename from the file, or from the title with the 
     ),
   ).toBe("-- a-b-c-d.js");
   expect(scriptFileName(createTab({ language: "typescript" }), "")).toBe("Untitled.ts");
+  expect(scriptFileName(createTab({ title: ".ts", titleIsCustom: true, language: "typescript" }), "")).toBe(
+    "Untitled.ts",
+  );
 });

@@ -183,19 +183,7 @@ export class RunCoordinator {
     try {
       const workingDirectory = request.workingDirectory ?? null;
       if (workingDirectory && !(await (this.deps.directoryExists ?? directoryExists)(workingDirectory))) {
-        if (!this.#isCurrent(run)) return;
-        this.deps.onEvents(run.tabId, run.runId, [
-          {
-            kind: "error",
-            phase: "runner",
-            name: WORKING_DIRECTORY_ERROR,
-            message: strings.runs.workingDirectoryNotFound(workingDirectory),
-            stack: [],
-            seq: 1,
-            t: Date.now(),
-          },
-        ]);
-        this.#setState(run, "failed");
+        this.#failWorkingDirectory(run, workingDirectory);
         return;
       }
       const settings = this.deps.settings();
@@ -252,6 +240,14 @@ export class RunCoordinator {
       } catch (error) {
         if (!this.#isCurrent(run)) return;
         this.#runnerError(run, `Runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      // Fail closed (M-3): a folder deleted after the check makes the runner config fall back to the data folder, and
+      // user code must never run (or write relative files) there. Test fakes have no `cwd`, hence the typeof guard.
+      if (workingDirectory && typeof runner.cwd === "string" && runner.cwd !== workingDirectory) {
+        run.expectedExit = true;
+        runner.kill();
+        this.#failWorkingDirectory(run, workingDirectory);
         return;
       }
       if (!this.#isCurrent(run)) {
@@ -394,6 +390,27 @@ export class RunCoordinator {
     previous.unsubscribe?.();
     previous.runner?.kill();
     this.deps.runLock.remove(previous.runId);
+  }
+
+  /**
+   * Fails a current run whose working directory is missing, or whose runner didn't start in it, with one
+   * WorkingDirectoryError (spec §12.2). The tab's spare is discarded, so a recreated folder gets a fresh runner (M-4).
+   */
+  #failWorkingDirectory(run: ActiveRun, workingDirectory: string): void {
+    if (!this.#isCurrent(run)) return;
+    this.deps.spares.invalidate(run.tabId);
+    this.deps.onEvents(run.tabId, run.runId, [
+      {
+        kind: "error",
+        phase: "runner",
+        name: WORKING_DIRECTORY_ERROR,
+        message: strings.runs.workingDirectoryNotFound(workingDirectory),
+        stack: [],
+        seq: 1,
+        t: Date.now(),
+      },
+    ]);
+    this.#setState(run, "failed");
   }
 
   #isCurrent(run: ActiveRun): boolean {

@@ -68,7 +68,8 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
           language,
           logpoints,
           workingDirectory: tab?.workingDirectory ?? null,
-          scriptName: tab ? scriptFileName(tab, code) : "Untitled.ts",
+          // The run compiles as the request's language, so __filename's extension follows it (N-4).
+          scriptName: tab ? scriptFileName({ ...tab, language }, code) : "Untitled.ts",
         });
       },
       "run.expand": (input: unknown): Promise<EncodedValue | null> => {

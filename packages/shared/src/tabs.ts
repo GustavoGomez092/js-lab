@@ -102,6 +102,8 @@ export function scriptFileName(
   code: string,
 ): string {
   if (tab.filePath) return baseName(tab.filePath);
-  const title = deriveTitle(tab, code).replace(TITLE_SEPARATORS, "-").replace(/…$/, "").trim() || "Untitled";
-  return `${title.replace(/[.](?:[mc]?[jt]sx?)$/i, "")}.${extensionFor(tab.language)}`;
+  const title = deriveTitle(tab, code).replace(TITLE_SEPARATORS, "-").replace(/…$/, "").trim();
+  // The fallback applies after the extension strip, so a title that is only an extension is Untitled (N-3).
+  const stem = title.replace(/[.](?:[mc]?[jt]sx?)$/i, "") || "Untitled";
+  return `${stem}.${extensionFor(tab.language)}`;
 }

@@ -96,6 +96,28 @@ describe("requests", () => {
       expect.objectContaining({ workingDirectory: "/work/api", scriptName: "fetch users.ts" }),
     );
   });
+
+  test("run.start names the script from the request's language and falls back for an unknown tab", () => {
+    const { handlers, deps } = setup();
+    deps.session.session.tabs.t1 = {
+      ...(deps.session.session.tabs.t1 as NonNullable<(typeof deps.session.session.tabs)["t1"]>),
+      language: "typescript",
+      workingDirectory: "/work/api",
+      title: "fetch users",
+      titleIsCustom: true,
+    };
+    handlers.requests["run.start"]({ ...validStart, language: "javascript" });
+    expect(deps.coordinator.start).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ workingDirectory: "/work/api", scriptName: "fetch users.js" }),
+    );
+    expect(deps.session.session.tabs.t9).toBeUndefined();
+    handlers.requests["run.start"]({ ...validStart, tabId: "t9" });
+    expect(deps.coordinator.start).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ tabId: "t9", workingDirectory: null, scriptName: "Untitled.ts" }),
+    );
+  });
 });
 
 describe("messages", () => {

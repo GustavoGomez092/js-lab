@@ -73,6 +73,48 @@ describe("working directory transform (spec §5.3)", () => {
     );
   });
 
+  test("assignment targets and for-in/for-of left sides are never rewritten", () => {
+    const out = code(
+      [
+        "const r = __dirname;",
+        '__dirname = "x";',
+        "__dirname++;",
+        'for (__dirname of ["a"]) {}',
+        "for (__filename in {}) {}",
+        'for (module.filename of ["a"]) {}',
+      ].join(NL),
+    );
+    expect(out).toContain('__dirname = "x"');
+    expect(out).toContain("__dirname++");
+    expect(out).toContain("for (__dirname of");
+    expect(out).toContain("for (__filename in");
+    expect(out).toContain("for (module.filename of");
+    expect(out).toContain('const r = "/work/api"');
+  });
+
+  test("dot specifiers, no-substitution template specifiers and query or hash suffixes resolve against the WD", () => {
+    const out = code(
+      [
+        'import up from "..";',
+        'import here from ".";',
+        "const t = await import(`./t.mjs`);",
+        "const y = require(`./y`);",
+        'const name = "n";',
+        "const s = await import(`./${name}`);",
+        'import q from "./x.js?raw";',
+        'import h from "./a?x/../../b";',
+        "console.log(up, here, t, y, s, q, h);",
+      ].join(NL),
+    );
+    expect(out).toContain('"/work"');
+    expect(out).toContain('"/work/api"');
+    expect(out).toContain('"/work/api/t.mjs"');
+    expect(out).toContain('"/work/api/y"');
+    expect(out).toContain("./${");
+    expect(out).toContain('"/work/api/x.js?raw"');
+    expect(out).toContain('"/work/api/a?x/../../b"');
+  });
+
   test("without a working directory nothing is rewritten", () => {
     // `a` is used so the TypeScript preset keeps the import.
     const out = code(`import a from "./a";${NL}const x = [a, __dirname];`, false);

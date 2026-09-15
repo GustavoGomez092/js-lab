@@ -46,3 +46,19 @@ export function authTokenFor(config: NpmrcConfig, registryUrl: string, env: EnvL
   }
   return best?.token || null;
 }
+
+/**
+ * Fix round 1 (M-6): a `.npmrc` registry may embed `user:pass@host`. This strips that userinfo before the URL
+ * reaches a log or error, so a leaked debug report never contains a password. Non-URLs pass through unchanged.
+ */
+export function redactRegistryUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) return url;
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}

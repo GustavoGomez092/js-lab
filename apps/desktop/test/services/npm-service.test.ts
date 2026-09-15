@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { OperationQueue } from "@jslab/npm";
 import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
 import { resolveAppPaths } from "../../src/main/app-paths";
-import { NpmService, type NpmServiceDeps } from "../../src/main/services/npm-service";
+import {
+  MAX_SEARCH_BODY_BYTES,
+  NpmService,
+  type NpmServiceDeps,
+  OUTDATED_TTL_MS,
+} from "../../src/main/services/npm-service";
 import type { NpmSpawn, NpmSpawnOptions, NpmSpawnResult } from "../../src/main/services/npm-spawn";
 import { ensurePackagesProject } from "../../src/main/services/packages-project";
 
@@ -500,7 +505,11 @@ describe("NpmService (spec §11.3)", () => {
     const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       seen.push({ url, authorization: new Headers(init?.headers).get("authorization") });
-      if (url.startsWith("http://127.0.0.1:9/")) throw new Error("ConnectionRefused");
+      if (url.includes("127.0.0.1:9")) {
+        // Fix round 1 (M-1): the error message names the URL, but that never includes the token (a header, not
+        // part of the URL) or, when the registry itself carries credentials (M-6), the password.
+        throw new Error(url.includes("@") ? "ConnectionRefused" : `ConnectionRefused fetching ${url}`);
+      }
       return Response.json({ objects: [{ package: { name: "zod", version: "4.6.4", description: "schemas" } }] });
     }) as typeof fetch;
     const { service, paths } = await setup({ fetch: fakeFetch });
@@ -513,20 +522,47 @@ describe("NpmService (spec §11.3)", () => {
       url: "http://127.0.0.1:4873/-/v1/search?text=zod%20schema&size=25",
       authorization: "Bearer s3cr3t-token",
     });
-    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:9/\n");
+
+    // Fix round 1 (M-1): the dead registry now ALSO has a token, so "not.toContain" is finally a real assertion.
+    writeFileSync(
+      paths.packagesNpmrc,
+      ["registry=http://127.0.0.1:9/", "//127.0.0.1:9/:_authToken=s3cr3t-token"].join(String.fromCharCode(10)),
+    );
     const failed = await service.search("zod");
     expect(failed.results).toEqual([]);
     expect(failed.error?.kind).toBe("network");
     expect(failed.error?.log).not.toContain("s3cr3t-token");
+    expect(failed.error?.log).toContain("http://127.0.0.1:9/-/v1/search");
+    expect(seen[1]).toEqual({
+      url: "http://127.0.0.1:9/-/v1/search?text=zod&size=25",
+      authorization: "Bearer s3cr3t-token",
+    });
+
+    // A registry with no token at all sends no authorization header.
+    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:4873\n");
+    await service.search("zod");
+    expect(seen[2]?.authorization).toBeNull();
+
+    // Fix round 1 (M-6): a registry URL with embedded credentials never leaks its password into the log.
+    writeFileSync(paths.packagesNpmrc, "registry=https://u:hunter2@127.0.0.1:9/\n");
+    const failedWithCreds = await service.search("zod");
+    expect(failedWithCreds.error?.kind).toBe("network");
+    expect(failedWithCreds.error?.log).not.toContain("hunter2");
   });
 
   test("with automatic types on, an untyped package gets @types/<name> when the registry has it", async () => {
+    const seenAccept: string[] = [];
     const { service, paths, calls } = await setup({
       settings: () => ({ allowInstallScripts: false, autoInstallTypes: true }),
-      fetch: (async (input: string | URL | Request) =>
-        String(input).endsWith("/@types%2ffixture-untyped")
-          ? Response.json({ name: "@types/fixture-untyped" })
-          : new Response("not found", { status: 404 })) as typeof fetch,
+      // Fix round 1 (M-1): the fake registry answers 200 for BOTH packages' @types, so fixture-typed's skip can
+      // only come from #hasOwnTypes, never from a registry 404.
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        seenAccept.push(new Headers(init?.headers).get("accept") ?? "");
+        return url.endsWith("/@types%2ffixture-untyped") || url.endsWith("/@types%2ffixture-typed")
+          ? Response.json({ name: "types" })
+          : new Response("not found", { status: 404 });
+      }) as typeof fetch,
       respond: async (argv) => {
         const spec = String(argv.at(-1));
         const name = spec.includes("@", 1) ? spec.slice(0, spec.lastIndexOf("@")) : spec;
@@ -550,5 +586,258 @@ describe("NpmService (spec §11.3)", () => {
       "fixture-typed@1.0.0",
       "@types/fixture-untyped",
     ]);
+    // Fix round 1 (M-3): the existence check requests the abbreviated packument.
+    expect(seenAccept).toContain("application/vnd.npm.install-v1+json");
+  });
+
+  test("an outdated refresh whose follow-up list throws never poisons whenIdle and can run again", async () => {
+    let now = 1_000_000;
+    const manifestPath = join(dir, "data", "packages", "package.json");
+    let releaseOutdated!: () => void;
+    let corruptOnRelease = true;
+    const outdatedGate = new Promise<void>((resolve) => {
+      releaseOutdated = resolve;
+    });
+    const { service, calls } = await setup({
+      now: () => now,
+      listRetryWait: () => Promise.resolve(),
+      respond: async (argv) => {
+        if (argv[0] === "outdated") {
+          await outdatedGate;
+          // The refresh's own follow-up list() will find this unparsable and throw (Task 11 I-2).
+          if (corruptOnRelease) writeFileSync(manifestPath, "{ not json");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        return { exitCode: 0, stdout: `installed ${argv.at(-1)}\n`, stderr: "" };
+      },
+    });
+
+    const first = await service.list({ refreshOutdated: true });
+    expect(first.installed).toEqual([]);
+    releaseOutdated();
+    await expect(service.whenIdle()).resolves.toBeUndefined();
+
+    // Restore a valid manifest and run a healthy install: whenIdle() must resolve again, not inherit the old
+    // rejection forever.
+    corruptOnRelease = false;
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({ name: "jslab-packages", private: true, dependencies: {}, trustedDependencies: [] }),
+    );
+    service.install("ok@1.0.0");
+    await expect(service.whenIdle()).resolves.toBeUndefined();
+
+    // A second refresh can still start, proving #refreshing was reset by the `finally`, not left stuck.
+    now += OUTDATED_TTL_MS;
+    await service.list({ refreshOutdated: true });
+    await service.whenIdle();
+    expect(calls.filter((call) => call.argv[0] === "outdated")).toHaveLength(2);
+  });
+
+  test("a burst of refreshOutdated calls runs bun outdated once", async () => {
+    const { service, calls } = await setup({
+      respond: async (argv) =>
+        argv[0] === "outdated" ? { exitCode: 0, stdout: "", stderr: "" } : { exitCode: 0, stdout: "", stderr: "" },
+    });
+    const first = service.list({ refreshOutdated: true });
+    const second = service.list({ refreshOutdated: true });
+    await Promise.all([first, second]);
+    await service.whenIdle();
+    expect(calls.filter((call) => call.argv[0] === "outdated")).toHaveLength(1);
+  });
+
+  test("a failed outdated check is cached with its error for the TTL", async () => {
+    let now = 1_000_000;
+    const { service, calls } = await setup({
+      now: () => now,
+      respond: async (argv) =>
+        argv[0] === "outdated"
+          ? { exitCode: 1, stdout: "", stderr: "error: ConnectionRefused downloading package manifest\n" }
+          : { exitCode: 0, stdout: "", stderr: "" },
+    });
+    await service.list({ refreshOutdated: true });
+    await service.whenIdle();
+    expect((await service.list({ refreshOutdated: false })).outdatedError?.kind).toBe("network");
+
+    now += 60_000;
+    await service.list({ refreshOutdated: true });
+    await service.whenIdle();
+    expect(calls.filter((call) => call.argv[0] === "outdated")).toHaveLength(1);
+
+    now += OUTDATED_TTL_MS;
+    await service.list({ refreshOutdated: true });
+    await service.whenIdle();
+    expect(calls.filter((call) => call.argv[0] === "outdated")).toHaveLength(2);
+  });
+
+  test("a successful install clears the outdated cache so the next refresh runs again", async () => {
+    let now = 1_000_000;
+    const { service, calls } = await setup({
+      now: () => now,
+      respond: async (argv) =>
+        argv[0] === "outdated"
+          ? { exitCode: 0, stdout: "", stderr: "" }
+          : { exitCode: 0, stdout: "installed ok@1.0.0\n", stderr: "" },
+    });
+    await service.list({ refreshOutdated: true });
+    await service.whenIdle();
+    expect(calls.filter((call) => call.argv[0] === "outdated")).toHaveLength(1);
+
+    now += 60_000; // well inside the TTL
+    service.install("ok@1.0.0");
+    await service.whenIdle();
+
+    await service.list({ refreshOutdated: true });
+    await service.whenIdle();
+    expect(calls.filter((call) => call.argv[0] === "outdated")).toHaveLength(2);
+  });
+
+  test("automatic types does nothing when npm.autoInstallTypes is off", async () => {
+    let autoInstallTypes = false;
+    let fetchCalls = 0;
+    const { service, paths, calls } = await setup({
+      settings: () => ({ allowInstallScripts: false, autoInstallTypes }),
+      fetch: (async (input: string | URL | Request) => {
+        fetchCalls++;
+        return String(input).endsWith("/@types%2ffixture-second")
+          ? Response.json({ name: "@types/fixture-second" })
+          : new Response("not found", { status: 404 });
+      }) as typeof fetch,
+      respond: async (argv) => {
+        const spec = String(argv.at(-1));
+        const name = spec.includes("@", 1) ? spec.slice(0, spec.lastIndexOf("@")) : spec;
+        const manifest = JSON.parse(readFileSync(paths.packagesJson, "utf8"));
+        manifest.dependencies[name] = "1.0.0";
+        writeFileSync(paths.packagesJson, JSON.stringify(manifest));
+        await mkdir(join(paths.packagesNodeModules, name), { recursive: true });
+        writeFileSync(join(paths.packagesNodeModules, name, "package.json"), JSON.stringify({ version: "1.0.0" }));
+        return { exitCode: 0, stdout: `installed ${spec}\n`, stderr: "" };
+      },
+    });
+    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:4873/\n");
+
+    // The setting is read live, as a getter, not captured once at construction.
+    service.install("fixture-untyped@1.0.0");
+    await service.whenIdle();
+    expect(fetchCalls).toBe(0);
+    expect(calls.map((call) => call.argv.at(-1))).toEqual(["fixture-untyped@1.0.0"]);
+
+    autoInstallTypes = true;
+    service.install("fixture-second@1.0.0");
+    await service.whenIdle();
+    expect(fetchCalls).toBeGreaterThan(0);
+    expect(calls.map((call) => call.argv.at(-1))).toContain("@types/fixture-second");
+  });
+
+  test("a scoped search uses the scope's registry and token", async () => {
+    const seen: { url: string; authorization: string | null }[] = [];
+    const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      seen.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+      return Response.json({ objects: [] });
+    }) as typeof fetch;
+    const { service, paths } = await setup({ fetch: fakeFetch });
+    writeFileSync(
+      paths.packagesNpmrc,
+      ["@acme:registry=http://127.0.0.1:4873/acme/", "//127.0.0.1:4873/acme/:_authToken=acme-token"].join(
+        String.fromCharCode(10),
+      ),
+    );
+    await service.search("@acme/thing");
+    expect(seen[0]).toEqual({
+      url: "http://127.0.0.1:4873/acme/-/v1/search?text=%40acme%2Fthing&size=25",
+      authorization: "Bearer acme-token",
+    });
+  });
+
+  test("a package whose only 'types' strings are keywords or files entries is not treated as typed", async () => {
+    const { service, paths, calls } = await setup({
+      settings: () => ({ allowInstallScripts: false, autoInstallTypes: true }),
+      fetch: (async (input: string | URL | Request) =>
+        String(input).endsWith("/@types%2ffixture-keywords")
+          ? Response.json({ name: "@types/fixture-keywords" })
+          : new Response("not found", { status: 404 })) as typeof fetch,
+      respond: async () => {
+        const manifest = JSON.parse(readFileSync(paths.packagesJson, "utf8"));
+        manifest.dependencies["fixture-keywords"] = "1.0.0";
+        writeFileSync(paths.packagesJson, JSON.stringify(manifest));
+        await mkdir(join(paths.packagesNodeModules, "fixture-keywords"), { recursive: true });
+        writeFileSync(
+          join(paths.packagesNodeModules, "fixture-keywords", "package.json"),
+          JSON.stringify({ version: "1.0.0", keywords: ["types"], files: ["dist", "types"] }),
+        );
+        return { exitCode: 0, stdout: "installed fixture-keywords@1.0.0\n", stderr: "" };
+      },
+    });
+    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:4873/\n");
+    service.install("fixture-keywords@1.0.0");
+    await service.whenIdle();
+    expect(calls.map((call) => call.argv.at(-1))).toEqual(["fixture-keywords@1.0.0", "@types/fixture-keywords"]);
+  });
+
+  test("search returns at most 25 results", async () => {
+    const objects = Array.from({ length: 40 }, (_, i) => ({
+      package: { name: `pkg-${i}`, version: "1.0.0", description: "" },
+    }));
+    const { service, paths } = await setup({
+      fetch: (async (_input: string | URL | Request) => Response.json({ objects })) as typeof fetch,
+    });
+    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:4873/\n");
+    const response = await service.search("pkg");
+    expect(response.error).toBeNull();
+    expect(response.results).toHaveLength(25);
+  });
+
+  test("an oversized search body fails as unknown without parsing", async () => {
+    const oversized = "x".repeat(MAX_SEARCH_BODY_BYTES + 1024);
+    const { service, paths } = await setup({
+      fetch: (async (_input: string | URL | Request) =>
+        new Response(oversized, { headers: { "content-type": "application/json" } })) as typeof fetch,
+    });
+    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:4873/\n");
+    const response = await service.search("pkg");
+    expect(response.error?.kind).toBe("unknown");
+    expect(response.results).toEqual([]);
+  });
+
+  test("installing then immediately removing a package never installs its @types", async () => {
+    const manifestPath = join(dir, "data", "packages", "package.json");
+    let removeDone!: () => void;
+    const removeDoneGate = new Promise<void>((resolve) => {
+      removeDone = resolve;
+    });
+    const { service, paths, calls } = await setup({
+      settings: () => ({ allowInstallScripts: false, autoInstallTypes: true }),
+      // The @types check's registry round trip only resolves once remove("x")'s own respond has run, so the
+      // recheck right before installing @types/x always sees the post-remove manifest.
+      fetch: (async (_input: string | URL | Request) => {
+        await removeDoneGate;
+        return Response.json({ name: "@types/x" });
+      }) as typeof fetch,
+      respond: async (argv) => {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        if (argv[0] === "add") {
+          const spec = String(argv.at(-1));
+          const name = spec.includes("@", 1) ? spec.slice(0, spec.lastIndexOf("@")) : spec;
+          manifest.dependencies[name] = "1.0.0";
+          writeFileSync(manifestPath, JSON.stringify(manifest));
+          await mkdir(join(paths.packagesNodeModules, name), { recursive: true });
+          writeFileSync(join(paths.packagesNodeModules, name, "package.json"), JSON.stringify({ version: "1.0.0" }));
+          return { exitCode: 0, stdout: `installed ${spec}\n`, stderr: "" };
+        }
+        if (argv[0] === "remove") {
+          delete manifest.dependencies[String(argv[1])];
+          writeFileSync(manifestPath, JSON.stringify(manifest));
+          removeDone();
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:4873/\n");
+    service.install("x@1.0.0");
+    service.remove("x");
+    await service.whenIdle();
+    expect(calls.map((call) => call.argv.at(-1))).toEqual(["x@1.0.0", "x"]);
   });
 });

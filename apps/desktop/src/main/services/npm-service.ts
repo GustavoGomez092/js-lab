@@ -11,6 +11,7 @@ import {
   parseNpmrc,
   parseOutdated,
   parseSearchResponse,
+  redactRegistryUrl,
   registryFor,
   resolveBunCacheDir,
   typesPackageName,
@@ -68,6 +69,48 @@ const LIST_RETRY_DELAY_MS = 100;
 /** Spec §11.3: `bun outdated` runs at most every 10 minutes. */
 export const OUTDATED_TTL_MS = 10 * 60_000;
 export const SEARCH_TIMEOUT_MS = 8_000;
+/** Fix round 1 (M-3): a search response body is never buffered past this many bytes. */
+export const MAX_SEARCH_BODY_BYTES = 1_048_576;
+
+/** Fix round 1 (M-3): thrown by `readCappedJson` so `search()` can classify it as `"unknown"`, not `"network"`. */
+class SearchBodyTooLargeError extends Error {}
+
+/** Reads `response`'s body with a byte cap (M-3), never buffering more than `capBytes` before failing. */
+async function readCappedJson(response: Response, capBytes: number): Promise<unknown> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && Number(contentLength) > capBytes) {
+    await response.body?.cancel();
+    throw new SearchBodyTooLargeError(`search response body exceeds ${capBytes} bytes`);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return response.json();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > capBytes) {
+      await reader.cancel();
+      throw new SearchBodyTooLargeError(`search response body exceeds ${capBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+  return JSON.parse(await new Blob(chunks).text());
+}
+
+/** Fix round 1 (M-2): walks `exports`, recursively through objects and arrays, for a `types` key (spec §6.2). */
+function exportsHaveTypes(node: unknown): boolean {
+  if (node === null || typeof node !== "object") return false;
+  if (Array.isArray(node)) return node.some((item) => exportsHaveTypes(item));
+  const record = node as Record<string, unknown>;
+  if ("types" in record) {
+    const value = record.types;
+    if (typeof value === "string" || (typeof value === "object" && value !== null)) return true;
+  }
+  return Object.values(record).some((value) => exportsHaveTypes(value));
+}
 
 const combineResults = (first: NpmSpawnResult, second: NpmSpawnResult): NpmSpawnResult => ({
   exitCode: second.exitCode,
@@ -161,23 +204,35 @@ export class NpmService {
   /** Registry search (spec §11.3): `GET <registry>/-/v1/search`, with the registry/token resolved from `.npmrc`. */
   async search(query: string): Promise<NpmSearchResponse> {
     const { registry, token } = await this.#registry(query.startsWith("@") ? query : null);
+    // Fix round 1 (M-6): a registry URL with embedded credentials never reaches a log or error.
+    const redacted = redactRegistryUrl(registry);
     try {
       const response = await (this.deps.fetch ?? fetch)(
         `${registry}-/v1/search?text=${encodeURIComponent(query)}&size=25`,
         { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) },
       );
       if (!response.ok) {
+        // Fix round 1 (M-3): a non-2xx body is never left open.
+        await response.body?.cancel();
         return {
           results: [],
           error: {
             kind: response.status === 404 ? "notFound" : "unknown",
-            log: `GET ${registry}-/v1/search: HTTP ${response.status}`,
+            log: `GET ${redacted}-/v1/search: HTTP ${response.status}`,
           },
         };
       }
-      return { results: parseSearchResponse(await response.json()), error: null };
+      const json = await readCappedJson(response, MAX_SEARCH_BODY_BYTES);
+      // Fix round 1 (M-3): the parsed count is capped too, in case a misconfigured registry ignores `size`.
+      return { results: parseSearchResponse(json).slice(0, 25), error: null };
     } catch (error) {
-      return { results: [], error: { kind: "network", log: `GET ${registry}-/v1/search: ${String(error)}` } };
+      return {
+        results: [],
+        error: {
+          kind: error instanceof SearchBodyTooLargeError ? "unknown" : "network",
+          log: `GET ${redacted}-/v1/search: ${String(error)}`,
+        },
+      };
     }
   }
 
@@ -280,9 +335,17 @@ export class NpmService {
       this.onSucceeded();
       this.deps.afterChange();
       this.deps.onChanged(await this.list());
-      if (!error) await afterSucceeded?.();
     } catch (failure) {
       this.deps.log(strings.log.npmPostChangeFailed, String(failure));
+    }
+    // Fix round 1 (M-4): its own try/catch, after the post-change block, so a throwing onChanged/list() can never
+    // skip the types check, and a failure here is never mislabeled as a post-change failure.
+    if (!error) {
+      try {
+        await afterSucceeded?.();
+      } catch (failure) {
+        this.deps.log(strings.log.npmTypesCheckFailed, String(failure));
+      }
     }
   }
 
@@ -359,9 +422,16 @@ export class NpmService {
     );
   }
 
-  /** Task 12: `#refreshOutdated` tracks its own promise so `whenIdle` waits for the background refresh too. */
-  #track(done: Promise<void>): void {
-    this.#idle = this.#idle.then(() => done);
+  /**
+   * Fix round 1 (I-1): guards the promise itself, so a caller (like `#refreshOutdated`) can never poison `whenIdle`
+   * by tracking a promise that rejects. `operation()`'s own `guardedDone` catch stays too; a double guard is
+   * harmless.
+   */
+  #track(promise: Promise<void>): void {
+    const guarded = promise.catch((error) => {
+      this.deps.log(strings.log.npmPostChangeFailed, String(error));
+    });
+    this.#idle = this.#idle.then(() => guarded);
   }
 
   /** Runs `bun outdated` at most once at a time, through the queue, and caches the result (spec §11.3). */
@@ -388,8 +458,12 @@ export class NpmService {
         },
       )
       .then(async () => {
-        this.#refreshing = false;
         this.deps.onChanged(await this.list({ refreshOutdated: false }));
+      })
+      // Fix round 1 (I-1): reset in a `finally`, so a throw anywhere in the chain above can never leave a burst
+      // guard stuck forever.
+      .finally(() => {
+        this.#refreshing = false;
       });
     this.#track(done);
   }
@@ -402,32 +476,53 @@ export class NpmService {
     return { registry, token: authTokenFor(config, registry, base) };
   }
 
-  /** Task 12: after a successful registry install, offers `@types/<name>` when the registry has it and it's needed. */
+  /**
+   * Task 12: after a successful registry install, offers `@types/<name>` when the registry has it and it's needed.
+   * Fix round 1 (M-4): `name` is confirmed still a dependency both before the network round trip and immediately
+   * before queuing the `@types` install, so a package removed in between (spec §11.2) never gets stray types.
+   */
   async #maybeInstallTypes(name: string): Promise<void> {
     if (!this.deps.settings().autoInstallTypes) return;
     const typesName = typesPackageName(name);
     if (!typesName || (await this.#hasOwnTypes(name))) return;
-    if (typesName in (await this.readManifest()).dependencies) return;
-    const { registry, token } = await this.#registry(typesName);
     try {
+      const before = await this.readManifest();
+      if (!(name in before.dependencies) || typesName in before.dependencies) return;
+      const { registry, token } = await this.#registry(typesName);
+      // Fix round 1 (M-3): the abbreviated packument is enough to test existence; only the status matters.
       const response = await (this.deps.fetch ?? fetch)(`${registry}${typesName.replace("/", "%2f")}`, {
-        headers: token ? { authorization: `Bearer ${token}` } : {},
+        headers: {
+          accept: "application/vnd.npm.install-v1+json",
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
         signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
       });
-      if (response.ok) this.install(typesName);
+      const found = response.ok;
+      await response.body?.cancel();
+      if (!found) return;
+      const current = await this.readManifest();
+      if (!(name in current.dependencies) || typesName in current.dependencies) return;
+      this.install(typesName);
     } catch (error) {
       this.deps.log(strings.log.npmTypesCheckFailed, String(error));
     }
   }
 
+  /**
+   * Fix round 1 (M-2): typed only via `types`/`typings`, an `exports` `types` condition (spec §6.2), or a bundled
+   * `index.d.ts`. A plain `"types"` substring elsewhere in the manifest (a keyword, a `files` entry) doesn't count.
+   */
   async #hasOwnTypes(name: string): Promise<boolean> {
+    let pkg: { types?: unknown; typings?: unknown; exports?: unknown };
     try {
       const text = await readFile(join(this.deps.paths.packagesNodeModules, name, "package.json"), "utf8");
-      const pkg = JSON.parse(text) as { types?: unknown; typings?: unknown };
-      if (typeof pkg.types === "string" || typeof pkg.typings === "string" || text.includes('"types"')) return true;
+      pkg = JSON.parse(text) as { types?: unknown; typings?: unknown; exports?: unknown };
     } catch {
       return false;
     }
+    if (typeof pkg.types === "string" && pkg.types.length > 0) return true;
+    if (typeof pkg.typings === "string" && pkg.typings.length > 0) return true;
+    if (exportsHaveTypes(pkg.exports)) return true;
     return Bun.file(join(this.deps.paths.packagesNodeModules, name, "index.d.ts")).exists();
   }
 }

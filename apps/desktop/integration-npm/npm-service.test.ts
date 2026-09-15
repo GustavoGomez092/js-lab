@@ -11,19 +11,26 @@ import { NpmService } from "../src/main/services/npm-service";
 import { createBunSpawn } from "../src/main/services/npm-spawn";
 import { ensurePackagesProject } from "../src/main/services/packages-project";
 
-let registry: TestRegistry;
+// Fix round 1 (M-5): both may still be unset if beforeAll throws before assigning them.
+let registry: TestRegistry | undefined;
 let root = "";
 
 beforeAll(async () => {
-  registry = await startTestRegistry();
+  const started = await startTestRegistry();
+  registry = started;
   root = await mkdtemp(join(tmpdir(), "jslab-npm-it-"));
   // R-M3-T12-PATH-1: publishStandardFixtures already appends "fixtures" to the work root.
-  await publishStandardFixtures(registry.url, root);
+  await publishStandardFixtures(started.url, root);
 });
 
 afterAll(async () => {
-  await registry.stop();
-  await rm(root, { recursive: true, force: true });
+  // Fix round 1 (M-5): a rejecting stop() must never skip cleanup, and a beforeAll that never assigned `registry`
+  // must never throw a TypeError that hides the original failure.
+  try {
+    await registry?.stop();
+  } finally {
+    if (root) await rm(root, { recursive: true, force: true });
+  }
 });
 
 async function service(name: string, options: { npmrc?: string; allowScripts?: boolean; baseHome?: string } = {}) {
@@ -34,7 +41,8 @@ async function service(name: string, options: { npmrc?: string; allowScripts?: b
     env: {},
   });
   await ensurePackagesProject(paths, () => {});
-  await writeFile(paths.packagesNpmrc, options.npmrc ?? `registry=${registry.url}\n`);
+  // beforeAll always runs (and assigns `registry`) before any test body.
+  await writeFile(paths.packagesNpmrc, options.npmrc ?? `registry=${registry?.url ?? ""}\n`);
   const ops: NpmOperation[] = [];
   const npm = new NpmService({
     paths,
@@ -66,7 +74,7 @@ describe("npm service against the test registry (opt-in, spec §22.2)", () => {
     const control = join(root, "control");
     await mkdir(control, { recursive: true });
     await writeFile(join(control, "package.json"), JSON.stringify({ name: "control", private: true }));
-    await writeFile(join(control, ".npmrc"), `registry=${registry.url}\n`);
+    await writeFile(join(control, ".npmrc"), `registry=${registry?.url ?? ""}\n`);
     const proc = Bun.spawn([process.execPath, "add", "--exact", "@jslab-fixture/scoped@1.0.0"], {
       cwd: control,
       env: npmEnvironment({
@@ -74,7 +82,8 @@ describe("npm service against the test registry (opt-in, spec §22.2)", () => {
         npmHome: userHome,
         bunCacheDir: join(root, "control-cache"),
       }),
-      stdout: "pipe",
+      // Fix round 1 (M-5): only stderr is read below; a large stdout would otherwise fill its pipe and hang exited.
+      stdout: "ignore",
       stderr: "pipe",
     });
     const [controlErr, controlCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);

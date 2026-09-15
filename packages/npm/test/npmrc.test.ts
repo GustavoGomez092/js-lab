@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { authTokenFor, parseNpmrc, registryFor } from "../src/npmrc";
+import { authTokenFor, parseNpmrc, redactRegistryUrl, registryFor } from "../src/npmrc";
 
 describe(".npmrc (spec §11.3, §11.5)", () => {
   test("parses keys and values, strips quotes and comments, and a later key wins", () => {
@@ -39,5 +39,11 @@ describe(".npmrc (spec §11.3, §11.5)", () => {
     expect(authTokenFor(config, "https://npm.acme.test/private/", { TOKEN: "long" })).toBe("long");
     expect(authTokenFor(config, "https://npm.acme.test/", {})).toBe("short");
     expect(authTokenFor(config, "http://127.0.0.1:4873/", {})).toBeNull();
+  });
+
+  test("redactRegistryUrl removes userinfo and leaves other URLs unchanged", () => {
+    expect(redactRegistryUrl("https://user:pass@npm.corp.example/")).toBe("https://npm.corp.example/");
+    expect(redactRegistryUrl("http://127.0.0.1:4873/")).toBe("http://127.0.0.1:4873/");
+    expect(redactRegistryUrl("not a url")).toBe("not a url");
   });
 });

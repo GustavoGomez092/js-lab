@@ -67,8 +67,12 @@ export interface RunnerEnvironmentInput {
   workingDirectory?: string | null;
 }
 
-/** Keys no layer may set in a runner's environment. */
+/**
+ * Keys no layer may set in a runner's environment: JSLab's own, BUN_OPTIONS, and names that would corrupt `environ`
+ * (an empty key, or one containing = or NUL, e.g. "BUN_OPTIONS=--preload"; R-M3-T14-FIX-2 NEW-N4).
+ */
 function isReservedRunnerKey(key: string): boolean {
+  if (key === "" || key.includes("=") || key.includes(String.fromCharCode(0))) return true;
   // R-M3-T14-BUNOPTS-1: JSLab owns the runner's Bun flags; BUN_OPTIONS could add --preload or --env-file.
   return key.startsWith("JSLAB_") || key === "BUN_OPTIONS";
 }

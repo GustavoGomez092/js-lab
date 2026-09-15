@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,4 +78,26 @@ test("a real runner sees login < env.json < .env < JSLAB=1 and resolves the WD's
     dep: "wd",
     only: "packages",
   });
+}, 20000);
+
+test("a working-directory bunfig.toml preload never runs in the runner", async () => {
+  const paths = resolveAppPaths({
+    resourcesFolder: "/R",
+    userData: join(dir, "data"),
+    execPath: process.execPath,
+    env: {},
+  });
+  const wd = join(dir, "wd-bunfig");
+  await mkdir(wd, { recursive: true });
+  await writeFile(join(wd, "bunfig.toml"), `preload = ["./p.js"]${LF}`);
+  await writeFile(join(wd, "p.js"), `require("node:fs").writeFileSync(__dirname + "/PRELOADED", "1");${LF}`);
+  const configFor = createRunnerConfig({
+    paths: { ...paths, runnerBootstrap: BOOTSTRAP },
+    baseEnv: () => ({ PATH: process.env.PATH }),
+    envVars: () => ({}),
+    workingDirectory: () => wd,
+  });
+  // BunRunnerProcess.start resolves on the runner's ready message; a preload would already have run by then.
+  runner = await BunRunnerProcess.start(configFor("t1"));
+  expect(existsSync(join(wd, "PRELOADED"))).toBe(false);
 }, 20000);

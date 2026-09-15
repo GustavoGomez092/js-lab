@@ -61,7 +61,8 @@ export class BunRunnerProcess {
   static start(config: RunnerSpawnConfig, timeoutMs = 5000): Promise<BunRunnerProcess> {
     return new Promise((resolve, reject) => {
       let runner: BunRunnerProcess | null = null;
-      const proc = Bun.spawn([config.bunPath, "--no-env-file", config.bootstrapPath], {
+      // R-M3-T14-BUNFIG-1: an empty config, so a working directory's bunfig.toml (e.g. a preload) never applies.
+      const proc = Bun.spawn([config.bunPath, "--no-env-file", "--config=/dev/null", config.bootstrapPath], {
         cwd: config.cwd,
         env: config.env,
         stdin: "ignore",

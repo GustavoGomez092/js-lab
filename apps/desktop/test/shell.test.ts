@@ -76,4 +76,20 @@ describe("runnerEnvironment", () => {
     expect(Object.hasOwn(env, "BUN_OPTIONS")).toBe(false);
     expect(env).toMatchObject({ FROM_LOGIN: "1", FROM_ENV_JSON: "1", FROM_DOTENV: "1" });
   });
+
+  test("keys that are empty or contain = or NUL are dropped from every layer", () => {
+    const paths = resolveAppPaths(input);
+    const NUL = String.fromCharCode(0);
+    const env = runnerEnvironment(paths, {
+      base: { [`BAD${NUL}KEY`]: "x", OK_C: "3" },
+      variables: { "BUN_OPTIONS=--preload": "./p.js", OK_A: "1" },
+      dotenv: { "": "x", OK_B: "2" },
+    });
+    expect(env).toEqual({ OK_C: "3", OK_A: "1", OK_B: "2", JSLAB: "1", NODE_PATH: paths.packagesNodeModules });
+    for (const key of Object.keys(env)) {
+      expect(key).not.toBe("");
+      expect(key.includes("=")).toBe(false);
+      expect(key.includes(NUL)).toBe(false);
+    }
+  });
 });

@@ -52,6 +52,28 @@ function killGroup(proc: Subprocess): void {
   }
 }
 
+/**
+ * Decides how a login-shell read ends (pure: every timer comes in through `deadline` and `grace`). Before the shell
+ * exits, the deadline or an output overflow ends the wait; EOF alone still waits for the exit or the deadline. Once
+ * the shell has exited, only the drain (EOF or overflow) or the grace period can end it, so a shell that finished just
+ * before the deadline keeps its output and the total stays under timeoutMs + PIPE_GRACE_MS (R-M3-T14-FIX-2 NEW-N1).
+ * "exited" means the shell exited and the bytes collected so far are the result.
+ */
+export async function settleLoginShell(parts: {
+  exited: Promise<unknown>;
+  drain: Promise<"eof" | "overflow">;
+  deadline: Promise<"deadline">;
+  grace: () => Promise<"grace">;
+}): Promise<"exited" | "deadline" | "overflow"> {
+  const exited = parts.exited.then(() => "exited" as const);
+  const first = await Promise.race([parts.drain, parts.deadline, exited]);
+  if (first === "exited")
+    return (await Promise.race([parts.drain, parts.grace()])) === "overflow" ? "overflow" : "exited";
+  // stdout closed before the shell exited: the exit still has to beat the deadline.
+  if (first === "eof") return Promise.race([exited, parts.deadline]);
+  return first;
+}
+
 function concat(chunks: Uint8Array[], size: number): Uint8Array {
   const out = new Uint8Array(size);
   let offset = 0;
@@ -86,35 +108,24 @@ export const runLoginShell: LoginShellRun = async (argv, timeoutMs) => {
         size += value.byteLength;
       }
     })();
-    const deadline = new Promise<"deadline">((resolve) => {
-      deadlineTimer = setTimeout(() => resolve("deadline"), timeoutMs);
-    });
-    let outcome: "eof" | "overflow" | "deadline" | "exited" | "grace" = await Promise.race([
+    const outcome = await settleLoginShell({
+      exited: proc.exited,
       drain,
-      deadline,
-      proc.exited.then(() => "exited" as const),
-    ]);
-    if (outcome === "exited") {
-      const grace = new Promise<"grace">((resolve) => {
-        graceTimer = setTimeout(() => resolve("grace"), PIPE_GRACE_MS);
-      });
-      outcome = await Promise.race([drain, deadline, grace]);
-    } else if (outcome === "eof") {
-      // stdout closed first; the shell still has to exit before the deadline.
-      const exited = await Promise.race([proc.exited.then(() => "exited" as const), deadline]);
-      if (exited === "deadline") outcome = "deadline";
-    }
-    if (outcome === "deadline") {
-      killGroup(proc);
-      return failed();
-    }
-    if (outcome === "overflow") {
+      deadline: new Promise<"deadline">((resolve) => {
+        deadlineTimer = setTimeout(() => resolve("deadline"), timeoutMs);
+      }),
+      grace: () =>
+        new Promise<"grace">((resolve) => {
+          graceTimer = setTimeout(() => resolve("grace"), PIPE_GRACE_MS);
+        }),
+    });
+    if (outcome !== "exited") {
       killGroup(proc);
       const result = failed();
-      overflowed.add(result);
+      if (outcome === "overflow") overflowed.add(result);
       return result;
     }
-    // "eof" after exit, or "grace": the shell has exited; a leftover stdout holder can't stall the result.
+    // The shell has exited: the bytes collected so far stand, and a leftover stdout holder can't stall the result.
     return { exitCode: proc.signalCode ? null : proc.exitCode, stdout: concat(chunks, size) };
   } finally {
     clearTimeout(deadlineTimer);

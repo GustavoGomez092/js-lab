@@ -67,6 +67,12 @@ export interface RunnerEnvironmentInput {
   workingDirectory?: string | null;
 }
 
+/** Keys no layer may set in a runner's environment. */
+function isReservedRunnerKey(key: string): boolean {
+  // R-M3-T14-BUNOPTS-1: JSLab owns the runner's Bun flags; BUN_OPTIONS could add --preload or --env-file.
+  return key.startsWith("JSLAB_") || key === "BUN_OPTIONS";
+}
+
 /**
  * Environment for runner processes (spec §5.3): login shell → env.json → the WD's .env → JSLAB=1, later layers winning.
  * JSLAB_* keys never reach a runner, and JSLab always sets NODE_PATH: the WD's node_modules first, then app packages.
@@ -77,10 +83,10 @@ export function runnerEnvironment(
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(input.base)) {
-    if (value !== undefined && !key.startsWith("JSLAB_")) env[key] = value;
+    if (value !== undefined && !isReservedRunnerKey(key)) env[key] = value;
   }
   for (const layer of [input.variables ?? {}, input.dotenv ?? {}]) {
-    for (const [key, value] of Object.entries(layer)) if (!key.startsWith("JSLAB_")) env[key] = value;
+    for (const [key, value] of Object.entries(layer)) if (!isReservedRunnerKey(key)) env[key] = value;
   }
   env.JSLAB = "1";
   env.NODE_PATH = input.workingDirectory

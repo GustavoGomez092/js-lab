@@ -45,4 +45,31 @@ describe("SparePool", () => {
     expect(started[2]?.kill).not.toHaveBeenCalled();
     pool.dispose();
   });
+
+  test("an in-flight take on a never-invalidated tab sees invalidateAll", async () => {
+    let value = "old";
+    const started: { env: string; kill: ReturnType<typeof mock> }[] = [];
+    let releaseFirst = () => {};
+    const pool = new SparePool(
+      (config: RunnerSpawnConfig) => {
+        const kill = mock(() => {});
+        const runner = { kill, startedWith: config.env.V } as unknown as BunRunnerProcess;
+        started.push({ env: config.env.V ?? "", kill });
+        if (started.length > 1) return Promise.resolve(runner);
+        return new Promise<BunRunnerProcess>((resolve) => {
+          releaseFirst = () => resolve(runner);
+        });
+      },
+      (tabId) => ({ bunPath: "bun", bootstrapPath: "bootstrap.js", cwd: `/runs/${tabId}`, env: { V: value } }),
+    );
+    const taking = pool.take("a");
+    value = "new";
+    pool.invalidateAll();
+    releaseFirst();
+    const runner = (await taking) as unknown as { startedWith: string };
+    expect(runner.startedWith).toBe("new");
+    expect(started[0]?.env).toBe("old");
+    expect(started[0]?.kill).toHaveBeenCalledTimes(1);
+    pool.dispose();
+  });
 });

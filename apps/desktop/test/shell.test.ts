@@ -65,4 +65,15 @@ describe("runnerEnvironment", () => {
       NODE_PATH: paths.packagesNodeModules,
     });
   });
+
+  test("BUN_OPTIONS is dropped from every layer", () => {
+    const paths = resolveAppPaths(input);
+    const env = runnerEnvironment(paths, {
+      base: { BUN_OPTIONS: "--preload ./login.js", FROM_LOGIN: "1" },
+      variables: { BUN_OPTIONS: "--preload ./env-json.js", FROM_ENV_JSON: "1" },
+      dotenv: { BUN_OPTIONS: "--env-file=.env.local", FROM_DOTENV: "1" },
+    });
+    expect(Object.hasOwn(env, "BUN_OPTIONS")).toBe(false);
+    expect(env).toMatchObject({ FROM_LOGIN: "1", FROM_ENV_JSON: "1", FROM_DOTENV: "1" });
+  });
 });

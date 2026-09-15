@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { resolveAppPaths } from "../src/main/app-paths";
 import { createMainServices, type MainServices } from "../src/main/main-services";
 import { createRpcHandlers, InvalidPayloadError } from "../src/main/rpc-handlers";
+import type { BunRunnerProcess, RunnerSpawnConfig } from "../src/main/runs/bun-runner-process";
 
 let dir = "";
 let services: MainServices | null = null;
@@ -57,5 +58,38 @@ describe("main services (composition root)", () => {
       InvalidPayloadError,
     );
     expect(logged).toEqual(["Rejected invalid run.start payload"]);
+  });
+
+  test("saving env.json replaces the active tab's pre-started runner", async () => {
+    const paths = resolveAppPaths({
+      resourcesFolder: join(dir, "Resources"),
+      userData: dir,
+      execPath: process.execPath,
+      env: {},
+    });
+    const started: { env: Record<string, string>; kill: ReturnType<typeof mock> }[] = [];
+    services = await createMainServices({
+      paths,
+      env: {},
+      shiftHeld: Promise.resolve(false),
+      onEvents: () => {},
+      onState: () => {},
+      onDiagnostics: () => {},
+      startRunner: async (config: RunnerSpawnConfig) => {
+        const kill = mock(() => {});
+        started.push({ env: config.env, kill });
+        return { kill } as unknown as BunRunnerProcess;
+      },
+      transformHost: { transform: () => Promise.reject(new Error("no transforms in this test")), dispose: () => {} },
+    });
+    services.spares.setActiveTab(services.session.session.activeTabId);
+    await Bun.sleep(0);
+    expect(started).toHaveLength(1);
+    expect(started[0]?.env.API_TOKEN).toBeUndefined();
+    await services.env.save({ API_TOKEN: "v2" });
+    await Bun.sleep(0);
+    expect(started[0]?.kill).toHaveBeenCalledTimes(1);
+    expect(started).toHaveLength(2);
+    expect(started[1]?.env.API_TOKEN).toBe("v2");
   });
 });

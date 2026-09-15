@@ -13,7 +13,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "e2e": "bun run --cwd packages/e2e e2e",
-    "test:npm": "bun run --cwd packages/test-registry test:npm",
+    "test:npm": "bun run --cwd packages/test-registry test:npm && bun run --cwd apps/desktop test:npm",
     "readme:screenshots": "bun packages/e2e/scripts/readme-screenshots.ts"
   },
   "devDependencies": {

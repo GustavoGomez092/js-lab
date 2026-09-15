@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -454,5 +454,101 @@ describe("NpmService (spec §11.3)", () => {
     expect(ops.at(-1)).toMatchObject({ status: "failed", error: { kind: "unknown" } });
     expect(afterChange()).toBe(0);
     expect(changed).toHaveLength(0);
+  });
+
+  test("list fills latest from a cached bun outdated that refreshes in the background at most every 10 minutes", async () => {
+    let now = 1_000_000;
+    const table = "│ Package │ Current │ Update │ Latest │\n│ zod │ 4.0.0 │ 4.0.0 │ 4.6.4 │\n";
+    const { service, paths, calls, changed } = await setup({
+      now: () => now,
+      respond: async (argv) =>
+        argv[0] === "outdated" ? { exitCode: 0, stdout: table, stderr: "" } : { exitCode: 0, stdout: "", stderr: "" },
+    });
+    writeFileSync(
+      paths.packagesJson,
+      JSON.stringify({
+        name: "jslab-packages",
+        private: true,
+        dependencies: { zod: "4.0.0" },
+        trustedDependencies: [],
+      }),
+    );
+    await mkdir(join(paths.packagesNodeModules, "zod"), { recursive: true });
+    writeFileSync(join(paths.packagesNodeModules, "zod", "package.json"), JSON.stringify({ version: "4.0.0" }));
+
+    expect((await service.list({ refreshOutdated: true })).installed).toEqual([
+      { name: "zod", version: "4.0.0", latest: null },
+    ]);
+    await service.whenIdle();
+    expect(changed.at(-1)).toEqual({
+      installed: [{ name: "zod", version: "4.0.0", latest: "4.6.4" }],
+      outdatedCheckedAt: 1_000_000,
+      outdatedError: null,
+    });
+    now += 60_000;
+    await service.list({ refreshOutdated: true });
+    await service.whenIdle();
+    expect(calls.filter((call) => call.argv[0] === "outdated")).toHaveLength(1);
+    now += 10 * 60_000;
+    await service.list({ refreshOutdated: true });
+    await service.whenIdle();
+    expect(calls.filter((call) => call.argv[0] === "outdated")).toHaveLength(2);
+  });
+
+  test("search uses the .npmrc registry and token, parses results, and reports a network failure without the token", async () => {
+    const seen: { url: string; authorization: string | null }[] = [];
+    const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      seen.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+      if (url.startsWith("http://127.0.0.1:9/")) throw new Error("ConnectionRefused");
+      return Response.json({ objects: [{ package: { name: "zod", version: "4.6.4", description: "schemas" } }] });
+    }) as typeof fetch;
+    const { service, paths } = await setup({ fetch: fakeFetch });
+    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:4873\n//127.0.0.1:4873/:_authToken=s3cr3t-token\n");
+    expect(await service.search("zod schema")).toEqual({
+      results: [{ name: "zod", version: "4.6.4", description: "schemas", weeklyDownloads: null }],
+      error: null,
+    });
+    expect(seen[0]).toEqual({
+      url: "http://127.0.0.1:4873/-/v1/search?text=zod%20schema&size=25",
+      authorization: "Bearer s3cr3t-token",
+    });
+    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:9/\n");
+    const failed = await service.search("zod");
+    expect(failed.results).toEqual([]);
+    expect(failed.error?.kind).toBe("network");
+    expect(failed.error?.log).not.toContain("s3cr3t-token");
+  });
+
+  test("with automatic types on, an untyped package gets @types/<name> when the registry has it", async () => {
+    const { service, paths, calls } = await setup({
+      settings: () => ({ allowInstallScripts: false, autoInstallTypes: true }),
+      fetch: (async (input: string | URL | Request) =>
+        String(input).endsWith("/@types%2ffixture-untyped")
+          ? Response.json({ name: "@types/fixture-untyped" })
+          : new Response("not found", { status: 404 })) as typeof fetch,
+      respond: async (argv) => {
+        const spec = String(argv.at(-1));
+        const name = spec.includes("@", 1) ? spec.slice(0, spec.lastIndexOf("@")) : spec;
+        const manifest = JSON.parse(readFileSync(paths.packagesJson, "utf8"));
+        manifest.dependencies[name] = "1.0.0";
+        writeFileSync(paths.packagesJson, JSON.stringify(manifest));
+        await mkdir(join(paths.packagesNodeModules, name), { recursive: true });
+        writeFileSync(
+          join(paths.packagesNodeModules, name, "package.json"),
+          JSON.stringify(name === "fixture-typed" ? { version: "1.0.0", types: "index.d.ts" } : { version: "1.0.0" }),
+        );
+        return { exitCode: 0, stdout: `installed ${spec}\n`, stderr: "" };
+      },
+    });
+    writeFileSync(paths.packagesNpmrc, "registry=http://127.0.0.1:4873/\n");
+    service.install("fixture-untyped@1.0.0");
+    service.install("fixture-typed@1.0.0");
+    await service.whenIdle();
+    expect(calls.map((call) => call.argv.at(-1))).toEqual([
+      "fixture-untyped@1.0.0",
+      "fixture-typed@1.0.0",
+      "@types/fixture-untyped",
+    ]);
   });
 });

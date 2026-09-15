@@ -1,15 +1,28 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  authTokenFor,
   classifyNpmFailure,
   detectNotice,
   npmEnvironment,
   OperationQueue,
   OperationTimeoutError,
   parseInstallSpec,
+  parseNpmrc,
+  parseOutdated,
+  parseSearchResponse,
+  registryFor,
   resolveBunCacheDir,
+  typesPackageName,
 } from "@jslab/npm";
-import type { InstalledPackage, NpmListResult, NpmOperation, NpmOpKind } from "@jslab/rpc-schema";
+import type {
+  InstalledPackage,
+  NpmListResult,
+  NpmOpError,
+  NpmOperation,
+  NpmOpKind,
+  NpmSearchResponse,
+} from "@jslab/rpc-schema";
 import { defaultPackagesManifest, type PackagesManifest } from "@jslab/shared";
 import type { AppPaths } from "../app-paths";
 import { writeFileAtomic } from "../persistence/atomic-write";
@@ -52,6 +65,10 @@ type RunStep = (argv: readonly string[]) => Promise<NpmSpawnResult>;
 const OK: NpmSpawnResult = { exitCode: 0, stdout: "", stderr: "" };
 const LIST_RETRY_DELAY_MS = 100;
 
+/** Spec §11.3: `bun outdated` runs at most every 10 minutes. */
+export const OUTDATED_TTL_MS = 10 * 60_000;
+export const SEARCH_TIMEOUT_MS = 8_000;
+
 const combineResults = (first: NpmSpawnResult, second: NpmSpawnResult): NpmSpawnResult => ({
   exitCode: second.exitCode,
   stdout: `${first.stdout}\n${second.stdout}`,
@@ -62,6 +79,8 @@ const combineResults = (first: NpmSpawnResult, second: NpmSpawnResult): NpmSpawn
 export class NpmService {
   protected readonly queue: OperationQueue;
   #idle: Promise<void> = Promise.resolve();
+  #outdated: { at: number; latest: Map<string, string>; error: NpmOpError | null } | null = null;
+  #refreshing = false;
 
   constructor(protected readonly deps: NpmServiceDeps) {
     this.queue = deps.queue ?? new OperationQueue();
@@ -69,27 +88,33 @@ export class NpmService {
 
   install(spec: string): NpmOperation {
     const parsed = parseInstallSpec(spec);
-    return this.operation("install", spec, async (run, markChanged) => {
-      const allowScripts = this.deps.settings().allowInstallScripts;
-      const before = await this.readManifest();
-      const wasTrusted = parsed?.kind === "registry" && before.trustedDependencies.includes(parsed.name);
-      const grantsTrust = allowScripts && parsed?.kind === "registry" && !wasTrusted;
-      if (grantsTrust) await this.#setTrusted(parsed.name, true);
-      const addResult = await run(["add", "--exact", spec]);
-      if (addResult.exitCode !== 0) {
-        // Fix round 1 (M-2): a failed install never leaves behind trust it granted.
-        if (grantsTrust) await this.#setTrusted(parsed.name, false);
-        return addResult;
-      }
-      // Fix round 1 (M-3): the change already happened (package.json/node_modules), regardless of what follows.
-      markChanged();
-      if (!allowScripts || parsed?.kind === "registry") return addResult;
-      const after = await this.readManifest();
-      const added = Object.keys(after.dependencies).filter((name) => !(name in before.dependencies));
-      if (added.length === 0) return addResult;
-      const trustResult = await run(["pm", "trust", ...added]);
-      return combineResults(addResult, trustResult);
-    });
+    return this.operation(
+      "install",
+      spec,
+      async (run, markChanged) => {
+        const allowScripts = this.deps.settings().allowInstallScripts;
+        const before = await this.readManifest();
+        const wasTrusted = parsed?.kind === "registry" && before.trustedDependencies.includes(parsed.name);
+        const grantsTrust = allowScripts && parsed?.kind === "registry" && !wasTrusted;
+        if (grantsTrust) await this.#setTrusted(parsed.name, true);
+        const addResult = await run(["add", "--exact", spec]);
+        if (addResult.exitCode !== 0) {
+          // Fix round 1 (M-2): a failed install never leaves behind trust it granted.
+          if (grantsTrust) await this.#setTrusted(parsed.name, false);
+          return addResult;
+        }
+        // Fix round 1 (M-3): the change already happened (package.json/node_modules), regardless of what follows.
+        markChanged();
+        if (!allowScripts || parsed?.kind === "registry") return addResult;
+        const after = await this.readManifest();
+        const added = Object.keys(after.dependencies).filter((name) => !(name in before.dependencies));
+        if (added.length === 0) return addResult;
+        const trustResult = await run(["pm", "trust", ...added]);
+        return combineResults(addResult, trustResult);
+      },
+      // Task 12: after a successful registry install, offer @types/<name> when it has none of its own.
+      parsed?.kind === "registry" ? () => this.#maybeInstallTypes(parsed.name) : undefined,
+    );
   }
 
   remove(name: string): NpmOperation {
@@ -111,16 +136,49 @@ export class NpmService {
     });
   }
 
-  /** Fix round 1 (M-4): retries once, after a short delay, when the manifest read hits a transient parse race. */
-  async list(_options: { refreshOutdated: boolean } = { refreshOutdated: false }): Promise<NpmListResult> {
+  /**
+   * Fix round 1 (M-4): retries once, after a short delay, when the manifest read hits a transient parse race.
+   * Task 12: fills `latest`/`outdatedCheckedAt`/`outdatedError` from the `bun outdated` cache (spec §11.3), and, when
+   * asked to refresh a cache older than `OUTDATED_TTL_MS`, starts one background refresh through the queue.
+   */
+  async list(options: { refreshOutdated: boolean } = { refreshOutdated: false }): Promise<NpmListResult> {
+    const now = (this.deps.now ?? Date.now)();
+    if (options.refreshOutdated && (!this.#outdated || now - this.#outdated.at >= OUTDATED_TTL_MS)) {
+      void this.#refreshOutdated();
+    }
+    const cache = this.#outdated;
+    const latest = cache?.latest ?? new Map<string, string>();
     let installed: InstalledPackage[];
     try {
-      installed = await this.installedPackages(new Map());
+      installed = await this.installedPackages(latest);
     } catch {
       await (this.deps.listRetryWait ?? (() => Bun.sleep(LIST_RETRY_DELAY_MS)))();
-      installed = await this.installedPackages(new Map());
+      installed = await this.installedPackages(latest);
     }
-    return { installed, outdatedCheckedAt: null, outdatedError: null };
+    return { installed, outdatedCheckedAt: cache?.at ?? null, outdatedError: cache?.error ?? null };
+  }
+
+  /** Registry search (spec §11.3): `GET <registry>/-/v1/search`, with the registry/token resolved from `.npmrc`. */
+  async search(query: string): Promise<NpmSearchResponse> {
+    const { registry, token } = await this.#registry(query.startsWith("@") ? query : null);
+    try {
+      const response = await (this.deps.fetch ?? fetch)(
+        `${registry}-/v1/search?text=${encodeURIComponent(query)}&size=25`,
+        { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) },
+      );
+      if (!response.ok) {
+        return {
+          results: [],
+          error: {
+            kind: response.status === 404 ? "notFound" : "unknown",
+            log: `GET ${registry}-/v1/search: HTTP ${response.status}`,
+          },
+        };
+      }
+      return { results: parseSearchResponse(await response.json()), error: null };
+    } catch (error) {
+      return { results: [], error: { kind: "network", log: `GET ${registry}-/v1/search: ${String(error)}` } };
+    }
   }
 
   /** Resolves once every queued operation, including ones queued while waiting, has finished. */
@@ -136,6 +194,8 @@ export class NpmService {
     kind: NpmOpKind,
     target: string,
     body: (run: RunStep, markChanged: () => void) => Promise<NpmSpawnResult>,
+    /** Task 12: runs once, after a genuinely successful op's post-change steps (e.g. the auto-@types check). */
+    afterSucceeded?: () => Promise<void>,
   ): NpmOperation {
     const op: NpmOperation = {
       id: (this.deps.newId ?? (() => crypto.randomUUID()))(),
@@ -162,17 +222,18 @@ export class NpmService {
         );
       })
       .then(
-        (result) => this.#finish(op, result, false, changed),
+        (result) => this.#finish(op, result, false, changed, afterSucceeded),
         (error: unknown) => {
           // Fix round 1 (I-1): a timeout that settled within the kill grace classifies from the child's real output.
           if (error instanceof OperationTimeoutError && error.settled) {
-            return this.#finish(op, error.settled.value as NpmSpawnResult, true, changed);
+            return this.#finish(op, error.settled.value as NpmSpawnResult, true, changed, afterSucceeded);
           }
           return this.#finish(
             op,
             { exitCode: null, stdout: "", stderr: String(error) },
             error instanceof OperationTimeoutError,
             changed,
+            afterSucceeded,
           );
         },
       );
@@ -180,7 +241,7 @@ export class NpmService {
     const guardedDone = done.catch((error) => {
       this.deps.log(strings.log.npmPostChangeFailed, String(error));
     });
-    this.#idle = this.#idle.then(() => guardedDone);
+    this.#track(guardedDone);
     return op;
   }
 
@@ -198,10 +259,18 @@ export class NpmService {
     return this.deps.spawn(argv, { cwd: this.deps.paths.packagesDir, env, signal, onOutput });
   }
 
-  /** Called after each successful change, before the new list is reported (Task 12 resets the outdated cache here). */
-  protected onSucceeded(): void {}
+  /** Called after each successful change, before the new list is reported: a change invalidates the outdated cache. */
+  protected onSucceeded(): void {
+    this.#outdated = null;
+  }
 
-  async #finish(op: NpmOperation, result: NpmSpawnResult, timedOut: boolean, forceChange: boolean): Promise<void> {
+  async #finish(
+    op: NpmOperation,
+    result: NpmSpawnResult,
+    timedOut: boolean,
+    forceChange: boolean,
+    afterSucceeded?: () => Promise<void>,
+  ): Promise<void> {
     const error = classifyNpmFailure({ ...result, timedOut });
     const notice = error ? null : detectNotice(result);
     this.#safeEmit({ ...op, status: error ? "failed" : "succeeded", error, notice });
@@ -211,6 +280,7 @@ export class NpmService {
       this.onSucceeded();
       this.deps.afterChange();
       this.deps.onChanged(await this.list());
+      if (!error) await afterSucceeded?.();
     } catch (failure) {
       this.deps.log(strings.log.npmPostChangeFailed, String(failure));
     }
@@ -287,5 +357,77 @@ export class NpmService {
       this.deps.paths.packagesJson,
       `${JSON.stringify({ ...manifest, trustedDependencies: [...set].sort() }, null, 2)}\n`,
     );
+  }
+
+  /** Task 12: `#refreshOutdated` tracks its own promise so `whenIdle` waits for the background refresh too. */
+  #track(done: Promise<void>): void {
+    this.#idle = this.#idle.then(() => done);
+  }
+
+  /** Runs `bun outdated` at most once at a time, through the queue, and caches the result (spec §11.3). */
+  async #refreshOutdated(): Promise<void> {
+    if (this.#refreshing) return;
+    this.#refreshing = true;
+    const run = this.queue.run((signal) => this.spawnStep(["outdated"], signal, () => {}));
+    const done = run
+      .then(
+        (result) => {
+          const error = classifyNpmFailure(result);
+          const latest = new Map(
+            parseOutdated(`${result.stdout}\n${result.stderr}`).map((entry) => [entry.name, entry.latest]),
+          );
+          this.#outdated = { at: (this.deps.now ?? Date.now)(), latest: error ? new Map() : latest, error };
+        },
+        (error: unknown) => {
+          // R-M3-T12-KIND-1: classify like `operation()` does, instead of always recording "timeout".
+          this.#outdated = {
+            at: (this.deps.now ?? Date.now)(),
+            latest: new Map(),
+            error: { kind: error instanceof OperationTimeoutError ? "timeout" : "unknown", log: String(error) },
+          };
+        },
+      )
+      .then(async () => {
+        this.#refreshing = false;
+        this.deps.onChanged(await this.list({ refreshOutdated: false }));
+      });
+    this.#track(done);
+  }
+
+  /** The registry and auth token for `packageName` (or the default registry when `packageName` is null). */
+  async #registry(packageName: string | null): Promise<{ registry: string; token: string | null }> {
+    const base = this.deps.baseEnv();
+    const config = parseNpmrc(await readFile(this.deps.paths.packagesNpmrc, "utf8").catch(() => ""));
+    const registry = registryFor(config, packageName, base);
+    return { registry, token: authTokenFor(config, registry, base) };
+  }
+
+  /** Task 12: after a successful registry install, offers `@types/<name>` when the registry has it and it's needed. */
+  async #maybeInstallTypes(name: string): Promise<void> {
+    if (!this.deps.settings().autoInstallTypes) return;
+    const typesName = typesPackageName(name);
+    if (!typesName || (await this.#hasOwnTypes(name))) return;
+    if (typesName in (await this.readManifest()).dependencies) return;
+    const { registry, token } = await this.#registry(typesName);
+    try {
+      const response = await (this.deps.fetch ?? fetch)(`${registry}${typesName.replace("/", "%2f")}`, {
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+      });
+      if (response.ok) this.install(typesName);
+    } catch (error) {
+      this.deps.log(strings.log.npmTypesCheckFailed, String(error));
+    }
+  }
+
+  async #hasOwnTypes(name: string): Promise<boolean> {
+    try {
+      const text = await readFile(join(this.deps.paths.packagesNodeModules, name, "package.json"), "utf8");
+      const pkg = JSON.parse(text) as { types?: unknown; typings?: unknown };
+      if (typeof pkg.types === "string" || typeof pkg.typings === "string" || text.includes('"types"')) return true;
+    } catch {
+      return false;
+    }
+    return Bun.file(join(this.deps.paths.packagesNodeModules, name, "index.d.ts")).exists();
   }
 }

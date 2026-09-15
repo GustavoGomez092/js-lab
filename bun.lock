@@ -23,6 +23,9 @@
         "source-map-js": "1.2.1",
         "zod": "4.6.4",
       },
+      "devDependencies": {
+        "@jslab/test-registry": "workspace:*",
+      },
     },
     "apps/ui": {
       "name": "@jslab/ui",

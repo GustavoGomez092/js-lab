@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { createUserData, type LaunchedApp, launchApp, waitFor } from "../src";
 
@@ -16,8 +17,9 @@ test("Copy Debug Log produces a redacted report and logs rotate under logs/ (ST-
   await app.command("help.copyDebugLog");
   const clip = join(app.userData, "e2e-clipboard.txt");
   const report = JSON.parse(await waitFor(() => (existsSync(clip) ? readFileSync(clip, "utf8") : null)));
+  expect(readFileSync(clip, "utf8")).not.toContain(homedir());
   expect(report).toMatchObject({ electrobunVersion: "2.0.1", arch: "arm64" });
-  expect(report.settings.version).toBe(2);
+  expect(report.settings.version).toBe(3);
   expect(Array.isArray(report.log)).toBe(true);
   expect(existsSync(join(app.userData, "logs", "main.log"))).toBe(true);
   await app.command("help.openLogsFolder");

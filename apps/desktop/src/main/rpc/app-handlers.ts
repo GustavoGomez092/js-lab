@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { type AppAction, appCommandSchema, settingsAppCommandSchema } from "@jslab/rpc-schema";
 import { buildDebugReport } from "../logging/debug-report";
 import type { Redactor } from "../logging/redact";
@@ -17,6 +18,8 @@ export interface AppHandlerDeps {
   closeWindow(): void;
   openSettings(): void;
   redact: Redactor;
+  /** The home folder written as `~` in the debug report (FA-m12); defaults to `os.homedir()`. */
+  home?: string;
   log: Log;
 }
 
@@ -55,6 +58,7 @@ async function runAppAction(deps: AppHandlerDeps, action: AppAction): Promise<vo
           settings: deps.settings.current,
           logLines: deps.logTail(500),
           redact: deps.redact,
+          home: deps.home ?? homedir(),
         }),
       );
       return;

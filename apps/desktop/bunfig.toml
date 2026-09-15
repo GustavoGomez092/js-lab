@@ -1,0 +1,4 @@
+# A bare `bun test` here runs only the unit tests. The opt-in npm integration suite (integration-npm/) runs only
+# through `bun run test:npm`, which names ./integration-npm explicitly.
+[test]
+root = "./test"

@@ -9,6 +9,10 @@
   "scripts": {
     "test": "bun test ./test",
     "e2e": "bun test ./scenarios --timeout 180000",
+    "e2e:npm": "bun test ./npm-scenarios --timeout 600000",
     "typecheck": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "@jslab/test-registry": "workspace:*"
   }
 }

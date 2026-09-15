@@ -45,9 +45,12 @@ export class BunRunnerProcess {
   lastHeartbeat = Date.now();
   bunVersion = "";
   readonly exited: Promise<number | null>;
+  /** The cwd the runner was spawned with, so a run can check it started in the tab's working directory (M-3). */
+  readonly cwd: string;
 
-  private constructor(proc: Subprocess) {
+  private constructor(proc: Subprocess, cwd: string) {
     this.#proc = proc;
+    this.cwd = cwd;
     // Set in the same callback that resolves `exited`, so anything awaiting `exited` already sees it.
     this.exited = proc.exited.then(() => {
       if (!this.#killed) signalExitedGroup(proc.pid);
@@ -61,7 +64,8 @@ export class BunRunnerProcess {
   static start(config: RunnerSpawnConfig, timeoutMs = 5000): Promise<BunRunnerProcess> {
     return new Promise((resolve, reject) => {
       let runner: BunRunnerProcess | null = null;
-      const proc = Bun.spawn([config.bunPath, "--no-env-file", config.bootstrapPath], {
+      // R-M3-T14-BUNFIG-1: an empty config, so a working directory's bunfig.toml (e.g. a preload) never applies.
+      const proc = Bun.spawn([config.bunPath, "--no-env-file", "--config=/dev/null", config.bootstrapPath], {
         cwd: config.cwd,
         env: config.env,
         stdin: "ignore",
@@ -77,7 +81,7 @@ export class BunRunnerProcess {
         // spawned (I3). IPC and exit-on-disconnect still work (verified on Bun 1.3.13 and the bundled 1.4.0).
         detached: true,
       });
-      runner = new BunRunnerProcess(proc);
+      runner = new BunRunnerProcess(proc, config.cwd);
       const started = runner;
       const timer = setTimeout(() => {
         started.kill();

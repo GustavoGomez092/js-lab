@@ -49,6 +49,8 @@ describe("requests", () => {
       code: "1 + 1",
       language: "typescript",
       logpoints: [],
+      workingDirectory: null,
+      scriptName: "1 + 1.ts",
     });
   });
 
@@ -78,6 +80,42 @@ describe("requests", () => {
     expect(deps.coordinator.expand).toHaveBeenCalledWith("t1", runId, "h3");
     expect(() => handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "nope" })).toThrow(
       InvalidPayloadError,
+    );
+  });
+
+  test("run.start passes the tab's working directory and script name from the session (spec §5.3)", () => {
+    const { handlers, deps } = setup();
+    deps.session.session.tabs.t1 = {
+      ...(deps.session.session.tabs.t1 as NonNullable<(typeof deps.session.session.tabs)["t1"]>),
+      workingDirectory: "/work/api",
+      title: "fetch users",
+      titleIsCustom: true,
+    };
+    handlers.requests["run.start"](validStart);
+    expect(deps.coordinator.start).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDirectory: "/work/api", scriptName: "fetch users.ts" }),
+    );
+  });
+
+  test("run.start names the script from the request's language and falls back for an unknown tab", () => {
+    const { handlers, deps } = setup();
+    deps.session.session.tabs.t1 = {
+      ...(deps.session.session.tabs.t1 as NonNullable<(typeof deps.session.session.tabs)["t1"]>),
+      language: "typescript",
+      workingDirectory: "/work/api",
+      title: "fetch users",
+      titleIsCustom: true,
+    };
+    handlers.requests["run.start"]({ ...validStart, language: "javascript" });
+    expect(deps.coordinator.start).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ workingDirectory: "/work/api", scriptName: "fetch users.js" }),
+    );
+    expect(deps.session.session.tabs.t9).toBeUndefined();
+    handlers.requests["run.start"]({ ...validStart, tabId: "t9" });
+    expect(deps.coordinator.start).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ tabId: "t9", workingDirectory: null, scriptName: "Untitled.ts" }),
     );
   });
 });

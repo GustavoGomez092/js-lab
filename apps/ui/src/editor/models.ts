@@ -21,14 +21,16 @@ export class ModelCache<M extends ModelLike> {
     return this.#entries.get(tabId)?.language === language;
   }
 
-  /** Returns the tab's model; a language change recreates it from the current model's content. */
-  ensure(tabId: string, language: Language, value: string): { model: M; recreated: boolean } {
+  /**
+   * Returns the tab's model; a language change creates a new one from the current content. The previous model is
+   * returned undisposed: the caller attaches the new model first, then disposes it (T12-m3).
+   */
+  ensure(tabId: string, language: Language, value: string): { model: M; recreated: boolean; previous: M | null } {
     const entry = this.#entries.get(tabId);
-    if (entry && entry.language === language) return { model: entry.model, recreated: false };
+    if (entry && entry.language === language) return { model: entry.model, recreated: false, previous: null };
     const model = this.create(tabId, language, entry ? entry.model.getValue() : value);
-    entry?.model.dispose();
     this.#entries.set(tabId, { model, language });
-    return { model, recreated: entry !== undefined };
+    return { model, recreated: entry !== undefined, previous: entry?.model ?? null };
   }
 
   prune(openIds: ReadonlySet<string>): string[] {

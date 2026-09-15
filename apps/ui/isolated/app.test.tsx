@@ -14,7 +14,7 @@ import {
   type Settings,
   shortcutFor,
 } from "@jslab/shared";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type ComponentType, Profiler } from "react";
 import type { MainApi } from "../src/api";
 import { type EditorHandle, type OffsetEdit, setEditorHandle } from "../src/editor/editor-handle";
@@ -25,18 +25,15 @@ import { applyEdits } from "../src/format/line-diff";
 import * as OutputPanelModule from "../src/output/OutputPanel";
 import { ActivityBar } from "../src/shell/ActivityBar";
 import { runStateLabel } from "../src/shell/labels";
+import { BUFFER_SYNC_DELAY_MS } from "../src/state/buffer-sync";
 import { type AppStore, createAppStore } from "../src/state/store";
 import { strings } from "../src/strings";
-import { createFakeApi } from "./fake-api";
+import { createFakeApi } from "../test/fake-api";
 
-// Monaco and the virtualized list need a real browser layout; the shell behavior under test does not.
-// mock.module replaces a module for the whole `bun test` process, so keep the real panel (a plain const: import
-// bindings are live and would see the mock) and put it back afterwards for output-panel.test.tsx.
+// T19A-mock: this file runs in its own `bun test` process (package.json "test"), so these module mocks can't leak into
+// any other test file. Monaco and the virtualized list need a real browser layout; the shell behavior under test
+// does not.
 const RealOutputPanel = OutputPanelModule.OutputPanel;
-// T19A-mock (parked to M3): the Editor mock is never restored. Restoring needs the real Editor module, which imports
-// Monaco and Vite `?worker` modules that can't load under `bun test`, and no ui test imports the real Editor, so the
-// mock can't leak into another file's assertions. Isolate this file or restore the mock once M3 adds a Monaco-capable
-// test setup.
 mock.module("../src/editor/Editor", () => ({ Editor: () => <div data-testid="editor" /> }));
 mock.module("../src/output/OutputPanel", () => ({ OutputPanel: () => <div data-testid="output" /> }));
 afterAll(() => {
@@ -259,12 +256,38 @@ describe("App shell", () => {
     expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.safeModePaused("⌘R"));
   });
 
-  test("edits and language changes are sent to Main for persistence", () => {
+  test("edits are sent to Main once per coalescing delay, and language changes at once (X5)", async () => {
     const { store, api } = renderApp();
+    act(() => store.getState().editCode("2"));
     act(() => store.getState().editCode("2 + 2"));
-    expect(api.bufferChanged).toHaveBeenCalledWith("t1", "2 + 2");
+    expect(api.bufferChanged).not.toHaveBeenCalled();
+    // Waits for the coalescing timer without a fixed sleep; one call proves the two edits were coalesced.
+    await waitFor(() => expect(api.bufferChanged).toHaveBeenCalledTimes(1), { timeout: BUFFER_SYNC_DELAY_MS + 2000 });
+    expect(api.bufferChanged.mock.calls).toEqual([["t1", "2 + 2"]]);
     fireEvent.change(screen.getByLabelText("Language"), { target: { value: "javascript" } });
     expect(api.patchTab).toHaveBeenCalledWith("t1", expect.objectContaining({ language: "javascript" }));
+  });
+
+  test("app.flushState flushes pending edits and view state, then acknowledges (X1)", async () => {
+    const { store, api, emit } = renderApp();
+    const order: string[] = [];
+    const flushViewState = mock(() => void order.push("viewState"));
+    setEditorHandle({ flushViewState } as unknown as EditorHandle);
+    api.bufferChanged.mockImplementation(() => void order.push("buffer"));
+    api.stateFlushed.mockImplementation(() => void order.push("ack"));
+    act(() => store.getState().editCode("3 + 3"));
+    await emit("app.flushState", {});
+    expect(order).toEqual(["viewState", "buffer", "ack"]);
+    setEditorHandle(null);
+  });
+
+  // M-2 (R-M3-T19-FIX-1): WebKit fires pagehide more reliably than beforeunload when the view goes away.
+  test("a pending edit is sent when the page hides", () => {
+    const { store, api } = renderApp();
+    act(() => store.getState().editCode("4 + 4"));
+    expect(api.bufferChanged).not.toHaveBeenCalled();
+    window.dispatchEvent(new Event("pagehide"));
+    expect(api.bufferChanged.mock.calls).toEqual([["t1", "4 + 4"]]);
   });
 
   test("Help menu commands are forwarded to Main", async () => {
@@ -634,7 +657,7 @@ describe("App shell", () => {
     await click(strings.shell.snippets);
     expect(state()).toEqual([false, "snippets", 2]);
     const npm = screen.getByRole("button", { name: strings.shell.npm }) as HTMLButtonElement;
-    expect([npm.disabled, npm.title]).toEqual([true, strings.shell.laterMilestone]);
+    expect([npm.disabled, npm.getAttribute("aria-pressed")]).toEqual([false, "false"]);
     expect((screen.getByRole("button", { name: strings.shell.settings }) as HTMLButtonElement).disabled).toBe(false);
   });
 

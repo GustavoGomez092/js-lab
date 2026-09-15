@@ -5,6 +5,10 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { SettingsApp } from "../src/settings/SettingsApp";
 import { createSettingsAgent } from "../src/settings/settings-agent";
 import type { SettingsApi } from "../src/settings/settings-rpc";
+import { strings } from "../src/strings";
+
+const NL = String.fromCharCode(10);
+const DEFAULT_REGISTRY_NPMRC = `registry=https://registry.npmjs.org/${NL}`;
 
 function fakeSettingsApi(fonts: Awaited<ReturnType<SettingsApi["listFonts"]>> = { fonts: null, refreshing: true }) {
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
@@ -16,6 +20,9 @@ function fakeSettingsApi(fonts: Awaited<ReturnType<SettingsApi["listFonts"]>> = 
       return current;
     }),
     listFonts: mock(async () => fonts),
+    getNpmrc: mock(async () => DEFAULT_REGISTRY_NPMRC),
+    saveNpmrc: mock(async (_content: string) => ({ ok: true as const })),
+    resetNpmrc: mock(async () => DEFAULT_REGISTRY_NPMRC),
     appCommand: mock((_action: string) => {}),
     e2eRespond: mock(() => {}),
     on(name: string, listener: (payload: never) => void) {
@@ -162,7 +169,15 @@ describe("SettingsApp", () => {
     document.body.appendChild(input);
     const execute = mock((id: string) => id === "settings.set");
     const agent = createSettingsAgent({
-      state: () => ({ ready: true, tab: "general", query: "", fieldCount: 7, fontOptions: [], settings: null }),
+      state: () => ({
+        ready: true,
+        tab: "general",
+        query: "",
+        fieldCount: 7,
+        fontOptions: [],
+        settings: null,
+        npmrc: null,
+      }),
       execute,
       target: () => input,
     });
@@ -175,5 +190,30 @@ describe("SettingsApp", () => {
     expect(input.value).toBe("print");
     await expect(agent("output", {})).rejects.toThrow("The Settings window has no output");
     input.remove();
+  });
+
+  test("the NPM tab shows the .npmrc editor above its fields, and the Build tab its seven fields (ST-01)", async () => {
+    const { api } = fakeSettingsApi();
+    render(
+      <SettingsApp
+        api={api}
+        initial={defaultSettings()}
+        npmrcEditorFactory={async () => ({
+          getValue: () => "",
+          setValue: () => {},
+          onChange: () => () => {},
+          dispose: () => {},
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "NPM" }));
+    expect(await screen.findByRole("button", { name: strings.settings.npmrc.reset })).toBeTruthy();
+    expect(screen.getByLabelText("Allow Install Scripts")).toBeTruthy();
+    expect(api.getNpmrc).toHaveBeenCalledTimes(1);
+    // R27-4: the examples disclosure is shown alongside the editor.
+    expect(screen.getByText(strings.settings.npmrc.examples)).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Build" }));
+    expect(screen.getByLabelText("Pipeline Operator")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: strings.settings.npmrc.reset })).toBeNull();
   });
 });

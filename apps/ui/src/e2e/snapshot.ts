@@ -1,5 +1,13 @@
 import type { RunState } from "@jslab/rpc-schema";
-import { deriveTitle, isDirty, type Language, type Runtime, type Settings, type TabLayout } from "@jslab/shared";
+import {
+  deriveTitle,
+  isDirty,
+  type Language,
+  type Runtime,
+  type Settings,
+  type TabLayout,
+  tabLabel,
+} from "@jslab/shared";
 import { filterCounts } from "../output/filters";
 import { entryToText } from "../output/text";
 import { initialOutput, visibleEntries } from "../state/output";
@@ -8,6 +16,8 @@ import type { AppState } from "../state/store";
 export interface TabSnapshot {
   id: string;
   title: string;
+  label: string;
+  workingDirectory: string | null;
   titleIsCustom: boolean;
   language: Language;
   runtime: Runtime;
@@ -42,6 +52,11 @@ export interface UiSnapshot {
   themeId: string;
   vimMode: string | null;
   fontFallback: boolean;
+  npm: {
+    installed: { name: string; version: string | null; latest: string | null }[];
+    operations: { kind: string; target: string; status: string; errorKind: string | null; notice: string | null }[];
+    outdatedError: string | null;
+  };
 }
 
 export interface OutputSnapshotEntry {
@@ -62,6 +77,8 @@ export function snapshotState(state: AppState): UiSnapshot {
       {
         id,
         title: deriveTitle(tab, code),
+        label: tabLabel(deriveTitle(tab, code), tab.workingDirectory),
+        workingDirectory: tab.workingDirectory,
         titleIsCustom: tab.titleIsCustom,
         language: tab.language,
         runtime: tab.runtime,
@@ -99,6 +116,17 @@ export function snapshotState(state: AppState): UiSnapshot {
     themeId: state.themeId,
     vimMode: state.vimMode,
     fontFallback: state.fontFallback,
+    npm: {
+      installed: state.npm.installed.map(({ name, version, latest }) => ({ name, version, latest })),
+      operations: state.npm.operations.map((op) => ({
+        kind: op.kind,
+        target: op.target,
+        status: op.status,
+        errorKind: op.error?.kind ?? null,
+        notice: op.notice,
+      })),
+      outdatedError: state.npm.outdatedError?.kind ?? null,
+    },
   };
 }
 

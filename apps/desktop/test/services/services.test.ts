@@ -1,9 +1,16 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createTab, defaultSession, defaultSettings, sessionSchema, settingsSchema } from "@jslab/shared";
+import {
+  createTab,
+  defaultSession,
+  defaultSettings,
+  SETTINGS_VERSION,
+  sessionSchema,
+  settingsSchema,
+} from "@jslab/shared";
 import {
   consumeSafeModeFlag,
   detectSafeMode,
@@ -61,7 +68,7 @@ describe("SettingsStore", () => {
     expect(store.recovered).toBe("none");
     expect(store.current.appearance).toMatchObject({ theme: "graphite", fontSize: 16 });
     expect(store.current.run.autoRun).toBe(false);
-    expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).version).toBe(2);
+    expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).version).toBe(SETTINGS_VERSION);
   });
 
   test("reset restores defaults, persists them and notifies listeners", async () => {
@@ -123,6 +130,33 @@ describe("SettingsStore", () => {
     await store.update({ view: { statusBar: false } });
     expect(store.current.view.statusBar).toBe(false);
     expect(await readFile(join(dir, "settings.json"), "utf8")).toBe(text);
+  });
+
+  test("a hung write times out and is reported, later updates still land, and the late write never commits (RR1-m2)", async () => {
+    const { writeFileAtomic } = await import("../../src/main/persistence/atomic-write");
+    const errors: unknown[] = [];
+    let calls = 0;
+    let releaseFirst: () => void = () => {};
+    // The first write's own promise, so the test waits for it to finish instead of sleeping.
+    let firstWrite: Promise<void> = Promise.resolve();
+    const store = await SettingsStore.open(dir, {
+      writeTimeoutMs: 250,
+      onWriteError: (error) => errors.push(error),
+      write: (path, data, options) => {
+        calls++;
+        if (calls !== 1) return writeFileAtomic(path, data, options);
+        firstWrite = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        }).then(() => writeFileAtomic(path, data, options));
+        return firstWrite;
+      },
+    });
+    await expect(store.update({ appearance: { uiScale: 1.25 } })).rejects.toThrow("did not finish within 250 ms");
+    expect(await store.update({ appearance: { uiScale: 1.5 } })).toBe(store.current);
+    releaseFirst();
+    await firstWrite;
+    expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).appearance.uiScale).toBe(1.5);
+    expect(errors).toHaveLength(1);
   });
 });
 
@@ -194,6 +228,17 @@ describe("SessionStore", () => {
     expect(store.recovered).not.toBe("none");
     const onDisk = JSON.parse(await readFile(join(dir, "session.json"), "utf8"));
     expect(sessionSchema.parse(onDisk)).toEqual(onDisk);
+  });
+
+  test("the session is serialized when it is written, so every commit before the write lands (FA-m9)", async () => {
+    const store = await openSession({ delayMs: 10_000 });
+    const id = store.session.activeTabId;
+    const stringify = spyOn(JSON, "stringify");
+    for (let i = 0; i < 50; i++) store.setViewState(id, { scrollTop: i });
+    expect(stringify).not.toHaveBeenCalled();
+    stringify.mockRestore();
+    await store.flush();
+    expect(JSON.parse(await readFile(join(dir, "session.json"), "utf8")).tabs[id].viewState).toEqual({ scrollTop: 49 });
   });
 });
 

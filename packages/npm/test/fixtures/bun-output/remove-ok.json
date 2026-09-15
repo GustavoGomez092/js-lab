@@ -1,0 +1,8 @@
+{
+  "name": "remove-ok",
+  "argv": ["remove", "fixture-outdated"],
+  "exitCode": 0,
+  "stdout": "bun remove v1.4.0 (<rev>)\n\n- fixture-outdated\n1 package removed [<ms>]\n",
+  "stderr": "Saved lockfile\n",
+  "bunVersion": "1.4.0"
+}

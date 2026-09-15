@@ -1,22 +1,44 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RawRunEvent, RunnerToMain } from "@jslab/rpc-schema";
 import type { Subprocess } from "bun";
 
 const BOOTSTRAP = join(import.meta.dir, "../src/bootstrap.ts");
+// R-M3-T17-ESC-1: build test source newlines this way, never a "\n" escape typed through a tool parameter.
+const NL = String.fromCharCode(10);
 
 let dir = "";
 const procs: Subprocess[] = [];
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "jslab-bootstrap-"));
+  // FLAKE-8 (flake-8-analysis.md): realpath removes the macOS /var symlink form. Bun 1.4.0's resolver can
+  // report "Cannot find module" for a file written into a directory it already scanned (here, the runner's
+  // own cwd at startup) when the import path goes through that symlink. Bun 1.3.13 never fails either way.
+  dir = await realpath(await mkdtemp(join(tmpdir(), "jslab-bootstrap-")));
 });
 afterEach(async () => {
   for (const proc of procs.splice(0)) proc.kill("SIGKILL");
   await rm(dir, { recursive: true, force: true });
 });
+
+// FLAKE-8: if the runner's own entry fails to resolve, fail fast with a diagnostic that names itself instead of
+// looking like a timeout or an "aborted work" failure (flake-8-analysis.md, flake-8-brief.md Part 1.3).
+function checkFlake8(messages: RunnerToMain[], entry: string, runnerDir: string) {
+  if (!entry) return;
+  const base = entry.slice(entry.lastIndexOf("/") + 1);
+  for (const m of messages) {
+    if (m.type !== "events") continue;
+    for (const e of m.events) {
+      if (e.kind === "error" && e.name === "ResolveMessage" && e.message.includes(base)) {
+        throw new Error(
+          `FLAKE-8: the runner could not import its entry; entry=${entry}; dir=${runnerDir}; messages=${JSON.stringify(messages)}`,
+        );
+      }
+    }
+  }
+}
 
 function startRunner() {
   const messages: RunnerToMain[] = [];
@@ -30,21 +52,29 @@ function startRunner() {
     serialization: "json",
   });
   procs.push(proc);
+  let lastEntry = "";
   const until = async (predicate: (message: RunnerToMain) => boolean, timeoutMs = 5000) => {
     const started = Date.now();
     while (!messages.some(predicate)) {
+      checkFlake8(messages, lastEntry, dir);
       if (Date.now() - started > timeoutMs) throw new Error(`timed out; received ${JSON.stringify(messages)}`);
       await Bun.sleep(10);
     }
   };
   const events = (): RawRunEvent[] => messages.flatMap((m) => (m.type === "events" ? m.events : []));
   const run = async (source: string) => {
-    const entry = join(dir, `entry-${crypto.randomUUID()}.mjs`);
+    // Production layout (run-coordinator.ts): entries live under runs/<tabId>, a subfolder the runner never
+    // scans at startup, never directly in the runner's own cwd (removes FLAKE-8 condition 1).
+    const entryDir = join(dir, "runs", "t1");
+    await mkdir(entryDir, { recursive: true });
+    const entry = join(entryDir, `entry-${crypto.randomUUID()}.mjs`);
     await Bun.write(entry, source);
+    lastEntry = entry;
     await until((m) => m.type === "ready");
     proc.send({ type: "run", runId: "run-1", entry, settings: { maxEntries: 100 } });
   };
-  return { proc, messages, until, events, run };
+  const entry = () => lastEntry;
+  return { proc, messages, until, events, run, entry };
 }
 
 test("reports ready with its Bun version and sends heartbeats", async () => {
@@ -176,7 +206,12 @@ test("an error's name and message are capped in bytes and marked as cut", async 
 
 test("stop does not report errors from work it aborted", async () => {
   let requests = 0;
+  // H3 hardening (flake-2-analysis.md): bind loopback explicitly. `port: 0` with no hostname binds an
+  // IPv6 dual-stack wildcard; an IPv4-only listener elsewhere could then shadow it. Binding 127.0.0.1
+  // explicitly matches the entry's connect address and fails loudly at startup if the port is taken,
+  // instead of silently handing this server's traffic to another listener.
   const server = Bun.serve({
+    hostname: "127.0.0.1",
     port: 0,
     fetch: (_req) => {
       requests++;
@@ -186,12 +221,28 @@ test("stop does not report errors from work it aborted", async () => {
   try {
     const port = server.port;
     const runner = startRunner();
-    const source = `fetch("http://127.0.0.1:${port}/a").then(() => {});\nawait fetch("http://127.0.0.1:${port}/b");\nexport {};\n`;
+    // The marker fires before either fetch call. Its presence in runner.messages on a failure separates
+    // "the run never started" (H2, marker absent) from "the fetch stalled" (H1, marker present, no error).
+    const source = `console.log("jslab-flake2-before-fetch");\nfetch("http://127.0.0.1:${port}/a").then(() => {});\nawait fetch("http://127.0.0.1:${port}/b");\nexport {};\n`;
     await runner.run(source);
-    // Wait until the server has received 2 requests
+    // Wait until the server has received 2 requests. Stop early with a diagnostic, instead of waiting out
+    // the full budget, if the run reports an error or reaches a terminal state first (H4): the original
+    // poll only checked `requests`, so a fetch that failed immediately still read as a 5s hang.
     const started = Date.now();
     while (requests < 2) {
-      if (Date.now() - started > 5000) throw new Error(`timed out; requests=${requests}`);
+      checkFlake8(runner.messages, runner.entry(), dir);
+      const errors = runner.events().filter((e) => e.kind === "error");
+      const settledEarly = runner.messages.some(
+        (m) => m.type === "state" && (m.state === "idle" || m.state === "stopped"),
+      );
+      if (errors.length > 0 || settledEarly) {
+        throw new Error(
+          `run settled before 2 requests arrived; requests=${requests}; messages=${JSON.stringify(runner.messages)}`,
+        );
+      }
+      if (Date.now() - started > 5000) {
+        throw new Error(`timed out; requests=${requests}; messages=${JSON.stringify(runner.messages)}`);
+      }
       await Bun.sleep(10);
     }
     runner.proc.send({ type: "stop" });
@@ -201,7 +252,7 @@ test("stop does not report errors from work it aborted", async () => {
   } finally {
     server.stop(true);
   }
-});
+}, 20000);
 
 test("the runner exits when its parent dies", async () => {
   const bootstrapPath = JSON.stringify(BOOTSTRAP);
@@ -321,3 +372,42 @@ test("events pushed right before process.exit still reach Main (final review M5)
     args: [{ t: "string", v: "last words" }],
   });
 });
+
+test("a caught process.exit ends the run: no later output, later timers are disposed, and the runner exits (FW1)", async () => {
+  const runner = startRunner();
+  const source =
+    [
+      "try { process.exit(0) } catch {}",
+      'console.log("after exit");',
+      'setInterval(() => console.log("tick"), 5);',
+      "export {};",
+    ].join(NL) + NL;
+  await runner.run(source);
+  // The runner's own drain fallback is 2 s; 4 s leaves margin on a loaded machine.
+  const exited = await Promise.race([runner.proc.exited.then(() => true), Bun.sleep(4000).then(() => false)]);
+  expect(exited).toBe(true);
+  expect(runner.messages.find((m) => m.type === "exitRequested")).toMatchObject({ runId: "run-1", code: 0 });
+  const texts = runner
+    .events()
+    .flatMap((event) => (event.kind === "console" ? event.args.map((arg) => String((arg as { v?: unknown }).v)) : []));
+  expect(texts).not.toContain("after exit");
+  expect(texts).not.toContain("tick");
+}, 15000);
+
+test("a caught process.exit with a non-integer or negative code still exits, reporting the real exit status (FW1)", async () => {
+  const nanRunner = startRunner();
+  const nanSource = ["try { process.exit(NaN) } catch {}", "export {};"].join(NL) + NL;
+  await nanRunner.run(nanSource);
+  const nanExited = await Promise.race([nanRunner.proc.exited.then(() => true), Bun.sleep(4000).then(() => false)]);
+  expect(nanExited).toBe(true);
+  expect(nanRunner.messages.find((m) => m.type === "exitRequested")).toMatchObject({ code: 1 });
+  expect(nanRunner.proc.exitCode).toBe(1);
+
+  const negRunner = startRunner();
+  const negSource = ["try { process.exit(-1) } catch {}", "export {};"].join(NL) + NL;
+  await negRunner.run(negSource);
+  const negExited = await Promise.race([negRunner.proc.exited.then(() => true), Bun.sleep(4000).then(() => false)]);
+  expect(negExited).toBe(true);
+  expect(negRunner.messages.find((m) => m.type === "exitRequested")).toMatchObject({ code: 255 });
+  expect(negRunner.proc.exitCode).toBe(255);
+}, 15000);

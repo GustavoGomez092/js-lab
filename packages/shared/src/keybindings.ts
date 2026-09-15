@@ -202,6 +202,7 @@ export const DEFAULT_KEYBINDINGS: readonly KeybindingRule[] = [
   { key: "alt+cmd+l", command: "run.toggleAutoLog" },
   { key: "alt+shift+f", command: "format.document" },
   { key: "cmd+k", command: "output.clear" },
+  { key: "cmd+i", command: "tools.npmPackages" },
   { key: "cmd+/", command: "edit.toggleLineComment", when: editor },
   { key: "cmd+alt+/", command: "edit.toggleBlockComment", when: editor },
   { key: "cmd+alt+shift+/", command: "edit.toggleMagicComment", when: editor },

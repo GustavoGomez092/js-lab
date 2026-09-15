@@ -1,10 +1,10 @@
-import { LANGUAGES, RUNTIMES, type SettingKey, UI_LANGUAGES } from "@jslab/shared";
+import { DECORATOR_MODES, LANGUAGES, RUNTIMES, type SettingKey, UI_LANGUAGES } from "@jslab/shared";
 import { strings } from "../strings";
 
-export type SettingsTab = "general" | "editor" | "formatting" | "appearance" | "advanced";
+export type SettingsTab = "general" | "editor" | "formatting" | "appearance" | "npm" | "build" | "advanced";
 
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = (
-  ["general", "editor", "formatting", "appearance", "advanced"] as const
+  ["general", "editor", "formatting", "appearance", "npm", "build", "advanced"] as const
 ).map((id) => ({ id, label: strings.settings.tabs[id] }));
 
 export type FieldKind =
@@ -80,6 +80,17 @@ export const SETTINGS_FIELDS: FieldDef[] = [
   { key: "view.layout", tab: "appearance", kind: choices(o.layout) },
   { key: "output.highlighting", tab: "appearance", kind: bool },
   { key: "output.showLineNumbers", tab: "appearance", kind: bool },
+
+  { key: "npm.allowInstallScripts", tab: "npm", kind: bool },
+  { key: "npm.autoInstallTypes", tab: "npm", kind: bool },
+
+  { key: "build.decorators", tab: "build", kind: choices(o.decorators, DECORATOR_MODES) },
+  { key: "build.pipelineOperator", tab: "build", kind: bool },
+  { key: "build.doExpressions", tab: "build", kind: bool },
+  { key: "build.throwExpressions", tab: "build", kind: bool },
+  { key: "build.functionSent", tab: "build", kind: bool },
+  { key: "build.regexpModifiers", tab: "build", kind: bool },
+  { key: "build.optionalChainingAssign", tab: "build", kind: bool },
 
   { key: "run.showUndefined", tab: "advanced", kind: bool },
   { key: "run.loopProtection", tab: "advanced", kind: bool },

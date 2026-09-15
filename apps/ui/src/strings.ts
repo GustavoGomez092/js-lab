@@ -1,5 +1,15 @@
 /** Every user-visible UI string added from M2 on, kept in one place for M5 i18n extraction (spec §17). */
+const NL = String.fromCharCode(10);
+
 export const strings = {
+  install: {
+    /** Spec §6.3. */
+    package: (name: string) => `Install package ${name}`,
+    types: (name: string) => `Install ${name}`,
+    /** R23-1: shown in the status bar right after npm.install dispatches. */
+    started: (spec: string, keys: string | null) =>
+      keys ? `Installing ${spec}… ${keys} shows progress.` : `Installing ${spec}…`,
+  },
   commands: {
     failed: (title: string, error: unknown) =>
       `${title} failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -7,6 +17,7 @@ export const strings = {
     loopLimit: (limit: number) => `limit ${limit}`,
     current: "current",
     copyFailed: "Couldn't copy the output to the clipboard.",
+    folder: (name: string) => `folder: ${name}`,
   },
   limits: {
     tooLarge: "This tab is larger than 64 MB. JSLab stops saving and running it until it's smaller.",
@@ -61,7 +72,9 @@ export const strings = {
     location: (path: string) => `Save as ${path}?`,
     notText: (name: string) => `${name} isn't a text file.`,
     tooLarge: (name: string) => `${name} is larger than 50 MB and can't be opened.`,
-    folderDrop: "Dropping a folder sets the working directory, which arrives with working directories.",
+    // Branch B (R-M3-SPIKE-1 NO-GO): a dropped folder can't carry its path into the webview on Electrobun 2.0.1.
+    folderDrop:
+      "A dropped folder can't become the working directory here. Use Actions → Set Working Directory… or the status bar.",
   },
   fonts: {
     fallback: (font: string) => `Font "${font}" isn't available; using JetBrains Mono.`,
@@ -88,6 +101,15 @@ export const strings = {
     cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
     runtime: "Runtime",
     language: "Language",
+    workingDirectory: {
+      // R24-1: the ellipsis signals that this opens a picker and matches the menu title.
+      set: "Set Working Directory…",
+      setHelp: "Run this tab in a folder: relative imports, .env and node_modules resolve there.",
+      change: (path: string) => `Working directory: ${path}. Change…`,
+      // R24-2: the chip keeps naming the problem and its fix after the output that reported it scrolls away.
+      missing: (path: string) => `Working directory not found: ${path}. Change…`,
+      clear: "Clear Working Directory",
+    },
     /** A button's tooltip with its shortcut, when it has one (FB-m3). */
     withKeys: (label: string, keys: string | null) => (keys ? `${label} (${keys})` : label),
     dismiss: (message: string) => `Dismiss: ${message}`,
@@ -131,6 +153,7 @@ export const strings = {
       edit: "Edit",
       format: "Format",
       view: "View",
+      tools: "Tools",
       runtime: "Runtime",
       language: "Language",
       theme: "Theme",
@@ -169,6 +192,134 @@ export const strings = {
     /** A clickable stack-frame line (RR2-m5). */
     frame: (fn: string, line: number, column: number) => `at ${fn} (L${line}:${column})`,
     anonymous: "<anonymous>",
+    /** Spec §6.3: a runtime module-not-found error offers to install the missing package. */
+    installPackage: (name: string) => `Install ${name}`,
+    /** Spec §12.2: a WorkingDirectoryError row offers to change the working directory. */
+    changeWorkingDirectory: "Change…",
+    /** R24-4: a relative module-not-found row offers to set a working directory when the tab has none. */
+    setWorkingDirectory: "Set Working Directory…",
+  },
+  env: {
+    title: "Environment Variables",
+    help: "Every tab uses these variables. Paste a .env file into Key to add several at once. Changes apply from the next run.",
+    key: "Key",
+    value: "Value",
+    keyOf: (row: number) => `Key, row ${row}`,
+    valueOf: (key: string) => `Value of ${key}`,
+    reveal: (key: string) => `Show value of ${key}`,
+    hide: (key: string) => `Hide value of ${key}`,
+    remove: (key: string) => `Remove ${key}`,
+    // Fix round 1 (M-6): New value is masked by default, with its own toggle (no key to name yet).
+    revealNew: "Show new value",
+    hideNew: "Hide new value",
+    newKey: "New key",
+    newValue: "New value",
+    add: "Add",
+    save: "Save",
+    cancel: "Cancel",
+    // R25-6: the reveal button's visible word, with the keycap glyphs kept out of the accessible name.
+    showButton: "Show",
+    hideButton: "Hide",
+    empty: "No variables yet. Type a key below, or paste a .env file.",
+    // R25-2: a failed load disables Save, so a transient read failure can't wipe every saved variable.
+    loadFailed:
+      "Couldn't read your saved variables, so Save is off to protect them. Close this sheet and open it again.",
+    saveFailed: (error: string) => `Couldn't save env.json (${error}). Your changes are still here.`,
+    // R25-5: states the "next run" effect, since env changes have no other visible effect.
+    saved: (count: number) =>
+      count === 0
+        ? "Removed all environment variables. The next run starts without them."
+        : `Saved ${count} environment variable${count === 1 ? "" : "s"}. The next run uses them.`,
+    // R25-3: shown after a .env block is pasted into New key.
+    pasted: (count: number) =>
+      `Added ${count} variable${count === 1 ? "" : "s"} from the paste. Check them, then Save.`,
+    // R-M3-T25-SAVE-1: the client-side limit checks that mirror @jslab/shared's envVarsSchema.
+    tooMany: (max: number) => `At most ${max} environment variables. Remove some before saving.`,
+    valueTooLong: (key: string, max: number) => `${key}'s value is longer than ${max} characters.`,
+    errors: {
+      invalidKey: "Use letters, digits and _, and don't start with a digit.",
+      duplicateKey: "Another row already uses this key.",
+    },
+  },
+  npm: {
+    title: "NPM Packages",
+    searchLabel: "Search npm packages",
+    searchPlaceholder: "Search npm, or type name@version",
+    weekly: (count: number) => `${count.toLocaleString("en-US")} weekly downloads`,
+    add: (name: string) => `Add ${name}`,
+    addButton: "Add",
+    // R26-3: a result with a pending install shows this instead of Add.
+    adding: "Adding…",
+    // R26-2: a result already in the installed table shows this instead of Add.
+    installedVersion: (version: string) => `Installed ${version}`,
+    name: "Name",
+    version: "Installed",
+    latest: "Latest",
+    update: (name: string) => `Update ${name}`,
+    updateButton: "Update",
+    remove: (name: string) => `Remove ${name}`,
+    updateAll: "Update All",
+    // R26-1: the toolbar's Update All tooltip, distinct from its (unchanged) accessible name.
+    updateAllTitle: (count: number, majors: number) =>
+      `Update ${count} package${count === 1 ? "" : "s"} to their latest versions${
+        majors > 0 ? `, including ${majors} major update${majors === 1 ? "" : "s"}` : ""
+      }.`,
+    showTypes: "Show @types",
+    allowScripts: "Allow install scripts",
+    // R26-5: shown only once the first list has loaded, so a load-in-progress sheet never flashes "no packages".
+    none: "No packages yet. Search above, or type name@version and press Return.",
+    noResults: (query: string) => `No packages match "${query}".`,
+    typesHidden: (count: number) => `${count} @types package${count === 1 ? "" : "s"} hidden.`,
+    log: "Log",
+    // R26-3 adds a `queued` count; do-not-change list R-M3: this is one of the two allowed signature changes.
+    running: (kind: string, target: string, queued: number) => {
+      const verb =
+        kind === "remove" ? "Removing" : kind === "update" || kind === "updateAll" ? "Updating" : "Installing";
+      const subject = kind === "updateAll" ? "all packages" : target;
+      return `${verb} ${subject}…${queued > 0 ? ` ${queued} more queued.` : ""}`;
+    },
+    // R26-3: shown in the affected row's Latest cell while that row has a queued or running operation.
+    rowStatus: (kind: string, status: string) => {
+      if (status === "queued") return "Queued";
+      return kind === "remove" ? "Removing…" : kind === "update" || kind === "updateAll" ? "Updating…" : "Installing…";
+    },
+    // R26-4 adds `kind`; do-not-change list R-M3: the second of the two allowed signature changes.
+    failed: (kind: string, target: string) =>
+      kind === "updateAll"
+        ? "Couldn't update all packages."
+        : `Couldn't ${kind === "remove" ? "remove" : kind === "update" ? "update" : "install"} ${target}.`,
+    // R26-4: the failure-card action row.
+    retry: "Retry",
+    allowAndRetry: "Allow Scripts and Retry",
+    copyLog: "Copy Log",
+    dismiss: "Dismiss",
+    scriptBlocked:
+      "Installed without running install scripts. To run them, turn on Allow install scripts and install again.",
+    // R26-1: the Major badge and its tooltip.
+    major: "Major",
+    majorTitle: (name: string, from: string | null, to: string | null) =>
+      `${name} ${from ?? "?"} → ${to ?? "?"} is a major update and may include breaking changes.`,
+    // R26-1: "Checked N min ago", above the installed table.
+    checkedAgo: (minutes: number) => `Checked for updates ${minutes < 1 ? "just now" : `${minutes} min ago`}`,
+    // R26-6: reported in the status bar when a finished operation's sheet isn't open to show it inline.
+    done: (kind: string, target: string, keys: string | null) => {
+      const verb = kind === "remove" ? "Removed" : kind === "update" || kind === "updateAll" ? "Updated" : "Installed";
+      const subject = kind === "updateAll" ? "all packages" : target;
+      return `${verb} ${subject}.${keys ? ` Press ${keys} to run again.` : ""}`;
+    },
+    doneFailed: (kind: string, target: string, hint: string) => `${strings.npm.failed(kind, target)} ${hint}`,
+    outdatedFailed: (hint: string) => `Couldn't check for updates. ${hint}`,
+    hints: {
+      network: "Check your connection and the registry in Settings → NPM.",
+      notFound: "The registry has no package with this name. Check the spelling.",
+      noMatchingVersion: "No published version matches. Try name@latest.",
+      peerConflict: "It needs a different version of a package you already have. The log names it.",
+      scriptBlocked: "Install scripts were blocked. Turn on Allow install scripts.",
+      nativeBuild: "A native module failed to build. See the log for the compiler error.",
+      disk: "JSLab couldn't write the packages folder. Check disk space and permissions.",
+      timeout: "Stopped after 5 minutes. Check your connection, then retry.",
+      unknown: "Open the log below to see what Bun reported.",
+    },
   },
   settings: {
     windowTitle: "Settings",
@@ -180,6 +331,8 @@ export const strings = {
       editor: "Editor",
       formatting: "Formatting",
       appearance: "Appearance",
+      npm: "NPM",
+      build: "Build",
       advanced: "Advanced",
     },
     groups: {
@@ -196,6 +349,28 @@ export const strings = {
     confirmReset: "Confirm Reset",
     restartSafeMode: "Restart in Safe Mode",
     loadFailed: (message: string) => `Settings failed to load: ${message}`,
+    npmrc: {
+      title: ".npmrc",
+      help: "Registry and authentication for package installs. Your ~/.npmrc is never used.",
+      privacyNote: "This file is readable only by you, and tokens never appear in JSLab's logs.",
+      editorLabel: ".npmrc contents",
+      save: "Save",
+      reset: "Reset",
+      saved: "Saved .npmrc",
+      resetDone: "Restored the default registry",
+      resetFailed: "Couldn't reset .npmrc.",
+      loadFailed: "Couldn't read .npmrc",
+      saveFailed: (code: string | null) =>
+        code
+          ? `Couldn't save .npmrc (${code}). Your changes are still here.`
+          : "Couldn't save .npmrc. Your changes are still here.",
+      examples: "Examples",
+      exampleText: `@acme:registry=https://npm.acme.dev/${NL}//npm.acme.dev/:_authToken=<token>`,
+      warnings: {
+        missingEquals: (line: number) => `Line ${line}: missing "=".`,
+        registryNotUrl: (line: number) => `Line ${line}: registry isn't a web address.`,
+      },
+    },
     fields: {
       "run.autoRun": { label: "Auto Run", help: "Run code automatically as you type." },
       "run.autoLog": { label: "Auto Log", help: "Show the value of each top-level expression." },
@@ -305,6 +480,33 @@ export const strings = {
         label: "Update Channel",
         help: "Stable releases, or canary builds with the newest changes.",
       },
+      "npm.allowInstallScripts": {
+        label: "Allow Install Scripts",
+        help: "Run packages' install scripts. Each package is added to trustedDependencies; scripts run with your permissions. Applies to future installs. Packages you already trusted keep running their install scripts.",
+      },
+      "npm.autoInstallTypes": {
+        label: "Install Types Automatically",
+        help: "Install @types/<package> automatically when an installed package has no types of its own.",
+      },
+      "build.decorators": {
+        label: "Decorators",
+        help: "Decorator syntax: 2023-11 (the standard), Legacy (TypeScript experimentalDecorators) or None.",
+      },
+      "build.pipelineOperator": { label: "Pipeline Operator", help: "Hack-style |> with % as the topic token." },
+      "build.doExpressions": { label: "Do Expressions", help: "do { … } blocks that produce a value." },
+      "build.throwExpressions": {
+        label: "Throw Expressions",
+        help: "throw as an expression, for example value ?? throw new Error().",
+      },
+      "build.functionSent": { label: "function.sent", help: "The value last passed to a generator's next()." },
+      "build.regexpModifiers": {
+        label: "RegExp Modifiers",
+        help: "Inline flags such as (?i:a) in regular expressions.",
+      },
+      "build.optionalChainingAssign": {
+        label: "Optional Chaining Assignment",
+        help: "a?.b = c assigns only when a is not null or undefined.",
+      },
     } as Record<string, { label: string; help: string }>,
     options: {
       runtime: { "browser-node": "Browser & Node APIs", bun: "Bun", browser: "Browser" },
@@ -315,6 +517,7 @@ export const strings = {
       arrowParens: { always: "Always", avoid: "Avoid" },
       layout: { horizontal: "Horizontal", vertical: "Vertical" },
       channel: { stable: "Stable", canary: "Canary" },
+      decorators: { none: "None", "2023-11": "2023-11 (standard)", legacy: "Legacy (experimentalDecorators)" },
     },
   },
 } as const;

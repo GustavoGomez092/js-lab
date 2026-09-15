@@ -6,17 +6,30 @@ import { strings } from "../strings";
 import { applyThemeVariables } from "../themes/apply";
 import { BUNDLED_FONTS } from "../themes/fonts";
 import { coerceFieldValue, type FieldDef, fieldsFor, SETTINGS_TABS, type SettingsTab } from "./fields";
+import { type CreateTextEditor, NpmrcEditor, type NpmrcEditorHandle } from "./NpmrcEditor";
 import { createSettingsAgent } from "./settings-agent";
 import type { SettingsApi } from "./settings-rpc";
 
 type FontsState = { fonts: SystemFontList | null; refreshing: boolean };
 
-export function SettingsApp({ api, initial, e2e = false }: { api: SettingsApi; initial: Settings; e2e?: boolean }) {
+export function SettingsApp({
+  api,
+  initial,
+  e2e = false,
+  npmrcEditorFactory,
+}: {
+  api: SettingsApi;
+  initial: Settings;
+  e2e?: boolean;
+  /** Tests pass a fake editor; the app uses Monaco (loaded lazily). */
+  npmrcEditorFactory?: CreateTextEditor;
+}) {
   const [settings, setSettings] = useState(initial);
   const [tab, setTab] = useState<SettingsTab>("general");
   const [query, setQuery] = useState("");
   const [fonts, setFonts] = useState<FontsState>({ fonts: null, refreshing: true });
   const [confirmReset, setConfirmReset] = useState(false);
+  const npmrc = useRef<NpmrcEditorHandle | null>(null);
   const snapshot = useRef({ settings, tab, query, fonts });
   snapshot.current = { settings, tab, query, fonts };
 
@@ -81,6 +94,9 @@ export function SettingsApp({ api, initial, e2e = false }: { api: SettingsApi; i
         fieldCount: fieldsFor(snapshot.current.query ? null : snapshot.current.tab, snapshot.current.query).length,
         fontOptions: fontOptionNames(snapshot.current.fonts.fonts),
         settings: snapshot.current.settings,
+        npmrc: npmrc.current
+          ? { content: npmrc.current.content(), dirty: npmrc.current.dirty(), status: npmrc.current.status() }
+          : null,
       }),
       execute: (id, args) => {
         if (id === "settings.set") {
@@ -94,6 +110,18 @@ export function SettingsApp({ api, initial, e2e = false }: { api: SettingsApi; i
         }
         if (id === "settings.resetAll") {
           api.appCommand("resetSettings");
+          return true;
+        }
+        if (id === "npmrc.set" && npmrc.current) {
+          npmrc.current.set(String((args as { content?: unknown }).content ?? ""));
+          return true;
+        }
+        if (id === "npmrc.save" && npmrc.current) {
+          void npmrc.current.save();
+          return true;
+        }
+        if (id === "npmrc.reset" && npmrc.current) {
+          void npmrc.current.reset();
           return true;
         }
         return false;
@@ -143,6 +171,15 @@ export function SettingsApp({ api, initial, e2e = false }: { api: SettingsApi; i
           onChange={(event) => setQuery(event.target.value)}
         />
         <h1>{query ? strings.settings.results : strings.settings.tabs[tab]}</h1>
+        {!query && tab === "npm" && (
+          <NpmrcEditor
+            api={api}
+            {...(npmrcEditorFactory ? { createEditor: npmrcEditorFactory } : {})}
+            onReady={(handle) => {
+              npmrc.current = handle;
+            }}
+          />
+        )}
         <div className="settings-fields">
           {visible.map((field) => (
             <FieldRow

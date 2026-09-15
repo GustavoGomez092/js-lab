@@ -1,7 +1,8 @@
-import { mkdir, readdir, unlink } from "node:fs/promises";
+import { mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { EncodedValue, RunEvent, RunnerToMain, RunState } from "@jslab/rpc-schema";
-import type { Diagnostic, Language, TransformOptions, TransformResult } from "@jslab/transform";
+import type { BuildOptions, Diagnostic, Language, TransformOptions, TransformResult } from "@jslab/transform";
+import { strings } from "../strings";
 import type { BunRunnerProcess } from "./bun-runner-process";
 import { createEventMapper } from "./event-mapper";
 
@@ -10,6 +11,10 @@ export interface RunStartRequest {
   code: string;
   language: Language;
   logpoints: number[];
+  /** The tab's working directory, or null (spec §5.3). */
+  workingDirectory?: string | null;
+  /** `__filename`'s base name (scriptFileName). */
+  scriptName?: string;
 }
 
 export interface RunnerSettings {
@@ -18,6 +23,7 @@ export interface RunnerSettings {
   loopProtectionMaxIterations: number;
   maxEntries: number;
   unresponsiveTimeoutMs: number;
+  build?: BuildOptions;
 }
 
 export interface RunCoordinatorDeps {
@@ -33,6 +39,8 @@ export interface RunCoordinatorDeps {
   stopGraceMs?: number;
   idleRunnerTtlMs?: number;
   expandTimeoutMs?: number;
+  directoryExists?(path: string): Promise<boolean>;
+  exitGraceMs?: number;
 }
 
 interface ActiveRun {
@@ -44,6 +52,8 @@ interface ActiveRun {
   expectedExit: boolean;
   stopTimer?: ReturnType<typeof setTimeout>;
   idleTimer?: ReturnType<typeof setTimeout>;
+  exitTimer?: ReturnType<typeof setTimeout>;
+  exitRequestedCode?: number;
   unsubscribe?: () => void;
   // Last known activeHandles, and the state to restore when recovering from "unresponsive" (I5): the run may have
   // gone unresponsive from "settled", not just "evaluating".
@@ -58,6 +68,20 @@ const STOPPABLE_STATES: ReadonlySet<RunState> = new Set(["transpiling", "evaluat
 
 /** Maximum events per `run.events` message sent to the UI (spec §4.2, verified by M0-S7). */
 const UI_BATCH_EVENTS = 200;
+
+/** The error name of a run whose working directory is gone; the UI offers Change… for it (spec §12.2). */
+export const WORKING_DIRECTORY_ERROR = "WorkingDirectoryError";
+
+/** How long Main waits after exitRequested before ending a runner that didn't exit (the runner's own drain is 2 s). */
+export const EXIT_KILL_GRACE_MS = 2500;
+
+async function directoryExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 export class RunCoordinator {
   readonly #runs = new Map<string, ActiveRun>();
@@ -163,6 +187,11 @@ export class RunCoordinator {
 
   async #execute(run: ActiveRun, request: RunStartRequest): Promise<void> {
     try {
+      const workingDirectory = request.workingDirectory ?? null;
+      if (workingDirectory && !(await (this.deps.directoryExists ?? directoryExists)(workingDirectory))) {
+        this.#failWorkingDirectory(run, workingDirectory);
+        return;
+      }
       const settings = this.deps.settings();
       const result = await this.deps.transform(request.code, {
         language: request.language,
@@ -170,6 +199,15 @@ export class RunCoordinator {
         loopProtection: settings.loopProtection,
         loopProtectionMaxIterations: settings.loopProtectionMaxIterations,
         logpoints: request.logpoints,
+        ...(settings.build ? { build: settings.build } : {}),
+        ...(workingDirectory
+          ? {
+              workingDirectory: {
+                dir: workingDirectory,
+                filename: join(workingDirectory, request.scriptName ?? "Untitled.ts"),
+              },
+            }
+          : {}),
       });
       if (!this.#isCurrent(run)) return;
       this.deps.onDiagnostics(run.tabId, run.runId, result.diagnostics);
@@ -210,6 +248,14 @@ export class RunCoordinator {
         this.#runnerError(run, `Runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
         return;
       }
+      // Fail closed (M-3): a folder deleted after the check makes the runner config fall back to the data folder, and
+      // user code must never run (or write relative files) there. Test fakes have no `cwd`, hence the typeof guard.
+      if (workingDirectory && typeof runner.cwd === "string" && runner.cwd !== workingDirectory) {
+        run.expectedExit = true;
+        runner.kill();
+        this.#failWorkingDirectory(run, workingDirectory);
+        return;
+      }
       if (!this.#isCurrent(run)) {
         runner.kill();
         return;
@@ -243,12 +289,18 @@ export class RunCoordinator {
     }
     if (!this.#isCurrent(run)) return;
     switch (message.type) {
+      case "exitRequested":
+        run.exitRequestedCode = message.code;
+        clearTimeout(run.exitTimer);
+        run.exitTimer = setTimeout(() => run.runner?.kill(), this.deps.exitGraceMs ?? EXIT_KILL_GRACE_MS);
+        return;
       case "heartbeat":
         if (run.state === "unresponsive") this.#setState(run, run.resumeState ?? "evaluating", run.activeHandles);
         return;
       case "events": {
         // Output from code that resumed after Stop (or from a killed runner's last gasp) is never shown (I1).
-        if (run.state === "stopped" || run.state === "killed") return;
+        // FW1: output after a caught process.exit is dropped too (the runner's buffer is already closed).
+        if (run.state === "stopped" || run.state === "killed" || run.exitRequestedCode !== undefined) return;
         // Re-batch for the UI (spec §4.2): at most 200 events per run.events message, whatever the runner sent.
         const events = message.events.map(mapper);
         for (let i = 0; i < events.length; i += UI_BATCH_EVENTS) {
@@ -276,9 +328,14 @@ export class RunCoordinator {
     }
   }
 
-  #onRunnerExit(run: ActiveRun, code: number | null, signal: string | null = null): void {
+  #onRunnerExit(run: ActiveRun, exitCode: number | null, exitSignal: string | null = null): void {
     clearTimeout(run.stopTimer);
     clearTimeout(run.idleTimer);
+    clearTimeout(run.exitTimer);
+    // FW1: a runner Main ended after exitRequested reports the code user code asked for.
+    const endedAfterExit = run.exitRequestedCode !== undefined && exitSignal === "SIGKILL";
+    const code = endedAfterExit ? (run.exitRequestedCode as number) : exitCode;
+    const signal = endedAfterExit ? null : exitSignal;
     // A dead runner can't answer: settle its pending expands now instead of after the expand timeout.
     for (const pending of [...this.#pendingExpands.values()]) {
       if (pending.runner === run.runner) pending.settle(null);
@@ -347,9 +404,31 @@ export class RunCoordinator {
     previous.expectedExit = true;
     clearTimeout(previous.stopTimer);
     clearTimeout(previous.idleTimer);
+    clearTimeout(previous.exitTimer);
     previous.unsubscribe?.();
     previous.runner?.kill();
     this.deps.runLock.remove(previous.runId);
+  }
+
+  /**
+   * Fails a current run whose working directory is missing, or whose runner didn't start in it, with one
+   * WorkingDirectoryError (spec §12.2). The tab's spare is discarded, so a recreated folder gets a fresh runner (M-4).
+   */
+  #failWorkingDirectory(run: ActiveRun, workingDirectory: string): void {
+    if (!this.#isCurrent(run)) return;
+    this.deps.spares.invalidate(run.tabId);
+    this.deps.onEvents(run.tabId, run.runId, [
+      {
+        kind: "error",
+        phase: "runner",
+        name: WORKING_DIRECTORY_ERROR,
+        message: strings.runs.workingDirectoryNotFound(workingDirectory),
+        stack: [],
+        seq: 1,
+        t: Date.now(),
+      },
+    ]);
+    this.#setState(run, "failed");
   }
 
   #isCurrent(run: ActiveRun): boolean {

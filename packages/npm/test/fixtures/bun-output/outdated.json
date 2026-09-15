@@ -1,0 +1,8 @@
+{
+  "name": "outdated",
+  "argv": ["outdated"],
+  "exitCode": 0,
+  "stdout": "bun outdated v1.4.0 (<rev>)\n|----------------------------------------------|\n| Package          | Current | Update | Latest |\n|------------------|---------|--------|--------|\n| fixture-outdated | 1.0.0   | 1.0.0  | 1.1.0  |\n|----------------------------------------------|\n",
+  "stderr": "",
+  "bunVersion": "1.4.0"
+}

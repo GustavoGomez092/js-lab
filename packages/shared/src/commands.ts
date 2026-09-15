@@ -5,6 +5,7 @@ export type CommandCategory =
   | "edit"
   | "format"
   | "view"
+  | "tools"
   | "runtime"
   | "language"
   | "theme"
@@ -31,6 +32,7 @@ export const COMMAND_CATEGORY_ORDER: readonly CommandCategory[] = [
   "edit",
   "format",
   "view",
+  "tools",
   "runtime",
   "language",
   "theme",
@@ -129,6 +131,13 @@ export const COMMANDS = [
   { id: "view.layoutVertical", title: "Vertical Layout", category: "view" },
   { id: "view.toggleLayout", title: "Toggle Vertical Split", category: "view" },
   { id: "view.toggleFullScreen", title: "Toggle Full Screen", category: "view" },
+
+  { id: "wd.set", title: "Set Working Directory…", category: "run" },
+  { id: "wd.clear", title: "Clear Working Directory", category: "run" },
+
+  { id: "tools.npmPackages", title: "NPM Packages…", category: "tools" },
+  { id: "tools.environmentVariables", title: "Environment Variables…", category: "tools" },
+  { id: "npm.install", title: "Install Package", category: "tools", palette: false },
 
   { id: "runtime.bun", title: "Runtime: Bun", category: "runtime" },
   { id: "runtime.browserNode", title: "Runtime: Browser & Node APIs", category: "runtime" },

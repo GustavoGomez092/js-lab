@@ -63,6 +63,14 @@ describe("writeFileAtomic", () => {
     await writeFileAtomic(path, "updated");
     expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
+
+  test("leaves the target untouched and removes its temp file when shouldCommit returns false (RR1-m2)", async () => {
+    const path = join(dir, "s.json");
+    await writeFileAtomic(path, "old");
+    await writeFileAtomic(path, "new", { shouldCommit: () => false });
+    expect(await readFile(path, "utf8")).toBe("old");
+    expect((await readdir(dir)).filter((name) => name.includes(".tmp-"))).toEqual([]);
+  });
 });
 
 describe("loadJson", () => {
@@ -163,6 +171,24 @@ describe("createDebouncedWriter", () => {
     await writer.flush();
     expect(writes).toEqual(["b"]);
     expect(errors.length).toBe(1);
+  });
+
+  test("a scheduled function is serialized once, when its write starts (FA-m9)", async () => {
+    const writes: string[] = [];
+    let state = 0;
+    let serialized = 0;
+    const writer = createDebouncedWriter(async (data) => void writes.push(data), 10_000);
+    for (let i = 1; i <= 3; i++) {
+      state = i;
+      writer.schedule(() => {
+        serialized++;
+        return `state ${state}`;
+      });
+    }
+    state = 4;
+    await writer.flush();
+    expect(serialized).toBe(1);
+    expect(writes).toEqual(["state 4"]);
   });
 });
 

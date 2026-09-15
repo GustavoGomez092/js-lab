@@ -35,10 +35,14 @@ export function ActivityBar(props: {
   runKeys: string | null;
   stopKeys: string | null;
   settingsKeys: string | null;
+  /** True while the NPM Packages sheet is open. */
+  npmOpen?: boolean;
+  npmKeys?: string | null;
   onRun(): void;
   onStop(): void;
   onPanel(panel: "snippets" | "ai"): void;
   onSettings(): void;
+  onNpm?(): void;
 }) {
   const open = (panel: "snippets" | "ai") => props.sideBarOpen && props.panel === panel;
   return (
@@ -72,7 +76,13 @@ export function ActivityBar(props: {
       >
         <Icon path={ICONS.snippets} />
       </button>
-      <button type="button" title={strings.shell.laterMilestone} aria-label={strings.shell.npm} disabled>
+      <button
+        type="button"
+        title={strings.shell.withKeys(strings.shell.npm, props.npmKeys ?? null)}
+        aria-label={strings.shell.npm}
+        aria-pressed={props.npmOpen ?? false}
+        onClick={props.onNpm}
+      >
         <Icon path={ICONS.npm} />
       </button>
       <button

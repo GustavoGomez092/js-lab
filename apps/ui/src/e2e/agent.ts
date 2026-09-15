@@ -1,6 +1,7 @@
 import type { E2EUiMethod } from "@jslab/rpc-schema";
 import type { ExecuteResult } from "../commands/registry";
-import type { EditorHandle } from "../editor/editor-handle";
+import type { EditorHandle, TsDiagnostic } from "../editor/editor-handle";
+import type { InstallAction } from "../editor/install-assist";
 import type { AppStore } from "../state/store";
 import { typeIntoField } from "./fields";
 import { keyEventInit } from "./keys";
@@ -20,10 +21,17 @@ export interface E2EAgentDeps {
   regions?(): Record<string, boolean>;
   /** Every command id registered in the UI command registry (Task 22 verification: every menu action is dispatchable). */
   registeredCommands?(): string[];
+  /** Monaco's TypeScript markers for the shown tab (Task 21). */
+  tsDiagnostics?(): Promise<TsDiagnostic[]>;
+  completions?(offset: number): Promise<string[]>;
+  /** The editor's install-assist actions for its current markers (Task 23). */
+  installActions?(): Promise<InstallAction[]>;
 }
 
 /** E2E-only command: clicks a temporary link inside the page, as a user clicking a web link would (R-M1-17(e)). */
 export const E2E_OPEN_LINK = "e2e.openLink";
+export const E2E_COMPLETIONS = "e2e.completions";
+export const E2E_INSTALL_ACTIONS = "e2e.installActions";
 
 function openLink(args: unknown): { executed: string } {
   const href = (args as { href?: unknown } | undefined)?.href;
@@ -65,6 +73,12 @@ export function createE2EAgent(deps: E2EAgentDeps) {
       case "command": {
         const { id, args } = params as { id: string; args?: unknown };
         if (id === E2E_OPEN_LINK) return openLink(args);
+        if (id === E2E_COMPLETIONS) {
+          const offset = Number((args as { offset?: unknown } | undefined)?.offset ?? 0);
+          return { executed: E2E_COMPLETIONS, completions: (await deps.completions?.(offset)) ?? [] };
+        }
+        if (id === E2E_INSTALL_ACTIONS)
+          return { executed: E2E_INSTALL_ACTIONS, actions: (await deps.installActions?.()) ?? [] };
         const result = deps.executeCommand(id, args);
         if (result === "unknown") throw new Error(`Unknown command: ${id}`);
         if (result === "disabled") throw new Error(`Command is disabled: ${id}`);
@@ -77,6 +91,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
           editorOptions: deps.editorOptions?.() ?? null,
           regions: deps.regions?.() ?? {},
           registeredCommands: deps.registeredCommands?.() ?? [],
+          tsDiagnostics: (await deps.tsDiagnostics?.()) ?? [],
         };
       case "output":
         return { entries: snapshotOutput(deps.store.getState(), (params as { tabId?: string }).tabId) };

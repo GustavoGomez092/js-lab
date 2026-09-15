@@ -1,0 +1,8 @@
+{
+  "name": "add-network",
+  "argv": ["add", "--exact", "fixture-outdated@1.0.0"],
+  "exitCode": 1,
+  "stdout": "bun add v1.4.0 (<rev>)\n",
+  "stderr": "Resolving dependencies\nResolved, downloaded and extracted [6]\nerror: ConnectionRefused downloading package manifest fixture-outdated\n",
+  "bunVersion": "1.4.0"
+}

@@ -170,6 +170,9 @@ export function buildMenu(model: MenuModel): MenuItem[] {
         separator,
         item("format.document"),
         separator,
+        item("wd.set", { enabled: activeTab !== null }),
+        item("wd.clear", { enabled: Boolean(activeTab?.workingDirectory) }),
+        separator,
         {
           label: "Runtime",
           submenu: [
@@ -188,6 +191,10 @@ export function buildMenu(model: MenuModel): MenuItem[] {
           ],
         },
       ],
+    },
+    {
+      label: "Tools",
+      submenu: [item("tools.npmPackages"), item("tools.environmentVariables")],
     },
     {
       label: "View",

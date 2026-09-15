@@ -5,18 +5,25 @@ import type { MainApi } from "../api";
 import type { AppState, AppStore } from "../state/store";
 import { setEditorHandle } from "./editor-handle";
 import { type EditorOptions, editorOptionsFor } from "./editor-options";
+import { installActionsFor, registerInstallAssist } from "./install-assist";
 import { createMarkerTracker, type EditorMarker, markersFor } from "./markers";
 import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
 import { installPasteGuard, pasteInto } from "./paste-guard";
 import { createTabView } from "./tab-view";
+import { createTsEnvironment } from "./ts-environment";
+import { tsEnvironmentChanged, tsStateFor, workingDirectoryChanged } from "./ts-state";
+import { createTypeFeeder } from "./type-feeder";
+import { loadRuntimePack } from "./type-libs";
 import { defineClipboardRegister, startVim, type VimController } from "./vim";
 import { createVimStatusNode } from "./vim-status";
 
 interface EditorProps {
   store: AppStore;
-  api: Pick<MainApi, "saveViewState">;
+  api: Pick<MainApi, "saveViewState" | "packageTypes" | "localTypes">;
   onLargePaste?(bytes: number): Promise<boolean>;
+  /** R23-1: routed through the npm.install command by the caller, not called on api directly. */
+  onInstall?(spec: string): void;
   /** The React-owned `.vim-slot` before the status bar, where the Vim status node goes (T16-rr1). */
   vimSlot?: RefObject<HTMLElement | null>;
 }
@@ -32,12 +39,15 @@ function toMonacoOptions(options: EditorOptions): Omit<Monaco.editor.IEditorOpti
   return { ...options, hover: { enabled: options.hover.enabled ? "on" : "off", delay: options.hover.delay } };
 }
 
-export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
+export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   // FB-m10: the paste confirm is read through a ref, so a new callback identity (for example `flows` rebuilt after a
   // formatter change) never disposes and recreates Monaco, which would lose undo history and Vim state.
   const largePaste = useRef(onLargePaste);
   largePaste.current = onLargePaste;
+  // R23-1: same latest-props ref pattern, so a new onInstall identity from App never tears down Monaco.
+  const install = useRef(onInstall);
+  install.current = onInstall;
 
   useEffect(() => {
     const monaco = setupMonaco();
@@ -55,6 +65,34 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
       fixedOverflowWidgets: true,
       scrollBeyondLastLine: false,
       ...toMonacoOptions(editorOptionsFor(initial.settings, initial.fontFallback)),
+    });
+
+    // Spec §6.1: Monaco's TypeScript defaults are global, so they follow the shown tab.
+    const tsEnvironment = createTsEnvironment({
+      defaults: [monaco.typescript.typescriptDefaults, monaco.typescript.javascriptDefaults],
+      loadPack: loadRuntimePack,
+    });
+    const applyTypeScript = (state: AppState) => {
+      const next = tsStateFor(state);
+      if (next) {
+        tsEnvironment
+          .apply(next)
+          .catch((error: unknown) => console.error("[editor] failed to apply the TypeScript environment", error));
+      }
+    };
+
+    // Spec §6.2: package and working-directory types for the imports in the shown model.
+    const feeder = createTypeFeeder({
+      requestPackages: (tabId, names) => api.packageTypes(tabId, names),
+      requestLocal: (tabId, specifiers) => api.localTypes(tabId, specifiers),
+      environment: tsEnvironment,
+      log: (message, detail) => console.warn(`[jslab] ${message}`, detail),
+    });
+    const feed = (tabId: string, model: Monaco.editor.ITextModel, options?: { immediate?: boolean }) =>
+      feeder.schedule(tabId, model.getValue(), Boolean(store.getState().tabs[tabId]?.workingDirectory), options);
+    const installAssist = registerInstallAssist(monaco, {
+      untyped: () => feeder.untyped(),
+      install: (spec) => install.current?.(spec),
     });
 
     const applyMonacoTheme = (themeId: string) => {
@@ -149,11 +187,16 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
         contentSubscription?.dispose();
         contentSubscription = null;
         if (!tabId || !model) return;
-        contentSubscription = model.onDidChangeContent(() => view.pushContent(tabId, model));
+        contentSubscription = model.onDidChangeContent(() => {
+          view.pushContent(tabId, model);
+          feed(tabId, model);
+        });
         reportCursor();
         // A new model starts with no markers or decorations (as built in M1): reapply both.
         applyMarkers(store.getState());
         applyHover(store.getState().hoveredLine);
+        applyTypeScript(store.getState());
+        feed(tabId, model);
       },
     });
 
@@ -244,6 +287,61 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
           hoverDelay: options.hover?.delay,
         };
       },
+      flushViewState: () => {
+        view.saveActive();
+        view.flush();
+      },
+      typeDiagnostics: async () => {
+        const model = editor.getModel();
+        if (!model) return [];
+        return (
+          monaco.editor
+            .getModelMarkers({ resource: model.uri })
+            .filter((marker) => marker.owner === "typescript" || marker.owner === "javascript")
+            .map((marker) => ({
+              code: Number(typeof marker.code === "object" ? marker.code?.value : marker.code),
+              message: marker.message,
+              line: marker.startLineNumber,
+            }))
+            // A marker with no code becomes NaN above; drop it rather than report a nonsense code (Task 21 fix
+            // round 1, N-3).
+            .filter((diagnostic) => Number.isFinite(diagnostic.code))
+            // Deterministic order for a future toEqual-style scenario (N-3).
+            .sort((a, b) => a.line - b.line || a.code - b.code || a.message.localeCompare(b.message))
+        );
+      },
+      completionsAt: async (offset) => {
+        const model = editor.getModel();
+        if (!model) return [];
+        // A tab switch mid-call can detach or dispose `model` between awaits; re-check after each one rather than
+        // ask the worker about a URI that no longer exists (Task 21 fix round 1, N-3).
+        const isStale = () => model.isDisposed() || editor.getModel() !== model;
+        const getWorker =
+          model.getLanguageId() === "javascript"
+            ? monaco.typescript.getJavaScriptWorker
+            : monaco.typescript.getTypeScriptWorker;
+        const accessor = await getWorker();
+        if (isStale()) return [];
+        const worker = await accessor(model.uri);
+        if (isStale()) return [];
+        const info = (await worker.getCompletionsAtPosition(model.uri.toString(), offset)) as
+          | { entries?: { name: string }[] }
+          | undefined;
+        if (isStale()) return [];
+        return (info?.entries ?? []).map((entry) => entry.name);
+      },
+      installActions: async () => {
+        const model = editor.getModel();
+        if (!model) return [];
+        const markers = monaco.editor
+          .getModelMarkers({ resource: model.uri })
+          .filter((marker) => marker.owner === "typescript" || marker.owner === "javascript")
+          .map((marker) => ({
+            code: typeof marker.code === "object" ? marker.code.value : (marker.code ?? ""),
+            message: marker.message,
+          }));
+        return installActionsFor(markers, feeder.untyped());
+      },
     });
 
     // T18-m-paste: the model attached at paste time is captured, and the text goes in only if it is still attached
@@ -268,6 +366,25 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
         editor.updateOptions(toMonacoOptions(editorOptionsFor(state.settings, state.fontFallback)));
         syncVim(state.settings.editor.vimKeys);
       }
+      // Task 21 fix round 1 (N-1): `tabId` is deliberately not compared here. A tab switch always reaches `onShown`
+      // below (a different tab always has a different Monaco model), which already calls `applyTypeScript`, so
+      // comparing `activeTabId` here only applied it twice per switch.
+      if (tsEnvironmentChanged(state, previous)) {
+        applyTypeScript(state);
+      }
+      // Task 23 fix round 2, I-1: workingDirectoryChanged only fires for the *same* active tab's own working
+      // directory actually changing — a tab switch between tabs whose WDs differ is never a WD change (handled
+      // below instead, where it invalidates nothing).
+      if (workingDirectoryChanged(state, previous) && state.activeTabId) {
+        feeder.invalidateLocal(state.activeTabId);
+        feeder.invalidatePackages();
+        const model = editor.getModel();
+        if (model) feed(state.activeTabId, model, { immediate: true });
+      } else if (state.packagesRevision !== previous.packagesRevision) {
+        feeder.invalidatePackages();
+        const model = editor.getModel();
+        if (state.activeTabId && model) feed(state.activeTabId, model);
+      }
       if (
         state.activeTabId !== previous.activeTabId ||
         state.tabs !== previous.tabs ||
@@ -275,8 +392,20 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
       ) {
         view.show(state);
       }
+      // Task 23 fix round 2, I-1: a genuine tab switch invalidates nothing — the newly shown tab's local and
+      // package caches are still valid — but feeds immediately. `view.show`'s `onShown` just scheduled a debounced
+      // feed for the newly shown model; immediate mode cancels that timer and feeds right away instead, so the tab
+      // doesn't show false "Cannot find module" markers for the 500 ms the debounce would otherwise wait out.
+      if (state.activeTabId !== previous.activeTabId && state.activeTabId) {
+        const model = editor.getModel();
+        if (model) feed(state.activeTabId, model, { immediate: true });
+      }
       if (state.tabOrder !== previous.tabOrder) {
-        for (const closed of models.prune(new Set(state.tabOrder))) view.cancel(closed);
+        for (const closed of models.prune(new Set(state.tabOrder))) {
+          view.cancel(closed);
+          // Task 23 fix round 2, M-1: release a closed tab's local type files and cancel any pending feed for it.
+          feeder.forget(closed);
+        }
       }
       if (state.hoveredLine !== previous.hoveredLine) applyHover(state.hoveredLine);
       if (state.revealRequest && state.revealRequest !== previous.revealRequest) {
@@ -305,7 +434,12 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
       focusSubscription.dispose();
       vim?.dispose();
       vimStatus?.remove();
+      feeder.dispose();
+      installAssist.dispose();
       editor.dispose();
+      // Task 21 fix round 1 (M-2): stop a pending apply from writing this environment's stale settings into
+      // Monaco's globals after this Editor is gone, before the models it was applying local files for are disposed.
+      tsEnvironment.dispose();
       models.disposeAll();
     };
   }, [store, api, vimSlot]);

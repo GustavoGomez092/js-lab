@@ -1,8 +1,8 @@
-import type { Language } from "@jslab/shared";
+import { DEFAULT_RUNTIME, type Language } from "@jslab/shared";
 import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import TsWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
-import { EDITOR_COMPILER_OPTIONS, EDITOR_DIAGNOSTIC_CODES_TO_IGNORE } from "./ts-lib";
+import { compilerOptionsFor, diagnosticsOptionsFor } from "./ts-environment";
 
 let configured = false;
 
@@ -16,18 +16,11 @@ export function setupMonaco(): typeof monaco {
       label === "typescript" || label === "javascript" ? new TsWorker() : new EditorWorker(),
   };
 
+  // The starting point before any tab is shown; Editor.tsx's TsEnvironment applies each shown tab's options (Task 21).
   const ts = monaco.typescript;
-  const compilerOptions = {
-    ...EDITOR_COMPILER_OPTIONS,
-    lib: [...EDITOR_COMPILER_OPTIONS.lib],
-  } as monaco.typescript.CompilerOptions;
   for (const defaults of [ts.typescriptDefaults, ts.javascriptDefaults]) {
-    defaults.setCompilerOptions(compilerOptions);
-    defaults.setDiagnosticsOptions({
-      noSemanticValidation: false,
-      noSyntaxValidation: false,
-      diagnosticCodesToIgnore: [...EDITOR_DIAGNOSTIC_CODES_TO_IGNORE],
-    });
+    defaults.setCompilerOptions(compilerOptionsFor(DEFAULT_RUNTIME, "2023-11") as monaco.typescript.CompilerOptions);
+    defaults.setDiagnosticsOptions(diagnosticsOptionsFor(true));
   }
 
   return monaco;

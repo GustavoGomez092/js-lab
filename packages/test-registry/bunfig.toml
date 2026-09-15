@@ -1,0 +1,4 @@
+# A bare `bun test` here runs only the unit tests. The opt-in suite under integration/ starts Verdaccio, so it runs
+# only through `bun run test:npm`, which names ./integration explicitly (Global Constraints (c)).
+[test]
+root = "./test"

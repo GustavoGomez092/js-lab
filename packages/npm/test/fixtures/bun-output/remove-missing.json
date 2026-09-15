@@ -1,0 +1,8 @@
+{
+  "name": "remove-missing",
+  "argv": ["remove", "jslab-not-installed"],
+  "exitCode": 0,
+  "stdout": "bun remove v1.4.0 (<rev>)\n\n[<ms>] done\n",
+  "stderr": "",
+  "bunVersion": "1.4.0"
+}

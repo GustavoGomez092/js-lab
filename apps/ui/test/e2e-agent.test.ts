@@ -124,6 +124,58 @@ describe("E2E agent", () => {
       "e2e.openLink needs an http(s) URL",
     );
   });
+
+  test("state carries TypeScript diagnostics, and e2e.completions asks the editor for completions", async () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "[1].m" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0.0.1", bun: "1.4.0" },
+    });
+    const agent = createE2EAgent({
+      store,
+      executeCommand: () => "unknown",
+      editor: () => null,
+      target: () => new EventTarget(),
+      tsDiagnostics: async () => [
+        { code: 2322, message: "Type 'string' is not assignable to type 'number'.", line: 1 },
+      ],
+      completions: async (offset) => (offset === 5 ? ["map"] : []),
+    });
+    expect(await agent("state", {})).toMatchObject({ tsDiagnostics: [{ code: 2322, line: 1 }] });
+    expect(await agent("command", { id: "e2e.completions", args: { offset: 5 } })).toEqual({
+      executed: "e2e.completions",
+      completions: ["map"],
+    });
+  });
+
+  test("e2e.installActions returns the editor's install-assist actions", async () => {
+    const { store } = setup();
+    const agent = createE2EAgent({
+      store,
+      executeCommand: () => "unknown",
+      editor: () => null,
+      target: () => new EventTarget(),
+      installActions: async () => [{ title: "Install package zod", spec: "zod" }],
+    });
+    expect(await agent("command", { id: "e2e.installActions" })).toEqual({
+      executed: "e2e.installActions",
+      actions: [{ title: "Install package zod", spec: "zod" }],
+    });
+  });
+
+  test("tab snapshots carry the working directory and the suffixed label", async () => {
+    const { store, agent } = setup();
+    store.getState().applyTabUpdate({
+      ...(store.getState().tabs.t1 as NonNullable<ReturnType<typeof store.getState>["tabs"]["t1"]>),
+      workingDirectory: "/work/api",
+    });
+    expect(await agent("state", {})).toMatchObject({
+      tabs: [{ id: "t1", workingDirectory: "/work/api", label: "scratch · api" }],
+    });
+  });
 });
 
 describe("keyEventInit", () => {

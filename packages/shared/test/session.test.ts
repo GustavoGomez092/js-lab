@@ -162,4 +162,15 @@ describe("session", () => {
       ["../x", dotted],
     ]);
   });
+
+  test("a tab's working directory survives a v2 round trip with no migration (M3 decision 1)", () => {
+    const tab = createTab({ id: "t1", workingDirectory: "/work/api" });
+    const written = JSON.parse(JSON.stringify({ ...defaultSession(() => tab), version: SESSION_VERSION }));
+    expect(parseSession(written).session.tabs.t1?.workingDirectory).toBe("/work/api");
+    expect(
+      parseSession({ version: 2, tabOrder: ["t2"], activeTabId: "t2", tabs: { t2: { id: "t2" } } }).session.tabs.t2
+        ?.workingDirectory,
+    ).toBeNull();
+    expect(SESSION_VERSION).toBe(2);
+  });
 });

@@ -1,0 +1,21 @@
+{
+  "name": "@jslab/npm",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./specifiers": "./src/specifiers.ts",
+    "./output": "./src/output.ts",
+    "./npmrc": "./src/npmrc.ts",
+    "./mask": "./src/mask.ts"
+  },
+  "dependencies": {
+    "@jslab/rpc-schema": "workspace:*",
+    "@jslab/shared": "workspace:*"
+  },
+  "scripts": {
+    "test": "bun test ./test",
+    "typecheck": "tsc --noEmit -p ."
+  }
+}

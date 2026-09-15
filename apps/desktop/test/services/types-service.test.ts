@@ -114,6 +114,8 @@ describe("TypesService", () => {
   });
 
   // #3: opening a FIFO must never hang (regression from fix round 1's M-2 open-before-fstat change).
+  // N6: races the collectPackageTypes half against its own bound, independent of the per-test timeout, and adds a
+  // real `index.d.ts` next to the FIFO `package.json` so `hasTypes: false` can only come from the FIFO manifest.
   test("reading a FIFO returns null without hanging", async () => {
     const fifoDir = await mkdtemp(join(tmpdir(), "jslab-types-fifo-"));
     try {
@@ -129,12 +131,19 @@ describe("TypesService", () => {
       const pkgJsonFifo = join(pkgDir, "package.json");
       const mkfifo2 = Bun.spawn(["mkfifo", pkgJsonFifo]);
       await mkfifo2.exited;
+      await writeFile(join(pkgDir, "index.d.ts"), "export declare const v: 1;\n");
 
-      const pkgResult = await collectPackageTypes(nodeTypesFs, {
-        name: "lib",
-        nodeModulesDirs: [join(fifoDir, "node_modules")],
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const bound = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("collectPackageTypes did not resolve within 2000ms")), 2000);
       });
+      const pkgResult = await Promise.race([
+        collectPackageTypes(nodeTypesFs, { name: "lib", nodeModulesDirs: [join(fifoDir, "node_modules")] }),
+        bound,
+      ]);
+      clearTimeout(timer);
       expect(pkgResult.hasTypes).toBe(false);
+      expect(pkgResult.typesPackage).toBeNull();
     } finally {
       await rm(fifoDir, { recursive: true, force: true });
     }

@@ -33,13 +33,17 @@ function memoryFs(
   };
 }
 
-/** Wraps a `TypesFs`, recording every `isFile`/`readText` path so tests can assert probe/read counts. */
-function countingFs(fs: TypesFs): TypesFs & { isFileCalls: string[]; readTextCalls: string[] } {
+/** Wraps a `TypesFs`, recording every `isFile`/`readText`/`realpath` path so tests can assert probe/read counts. */
+function countingFs(
+  fs: TypesFs,
+): TypesFs & { isFileCalls: string[]; readTextCalls: string[]; realpathCalls: string[] } {
   const isFileCalls: string[] = [];
   const readTextCalls: string[] = [];
+  const realpathCalls: string[] = [];
   return {
     isFileCalls,
     readTextCalls,
+    realpathCalls,
     readText: async (path) => {
       readTextCalls.push(path);
       return fs.readText(path);
@@ -48,7 +52,10 @@ function countingFs(fs: TypesFs): TypesFs & { isFileCalls: string[]; readTextCal
       isFileCalls.push(path);
       return fs.isFile(path);
     },
-    realpath: (path) => fs.realpath(path),
+    realpath: (path) => {
+      realpathCalls.push(path);
+      return fs.realpath(path);
+    },
   };
 }
 
@@ -228,18 +235,140 @@ describe("package type closure (spec §6.2)", () => {
   });
 
   // #2: a manifest entry pointing outside the package is never probed, and yields no types.
+  // N6: also covers a prefix-sibling entry (`/n/orc-evil`), which only a trailing-slash-safe filter rejects.
   test("manifest types outside the package are never probed and give no types", async () => {
+    const dir = "/n/orc";
     const fs = countingFs(
       memoryFs({
-        "/n/orc/package.json": JSON.stringify({ name: "orc", types: "../../secret/x.d.ts" }),
+        "/n/orc/package.json": JSON.stringify({
+          name: "orc",
+          types: "../../secret/x.d.ts",
+          exports: { "./a": { types: "../orc-evil/x.d.ts" } },
+        }),
         "/secret/x.d.ts": "export declare const leaked = 1;\n",
+        "/n/orc-evil/x.d.ts": "export declare const leaked2 = 1;\n",
       }),
     );
     const result = await collectPackageTypes(fs, { name: "orc", nodeModulesDirs: ["/n"] });
-    expect(fs.isFileCalls.every((path) => path.startsWith("/n/orc/"))).toBe(true);
-    expect(fs.readTextCalls.every((path) => path.startsWith("/n/orc/"))).toBe(true);
+    const isOutside = (path: string) => path !== dir && !path.startsWith(`${dir}/`);
+    expect(fs.isFileCalls.some(isOutside)).toBe(false);
+    expect(fs.readTextCalls.some(isOutside)).toBe(false);
     expect(result.hasTypes).toBe(false);
     expect(result.typesPackage).toBe("@types/orc");
+  });
+
+  // N1: a package whose own declarations can't be loaded reports truncated and never offers or substitutes @types.
+  test("a package whose own declarations can't be loaded reports truncated and never offers or substitutes @types", async () => {
+    // (a) Own declarations over the byte cap; a valid @types package is also installed but must never be used.
+    const overCap = memoryFs({
+      "/n/lib/package.json": JSON.stringify({ name: "lib", types: "index.d.ts" }),
+      "/n/lib/index.d.ts": "x".repeat(2000),
+      "/n/@types/lib/package.json": JSON.stringify({ name: "@types/lib", types: "index.d.ts" }),
+      "/n/@types/lib/index.d.ts": "export declare const v: 1;\n",
+    });
+    const overCapResult = await collectPackageTypes(overCap, { name: "lib", nodeModulesDirs: ["/n"], maxBytes: 1000 });
+    expect(overCapResult.hasTypes).toBe(false);
+    expect(overCapResult.typesPackage).toBeNull();
+    expect(overCapResult.truncated).toBe(true);
+    expect(overCapResult.files).toEqual([]);
+
+    // (b) Own declaration gated out by a symlink escape; pins mutation M4 (see report).
+    const gatedOut = memoryFs(
+      {
+        "/n/lib/package.json": JSON.stringify({ name: "lib", types: "index.d.ts" }),
+        "/outside/x.d.ts": "export declare const leaked = 1;\n",
+      },
+      { "/n/lib/index.d.ts": "/outside/x.d.ts" },
+    );
+    const gatedResult = await collectPackageTypes(gatedOut, { name: "lib", nodeModulesDirs: ["/n"] });
+    expect(gatedResult.hasTypes).toBe(false);
+    expect(gatedResult.typesPackage).toBeNull();
+    expect(gatedResult.truncated).toBe(true);
+
+    // (c) The @types fallback itself is over the byte cap.
+    const typesOverCap = memoryFs({
+      "/n/lib2/package.json": JSON.stringify({ name: "lib2", main: "index.js" }),
+      "/n/@types/lib2/package.json": JSON.stringify({ name: "@types/lib2", types: "index.d.ts" }),
+      "/n/@types/lib2/index.d.ts": "y".repeat(2000),
+    });
+    const typesOverCapResult = await collectPackageTypes(typesOverCap, {
+      name: "lib2",
+      nodeModulesDirs: ["/n"],
+      maxBytes: 1000,
+    });
+    expect(typesOverCapResult.hasTypes).toBe(false);
+    expect(typesOverCapResult.typesPackage).toBe("@types/lib2");
+    expect(typesOverCapResult.truncated).toBe(true);
+  });
+
+  // N2: the declared-entry cap counts only in-package entries, and reports when it drops some.
+  test("the declared-entry cap counts only in-package entries and reports truncation", async () => {
+    // (a) Over the cap: 100 distinct subpath entries, all resolvable, no index.
+    const overCapFiles: Record<string, string> = {};
+    const exportsField: Record<string, unknown> = {};
+    for (let i = 0; i < 100; i++) {
+      exportsField[`./s${i}`] = { types: `./s${i}.d.ts` };
+      overCapFiles[`/n/lib/s${i}.d.ts`] = `export declare const v${i}: number;\n`;
+    }
+    overCapFiles["/n/lib/package.json"] = JSON.stringify({ name: "lib", exports: exportsField });
+    const overCapResult = await collectPackageTypes(memoryFs(overCapFiles), { name: "lib", nodeModulesDirs: ["/n"] });
+    expect(overCapResult.hasTypes).toBe(true);
+    expect(overCapResult.files.length).toBe(MAX_DECLARED_TYPE_ENTRIES + 1); // + package.json
+    expect(overCapResult.truncated).toBe(true);
+
+    // (b) Entries pointing outside the package never use a cap slot, so a later in-package entry still resolves.
+    const outsideExports: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_DECLARED_TYPE_ENTRIES; i++) outsideExports[`./o${i}`] = { types: `../o${i}.d.ts` };
+    outsideExports["."] = { types: "./index.d.ts" };
+    const outsideFs = memoryFs({
+      "/n/lib2/package.json": JSON.stringify({ name: "lib2", exports: outsideExports }),
+      "/n/lib2/index.d.ts": "export declare const v: 1;\n",
+    });
+    const outsideResult = await collectPackageTypes(outsideFs, { name: "lib2", nodeModulesDirs: ["/n"] });
+    expect(outsideResult.hasTypes).toBe(true);
+    expect(outsideResult.files.map((file) => file.path)).toContain("file:///node_modules/lib2/index.d.ts");
+  });
+
+  // N3: manifest-entry probes and the closure walk draw on one shared budget, not two separate ones.
+  test("manifest-entry probes and the closure walk draw on one budget", async () => {
+    const exportsField: Record<string, unknown> = {};
+    for (let i = 0; i < 63; i++) exportsField[`./s${i}`] = { types: `./s${i}` }; // none of these exist
+    exportsField["."] = { types: "./index.d.ts" };
+    const lines: string[] = [];
+    for (let i = 0; i < 40000; i++) lines.push(`export * from "./m${i}";`); // none of these exist either
+    const fs = countingFs(
+      memoryFs({
+        "/n/lib/package.json": JSON.stringify({ name: "lib", exports: exportsField }),
+        "/n/lib/index.d.ts": `${lines.join("\n")}\n`,
+      }),
+    );
+    const result = await collectPackageTypes(fs, { name: "lib", nodeModulesDirs: ["/n"] });
+    expect(fs.isFileCalls.length).toBeLessThanOrEqual(MAX_PACKAGE_TYPE_FILES * 16);
+    expect(result.truncated).toBe(true);
+    expect(result.hasTypes).toBe(true);
+  });
+
+  // N4: an entry that normalizes to the package directory itself must never probe `<node_modules>/<name>.d.{ts,mts,cts}`.
+  test("entries that normalize to the package directory never probe sibling paths", async () => {
+    const fs = countingFs(
+      memoryFs({
+        "/n/node_modules/lib/package.json": JSON.stringify({
+          name: "lib",
+          types: ".",
+          exports: { ".": { types: "../lib" } },
+        }),
+        "/n/node_modules/lib/index.d.ts": "export declare const v: 1;\n",
+        "/n/node_modules/lib.d.ts": "export declare const sibling: 1;\n",
+        "/n/node_modules/lib.d.mts": "export declare const sibling: 1;\n",
+      }),
+    );
+    const result = await collectPackageTypes(fs, { name: "lib", nodeModulesDirs: ["/n/node_modules"] });
+    expect(result.hasTypes).toBe(true);
+    expect(result.files.map((file) => file.path)).toContain("file:///node_modules/lib/index.d.ts");
+    const forbidden = ["/n/node_modules/lib.d.ts", "/n/node_modules/lib.d.mts", "/n/node_modules/lib.d.cts"];
+    expect(fs.isFileCalls.some((path) => forbidden.includes(path))).toBe(false);
+    expect(fs.readTextCalls.some((path) => forbidden.includes(path))).toBe(false);
+    expect(fs.realpathCalls.some((path) => forbidden.includes(path))).toBe(false);
   });
 });
 
@@ -319,11 +448,14 @@ describe("working-directory local types (spec §6.2)", () => {
   });
 
   // #4: a relative working directory would otherwise resolve against Main's cwd; it must be rejected instead.
+  // N6: the guard must run before any fs call at all, not just before readText.
   test("a relative working directory returns nothing", async () => {
     const fs = countingFs(memoryFs({ "cwdwd/util.ts": "export const a = 1;\n" }));
     const result = await collectLocalTypes(fs, { workingDirectory: "cwdwd", specifiers: ["./util"] });
     expect(result).toEqual({ files: [], packages: [], truncated: false });
     expect(fs.readTextCalls).toEqual([]);
+    expect(fs.isFileCalls).toEqual([]);
+    expect(fs.realpathCalls).toEqual([]);
   });
 
   // #5: exhausting the probe budget must not discard files already found, or the current file's bare dependencies.

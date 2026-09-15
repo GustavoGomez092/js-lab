@@ -6,7 +6,8 @@ import type { LocalTypesResult, PackageTypesResult } from "@jslab/rpc-schema";
 const MAX_TYPE_FILE_BYTES = 5 * 1024 * 1024;
 
 /**
- * Reads only regular files; a file over 5 MB is skipped (its package reports truncated). Opens the path once and
+ * Reads only regular files; a file over 5 MB is skipped, which the caller reports through its own `truncated` flag
+ * — never silently treated as though the declaration didn't exist (R-M3-T13-FIX-3 N1). Opens the path once and
  * fstats and reads that same handle (R-M3-T13-FIX-1 M-2), so the size that was checked is the size that gets read,
  * and a path swapped to a symlink after the check can't redirect the read. Opens with `O_NONBLOCK` (R-M3-T13-FIX-2
  * #3) so a FIFO — for example a crafted `package.json` — returns null instead of blocking until a writer appears;

@@ -20,6 +20,38 @@ async function writePackage(userData: string, name: string, version: string) {
   await writeFile(join(dir, "package.json"), JSON.stringify({ name, version }));
 }
 
+const NL = String.fromCharCode(10);
+
+/**
+ * R-M3-T26-FIX-1 (ruling): `bun outdated` never contacts the registry when `<packages>/bun.lock` is missing —
+ * it fails at once with "missing lockfile" (a non-network error), which is what a hand-seeded `node_modules`
+ * with no lockfile always hits. This is a real lockfile, generated once (Bun 1.4.0, the E2E build's own bundled
+ * binary, via a throwaway loopback responder, never the public registry) for fixture-a and @types/fixture-a, then
+ * pasted here as a literal. Seeding it lets `bun outdated` reach a real connection attempt against the dead
+ * registry below, instead of failing before ever attempting one.
+ */
+const FIXTURE_BUN_LOCK =
+  [
+    "{",
+    '  "lockfileVersion": 2,',
+    '  "configVersion": 1,',
+    '  "workspaces": {',
+    '    "": {',
+    '      "name": "jslab-packages",',
+    '      "dependencies": {',
+    '        "@types/fixture-a": "1.0.0",',
+    '        "fixture-a": "1.0.0",',
+    "      },",
+    "    },",
+    "  },",
+    '  "packages": {',
+    '    "@types/fixture-a": ["@types/fixture-a@1.0.0", "http://127.0.0.1:4900/@types/fixture-a/-/fixture-a-1.0.0.tgz", {}, "sha1-cVpFoM1CIh1bC55saKqtOvICAh0="],',
+    "",
+    '    "fixture-a": ["fixture-a@1.0.0", "http://127.0.0.1:4900/fixture-a/-/fixture-a-1.0.0.tgz", {}, "sha1-lhe0XEIxgNU0SUtnC6NVpOI/EEM="],',
+    "  }",
+    "}",
+  ].join(NL) + NL;
+
 test("⌘I opens the installed table from the packages project; a dead registry reports a network hint (TL-01, TL-06, TL-09)", async () => {
   const userData = await createUserData();
   await mkdir(join(userData, "packages"), { recursive: true });
@@ -34,6 +66,8 @@ test("⌘I opens the installed table from the packages project; a dead registry 
   );
   await writePackage(userData, "fixture-a", "1.0.0");
   await writePackage(userData, "@types/fixture-a", "1.0.0");
+  // Fix round 1 (R-M3-T26-FIX-1): without a lockfile, `bun outdated` never reaches the network (see FIXTURE_BUN_LOCK).
+  await writeFile(join(userData, "packages", "bun.lock"), FIXTURE_BUN_LOCK);
   // No registry is ever contacted: a dead local port (R-M3-NET-1) forces the outdated check's network hint.
   await writeFile(join(userData, "packages", ".npmrc"), "registry=http://127.0.0.1:9/\n");
   // The E2E Bun cache stays inside the scenario's own data dir, never the user's real Bun cache.

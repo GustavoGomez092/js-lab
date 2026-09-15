@@ -1,10 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import { COMMANDS, createTab, defaultSession, defaultSettings } from "@jslab/shared";
+import { createAppCommands } from "../src/commands/app-commands";
 import { createEditorCommands, EDITOR_ACTIONS } from "../src/commands/editor-commands";
 import { CommandRegistry } from "../src/commands/registry";
 import { sortLinesCaseInsensitive, toggleMagicCommentLines } from "../src/commands/text-edits";
 import type { EditorHandle } from "../src/editor/editor-handle";
 import { createAppStore } from "../src/state/store";
+import { strings } from "../src/strings";
 import { createTabActions } from "../src/tabs/tab-actions";
 import { createFakeApi } from "./fake-api";
 
@@ -159,5 +161,57 @@ describe("tab actions: reopen dedup (T11-oos1)", () => {
     await Promise.all([tabs.reopen(), tabs.reopen()]);
     expect(store.getState().closedCount).toBe(1);
     expect(store.getState().tabOrder.filter((id) => id === "t2")).toHaveLength(1);
+  });
+});
+
+describe("M3 app commands", () => {
+  function setup(workingDirectory: string | null = null) {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1", workingDirectory })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const { api } = createFakeApi();
+    const registry = new CommandRegistry();
+    registry.register(
+      ...createAppCommands({ store, api, tabs: createTabActions(store, api), run: () => {}, editor: () => null }),
+    );
+    return { store, api, registry };
+  }
+
+  test("Tools commands open their sheets", () => {
+    const { store, registry } = setup();
+    registry.execute("tools.npmPackages");
+    expect(store.getState().modal).toEqual({ kind: "npm" });
+    registry.execute("tools.environmentVariables");
+    expect(store.getState().modal).toEqual({ kind: "env" });
+    // R22-2: ⌘I toggles the NPM Packages sheet closed when it's already open, run from a fresh setup().
+    const fresh = setup();
+    fresh.registry.execute("tools.npmPackages");
+    fresh.registry.execute("tools.npmPackages");
+    expect(fresh.store.getState().modal).toBeNull();
+  });
+
+  test("Set and Clear Working Directory reach Main for the active tab; Clear needs a WD", () => {
+    const withoutWd = setup();
+    withoutWd.registry.execute("wd.set");
+    expect(withoutWd.api.pickWorkingDirectory).toHaveBeenCalledWith("t1");
+    expect(withoutWd.registry.execute("wd.clear")).toBe("disabled");
+    const withWd = setup("/work/api");
+    expect(withWd.registry.execute("wd.clear")).toBe("executed");
+    expect(withWd.api.clearWorkingDirectory).toHaveBeenCalledWith("t1");
+    // R22-1: the palette description names the folder the WD commands act on.
+    expect(withWd.registry.get("wd.clear")?.description?.()).toBe(strings.commands.folder("api"));
+  });
+
+  test("npm.install sends a trimmed spec and ignores anything else", () => {
+    const { api, registry } = setup();
+    registry.execute("npm.install", { spec: " zod@4.6.4 " });
+    registry.execute("npm.install", { spec: "" });
+    registry.execute("npm.install", {});
+    expect(api.npmInstall.mock.calls).toEqual([["zod@4.6.4"]]);
   });
 });

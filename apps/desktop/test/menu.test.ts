@@ -166,4 +166,16 @@ describe("application menu", () => {
     dispatchMenuAction(menuAction("app.settings"), target(true));
     expect(calls).toEqual({ opened: 1, settings: 2, sent: [{ command: "run.start" }] });
   });
+
+  test("Actions has Set and Clear Working Directory, and Tools lists NPM Packages and Environment Variables (spec §7.4)", () => {
+    const top = buildMenu(model()).map((item) => item.label);
+    expect(top.indexOf("Tools")).toBe(top.indexOf("Actions") + 1);
+    const withoutWd = buildMenu(model());
+    expect(byLabel(withoutWd, "Set Working Directory…")?.enabled).toBe(true);
+    expect(byLabel(withoutWd, "Clear Working Directory")?.enabled).toBe(false);
+    const withWd = buildMenu(model({ activeTab: createTab({ id: "t1", workingDirectory: "/work/api" }) }));
+    expect(byLabel(withWd, "Clear Working Directory")?.enabled).toBe(true);
+    expect(byLabel(withWd, "NPM Packages…")?.label).toBe("NPM Packages…    ⌘I");
+    expect(byLabel(withWd, "Environment Variables…")?.action).toBe(menuAction("tools.environmentVariables"));
+  });
 });

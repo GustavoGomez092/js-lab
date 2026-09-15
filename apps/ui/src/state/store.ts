@@ -27,7 +27,9 @@ export type ConfirmButton = { id: string; label: string; role?: "primary" | "dan
 export type Modal =
   | { kind: "palette"; context: "editor" | "output" }
   | { kind: "confirm"; id: string; title: string; message: string; buttons: ConfirmButton[] }
-  | { kind: "rename"; tabId: string };
+  | { kind: "rename"; tabId: string }
+  | { kind: "npm" }
+  | { kind: "env" };
 
 export interface AppState {
   ready: boolean;

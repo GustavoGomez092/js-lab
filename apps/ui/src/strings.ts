@@ -7,6 +7,7 @@ export const strings = {
     loopLimit: (limit: number) => `limit ${limit}`,
     current: "current",
     copyFailed: "Couldn't copy the output to the clipboard.",
+    folder: (name: string) => `folder: ${name}`,
   },
   limits: {
     tooLarge: "This tab is larger than 64 MB. JSLab stops saving and running it until it's smaller.",
@@ -131,6 +132,7 @@ export const strings = {
       edit: "Edit",
       format: "Format",
       view: "View",
+      tools: "Tools",
       runtime: "Runtime",
       language: "Language",
       theme: "Theme",

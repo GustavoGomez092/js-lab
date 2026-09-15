@@ -65,6 +65,9 @@
     "packages/e2e": {
       "name": "@jslab/e2e",
       "version": "0.0.0",
+      "devDependencies": {
+        "@jslab/test-registry": "workspace:*",
+      },
     },
     "packages/npm": {
       "name": "@jslab/npm",

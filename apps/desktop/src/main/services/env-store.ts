@@ -25,7 +25,11 @@ export class EnvStore {
     let text: string | null;
     try {
       text = await readFile(path, "utf8");
-    } catch {
+    } catch (error) {
+      // FR-2: only a missing file means "no environment yet". Any other read failure (EACCES, EIO, EBUSY, ...)
+      // must fail the caller instead of silently returning an empty store, since the next save() would then
+      // overwrite the user's real env.json with {}.
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
       text = null;
     }
     if (text === null) return new EnvStore(path, {}, "none", write);

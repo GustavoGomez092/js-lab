@@ -53,12 +53,14 @@ function EnvForm({ store, api }: { store: AppStore; api: Pick<MainApi, "getEnv" 
   const initial = useRef<string>("");
   const savingRef = useRef(false);
   const mounted = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // FR-4: reset on mount, not just cleared on cleanup, so a reused instance (e.g. a cleanup-then-reeffect
+    // cycle) doesn't leave every guard below permanently short-circuited after its first unmount.
+    mounted.current = true;
+    return () => {
       mounted.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   // R25-1: this form exists only while the sheet is open, so its own mount/unmount is the open/close
   // transition; the opener snapshot happens before the load effect's `newKey.focus()` below.

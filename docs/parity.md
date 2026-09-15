@@ -51,7 +51,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | EX-27 | `console.time*`, `console.assert`, `console.clear`, `console.table` | CL 1.10–2.3 | All console methods incl. `group*`, `trace`, `count`, `dir` | §5.6, §5.10 | M1 | U, I | ✅ `apps/ui/test/entry-row.test.tsx`, `apps/ui/test/output.test.ts` |
 | EX-28 | stdout/stderr output | #273 | `stdout`/`stderr` events | §5.6 | M1 | I | ✅ `packages/runner-bun/test/bootstrap.test.ts`, `packages/runner-bun/test/event-buffer.test.ts` |
 | EX-29 | Loading spinner while running | CL 1.12.0 | Run state indicators | §5.7 | M1 | E | ✅ `apps/ui/test/logic.test.ts`, `apps/ui/test/app.test.tsx` |
-| EX-30 | Working directory: Set Working Directory…, relative import/require/fs | Docs, CL 1.3.0, 1.5.1 | Per tab; relative imports and local `.ts` run natively | §5.3, §12.2 | M3 | I, E | ✅ |
+| EX-30 | Working directory: Set Working Directory…, relative import/require/fs | Docs, CL 1.3.0, 1.5.1 | Per tab; relative imports and local `.ts` run natively | §5.3, §12.2 | M3 | I, E | 🚧 `fs.readFileSync` on a WD-relative path has neither automated coverage nor manual sign-off; see `docs/qa/m3-checklist.md` Q13 |
 | EX-31 | `__dirname` / `__filename` / `module` scoped to the WD | CL 2.7.5, #519 | Same | §5.3 | M3 | I | ✅ |
 | EX-32 | `.env` files in the WD load | Docs, CL 3.2.0 | Same; Bun auto-load disabled | §5.3 | M3 | I | ✅ |
 | EX-33 | Tab label shows the WD name | #99 | Suffix "· dirname" | §12.2 | M3 | E | ✅ |

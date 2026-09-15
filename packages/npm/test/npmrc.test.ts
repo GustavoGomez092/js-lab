@@ -41,6 +41,23 @@ describe(".npmrc (spec §11.3, §11.5)", () => {
     expect(authTokenFor(config, "http://127.0.0.1:4873/", {})).toBeNull();
   });
 
+  test("case-folds the scheme and host, but not the path, when matching _authToken (FR-5)", () => {
+    const config = parseNpmrc("//npm.acme.test/:_authToken=s3cr3t");
+    expect(authTokenFor(config, "https://NPM.ACME.TEST/", {})).toBe("s3cr3t");
+    expect(authTokenFor(config, "HTTPS://npm.acme.test/", {})).toBe("s3cr3t");
+    // Longest-prefix-wins still holds once host folding is added.
+    const nested = parseNpmrc(
+      ["//npm.acme.test/:_authToken=short", "//npm.acme.test/private/:_authToken=long"].join("\n"),
+    );
+    expect(authTokenFor(nested, "https://NPM.ACME.TEST/private/", {})).toBe("long");
+    // The path stays case-sensitive: a differently-cased path segment falls back to the shorter, root match.
+    const pathSensitive = parseNpmrc(
+      ["//npm.acme.test/:_authToken=roottoken", "//npm.acme.test/Scoped/:_authToken=scopedtoken"].join("\n"),
+    );
+    expect(authTokenFor(pathSensitive, "https://NPM.ACME.TEST/Scoped/pkg", {})).toBe("scopedtoken");
+    expect(authTokenFor(pathSensitive, "https://NPM.ACME.TEST/scoped/pkg", {})).toBe("roottoken");
+  });
+
   test("redactRegistryUrl removes userinfo and leaves other URLs unchanged", () => {
     expect(redactRegistryUrl("https://user:pass@npm.corp.example/")).toBe("https://npm.corp.example/");
     expect(redactRegistryUrl("http://127.0.0.1:4873/")).toBe("http://127.0.0.1:4873/");

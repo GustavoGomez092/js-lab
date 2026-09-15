@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_NPMRC, defaultPackagesManifest } from "@jslab/shared";
@@ -49,5 +49,15 @@ describe("packages project (spec §11.1, §11.3)", () => {
     expect(await readdir(paths.npmHome)).toEqual([]);
     expect(await readFile(join(dir, "npm-home.npmrc.ignored-7"), "utf8")).toContain("@scope:registry");
     expect(log).toHaveLength(1);
+  });
+
+  test("repairs an existing .npmrc's loose mode to 0600 without touching its content (FR-3)", async () => {
+    const paths = pathsFor(dir);
+    await ensurePackagesProject(paths, () => {});
+    await writeFile(paths.packagesNpmrc, "registry=http://127.0.0.1:4873/\n");
+    await chmod(paths.packagesNpmrc, 0o644);
+    await ensurePackagesProject(paths, () => {});
+    expect((await stat(paths.packagesNpmrc)).mode & 0o777).toBe(0o600);
+    expect(await readFile(paths.packagesNpmrc, "utf8")).toBe("registry=http://127.0.0.1:4873/\n");
   });
 });

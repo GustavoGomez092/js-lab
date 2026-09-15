@@ -219,7 +219,15 @@ export class NpmService {
 
   /** Registry search (spec §11.3): `GET <registry>/-/v1/search`, with the registry/token resolved from `.npmrc`. */
   async search(query: string): Promise<NpmSearchResponse> {
-    const { registry, token } = await this.#registry(query.startsWith("@") ? query : null);
+    let registry: string;
+    let token: string | null;
+    try {
+      ({ registry, token } = await this.#registry(query.startsWith("@") ? query : null));
+    } catch (error) {
+      // FR-12: a non-ENOENT .npmrc read failure must fail the search, not silently retarget it at the public
+      // registry with the user's (possibly internal) query text.
+      return { results: [], error: { kind: "disk", log: String(error) } };
+    }
     // Fix round 1 (M-6): a registry URL with embedded credentials never reaches a log or error.
     const redacted = redactRegistryUrl(registry);
     try {
@@ -521,9 +529,24 @@ export class NpmService {
   /** The registry and auth token for `packageName` (or the default registry when `packageName` is null). */
   async #registry(packageName: string | null): Promise<{ registry: string; token: string | null }> {
     const base = this.deps.baseEnv();
-    const config = parseNpmrc(await readFile(this.deps.paths.packagesNpmrc, "utf8").catch(() => ""));
+    const config = parseNpmrc(await this.#readNpmrc());
     const registry = registryFor(config, packageName, base);
     return { registry, token: authTokenFor(config, registry, base) };
+  }
+
+  /**
+   * FR-12: the same bare-catch anti-pattern readManifest's I-2 fixed (FR-2's sibling), in the registry-selection
+   * path. The empty config that makes registryFor fall back to the public registry is used ONLY when .npmrc
+   * doesn't exist yet; any other read failure (permission drift, transient I/O) fails the caller instead of
+   * silently retargeting a private registry to the public one.
+   */
+  async #readNpmrc(): Promise<string> {
+    try {
+      return await readFile(this.deps.paths.packagesNpmrc, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "";
+      throw new Error(strings.log.npmNpmrcUnreadable(this.deps.paths.packagesNpmrc), { cause: error });
+    }
   }
 
   /**

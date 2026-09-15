@@ -60,6 +60,12 @@ describe("redaction", () => {
     expect(out).not.toContain(JSON.stringify(secret).slice(1, -1));
     expect(redact(`plain ${secret} end`)).toBe("plain [REDACTED] end");
   });
+
+  test("masks the longer of two secrets first when one contains the other, whatever order they're supplied (FR-1)", () => {
+    // Supplied shortest-first: the buggy order-preserving loop would split "abcdef" apart and leave its "ef" tail.
+    const redact = createRedactor(() => ["abcd", "abcdef"]);
+    expect(redact("line abcdef end")).toBe("line [REDACTED] end");
+  });
 });
 
 describe("RotatingLog", () => {

@@ -22,20 +22,25 @@ JSLAB_QA_PID=$!
 builtin cd "$REPO"
 ```
 
-Scripted teardown (R-M1-13):
+Scripted teardown (R-M1-13, FR-6: validated the same way the launch block is, and matched by tracked PID only —
+never a `pgrep -f` pattern, which degenerates to matching every process on the machine when `JSLAB_QA_DIR` is
+unset and can match unrelated command lines otherwise):
 
 ```bash
-pids=( $(pgrep -f "$JSLAB_QA_DIR/") $(pgrep -f "Library/Application Support/dev.jslab.app/canary") )
+: "${JSLAB_QA_DIR:?set JSLAB_QA_DIR to a folder under the session scratchpad (internal disk)}"
+: "${JSLAB_QA_PID:?JSLAB_QA_PID isn't set; re-run the launch block in this same shell first}"
+pids=( "$JSLAB_QA_PID" $(pgrep -P "$JSLAB_QA_PID") )
 for p in "${pids[@]}"; do kill -TERM "$p"; done
 sleep 5
-survivors=( $(pgrep -f "$JSLAB_QA_DIR/") $(pgrep -f "Library/Application Support/dev.jslab.app/canary") )
+survivors=()
+for p in "${pids[@]}"; do kill -0 "$p" 2>/dev/null && survivors+=("$p"); done
 for p in "${survivors[@]}"; do kill -KILL "$p"; done
 ```
 
 Each item passes only if the result matches exactly. Items marked **(E)** are also covered by an automated scenario.
 
 ## Packages
-- [ ] **Q1 NPM sheet (TL-01, TL-06).** ⌘I, Tools → NPM Packages… and the activity bar open the sheet. The installed table's header stays visible while scrolling. A package you add is highlighted for about 2 s. Show @types toggles `@types/*` rows. (E: tools, npm-panel) — **verified (I):** the ⌘I shortcut opens the sheet (by the passing `tools` and `npm-panel` dev-build scenarios), and the Tools menu's "NPM Packages…" item is present, enabled and correctly labeled. **Pending user:** actually opening it from the Tools menu or the activity bar (no scenario clicks either), the sticky header, the add-highlight and the Show @types toggle (the last two also need a real install).
+- [ ] **Q1 NPM sheet (TL-01, TL-06).** ⌘I, Tools → NPM Packages… and the activity bar open the sheet. The installed table's header stays visible while scrolling. A package you add is highlighted for about 2 s. Show @types toggles `@types/*` rows. (E: tools, npm-panel) — **verified (I):** the ⌘I shortcut opens the sheet (by the passing `tools` and `npm-panel` dev-build scenarios), and the Tools menu's "NPM Packages…" item is present and correctly labeled (FR-9: `enabled` is asserted for two other menu items in that scenario, not this one). **Pending user:** actually opening it from the Tools menu or the activity bar (no scenario clicks either, and neither does the item's enabled state), the sticky header, the add-highlight and the Show @types toggle (the last two also need a real install).
 - [ ] **Q2 Real install (TL-02, TL-03).** Typing `zod` shows registry results with descriptions and weekly downloads. **Add** installs it; `zod@3` installs that range's newest version exactly. — pending user (real registry).
 - [ ] **Q3 Git and tarball specs (TL-03).** `github:colinhacks/zod#main` or an `https://…tgz` URL installs. With install scripts off, the notice about blocked scripts appears when the package has one. — pending user (real registry).
 - [ ] **Q4 Update and remove (TL-06).** A package pinned to an old version shows **Update** with the newest version; Update, Remove and Update all do what they say, and the log drawer streams output. — pending user (real registry).
@@ -51,14 +56,14 @@ Each item passes only if the result matches exactly. Items marked **(E)** are al
 - [x] **Q12 Automatic types (XT-12).** With Install Types Automatically on, installing `lodash` also installs `@types/lodash`. (E: npm suite) — verified (I) by the passing npm-suite dev-build scenario.
 
 ## Working directory and environment
-- [ ] **Q13 Working directory (EX-30..EX-33, TF-19).** Actions → Set Working Directory… shows the folder picker; the status bar chip shows the folder name with the full path as its tooltip, and × clears it; the tab reads "title · folder". Relative imports, `__dirname`, `fs.readFileSync("./x")`, the folder's `.env` and its `node_modules` all work. (E: working-directory) — **verified (I):** the picker-driven WD flow (setting the WD, the chip, ×, relative imports/`__dirname`/`fs`/`.env`/`node_modules`), by the passing `working-directory` dev-build scenario. **Pending user:** the visual chip tooltip and tab-label read.
+- [ ] **Q13 Working directory (EX-30..EX-33, TF-19).** Actions → Set Working Directory… shows the folder picker; the status bar chip shows the folder name with the full path as its tooltip, and × clears it; the tab reads "title · folder". Relative imports, `__dirname`, `fs.readFileSync("./x")`, the folder's `.env` and its `node_modules` all work. (E: working-directory) — **verified (I):** the picker-driven WD flow (setting the WD via the picker, the tab label suffix, relative imports, `__dirname`, `.env`, `env.json` and `node_modules`), by the passing `working-directory` dev-build scenario. **Pending user (FR-8, FR-10):** the status-bar chip and its tooltip (the scenario asserts the tab **label**, not the chip), the × button's own click path (the scenario clears via the `wd.clear` command, not the button — `StatusBar.tsx:97-105`), `fs.readFileSync` on a WD-relative path (no scenario in `packages/e2e` calls it), and a visual read of the tab label.
 - [ ] **Q14 Missing folder.** Rename the working directory in Finder and run: the error "Working directory not found: …" shows **Change…**, which opens the picker. — pending user: the Finder rename needs a GUI action.
 - [ ] **Q15 Folder drop (TF-11).** Dropping a folder onto the window shows the notice pointing at Set Working Directory (Branch B), or sets the working directory (Branch A, per R-M3-SPIKE-1). — pending user: the drop needs a GUI/OS-level drop, never scripted (R-CI-1's E2E rule).
 - [ ] **Q16 Environment Variables (TL-11).** Values are masked until the eye toggle; Save persists and the next run sees them; Cancel discards; `env.json` is readable only by you (`ls -l` shows `-rw-------`). (E: environment) — **verified (I):** Save persisting, the next run seeing the values, and `env.json`'s 0600 mode, by the passing `environment` dev-build scenario. **Pending user:** the mask/eye-toggle visual and Cancel-discard read.
 - [ ] **Q17 Login shell PATH.** Launched from the Dock (not a terminal), a package whose install script needs a tool from your shell `PATH` (for example `git`) installs, and `process.env.PATH` in a run includes your shell's additions. — pending user: a Dock launch needs a GUI action.
 
 ## Settings, docs and diagnostics
-- [ ] **Q18 Bun vs Node doc.** `docs/user/bun-vs-node.md` matches Bun's compatibility page for Bun 1.4.0 (its last line records the check). — pending user: this dispatch had no web access, so `docs/user/bun-vs-node.md`'s last line records "Not yet checked against Bun's compatibility page for Bun 1.4.0."; a person must check it against the live page.
+- [ ] **Q18 Bun vs Node doc.** `docs/user/bun-vs-node.md` matches Bun's compatibility page for Bun 1.4.0. — pending user: this dispatch had no web access, so the check has never been run (FR-7: the doc no longer carries a to-do marker claiming otherwise — a person must check it against the live page and, if it's accurate, add a line recording that).
 - [x] **Q19a Build tab, Pipeline Operator (LB-05).** Settings → Build → Pipeline Operator on makes `5 |> % * 2` run. (E: settings-window) — verified (I) by the passing `settings-window` dev-build scenario.
 - [ ] **Q19b Build tab, Decorators Legacy (LB-07).** Settings → Build → Decorators Legacy makes a TypeScript `@decorator` on a class method compile with no editor error. — pending user: no automated scenario covers this; a person must check that a `@decorator` on a class method compiles with no editor error once the setting is on.
 - [ ] **Q20 .npmrc editor (TL-10).** Settings → NPM shows `.npmrc` with ini highlighting; Save is disabled until you edit; Reset restores `registry=https://registry.npmjs.org/`. (E: settings-window) — **verified (I):** Save persisting the edited content with 0600 mode, and Reset restoring the default registry, by the passing `settings-window` dev-build scenario. **Pending user:** the Save-disabled-until-edited button state and the ini syntax-highlighting visual read (no scenario checks the button's enabled/disabled state).

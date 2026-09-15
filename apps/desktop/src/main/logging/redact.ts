@@ -19,7 +19,9 @@ const PATTERNS: [RegExp, string][] = [
 export function createRedactor(secrets: () => readonly string[] = () => []): Redactor {
   return (text) => {
     let out = text;
-    for (const secret of secrets()) {
+    // FR-1: longer secrets first, so when one secret is a substring of another the longer one is masked whole
+    // before the shorter one can split it apart and leave a tail behind.
+    for (const secret of [...secrets()].sort((left, right) => right.length - left.length)) {
       if (secret.length < 4) continue;
       // R-M3-T18-FIX-1 M-1: a JSON-serialized log detail carries the escaped spelling. Mask it before the raw value,
       // so a partial raw match can't break it apart.

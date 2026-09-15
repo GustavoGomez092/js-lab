@@ -38,5 +38,3 @@ JSLab's **Bun** runtime runs your code with the Bun that ships inside JSLab (1.4
 
 - Install scripts (`postinstall` and friends) are blocked unless **Allow install scripts** is on in the NPM sheet or Settings → NPM.
 - npm operations use JSLab's own `.npmrc` (Settings → NPM), never your `~/.npmrc`. A git dependency over SSH authenticates through your SSH agent (`SSH_AUTH_SOCK`) or `GIT_SSH_COMMAND`, because npm operations don't see your home folder's `~/.ssh`.
-
-Not yet checked against Bun's compatibility page for Bun 1.4.0.

@@ -27,6 +27,16 @@ export function expandNpmrcValue(value: string, env: EnvLike): string {
 
 const withSlash = (url: string) => (url.endsWith("/") ? url : `${url}/`);
 
+/**
+ * FR-5: case-folds only the `//host[:port]` authority of a schemeless `//host/path` string, leaving the path
+ * (which can be case-sensitive on a registry) untouched.
+ */
+const foldAuthority = (schemeless: string): string => {
+  const match = /^(\/\/[^/]*)([\s\S]*)$/.exec(schemeless);
+  if (!match) return schemeless;
+  return `${(match[1] ?? "").toLowerCase()}${match[2] ?? ""}`;
+};
+
 export function registryFor(config: NpmrcConfig, packageName: string | null, env: EnvLike): string {
   const scope = packageName?.startsWith("@") ? packageName.split("/")[0] : null;
   const scoped = scope ? config.get(`${scope}:registry`) : undefined;
@@ -36,11 +46,14 @@ export function registryFor(config: NpmrcConfig, packageName: string | null, env
 
 /** The `_authToken` whose `//host/path/` key is the longest prefix of the registry URL (without its protocol). */
 export function authTokenFor(config: NpmrcConfig, registryUrl: string, env: EnvLike): string | null {
-  const target = withSlash(registryUrl.replace(/^https?:/, ""));
+  // FR-5: fold scheme and host/port case before comparing, on both sides, so `https://NPM.ACME.TEST/` still
+  // matches a `//npm.acme.test/:_authToken` key. The path segment is never folded -- registry paths can be
+  // case-sensitive.
+  const target = foldAuthority(withSlash(registryUrl.replace(/^https?:/i, "")));
   let best: { length: number; token: string } | null = null;
   for (const [key, value] of config) {
     if (!key.endsWith(":_authToken") || !key.startsWith("//")) continue;
-    const prefix = withSlash(key.slice(0, -":_authToken".length));
+    const prefix = foldAuthority(withSlash(key.slice(0, -":_authToken".length)));
     if (!target.startsWith(prefix)) continue;
     if (!best || prefix.length > best.length) best = { length: prefix.length, token: expandNpmrcValue(value, env) };
   }

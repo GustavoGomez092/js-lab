@@ -28,6 +28,8 @@ export const strings = {
     npmTypesCheckFailed: "Couldn't check the registry for types",
     /** Fix round 1 (I-2): packages/package.json exists but isn't a readable manifest; never replaced silently. */
     npmManifestUnreadable: (path: string) => `npm's package.json at ${path} could not be read as JSON`,
+    /** FR-12 (fix round 2): the same anti-pattern as npmManifestUnreadable, in the registry-selection path. */
+    npmNpmrcUnreadable: (path: string) => `npm's .npmrc at ${path} could not be read`,
     /** Fix round 1 (M-1): an onOperation subscriber threw; the queue's own bookkeeping must still proceed. */
     npmOperationEventFailed: "npm operation event could not be delivered",
     loginShellFailed: (reason: string) =>

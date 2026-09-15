@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { chmod, mkdir, rename } from "node:fs/promises";
+import { chmod, mkdir, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_NPMRC, defaultPackagesManifest } from "@jslab/shared";
 import type { AppPaths } from "../app-paths";
@@ -24,7 +24,13 @@ export async function ensurePackagesProject(
   if (!existsSync(paths.packagesJson)) {
     await writeFileAtomic(paths.packagesJson, `${JSON.stringify(defaultPackagesManifest(), null, 2)}\n`);
   }
-  if (!existsSync(paths.packagesNpmrc)) await writeFileAtomic(paths.packagesNpmrc, DEFAULT_NPMRC, { mode: 0o600 });
+  if (!existsSync(paths.packagesNpmrc)) {
+    await writeFileAtomic(paths.packagesNpmrc, DEFAULT_NPMRC, { mode: 0o600 });
+  } else if (((await stat(paths.packagesNpmrc)).mode & 0o777) !== 0o600) {
+    // FR-3: mirrors env-store.ts's drift repair. .npmrc can hold `_authToken` values, so a file created by an
+    // older build, restored from a backup, or copied with a permissive umask must not keep looser permissions.
+    await chmod(paths.packagesNpmrc, 0o600);
+  }
   await mkdir(paths.npmHome, { recursive: true, mode: 0o700 });
   await chmod(paths.npmHome, 0o700);
   const stray = join(paths.npmHome, ".npmrc");

@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createTab, defaultSession, defaultSettings, MAX_ENV_VALUE_CHARS, MAX_ENV_VARS } from "@jslab/shared";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { type EditorHandle, setEditorHandle } from "../src/editor/editor-handle";
 import { EnvVarsSheet } from "../src/env/EnvVarsSheet";
 import { createAppStore } from "../src/state/store";
@@ -238,6 +239,22 @@ describe("Environment Variables sheet (spec §12.1)", () => {
   test("an empty table shows the empty state (R25-6)", async () => {
     setup({});
     expect(await screen.findByText(strings.env.empty)).toBeTruthy();
+  });
+
+  test("reloads its rows when React re-invokes the mount effect on the same instance (FR-4)", async () => {
+    // The sheet remounts EnvForm with a fresh `key` on every real open/close (severity note in the review), so
+    // the `mounted` bug is otherwise latent. StrictMode's dev-only cleanup-then-reeffect on the SAME instance is
+    // exactly the case the review names as making it live, and the only way to reproduce it through the public
+    // component without reaching into EnvForm (which isn't exported).
+    const store = hydratedStore();
+    const api = { getEnv: mock(async () => ({ A: "1" })), saveEnv: mock(async () => ({ ok: true }) as const) };
+    render(
+      <StrictMode>
+        <EnvVarsSheet store={store} api={api} />
+      </StrictMode>,
+    );
+    act(() => store.getState().openModal({ kind: "env" }));
+    expect(await screen.findByLabelText(strings.env.valueOf("A"))).toBeTruthy();
   });
 
   test("a rejected save shows the error and keeps the sheet open (R-M3-T25-SAVE-1)", async () => {

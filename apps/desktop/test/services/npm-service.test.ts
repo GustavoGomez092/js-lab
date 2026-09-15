@@ -552,6 +552,30 @@ describe("NpmService (spec §11.3)", () => {
     expect(failedWithCreds.error?.log).not.toContain("hunter2");
   });
 
+  test("a non-ENOENT .npmrc read failure never falls back to the public registry (FR-12)", async () => {
+    const seen: string[] = [];
+    const fakeFetch = (async (input: string | URL | Request) => {
+      seen.push(String(input));
+      return Response.json({ objects: [] });
+    }) as typeof fetch;
+    const { service, paths } = await setup({ fetch: fakeFetch });
+
+    // A directory where .npmrc is expected: readFile fails with EISDIR, never ENOENT.
+    await rm(paths.packagesNpmrc, { force: true });
+    await mkdir(paths.packagesNpmrc);
+    const result = await service.search("acme-internal-tool");
+    expect(result.results).toEqual([]);
+    expect(result.error?.kind).toBe("disk");
+    // The public registry must never be reached with the (possibly internal) query text.
+    expect(seen).toEqual([]);
+
+    // ENOENT (no .npmrc at all) still uses the public default, as before.
+    await rm(paths.packagesNpmrc, { recursive: true, force: true });
+    const fallback = await service.search("zod");
+    expect(fallback.error).toBeNull();
+    expect(seen).toEqual(["https://registry.npmjs.org/-/v1/search?text=zod&size=25"]);
+  });
+
   test("with automatic types on, an untyped package gets @types/<name> when the registry has it", async () => {
     const seenAccept: string[] = [];
     const { service, paths, calls } = await setup({

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { chmod, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ENV_FILE_MODE, EnvStore } from "../../src/main/services/env-store";
@@ -51,5 +51,17 @@ describe("EnvStore (spec §12.1)", () => {
     await chmod(path, 0o644);
     expect((await EnvStore.open(path)).variables).toEqual({ A: "1" });
     expect(await modeOf(path)).toBe(ENV_FILE_MODE);
+  });
+
+  test("a non-ENOENT read failure rejects; ENOENT still returns an empty store with recovered: none (FR-2)", async () => {
+    // A directory where a file is expected: readFile fails with EISDIR, never ENOENT. Never chmod under the
+    // user's home; a directory-shaped path is enough to force a non-ENOENT failure in a temp dir.
+    const dirAsFile = join(dir, "env-is-a-dir");
+    await mkdir(dirAsFile);
+    await expect(EnvStore.open(dirAsFile)).rejects.toThrow();
+
+    const missing = join(dir, "does-not-exist.json");
+    const store = await EnvStore.open(missing);
+    expect([store.variables, store.recovered]).toEqual([{}, "none"]);
   });
 });

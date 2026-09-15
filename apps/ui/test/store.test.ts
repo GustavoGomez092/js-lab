@@ -7,6 +7,7 @@ import {
   mergeSettings,
   normalizeSession,
   sessionSchema,
+  type TabState,
 } from "@jslab/shared";
 import { createAppStore, STATUS_MESSAGE_MS, shouldAutoRun } from "../src/state/store";
 
@@ -81,6 +82,25 @@ describe("app store", () => {
     expect(store.getState().output.runState).toBe("idle");
     store.getState().clearOutput();
     expect(store.getState().output.entries).toEqual([]);
+
+    // Fix round 1 (I-1): workingDirectoryMissing goes true on a WorkingDirectoryError event, and false again once
+    // a new run's leftover entries are actually cleared -- the same moment `stale` flips back to false.
+    store.getState().receiveState("r2", "transpiling");
+    store.getState().receiveEvents("r2", [
+      {
+        kind: "error",
+        phase: "runner",
+        name: "WorkingDirectoryError",
+        message: "Working directory not found: /work/api",
+        stack: [],
+        seq: 1,
+        t: 0,
+      },
+    ]);
+    expect(store.getState().output.workingDirectoryMissing).toBe(true);
+    store.getState().receiveState("r3", "transpiling");
+    store.getState().receiveState("r3", "evaluating");
+    expect([store.getState().output.stale, store.getState().output.workingDirectoryMissing]).toEqual([false, false]);
   });
 
   test("diagnostics are kept only for the current run and reset when a new run starts", () => {
@@ -126,6 +146,18 @@ describe("app store", () => {
     expect(store.getState().output.entries).toHaveLength(0);
     store.getState().activateTab("a");
     expect([store.getState().code, store.getState().output.entries.length]).toEqual(["1", 1]);
+
+    // M-2 (fix round 1): applyTabUpdate marks the output stale only for the ACTIVE tab's own WD change.
+    store.getState().activateTab("b");
+    expect(store.getState().output.stale).toBe(false);
+    // A background tab's ("a") WD change must not mark the active tab's ("b") output stale.
+    store.getState().applyTabUpdate({ ...(store.getState().tabs.a as TabState), workingDirectory: "/work/api" });
+    expect(store.getState().output.stale).toBe(false);
+    // An active-tab update with the same WD (null -> null here) doesn't mark it stale either.
+    store
+      .getState()
+      .applyTabUpdate({ ...(store.getState().tabs.b as TabState), title: "renamed", titleIsCustom: true });
+    expect(store.getState().output.stale).toBe(false);
   });
 
   test("openTab inserts after the active tab; removing the last tab clears the mirrors", () => {

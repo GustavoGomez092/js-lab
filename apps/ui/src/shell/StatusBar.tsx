@@ -26,13 +26,9 @@ export function StatusBar({
   const language = useStore(store, (s) => s.tab?.language);
   const orientation = useStore(store, (s) => s.tab?.layout.orientation);
   const workingDirectory = useStore(store, (s) => s.tab?.workingDirectory ?? null);
-  // R24-2: a primitive boolean — true while the current output still carries a WorkingDirectoryError.
-  const wdMissing = useStore(
-    store,
-    (s) =>
-      !s.output.stale &&
-      s.output.entries.some((e) => e.event.kind === "error" && e.event.name === "WorkingDirectoryError"),
-  );
+  // R24-2, fix round 1 (I-1/M-2): an O(1) read of the store-derived flag, instead of scanning `entries` on every
+  // render. The flag itself is kept current in `store.ts` (`withWorkingDirectoryMissing`, `applyTabUpdate`).
+  const wdMissing = useStore(store, (s) => s.output.workingDirectoryMissing && !s.output.stale);
   const runState = useStore(store, (s) => s.output.runState);
   const activeHandles = useStore(store, (s) => s.output.activeHandles);
   const safeMode = useStore(store, (s) => s.safeMode.active);

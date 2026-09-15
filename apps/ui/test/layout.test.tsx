@@ -1,5 +1,13 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createTab, defaultSession, defaultSettings, mergeSettings, nextZoom, type Settings } from "@jslab/shared";
+import {
+  commandMeta,
+  createTab,
+  defaultSession,
+  defaultSettings,
+  mergeSettings,
+  nextZoom,
+  type Settings,
+} from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createViewCommands } from "../src/commands/view-commands";
 import { runStateKind } from "../src/shell/labels";
@@ -210,6 +218,10 @@ describe("layout", () => {
     );
     const emptyChip = screen.getByRole("button", { name: strings.shell.workingDirectory.set });
     expect(emptyChip.getAttribute("title")).toBe(strings.shell.workingDirectory.setHelp);
+
+    // M-3 (fix round 1): the chip labels stay in step with the wd.set/wd.clear command titles (R24-1).
+    expect(commandMeta("wd.set")?.title).toBe(strings.shell.workingDirectory.set);
+    expect(commandMeta("wd.clear")?.title).toBe(strings.shell.workingDirectory.clear);
   });
 
   // R24-2: the chip keeps showing "Working directory not found" after the output scrolls away.
@@ -236,5 +248,45 @@ describe("layout", () => {
     ]);
     render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
     expect(screen.getByRole("button", { name: strings.shell.workingDirectory.missing("/work/api") })).toBeTruthy();
+  });
+
+  // I-1 (fix round 1): picking a new, valid folder must stop the chip from calling it "not found".
+  test("picking a new working directory clears the missing-folder warning", () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1", workingDirectory: "/work/api" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    store.getState().receiveState("r1", "transpiling");
+    store.getState().receiveEvents("r1", [
+      {
+        kind: "error",
+        phase: "runner",
+        name: "WorkingDirectoryError",
+        message: "Working directory not found: /work/api",
+        stack: [],
+        seq: 1,
+        t: 0,
+      },
+    ]);
+    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
+    expect(screen.getByRole("button", { name: strings.shell.workingDirectory.missing("/work/api") })).toBeTruthy();
+
+    // The same store action the wd.changed handler uses (App.tsx: applyTabUpdate(tab)).
+    act(() => {
+      store.getState().applyTabUpdate({
+        ...(store.getState().tab as NonNullable<ReturnType<typeof store.getState>["tab"]>),
+        workingDirectory: "/work/api2",
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: strings.shell.workingDirectory.missing("/work/api2") })).toBeNull();
+    const chip = screen.getByRole("button", { name: strings.shell.workingDirectory.change("/work/api2") });
+    expect(chip.getAttribute("aria-label")).not.toContain("not found");
+    expect(chip.className).not.toContain("status-wd-missing");
+    expect(store.getState().output.stale).toBe(true);
   });
 });

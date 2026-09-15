@@ -13,13 +13,35 @@ import { applyRunEvents, applyRunState, initialOutput, type OutputState } from "
 import { clampEditorSize, EDITOR_SIZE_RESET, insertAfterActive, isPermutation, renamePatch } from "./workspace";
 
 export interface TabRuntime {
-  output: OutputState;
+  /**
+   * Fix round 1 (I-1/M-2): `workingDirectoryMissing` is a store-local extension of `OutputState`, kept in lockstep
+   * with `stale` by `withWorkingDirectoryMissing` below, instead of `StatusBar` scanning `entries` on every render.
+   * `OutputState` itself (in `./output`, a separate reducer module) is unchanged.
+   */
+  output: OutputState & { workingDirectoryMissing: boolean };
   diagnostics: DiagnosticPayload[];
   /** Restored tabs never auto-run until edited or run manually (spec §5.14). */
   autoRunArmed: boolean;
 }
 
-export const newRuntime = (): TabRuntime => ({ output: initialOutput, diagnostics: [], autoRunArmed: false });
+const freshOutput = (): TabRuntime["output"] => ({ ...initialOutput, workingDirectoryMissing: false });
+
+export const newRuntime = (): TabRuntime => ({ output: freshOutput(), diagnostics: [], autoRunArmed: false });
+
+/**
+ * Fix round 1 (I-1): true exactly when the most recent events carried a `WorkingDirectoryError`, reset to false the
+ * moment leftover entries from a previous run are actually cleared — the same instant `stale` flips from true to
+ * false, so a stale error row can never keep calling a folder the user has since fixed "not found".
+ */
+function withWorkingDirectoryMissing(
+  previous: TabRuntime["output"],
+  next: OutputState,
+  events: readonly RunEvent[] = [],
+): TabRuntime["output"] {
+  const cleared = previous.stale && !next.stale;
+  const reported = events.some((event) => event.kind === "error" && event.name === "WorkingDirectoryError");
+  return { ...next, workingDirectoryMissing: reported || (cleared ? false : previous.workingDirectoryMissing) };
+}
 
 export type FocusArea = "editor" | "output" | "other";
 export type OutputFilter = "all" | "results" | "logs" | "errors";
@@ -67,7 +89,7 @@ export interface AppState {
   tab: TabState | null;
   code: string;
   autoRunArmed: boolean;
-  output: OutputState;
+  output: TabRuntime["output"];
   diagnostics: DiagnosticPayload[];
 
   hoveredLine: number | null;
@@ -150,7 +172,7 @@ function mirrorOf(state: Pick<AppState, "tabs" | "activeTabId" | "buffers" | "ru
     tab: id ? (state.tabs[id] ?? null) : null,
     code: id ? (state.buffers[id] ?? "") : "",
     autoRunArmed: runtime?.autoRunArmed ?? false,
-    output: runtime?.output ?? initialOutput,
+    output: runtime?.output ?? freshOutput(),
     diagnostics: runtime?.diagnostics ?? NO_DIAGNOSTICS,
   };
 }
@@ -222,7 +244,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       tab: null,
       code: "",
       autoRunArmed: false,
-      output: initialOutput,
+      output: freshOutput(),
       diagnostics: NO_DIAGNOSTICS,
       hoveredLine: null,
       revealRequest: null,
@@ -308,24 +330,32 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       receiveEvents(runId, events, tabId) {
         const id = tabId ?? get().activeTabId;
         if (!id) {
-          set({ output: applyRunEvents(get().output, runId, events) });
+          const previous = get().output;
+          set({ output: withWorkingDirectoryMissing(previous, applyRunEvents(previous, runId, events), events) });
           return;
         }
         if (!get().tabs[id]) return;
-        updateRuntime(id, (runtime) => ({ ...runtime, output: applyRunEvents(runtime.output, runId, events) }));
+        updateRuntime(id, (runtime) => ({
+          ...runtime,
+          output: withWorkingDirectoryMissing(runtime.output, applyRunEvents(runtime.output, runId, events), events),
+        }));
       },
 
       receiveState(runId, runState, activeHandles, tabId) {
         const id = tabId ?? get().activeTabId;
         if (!id) {
-          const previousRunId = get().output.runId;
-          const output = applyRunState(get().output, runId, runState, activeHandles);
+          const previous = get().output;
+          const previousRunId = previous.runId;
+          const output = withWorkingDirectoryMissing(previous, applyRunState(previous, runId, runState, activeHandles));
           set(output.runId !== previousRunId ? { output, diagnostics: [] } : { output });
           return;
         }
         if (!get().tabs[id]) return;
         updateRuntime(id, (runtime) => {
-          const output = applyRunState(runtime.output, runId, runState, activeHandles);
+          const output = withWorkingDirectoryMissing(
+            runtime.output,
+            applyRunState(runtime.output, runId, runState, activeHandles),
+          );
           return output.runId !== runtime.output.runId
             ? { ...runtime, output, diagnostics: [] }
             : { ...runtime, output };
@@ -343,7 +373,14 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       },
 
       clearOutput(tabId) {
-        const clear = (output: OutputState): OutputState => ({ ...output, entries: [], stale: false, truncated: 0 });
+        const clear = (output: TabRuntime["output"]): TabRuntime["output"] => ({
+          ...output,
+          entries: [],
+          stale: false,
+          truncated: 0,
+          // Fix round 1 (I-1): clearing the output clears any WorkingDirectoryError row with it.
+          workingDirectoryMissing: false,
+        });
         const id = resolve(tabId);
         if (!id) set({ output: clear(get().output) });
         else updateRuntime(id, (runtime) => ({ ...runtime, output: clear(runtime.output) }));
@@ -399,7 +436,16 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       },
 
       applyTabUpdate(tab) {
+        const activeId = get().activeTabId;
+        const previous = get().tabs[tab.id];
         updateTab(tab.id, (current) => ({ ...tab, viewState: current.viewState }));
+        // Fix round 1 (I-1/M-2): the active tab's WD changed underneath its last run's output, which belongs to
+        // the previous folder; mark it stale like any other stale output, using the existing stale mechanism, so a
+        // leftover WorkingDirectoryError row can't keep calling the *new* folder "not found" until the next run.
+        // A background tab's own update, or one where the WD didn't change (e.g. a file.saved), leaves it alone.
+        if (tab.id === activeId && previous && previous.workingDirectory !== tab.workingDirectory) {
+          updateRuntime(tab.id, (runtime) => ({ ...runtime, output: { ...runtime.output, stale: true } }));
+        }
       },
 
       setViewState(tabId, viewState) {

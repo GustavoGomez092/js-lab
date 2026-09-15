@@ -208,10 +208,14 @@ describe("M3 app commands", () => {
   });
 
   test("npm.install sends a trimmed spec and ignores anything else", () => {
-    const { api, registry } = setup();
-    registry.execute("npm.install", { spec: " zod@4.6.4 " });
+    const { api, registry, store } = setup();
+    // R23-1: an empty or whitespace spec does nothing, including no status message.
     registry.execute("npm.install", { spec: "" });
     registry.execute("npm.install", {});
+    expect(store.getState().statusMessage).toBeNull();
+    registry.execute("npm.install", { spec: " zod@4.6.4 " });
     expect(api.npmInstall.mock.calls).toEqual([["zod@4.6.4"]]);
+    // R23-1: the status bar confirms the install started.
+    expect(store.getState().statusMessage).toBe(strings.install.started("zod@4.6.4", null));
   });
 });

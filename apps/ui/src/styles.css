@@ -310,6 +310,14 @@ button:disabled {
   text-align: left;
 }
 
+.entry-action {
+  margin-top: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--fg-accent);
+}
+
 .entry-codeframe,
 .entry-stream {
   margin: 0;

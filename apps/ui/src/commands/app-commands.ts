@@ -23,6 +23,9 @@ export interface AppCommandDeps {
   tabs: TabActions;
   run(reason: "manual"): void;
   editor(): EditorHandle | null;
+  /** R23-1: the effective keycap for a command, for the install-started status message. Optional so existing call
+   * sites and tests compile unchanged. */
+  keysFor?(command: string): string | null;
 }
 
 const RUNTIME_COMMANDS: [CommandId, Runtime][] = [
@@ -164,7 +167,10 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
       id: "npm.install",
       run: (args) => {
         const spec = (args as { spec?: unknown } | undefined)?.spec;
-        if (typeof spec === "string" && spec.trim()) deps.api.npmInstall(spec.trim());
+        const trimmed = typeof spec === "string" ? spec.trim() : "";
+        if (!trimmed) return;
+        deps.api.npmInstall(trimmed);
+        s().setStatusMessage(strings.install.started(trimmed, deps.keysFor?.("tools.npmPackages") ?? null));
       },
     },
   ];

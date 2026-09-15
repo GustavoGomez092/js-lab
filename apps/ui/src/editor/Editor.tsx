@@ -5,6 +5,7 @@ import type { MainApi } from "../api";
 import type { AppState, AppStore } from "../state/store";
 import { setEditorHandle } from "./editor-handle";
 import { type EditorOptions, editorOptionsFor } from "./editor-options";
+import { installActionsFor, registerInstallAssist } from "./install-assist";
 import { createMarkerTracker, type EditorMarker, markersFor } from "./markers";
 import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
@@ -12,14 +13,17 @@ import { installPasteGuard, pasteInto } from "./paste-guard";
 import { createTabView } from "./tab-view";
 import { createTsEnvironment } from "./ts-environment";
 import { tsEnvironmentChanged, tsStateFor } from "./ts-state";
+import { createTypeFeeder } from "./type-feeder";
 import { loadRuntimePack } from "./type-libs";
 import { defineClipboardRegister, startVim, type VimController } from "./vim";
 import { createVimStatusNode } from "./vim-status";
 
 interface EditorProps {
   store: AppStore;
-  api: Pick<MainApi, "saveViewState">;
+  api: Pick<MainApi, "saveViewState" | "packageTypes" | "localTypes">;
   onLargePaste?(bytes: number): Promise<boolean>;
+  /** R23-1: routed through the npm.install command by the caller, not called on api directly. */
+  onInstall?(spec: string): void;
   /** The React-owned `.vim-slot` before the status bar, where the Vim status node goes (T16-rr1). */
   vimSlot?: RefObject<HTMLElement | null>;
 }
@@ -35,12 +39,15 @@ function toMonacoOptions(options: EditorOptions): Omit<Monaco.editor.IEditorOpti
   return { ...options, hover: { enabled: options.hover.enabled ? "on" : "off", delay: options.hover.delay } };
 }
 
-export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
+export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   // FB-m10: the paste confirm is read through a ref, so a new callback identity (for example `flows` rebuilt after a
   // formatter change) never disposes and recreates Monaco, which would lose undo history and Vim state.
   const largePaste = useRef(onLargePaste);
   largePaste.current = onLargePaste;
+  // R23-1: same latest-props ref pattern, so a new onInstall identity from App never tears down Monaco.
+  const install = useRef(onInstall);
+  install.current = onInstall;
 
   useEffect(() => {
     const monaco = setupMonaco();
@@ -73,6 +80,20 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
           .catch((error: unknown) => console.error("[editor] failed to apply the TypeScript environment", error));
       }
     };
+
+    // Spec §6.2: package and working-directory types for the imports in the shown model.
+    const feeder = createTypeFeeder({
+      requestPackages: (tabId, names) => api.packageTypes(tabId, names),
+      requestLocal: (tabId, specifiers) => api.localTypes(tabId, specifiers),
+      environment: tsEnvironment,
+      log: (message, detail) => console.warn(`[jslab] ${message}`, detail),
+    });
+    const feed = (tabId: string, model: Monaco.editor.ITextModel) =>
+      feeder.schedule(tabId, model.getValue(), Boolean(store.getState().tabs[tabId]?.workingDirectory));
+    const installAssist = registerInstallAssist(monaco, {
+      untyped: () => feeder.untyped(),
+      install: (spec) => install.current?.(spec),
+    });
 
     const applyMonacoTheme = (themeId: string) => {
       const theme = getTheme(themeId);
@@ -166,12 +187,16 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
         contentSubscription?.dispose();
         contentSubscription = null;
         if (!tabId || !model) return;
-        contentSubscription = model.onDidChangeContent(() => view.pushContent(tabId, model));
+        contentSubscription = model.onDidChangeContent(() => {
+          view.pushContent(tabId, model);
+          feed(tabId, model);
+        });
         reportCursor();
         // A new model starts with no markers or decorations (as built in M1): reapply both.
         applyMarkers(store.getState());
         applyHover(store.getState().hoveredLine);
         applyTypeScript(store.getState());
+        feed(tabId, model);
       },
     });
 
@@ -305,6 +330,18 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
         if (isStale()) return [];
         return (info?.entries ?? []).map((entry) => entry.name);
       },
+      installActions: async () => {
+        const model = editor.getModel();
+        if (!model) return [];
+        const markers = monaco.editor
+          .getModelMarkers({ resource: model.uri })
+          .filter((marker) => marker.owner === "typescript" || marker.owner === "javascript")
+          .map((marker) => ({
+            code: typeof marker.code === "object" ? marker.code.value : (marker.code ?? ""),
+            message: marker.message,
+          }));
+        return installActionsFor(markers, feeder.untyped());
+      },
     });
 
     // T18-m-paste: the model attached at paste time is captured, and the text goes in only if it is still attached
@@ -334,6 +371,16 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
       // comparing `activeTabId` here only applied it twice per switch.
       if (tsEnvironmentChanged(state, previous)) {
         applyTypeScript(state);
+      }
+      if (
+        state.packagesRevision !== previous.packagesRevision ||
+        state.tab?.workingDirectory !== previous.tab?.workingDirectory
+      ) {
+        if (state.tab && state.tab.workingDirectory !== previous.tab?.workingDirectory)
+          feeder.invalidateLocal(state.tab.id);
+        feeder.invalidatePackages();
+        const model = editor.getModel();
+        if (state.activeTabId && model) feed(state.activeTabId, model);
       }
       if (
         state.activeTabId !== previous.activeTabId ||
@@ -372,6 +419,8 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
       focusSubscription.dispose();
       vim?.dispose();
       vimStatus?.remove();
+      feeder.dispose();
+      installAssist.dispose();
       editor.dispose();
       // Task 21 fix round 1 (M-2): stop a pending apply from writing this environment's stale settings into
       // Monaco's globals after this Editor is gone, before the models it was applying local files for are disposed.

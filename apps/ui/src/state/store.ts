@@ -60,6 +60,8 @@ export interface AppState {
   fontFallback: boolean;
   /** Which panel the side bar shows when open (Task 16). Snippets and AI Chat arrive in M5. */
   sideBarPanel: "snippets" | "ai";
+  /** Bumped on every `npm.changed` message, so the editor's type feeder invalidates its package cache (Task 23). */
+  packagesRevision: number;
 
   // Mirrors of the active tab, so M1 components keep reading a single tab.
   tab: TabState | null;
@@ -121,6 +123,7 @@ export interface AppState {
   setThemeId(themeId: string): void;
   setFontFallback(value: boolean): void;
   setSideBarPanel(panel: "snippets" | "ai"): void;
+  bumpPackagesRevision(): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -215,6 +218,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       themeId: "graphite",
       fontFallback: false,
       sideBarPanel: "snippets",
+      packagesRevision: 0,
       tab: null,
       code: "",
       autoRunArmed: false,
@@ -465,6 +469,10 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       setSideBarPanel(sideBarPanel) {
         set({ sideBarPanel });
+      },
+
+      bumpPackagesRevision() {
+        set({ packagesRevision: get().packagesRevision + 1 });
       },
     };
   });

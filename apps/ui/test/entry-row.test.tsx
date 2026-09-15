@@ -147,4 +147,31 @@ describe("EntryRow", () => {
     expect(screen.getByTestId("entry").className).toContain("entry-level-error");
     expect(screen.queryByRole("button", { name: /^L\d/ })).toBeNull();
   });
+
+  test("a module-not-found runtime error offers to install the package (spec §6.3)", () => {
+    const onInstall = mock((_name: string) => {});
+    render(
+      <EntryRow
+        entry={{
+          key: "e",
+          event: {
+            kind: "error",
+            phase: "runtime",
+            name: "ResolveMessage",
+            message: "Cannot find package 'zod' from '/data/runs/t1/entry-1.mjs'",
+            stack: [],
+            seq: 1,
+            t: 0,
+          } as DisplayEvent,
+        }}
+        stale={false}
+        expand={noExpand}
+        onReveal={() => {}}
+        onHover={() => {}}
+        onInstall={onInstall}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: strings.output.installPackage("zod") }));
+    expect(onInstall).toHaveBeenCalledWith("zod");
+  });
 });

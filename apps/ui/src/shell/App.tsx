@@ -189,12 +189,22 @@ export function App({
     return () => tabs.setBeforeClose(null);
   }, [tabs, flows, bufferSync]);
 
+  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
+  // R23-1: hoisted above the registry so app-commands' npm.install status message can show its keycap too.
+  const keysFor = useCallback(
+    (command: string) => {
+      const chord = shortcutFor(bindings, command);
+      return chord ? formatChord(chord) : null;
+    },
+    [bindings],
+  );
+
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>
       store.getState().setStatusMessage(strings.commands.failed(commandMeta(id)?.title ?? id, error)),
     );
     created.register(
-      ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle }),
+      ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle, keysFor }),
       ...createEditorCommands(getEditorHandle),
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
@@ -231,18 +241,14 @@ export function App({
       },
     );
     return created;
-  }, [store, api, tabs, run, flows, format]);
+  }, [store, api, tabs, run, flows, format, keysFor]);
 
-  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
   const resolver = useMemo(() => new KeybindingResolver(bindings), [bindings]);
   // FB-m3: chrome keycaps follow the effective bindings, as the palette and the menu do.
-  const keycaps = useMemo(() => {
-    const keysFor = (command: string) => {
-      const chord = shortcutFor(bindings, command);
-      return chord ? formatChord(chord) : null;
-    };
-    return { run: keysFor("run.start"), stop: keysFor("run.stop"), settings: keysFor("app.settings") };
-  }, [bindings]);
+  const keycaps = useMemo(
+    () => ({ run: keysFor("run.start"), stop: keysFor("run.stop"), settings: keysFor("app.settings") }),
+    [keysFor],
+  );
 
   useEffect(() => {
     const stop = startAutoRun(store, () => run("auto"));
@@ -280,6 +286,8 @@ export function App({
         registry.execute(command, args);
       }),
       api.on("settings.changed", ({ settings }) => store.getState().receiveSettings(settings)),
+      // R-M3-T23: Main's npm queue finished, so the type feeder's package cache may be stale (Task 26 bumps this too).
+      api.on("npm.changed", () => store.getState().bumpPackagesRevision()),
       api.on("file.opened", (payload) => void flows.handleOpened(payload)),
       api.on("file.saved", (payload) => flows.handleSaved(payload)),
       api.on("file.saveCancelled", (payload) => flows.handleSaveCancelled(payload)),
@@ -314,6 +322,7 @@ export function App({
       registeredCommands: () => registry.list().map((spec) => spec.id),
       tsDiagnostics: () => getEditorHandle()?.typeDiagnostics() ?? Promise.resolve([]),
       completions: (offset) => getEditorHandle()?.completionsAt(offset) ?? Promise.resolve([]),
+      installActions: () => getEditorHandle()?.installActions() ?? Promise.resolve([]),
       regions: () => ({
         toolbar: document.querySelector(".toolbar") !== null,
         activityBar: document.querySelector(".activity-bar") !== null,
@@ -413,6 +422,10 @@ export function App({
     [store, registry],
   );
 
+  // R23-1: every install action (the editor's quick fix and the output row's button) dispatches npm.install, so the
+  // status bar confirms it started.
+  const install = useCallback((spec: string) => registry.execute("npm.install", { spec }), [registry]);
+
   if (!tabId || !settings) return null;
   const busy = runState !== null && BUSY_STATES.has(runState);
 
@@ -481,8 +494,16 @@ export function App({
           secondVisible={outputVisible}
           onResize={(size) => store.getState().setEditorSize(size)}
           onReset={() => store.getState().resetEditorSize()}
-          first={<Editor store={store} api={api} onLargePaste={flows.confirmLargePaste} vimSlot={vimSlot} />}
-          second={<OutputPanel store={store} api={api} runKeys={keycaps.run} />}
+          first={
+            <Editor
+              store={store}
+              api={api}
+              onLargePaste={flows.confirmLargePaste}
+              onInstall={install}
+              vimSlot={vimSlot}
+            />
+          }
+          second={<OutputPanel store={store} api={api} runKeys={keycaps.run} onInstall={install} />}
         />
       </div>
       <div className="vim-slot" ref={vimSlot} />

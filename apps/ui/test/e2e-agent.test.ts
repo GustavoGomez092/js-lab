@@ -150,6 +150,21 @@ describe("E2E agent", () => {
       completions: ["map"],
     });
   });
+
+  test("e2e.installActions returns the editor's install-assist actions", async () => {
+    const { store } = setup();
+    const agent = createE2EAgent({
+      store,
+      executeCommand: () => "unknown",
+      editor: () => null,
+      target: () => new EventTarget(),
+      installActions: async () => [{ title: "Install package zod", spec: "zod" }],
+    });
+    expect(await agent("command", { id: "e2e.installActions" })).toEqual({
+      executed: "e2e.installActions",
+      actions: [{ title: "Install package zod", spec: "zod" }],
+    });
+  });
 });
 
 describe("keyEventInit", () => {

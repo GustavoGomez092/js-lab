@@ -19,9 +19,11 @@ interface OutputPanelProps {
   api: MainApi;
   /** The Run keycap from the effective keybindings, for the empty state (review rec 2). */
   runKeys?: string | null;
+  /** R23-1: routed through the npm.install command by the caller, not called on api directly. */
+  onInstall?(spec: string): void;
 }
 
-export function OutputPanel({ store, api, runKeys = null }: OutputPanelProps) {
+export function OutputPanel({ store, api, runKeys = null, onInstall }: OutputPanelProps) {
   const output = useStore(store, (s) => s.output);
   const showUndefined = useStore(store, (s) => s.settings?.run.showUndefined ?? false);
   const highlighting = useStore(store, (s) => s.settings?.output.highlighting ?? true);
@@ -124,6 +126,7 @@ export function OutputPanel({ store, api, runKeys = null }: OutputPanelProps) {
                   showLineNumbers={showLineNumbers}
                   onReveal={(line) => store.getState().reveal(line)}
                   onHover={(line) => store.getState().setHoveredLine(line)}
+                  onInstall={onInstall}
                 />
               </div>
             );

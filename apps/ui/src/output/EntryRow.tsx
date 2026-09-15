@@ -1,4 +1,5 @@
 import type { RunEvent } from "@jslab/rpc-schema";
+import { runtimeMissingPackage } from "../editor/install-assist";
 import type { OutputEntry } from "../state/output";
 import { strings } from "../strings";
 import { entryLevel } from "./filters";
@@ -12,6 +13,7 @@ interface EntryRowProps {
   onReveal(line: number): void;
   onHover(line: number | null): void;
   showLineNumbers?: boolean;
+  onInstall?(name: string): void;
 }
 
 type ErrorEvent = Extract<RunEvent, { kind: "error" }>;
@@ -21,7 +23,15 @@ function kindClass(event: OutputEntry["event"]): string {
   return event.kind === "console" ? `console-${event.level}` : event.kind;
 }
 
-export function EntryRow({ entry, stale, expand, onReveal, onHover, showLineNumbers = true }: EntryRowProps) {
+export function EntryRow({
+  entry,
+  stale,
+  expand,
+  onReveal,
+  onHover,
+  showLineNumbers = true,
+  onInstall,
+}: EntryRowProps) {
   const { event } = entry;
   const line = event.kind === "result" || event.kind === "console" || event.kind === "error" ? event.line : undefined;
   return (
@@ -38,7 +48,7 @@ export function EntryRow({ entry, stale, expand, onReveal, onHover, showLineNumb
         {event.kind === "result" && <ValueView value={event.value} expand={expand} />}
         {event.kind === "console" && <ConsoleBody event={event} expand={expand} />}
         {(event.kind === "stdout" || event.kind === "stderr") && <pre className="entry-stream">{event.text}</pre>}
-        {event.kind === "error" && <ErrorBody event={event} onReveal={onReveal} />}
+        {event.kind === "error" && <ErrorBody event={event} onReveal={onReveal} onInstall={onInstall} />}
       </div>
       {showLineNumbers && line !== undefined && (
         <button
@@ -93,7 +103,15 @@ function ConsoleBody({ event, expand }: { event: ConsoleEvent; expand: ExpandHan
   );
 }
 
-function ErrorBody({ event, onReveal }: { event: ErrorEvent; onReveal(line: number): void }) {
+function ErrorBody({
+  event,
+  onReveal,
+  onInstall,
+}: {
+  event: ErrorEvent;
+  onReveal(line: number): void;
+  onInstall?(name: string): void;
+}) {
   const userFrames = event.stack.filter((frame) => frame.user && frame.line != null);
   const internal = event.stack.length - userFrames.length;
   return (
@@ -115,6 +133,14 @@ function ErrorBody({ event, onReveal }: { event: ErrorEvent; onReveal(line: numb
         </button>
       ))}
       {internal > 0 && <span className="entry-internal">{strings.output.internalFrames(internal)}</span>}
+      {(() => {
+        const missing = onInstall ? runtimeMissingPackage(event.message) : null;
+        return missing ? (
+          <button type="button" className="entry-action" onClick={() => onInstall?.(missing)}>
+            {strings.output.installPackage(missing)}
+          </button>
+        ) : null;
+      })()}
     </div>
   );
 }

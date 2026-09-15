@@ -1,5 +1,13 @@
 /** Every user-visible UI string added from M2 on, kept in one place for M5 i18n extraction (spec §17). */
 export const strings = {
+  install: {
+    /** Spec §6.3. */
+    package: (name: string) => `Install package ${name}`,
+    types: (name: string) => `Install ${name}`,
+    /** R23-1: shown in the status bar right after npm.install dispatches. */
+    started: (spec: string, keys: string | null) =>
+      keys ? `Installing ${spec}… ${keys} shows progress.` : `Installing ${spec}…`,
+  },
   commands: {
     failed: (title: string, error: unknown) =>
       `${title} failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -171,6 +179,8 @@ export const strings = {
     /** A clickable stack-frame line (RR2-m5). */
     frame: (fn: string, line: number, column: number) => `at ${fn} (L${line}:${column})`,
     anonymous: "<anonymous>",
+    /** Spec §6.3: a runtime module-not-found error offers to install the missing package. */
+    installPackage: (name: string) => `Install ${name}`,
   },
   settings: {
     windowTitle: "Settings",

@@ -552,7 +552,7 @@ Special cases:
   1. It reads `package.json` `types`/`typings`/`exports[types]`.
   2. It falls back to `@types/<name>`.
   3. It collects the `.d.ts` closure, following relative references, up to 5 MB per package.
-- **Type-declaration versioning:** declarations follow each package's `typesVersions` for the TypeScript version bundled with the editor (5.9.3); declarations written for other TypeScript versions are left out.
+- **Type-declaration versioning:** The bundled type packages' `typesVersions` maps are matched against Monaco's bundled TypeScript (5.9.3); non-matching version directories are excluded.
 - **Loading.** The UI requests types for the import specifiers found in the model (debounced 500 ms) and registers them with `addExtraLib(content, 'file:///node_modules/<pkg>/…')`. A registered package is never requested twice, and types are invalidated when packages change.
 - **WD-local modules:** `.ts`, `.d.ts`, and `.js` files imported relatively from the WD are fed the same way at `file:///tab/<path relative to the WD>`, limited to 200 files. A relative import that leaves the WD gets no editor types.
 

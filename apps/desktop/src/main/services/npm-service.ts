@@ -35,8 +35,11 @@ export interface NpmServiceDeps {
   queue?: OperationQueue;
   now?(): number;
   newId?(): string;
-  /** Fix round 1 (M-4): how long `list()` waits before its one retry of a transient manifest parse failure. */
-  listRetryDelayMs?: number;
+  /**
+   * Fix round 1 (M-4) / round 2 (FLAKE-3): waited once before `list()` retries a transient manifest parse failure.
+   * Defaults to `LIST_RETRY_DELAY_MS`.
+   */
+  listRetryWait?: () => Promise<void>;
   onOperation(operation: NpmOperation): void;
   onLog(opId: string, text: string): void;
   onChanged(list: NpmListResult): void;
@@ -114,7 +117,7 @@ export class NpmService {
     try {
       installed = await this.installedPackages(new Map());
     } catch {
-      await Bun.sleep(this.deps.listRetryDelayMs ?? LIST_RETRY_DELAY_MS);
+      await (this.deps.listRetryWait ?? (() => Bun.sleep(LIST_RETRY_DELAY_MS)))();
       installed = await this.installedPackages(new Map());
     }
     return { installed, outdatedCheckedAt: null, outdatedError: null };

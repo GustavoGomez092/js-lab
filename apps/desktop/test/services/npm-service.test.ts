@@ -227,6 +227,25 @@ describe("NpmService (spec §11.3)", () => {
     expect(calls[0]?.signal.aborted).toBe(true);
   });
 
+  test("a timed-out operation that settles within the grace keeps the child's output in its log", async () => {
+    const { service, ops } = await setup({
+      queue: new OperationQueue({ timeoutMs: 20 }),
+      // Settles from the abort event itself (fix round 2, R-M3-FLAKE-7b): no timer, so this can't flake.
+      respond: (_argv, options) =>
+        new Promise((resolve) =>
+          options.signal.addEventListener("abort", () =>
+            resolve({ exitCode: null, stdout: "marker-stdout", stderr: "marker-stderr" }),
+          ),
+        ),
+    });
+    service.install("slow@1.0.0");
+    await service.whenIdle();
+    const last = ops.at(-1);
+    expect(last).toMatchObject({ status: "failed", error: { kind: "timeout" } });
+    expect(last?.error?.log).toContain("marker-stdout");
+    expect(last?.error?.log).toContain("marker-stderr");
+  });
+
   test("a malformed package.json fails the operation and is never overwritten", async () => {
     const { service, ops, calls, paths } = await setup({
       settings: () => ({ allowInstallScripts: true, autoInstallTypes: false }),
@@ -243,11 +262,28 @@ describe("NpmService (spec §11.3)", () => {
 
   test("list retries a transient manifest parse failure once, then reports the error", async () => {
     const manifestPath = join(dir, "data", "packages", "package.json");
-    const { service } = await setup({ listRetryDelayMs: 20 });
+    // Fix round 2 (FLAKE-3): a gate proves the retry path was actually entered before any fix-up write lands, so
+    // the test can never pass because the FIRST read happened to overtake the swap.
+    let reached!: () => void;
+    const retryReached = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let release!: () => void;
+    const retryGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { service } = await setup({
+      listRetryWait: () => {
+        reached();
+        return retryGate;
+      },
+    });
 
     await writeFile(manifestPath, "{ not json");
     const listPromise = service.list();
-    // Fix the file well before the 20 ms retry delay elapses.
+    await retryReached;
+
+    // Every fix-up write is awaited before the retry is allowed to proceed.
     await writeFile(
       manifestPath,
       JSON.stringify({
@@ -262,11 +298,15 @@ describe("NpmService (spec §11.3)", () => {
       join(dir, "data", "packages", "node_modules", "zod", "package.json"),
       JSON.stringify({ version: "4.6.4" }),
     );
+
+    release();
     const result = await listPromise;
     expect(result.installed).toEqual([{ name: "zod", version: "4.6.4", latest: null }]);
 
+    // A permanently unparsable file still rejects after its one retry.
+    const { service: serviceWithImmediateRetry } = await setup({ listRetryWait: () => Promise.resolve() });
     await writeFile(manifestPath, "{ still not json");
-    await expect(service.list()).rejects.toThrow();
+    await expect(serviceWithImmediateRetry.list()).rejects.toThrow();
   });
 
   test("a throwing onOperation never poisons whenIdle", async () => {

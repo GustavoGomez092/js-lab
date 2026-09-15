@@ -51,12 +51,14 @@ describe("OperationQueue (spec §11.3)", () => {
     const first = queue.run(
       (signal) =>
         new Promise<string>((resolve) => {
+          // Fix round 2 (R-M3-FLAKE-7b): settles from the abort event itself (a microtask), never a real timer, so
+          // this can't race the grace window on a loaded runner.
           signal.addEventListener("abort", () => {
             events.push("aborted");
-            setTimeout(() => {
+            queueMicrotask(() => {
               events.push("settled");
               resolve("first-result");
-            }, 5);
+            });
           });
         }),
     );

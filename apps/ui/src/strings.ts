@@ -1,4 +1,6 @@
 /** Every user-visible UI string added from M2 on, kept in one place for M5 i18n extraction (spec §17). */
+const NL = String.fromCharCode(10);
+
 export const strings = {
   install: {
     /** Spec §6.3. */
@@ -347,6 +349,25 @@ export const strings = {
     confirmReset: "Confirm Reset",
     restartSafeMode: "Restart in Safe Mode",
     loadFailed: (message: string) => `Settings failed to load: ${message}`,
+    npmrc: {
+      title: ".npmrc",
+      help: "Registry and authentication for package installs. Your ~/.npmrc is never used.",
+      privacyNote: "This file is readable only by you, and tokens never appear in JSLab's logs.",
+      editorLabel: ".npmrc contents",
+      save: "Save",
+      reset: "Reset",
+      saved: "Saved .npmrc",
+      resetDone: "Restored the default registry",
+      resetFailed: "Couldn't reset .npmrc.",
+      loadFailed: "Couldn't read .npmrc",
+      saveFailed: (error: string) => `Couldn't save .npmrc: ${error}`,
+      examples: "Examples",
+      exampleText: `@acme:registry=https://npm.acme.dev/${NL}//npm.acme.dev/:_authToken=<token>`,
+      warnings: {
+        missingEquals: (line: number) => `Line ${line}: missing "=".`,
+        registryNotUrl: (line: number) => `Line ${line}: registry isn't a web address.`,
+      },
+    },
     fields: {
       "run.autoRun": { label: "Auto Run", help: "Run code automatically as you type." },
       "run.autoLog": { label: "Auto Log", help: "Show the value of each top-level expression." },
@@ -458,7 +479,7 @@ export const strings = {
       },
       "npm.allowInstallScripts": {
         label: "Allow Install Scripts",
-        help: "Run packages' install scripts. Each package is added to trustedDependencies; scripts run with your permissions.",
+        help: "Run packages' install scripts. Each package is added to trustedDependencies; scripts run with your permissions. Applies to future installs. Packages you already trusted keep running their install scripts.",
       },
       "npm.autoInstallTypes": {
         label: "Install Types Automatically",

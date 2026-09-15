@@ -1371,3 +1371,53 @@ button:disabled {
   background: var(--bg-errorRow);
   color: var(--fg-error);
 }
+
+.npmrc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.npmrc h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.npmrc-editor {
+  height: 180px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.npmrc-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--fg-warn);
+  font-size: 12px;
+}
+
+.npmrc-examples {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.npmrc-examples pre {
+  margin: 6px 0;
+  padding: 8px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  font-size: 12px;
+  overflow-x: auto;
+}
+
+.npmrc-status {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.npmrc-status-error {
+  color: var(--fg-error);
+}

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createUserData, type LaunchedApp, launchApp, waitFor } from "../src";
+
+const NL = String.fromCharCode(10);
 
 let app: LaunchedApp | null = null;
 afterEach(async () => {
@@ -87,5 +89,34 @@ describe("Settings window", () => {
     await waitFor(async () => (await current().state()).ui.settings?.build?.pipelineOperator === true || null);
     await current().settingsCommand("settings.tab", { tab: "npm" });
     await waitFor(async () => (await current().settingsState())?.fieldCount === 2 || null);
+  });
+
+  test("Settings → NPM edits, saves and resets <packages>/.npmrc with mode 0600 (TL-10)", async () => {
+    app = await launchApp();
+    await openSettings();
+    await current().settingsCommand("settings.tab", { tab: "npm" });
+    await waitFor(async () => (await current().settingsState())?.npmrc?.content?.startsWith("registry=") || null, {
+      timeoutMs: 30_000,
+    });
+    const npmrc = join(current().userData, "packages", ".npmrc");
+    await current().settingsCommand("npmrc.set", { content: `registry=http://127.0.0.1:4873/${NL}` });
+    await current().settingsCommand("npmrc.save");
+    await waitFor(async () => (await readFile(npmrc, "utf8")) === `registry=http://127.0.0.1:4873/${NL}` || null);
+    expect((await stat(npmrc)).mode & 0o777).toBe(0o600);
+    await current().settingsCommand("npmrc.reset");
+    await waitFor(async () => (await readFile(npmrc, "utf8")) === `registry=https://registry.npmjs.org/${NL}` || null);
+  });
+
+  test("turning on Pipeline Operator in Settings → Build lets the next run use |> (LB-05)", async () => {
+    app = await launchApp({ settings: { version: 3, run: { autoRun: false } } });
+    await openSettings();
+    await current().settingsCommand("settings.set", { key: "build.pipelineOperator", value: true });
+    await waitFor(async () => (await current().state()).ui.settings?.build?.pipelineOperator === true || null);
+    await current().type("5 |> % * 2");
+    await current().command("run.start");
+    await current().waitForOutput(
+      (entries) => entries.some((entry) => entry.kind === "result" && entry.text === "10"),
+      30_000,
+    );
   });
 });

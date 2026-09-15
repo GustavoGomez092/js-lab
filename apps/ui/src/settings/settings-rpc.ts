@@ -1,5 +1,6 @@
 import type {
   E2EResponse,
+  SaveResult,
   SettingsAppAction,
   SettingsUpdateParams,
   SettingsViewMessages,
@@ -19,6 +20,9 @@ export interface SettingsApi {
   get(): Promise<{ settings: Settings; e2e: boolean }>;
   update(patch: SettingsUpdateParams["patch"]): Promise<Settings>;
   listFonts(): Promise<SettingsWindowRequests["fonts.list"]["response"]>;
+  getNpmrc(): Promise<string>;
+  saveNpmrc(content: string): Promise<SaveResult>;
+  resetNpmrc(): Promise<string>;
   appCommand(action: SettingsAppAction): void;
   e2eRespond(response: E2EResponse): void;
   on<K extends keyof SettingsViewMessages>(name: K, listener: (payload: SettingsViewMessages[K]) => void): () => void;
@@ -39,6 +43,9 @@ export function createSettingsApi(): SettingsApi {
     get: () => rpc.request["settings.get"]({}),
     update: (patch) => rpc.request["settings.update"]({ patch }),
     listFonts: () => rpc.request["fonts.list"]({}),
+    getNpmrc: () => rpc.request["npmrc.get"]({}).then((reply) => reply.content),
+    saveNpmrc: (content) => rpc.request["npmrc.save"]({ content }),
+    resetNpmrc: () => rpc.request["npmrc.reset"]({}).then((reply) => reply.content),
     appCommand: (action) => rpc.send["app.command"]({ action }),
     e2eRespond: (response) => rpc.send["e2e.response"](response),
     on: (name, listener) => hub.on(name, listener),

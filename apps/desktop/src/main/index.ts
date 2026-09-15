@@ -22,7 +22,7 @@ import Electrobun, {
   Updater,
   Utils,
 } from "electrobun/main";
-import { resolveAppPaths } from "./app-paths";
+import { e2eBunCacheDir, resolveAppPaths } from "./app-paths";
 import { E2EBridge } from "./cli/e2e-bridge";
 import { createSocketMethods } from "./cli/socket-methods";
 import { type SocketServer, startSocketServer } from "./cli/socket-server";
@@ -162,6 +162,9 @@ async function start(): Promise<void> {
   const loginEnv = process.env.JSLAB_E2E === "1" ? null : await readLoginShellEnv({ shell: process.env.SHELL, log });
   const baseEnv = mergeLoginEnv(process.env, loginEnv);
   // The composition root builds everything that doesn't need Electrobun (main-services.ts, tested without it).
+  // R-M3-T18-FIX-1 M-4: under E2E, npm operations never use the user's Bun cache
+  // (JSLAB_E2E_BUN_CACHE_DIR, else <dataDir>/e2e-bun-cache).
+  const cacheDir = e2eBunCacheDir(process.env, paths.dataDir);
   const services = await createMainServices({
     paths,
     env: baseEnv,
@@ -172,9 +175,7 @@ async function start(): Promise<void> {
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
     onDiagnostics: (tabId, runId, diagnostics) => rpc.send["run.diagnostics"]({ tabId, runId, diagnostics }),
     realHome: homedir(),
-    ...(process.env.JSLAB_E2E === "1" && process.env.JSLAB_E2E_BUN_CACHE_DIR
-      ? { bunCacheDirOverride: process.env.JSLAB_E2E_BUN_CACHE_DIR }
-      : {}),
+    ...(cacheDir ? { bunCacheDirOverride: cacheDir } : {}),
     onNpmOperation: (operation) => rpc.send["npm.op"](operation),
     // R-M3-T18-LOGCAP-1: a pass-through; the log drawer (Task 26) keeps the newest MAX_NPM_LOG_CHARS per operation.
     onNpmLog: (opId, text) => rpc.send["npm.log"]({ opId, text }),

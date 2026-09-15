@@ -46,6 +46,20 @@ describe("redaction", () => {
     expect(redact('{"Authorization":["Bearer abc123"]}')).toBe('{"Authorization":["[REDACTED]"]}');
     expect(redact('{"Authorization":"Bearer abc123"}')).toBe('{"Authorization":"[REDACTED]"}');
   });
+
+  test("env secrets are masked in their JSON-escaped spelling too", () => {
+    const q = String.fromCharCode(34);
+    const bs = String.fromCharCode(92);
+    const nl = String.fromCharCode(10);
+    const secret = `pa${q}ss${bs}word${nl}Z9Z9`;
+    const redact = createRedactor(() => [secret]);
+    const line = `detail ${JSON.stringify({ v: secret })}`;
+    const out = redact(line);
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain("Z9Z9");
+    expect(out).not.toContain(JSON.stringify(secret).slice(1, -1));
+    expect(redact(`plain ${secret} end`)).toBe("plain [REDACTED] end");
+  });
 });
 
 describe("RotatingLog", () => {

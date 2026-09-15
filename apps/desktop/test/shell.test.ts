@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { resolveAppPaths, runnerEnvironment } from "../src/main/app-paths";
+import { join } from "node:path";
+import { e2eBunCacheDir, resolveAppPaths, runnerEnvironment } from "../src/main/app-paths";
 
 const input = {
   resourcesFolder: "/Applications/JSLab.app/Contents/Resources",
@@ -49,6 +50,12 @@ describe("resolveAppPaths", () => {
       "/tmp-e2e/u1/run.lock",
       "/tmp-e2e/u1/jslab.sock",
     ]);
+  });
+
+  test("e2eBunCacheDir keeps E2E npm off the user's Bun cache", () => {
+    expect(e2eBunCacheDir({ JSLAB_E2E_BUN_CACHE_DIR: "/x" }, "/data")).toBeUndefined();
+    expect(e2eBunCacheDir({ JSLAB_E2E: "1", JSLAB_E2E_BUN_CACHE_DIR: "/x" }, "/data")).toBe("/x");
+    expect(e2eBunCacheDir({ JSLAB_E2E: "1" }, "/data")).toBe(join("/data", "e2e-bun-cache"));
   });
 });
 

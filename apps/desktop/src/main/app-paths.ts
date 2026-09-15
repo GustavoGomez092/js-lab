@@ -57,6 +57,12 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
   };
 }
 
+/** Under E2E, npm uses a private Bun cache: JSLAB_E2E_BUN_CACHE_DIR, else <dataDir>/e2e-bun-cache. Never the user's cache. */
+export function e2eBunCacheDir(env: Record<string, string | undefined>, dataDir: string): string | undefined {
+  if (env.JSLAB_E2E !== "1") return undefined;
+  return env.JSLAB_E2E_BUN_CACHE_DIR ? env.JSLAB_E2E_BUN_CACHE_DIR : join(dataDir, "e2e-bun-cache");
+}
+
 export interface RunnerEnvironmentInput {
   /** The login-shell environment (spec §4.6). */
   base: Record<string, string | undefined>;

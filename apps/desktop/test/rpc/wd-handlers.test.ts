@@ -2,7 +2,9 @@ import { describe, expect, mock, test } from "bun:test";
 import { createTab, defaultSession, type TabState } from "@jslab/shared";
 import { createWorkingDirectoryHandlers } from "../../src/main/rpc/wd-handlers";
 
-function setup(options: { picked?: string | null; directories?: string[] } = {}) {
+type PickFolder = (options: { startingFolder: string }) => Promise<string | null>;
+
+function setup(options: { picked?: string | null; directories?: string[]; pickFolder?: PickFolder } = {}) {
   const session = defaultSession(() => createTab({ id: "t1" }));
   const changed: { tabId: string; tab: TabState }[] = [];
   const calls: string[] = [];
@@ -17,7 +19,7 @@ function setup(options: { picked?: string | null; directories?: string[] } = {})
         return next;
       }),
     },
-    pickFolder: mock(async (_options: { startingFolder: string }) => options.picked ?? null),
+    pickFolder: mock<PickFolder>(options.pickFolder ?? (async () => options.picked ?? null)),
     isDirectory: async (path: string) => (options.directories ?? []).includes(path),
     documentsDir: "/docs",
     spares: {
@@ -62,5 +64,75 @@ describe("working directory handlers (spec §12.2)", () => {
     handlers.messages["wd.clear"]({ tabId: "t1" });
     await settle();
     expect(changed.map((entry) => entry.tab.workingDirectory)).toEqual([null]);
+  });
+
+  test("a second wd.pick for the same tab is ignored while its picker is open", async () => {
+    let resolvePick: (folder: string | null) => void = () => {};
+    const { handlers, deps } = setup({
+      pickFolder: () =>
+        new Promise<string | null>((resolve) => {
+          resolvePick = resolve;
+        }),
+    });
+    handlers.messages["wd.pick"]({ tabId: "t1" });
+    handlers.messages["wd.pick"]({ tabId: "t1" });
+    await settle();
+    expect(deps.pickFolder).toHaveBeenCalledTimes(1);
+    resolvePick(null);
+    await settle();
+    handlers.messages["wd.pick"]({ tabId: "t1" });
+    await settle();
+    expect(deps.pickFolder).toHaveBeenCalledTimes(2);
+  });
+
+  test("clearing a tab with no working directory, or picking its current one, changes nothing", async () => {
+    const cleared = setup();
+    expect(cleared.session.tabs.t1?.workingDirectory ?? null).toBeNull();
+    cleared.handlers.messages["wd.clear"]({ tabId: "t1" });
+    await settle();
+
+    const repicked = setup({ picked: "/work/api", directories: ["/work/api"] });
+    (repicked.session.tabs.t1 as TabState).workingDirectory = "/work/api";
+    repicked.handlers.messages["wd.pick"]({ tabId: "t1" });
+    await settle();
+    expect(repicked.deps.pickFolder).toHaveBeenCalledTimes(1);
+
+    for (const { deps, changed, calls } of [cleared, repicked]) {
+      expect(deps.session.setWorkingDirectory).not.toHaveBeenCalled();
+      expect(deps.spares.invalidate).not.toHaveBeenCalled();
+      expect(deps.spares.setActiveTab).not.toHaveBeenCalled();
+      expect(deps.types.invalidate).not.toHaveBeenCalled();
+      expect(changed).toEqual([]);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  test("a relative picked path is ignored", async () => {
+    const { handlers, deps, changed } = setup({ picked: ".", directories: ["."] });
+    handlers.messages["wd.pick"]({ tabId: "t1" });
+    await settle();
+    expect(deps.pickFolder).toHaveBeenCalledTimes(1);
+    expect(deps.session.setWorkingDirectory).not.toHaveBeenCalled();
+    expect(changed).toEqual([]);
+  });
+
+  test("the picker starts in the tab's working directory, else the last directory, else Documents", async () => {
+    const withWorkingDirectory = setup({ directories: ["/work/api", "/last"] });
+    (withWorkingDirectory.session.tabs.t1 as TabState).workingDirectory = "/work/api";
+    withWorkingDirectory.session.lastDirectory = "/last";
+
+    const workingDirectoryGone = setup({ directories: ["/last"] });
+    (workingDirectoryGone.session.tabs.t1 as TabState).workingDirectory = "/deleted";
+    workingDirectoryGone.session.lastDirectory = "/last";
+
+    const neither = setup();
+
+    for (const { handlers } of [withWorkingDirectory, workingDirectoryGone, neither]) {
+      handlers.messages["wd.pick"]({ tabId: "t1" });
+    }
+    await settle();
+    expect(withWorkingDirectory.deps.pickFolder.mock.calls).toEqual([[{ startingFolder: "/work/api" }]]);
+    expect(workingDirectoryGone.deps.pickFolder.mock.calls).toEqual([[{ startingFolder: "/last" }]]);
+    expect(neither.deps.pickFolder.mock.calls).toEqual([[{ startingFolder: "/docs" }]]);
   });
 });

@@ -92,19 +92,14 @@ test("⌘I opens the installed table from the packages project; a dead registry 
     { name: "fixture-a", version: "1.0.0", latest: null },
   ]);
   expect(npm.outdatedError).toBe("network");
+  // R-M3-OUTDATED-1-FIX-1 (M-4): a reopen check was here (Escape, then cmd+i, asserting `network` again), but the
+  // `ui.npm` E2E snapshot (`apps/ui/src/e2e/snapshot.ts`) exposes only `installed`, `operations` and
+  // `outdatedError` — no revision, checked-at timestamp, or other field that changes when the reopened sheet's own
+  // `npm.list(true)` reply actually lands. `outdatedCheckedAt` isn't exposed either, and wouldn't help: the
+  // 10-minute TTL means reopening never triggers a new refresh, so its value would be identical before and after,
+  // not merely non-decreasing. Without a freshness signal, `waitFor` would accept the stale pre-reopen snapshot the
+  // instant `ui.modal` reads "npm" again, proving nothing about the reopened reply. Removed rather than left
+  // vacuous, per the fix-round spec; no production or snapshot change is in scope for this round.
   await current.key("escape");
   await waitFor(async () => (await current.state()).ui.modal === null || null);
-
-  // R-M3-OUTDATED-1: reopening the sheet exercises the cached-response path (the 10-minute TTL means no new
-  // refresh runs), which stays order-independent regardless of the delivery-race fix above.
-  await current.key("cmd+i");
-  const reopened = await waitFor(
-    async () => {
-      const ui = (await current.state()).ui;
-      const snapshot = ui.npm as NpmSnapshot;
-      return ui.modal === "npm" && snapshot.outdatedError ? snapshot : null;
-    },
-    { timeoutMs: 90_000, message: "the reopened sheet never reported the cached outdated error" },
-  );
-  expect(reopened.outdatedError).toBe("network");
 });

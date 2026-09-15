@@ -846,7 +846,7 @@ describe("NpmService (spec §11.3)", () => {
   // R-M3-OUTDATED-1: this is the mechanism behind the npm-panel E2E flake (analysis H6). A `list()` reply taken
   // before the background refresh completes must carry a lower revision than the `npm.changed` push that follows
   // it, whatever order delivery to the UI actually takes.
-  test("list results carry increasing revisions, and the post-refresh push is newest", async () => {
+  test("list results carry increasing revisions, and a slower read still keeps the revision from when it started", async () => {
     const table = "│ Package │ Current │ Update │ Latest │\n│ zod │ 4.0.0 │ 4.0.0 │ 4.6.4 │\n";
     const { service, changed } = await setup({
       respond: async (argv) =>
@@ -855,12 +855,54 @@ describe("NpmService (spec §11.3)", () => {
     const response = await service.list({ refreshOutdated: true });
     await service.whenIdle();
     expect(changed.at(-1)?.revision).toBeGreaterThan(response.revision);
+
+    // R-M3-OUTDATED-1-FIX-1 (M-2): the revision must come from when the snapshot was TAKEN, not when the result is
+    // finally returned (review mutant M3 moved the stamp to the `return` statement and every test still passed).
+    // A (started first) is slowed by a transient manifest-parse retry; B (started after A) reads a valid manifest
+    // immediately and finishes first. A must still carry the LOWER revision — reflecting that it snapshotted state
+    // before B did — even though A's own promise settles after B's.
+    let reached!: () => void;
+    const retryReached = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let release!: () => void;
+    const retryGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { service: raced, paths } = await setup({
+      listRetryWait: () => {
+        reached();
+        return retryGate;
+      },
+    });
+    await writeFile(paths.packagesJson, "{ not json");
+    const aPromise = raced.list({ refreshOutdated: false });
+    await retryReached; // A has read the broken manifest and is now waiting on the retry gate.
+
+    await writeFile(
+      paths.packagesJson,
+      JSON.stringify({ name: "jslab-packages", private: true, dependencies: {}, trustedDependencies: [] }),
+    );
+    const bResult = await raced.list({ refreshOutdated: false }); // B starts after A, reads cleanly, finishes first.
+    release();
+    const aResult = await aPromise;
+
+    expect(aResult.revision).toBeLessThan(bResult.revision);
+
+    // A store applying results in arrival order (B first, then the older A) must keep B's data — the pure
+    // "ignore a lower revision" rule `store.ts`'s `receiveNpmList` uses.
+    const applyIfNewer = <T extends { revision: number }>(current: T | null, next: T): T =>
+      current && next.revision < current.revision ? current : next;
+    let applied: NpmListResult | null = null;
+    applied = applyIfNewer(applied, bResult);
+    applied = applyIfNewer(applied, aResult);
+    expect(applied).toBe(bResult);
   });
 
   // R-M3-OUTDATED-1: the queue is serial, so without preemption a stalled `bun outdated` would hold every install,
   // remove, update and Update all behind it for up to the queue's 5-minute timeout. This proves both halves of the
   // fix: preemption (never waits) and the outdated-specific deadline (never blames the queue's own timeout).
-  test("a user operation preempts a running or queued update check", async () => {
+  test("a user operation preempts a running update check", async () => {
     const { service, calls } = await setup({
       respond: (argv, options) =>
         argv[0] === "outdated"
@@ -869,7 +911,16 @@ describe("NpmService (spec §11.3)", () => {
               // resolves with whatever the streams gave.
               options.signal.addEventListener("abort", () => resolve({ exitCode: null, stdout: "", stderr: "" }));
             })
-          : Promise.resolve({ exitCode: 0, stdout: "installed ok@1.0.0\n", stderr: "" }),
+          : // R-M3-OUTDATED-1-FIX-1 (I-1): the interrupting install FAILS. A successful install would call
+            // `onSucceeded()` (npm-service.ts:360), which clears `#outdated` and makes the "no outdatedError
+            // recorded" assertion below pass even if the preemption guard (npm-service.ts:489) were removed
+            // (review mutant M1) — it can't currently fail. A failed install never calls `onSucceeded()`, so the
+            // assertion below is a real proof that the preempted refresh itself never wrote an error.
+            Promise.resolve({
+              exitCode: 1,
+              stdout: "",
+              stderr: "error: ConnectionRefused downloading package manifest ok\n",
+            }),
     });
 
     void service.list({ refreshOutdated: true });
@@ -900,5 +951,35 @@ describe("NpmService (spec §11.3)", () => {
     await slow.list({ refreshOutdated: true });
     await slow.whenIdle();
     expect((await slow.list({ refreshOutdated: false })).outdatedError).toEqual({ kind: "timeout", log: "" });
+  });
+
+  // R-M3-OUTDATED-1-FIX-1 (M-1): the sibling test above only preempts a refresh that's already spawned. This
+  // proves the OTHER branch (npm-service.ts:477): a refresh still waiting in the queue, preempted before its task
+  // is ever invoked, must never spawn `bun outdated` at all.
+  test("a queued update check is skipped when a user operation preempts it", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const { service, calls } = await setup({
+      respond: async (argv) => {
+        if (argv[0] === "outdated") return { exitCode: 0, stdout: "", stderr: "" }; // must never actually be called
+        if (argv.includes("first@1.0.0")) {
+          await firstGate;
+          return { exitCode: 0, stdout: "installed first@1.0.0\n", stderr: "" };
+        }
+        return { exitCode: 0, stdout: `installed ${argv.at(-1)}\n`, stderr: "" };
+      },
+    });
+
+    service.install("first@1.0.0"); // occupies the queue (running, gated on firstGate).
+    void service.list({ refreshOutdated: true }); // queues the refresh behind it — never yet started.
+    service.install("second@1.0.0"); // preempts the still-queued refresh before it's ever invoked.
+    releaseFirst();
+    await service.whenIdle();
+
+    expect(calls.some((call) => call.argv[0] === "outdated")).toBe(false);
+    expect(calls.map((call) => call.argv.at(-1))).toEqual(["first@1.0.0", "second@1.0.0"]);
+    expect((await service.list({ refreshOutdated: false })).outdatedError).toBeNull();
   });
 });

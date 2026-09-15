@@ -411,6 +411,7 @@ export type MainMessages = {
   "npm.updateAll": Record<string, never>;
   "wd.pick": TabParams;
   "wd.clear": TabParams;
+  "ui.stateFlushed": Record<string, never>;
 };
 
 /** Messages received by the UI, sent by Main. */
@@ -431,4 +432,5 @@ export type ViewMessages = {
   "npm.log": { opId: string; text: string };
   "npm.changed": NpmListResult;
   "wd.changed": { tabId: string; tab: TabState };
+  "app.flushState": Record<string, never>;
 };

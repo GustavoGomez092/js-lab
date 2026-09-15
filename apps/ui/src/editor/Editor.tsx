@@ -244,6 +244,10 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
           hoverDelay: options.hover?.delay,
         };
       },
+      flushViewState: () => {
+        view.saveActive();
+        view.flush();
+      },
     });
 
     // T18-m-paste: the model attached at paste time is captured, and the text goes in only if it is still attached

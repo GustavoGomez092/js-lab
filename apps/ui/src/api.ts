@@ -29,6 +29,7 @@ export interface MainApi {
   bufferChanged(tabId: string, content: string): void;
   patchTab(tabId: string, patch: TabPatch["patch"]): void;
   heartbeat(): void;
+  stateFlushed(): void;
 
   createTab(params: TabCreateParams): Promise<{ tab: TabState }>;
   closeTab(tabId: string): Promise<TabCloseResult>;

@@ -27,6 +27,7 @@ export function createFakeApi() {
     bufferChanged: mock((_tabId: string, _content: string) => {}),
     patchTab: mock((_tabId: string, _patch: unknown) => {}),
     heartbeat: mock(() => {}),
+    stateFlushed: mock(() => {}),
     createTab: mock(async (params: TabCreateParams) => ({ tab: createTab({ language: params.language }) })),
     closeTab: mock(
       async (_tabId: string): Promise<TabCloseResult> => ({ ok: true, activeTabId: "", replacement: null }),

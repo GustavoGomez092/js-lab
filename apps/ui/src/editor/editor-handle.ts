@@ -26,6 +26,8 @@ export interface EditorHandle {
   missingActions(ids: readonly string[]): string[];
   /** Settings-driven editor options currently in effect (E2E verification). */
   getOptions(): Record<string, unknown>;
+  /** Sends every pending view-state save now (X1, before quit). */
+  flushViewState(): void;
 }
 
 let active: EditorHandle | null = null;

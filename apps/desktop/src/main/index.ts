@@ -56,6 +56,7 @@ import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
 import { startupNotices } from "./startup-notices";
 import { strings } from "./strings";
+import { createUiFlushHandlers, createUiFlushWaiter } from "./ui-flush";
 import { onReload, shouldReloadView } from "./ui-watchdog";
 import { type DisplayInfo, displayForFrame, frameToSave, restoreFrame } from "./windows/frame-restore";
 import { createMainWindowController } from "./windows/main-window";
@@ -251,6 +252,11 @@ async function start(): Promise<void> {
   };
   const appHandlers = createAppHandlers(appHandlerDeps);
 
+  // X1: before the quit flush, the UI flushes its pending view-state saves and buffer edits.
+  const uiFlush = createUiFlushWaiter({
+    send: () => rpc.send["app.flushState"]({}),
+    isOpen: () => mainWindow.isOpen(),
+  });
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
     handlers: mergeHandlers(
@@ -304,6 +310,7 @@ async function start(): Promise<void> {
         log,
       }),
       appHandlers,
+      createUiFlushHandlers(uiFlush, log),
       createFileHandlers({
         files: new FileService(nodeFileSystem),
         session,
@@ -547,9 +554,14 @@ async function start(): Promise<void> {
     runLock.releaseAll();
     // Final review T14: a hung flush must not keep JSLab from quitting. FA-I1: settings writes are awaited too.
     // A quit started by a startup failure keeps its exit code 1 (FA-I3).
-    void flushBeforeQuit(() => Promise.all([session.flush(), settings.flush()]).then(() => {}), log).finally(() =>
-      Utils.quit(errorPolicy.exitCode),
-    );
+    void flushBeforeQuit(
+      () =>
+        uiFlush
+          .request()
+          .then(() => Promise.all([session.flush(), settings.flush()]))
+          .then(() => {}),
+      log,
+    ).finally(() => Utils.quit(errorPolicy.exitCode));
   });
 }
 

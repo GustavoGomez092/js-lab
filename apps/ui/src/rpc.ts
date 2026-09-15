@@ -40,6 +40,7 @@ export function createRpcApi(): MainApi {
     bufferChanged: (tabId, content) => rpc.send["buffer.changed"]({ tabId, content }),
     patchTab: (tabId, patch) => rpc.send["tab.patch"]({ tabId, patch }),
     heartbeat: () => rpc.send["ui.heartbeat"]({}),
+    stateFlushed: () => rpc.send["ui.stateFlushed"]({}),
     createTab: (params) => rpc.request["tab.create"](params),
     closeTab: (tabId) => rpc.request["tab.close"]({ tabId }, { maxRequestTime: SAVE_REQUEST_TIME_MS }),
     reopenTab: () => rpc.request["tab.reopen"]({}),

@@ -18,6 +18,7 @@ export const VIEW_MESSAGES = [
   "npm.log",
   "npm.changed",
   "wd.changed",
+  "app.flushState",
 ] as const satisfies readonly (keyof ViewMessages)[];
 
 // Type-level exhaustiveness check: a ViewMessages key missing from VIEW_MESSAGES fails typecheck here (m-5).

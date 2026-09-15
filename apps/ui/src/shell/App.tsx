@@ -19,6 +19,7 @@ import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { OutputPanel } from "../output/OutputPanel";
 import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
+import { createBufferSync } from "../state/buffer-sync";
 import { createEventCoalescer, createFrameScheduler } from "../state/event-coalescer";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
@@ -97,6 +98,18 @@ export function App({
     [store, formatter],
   );
 
+  // X5: edits reach Main at most once per BUFFER_SYNC_DELAY_MS per tab; pending content is flushed on demand.
+  const bufferSync = useMemo(() => createBufferSync((tabId, content) => api.bufferChanged(tabId, content)), [api]);
+  useEffect(() => {
+    const flushAll = () => bufferSync.flush();
+    window.addEventListener("beforeunload", flushAll);
+    return () => {
+      window.removeEventListener("beforeunload", flushAll);
+      bufferSync.flush();
+      bufferSync.dispose();
+    };
+  }, [bufferSync]);
+
   const run = useCallback(
     (reason: "auto" | "manual") => {
       const state = store.getState();
@@ -119,6 +132,7 @@ export function App({
           fresh.setStatusMessage(strings.limits.tooLarge);
           return;
         }
+        bufferSync.flush(tabId);
         void api.startRun({ tabId, code, language: freshTab.language, logpoints: [], reason });
       };
       const wantsFormat =
@@ -133,7 +147,7 @@ export function App({
       if (wantsFormat && format) void format.formatTab(tabId).then(start, start);
       else start();
     },
-    [store, api, format],
+    [store, api, format, bufferSync],
   );
 
   const tabs = useMemo(() => createTabActions(store, api), [store, api]);
@@ -163,9 +177,14 @@ export function App({
 
   // The close guard is a side effect, so it lives in an effect and is cleared on unmount (fix round 1, m-6).
   useEffect(() => {
-    tabs.setBeforeClose((tabId) => flows.beforeClose(tabId));
+    tabs.setBeforeClose(async (tabId) => {
+      const allowed = await flows.beforeClose(tabId);
+      // Main moves the buffer file into buffers/closed/ on close, so it must have the latest content first.
+      if (allowed) bufferSync.flush(tabId);
+      return allowed;
+    });
     return () => tabs.setBeforeClose(null);
-  }, [tabs, flows]);
+  }, [tabs, flows, bufferSync]);
 
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>
@@ -268,11 +287,17 @@ export function App({
         const notice = appNoticeSchema.safeParse(payload);
         if (notice.success) store.getState().addNotice(notice.data);
       }),
+      // X1: Main is quitting. Flush view state and edits, then acknowledge so Main can write the session.
+      api.on("app.flushState", () => {
+        getEditorHandle()?.flushViewState();
+        bufferSync.flush();
+        api.stateFlushed();
+      }),
     ];
     return () => {
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
-  }, [store, api, registry, flows, coalescer]);
+  }, [store, api, registry, flows, coalescer, bufferSync]);
 
   useEffect(() => {
     if (!e2e) return;
@@ -316,7 +341,7 @@ export function App({
             const content = state.buffers[id] ?? "";
             // Main rejects buffer.changed above MAX_TEXT_CHARS. Tell the user rather than dropping the edit silently.
             if (content.length > MAX_TEXT_CHARS) store.getState().setStatusMessage(strings.limits.tooLarge);
-            else api.bufferChanged(id, content);
+            else bufferSync.changed(id, content);
             if (id === state.activeTabId) lastTypedAt.current = Date.now();
           }
           // updateLayout (state/store.ts) always replaces the layout object, even when the clamped
@@ -343,7 +368,7 @@ export function App({
           }
         }
       }),
-    [store, api],
+    [store, api, bufferSync],
   );
 
   useEffect(() => {

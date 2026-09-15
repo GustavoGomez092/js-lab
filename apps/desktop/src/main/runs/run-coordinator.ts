@@ -1,7 +1,7 @@
 import { mkdir, readdir, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { EncodedValue, RunEvent, RunnerToMain, RunState } from "@jslab/rpc-schema";
-import type { Diagnostic, Language, TransformOptions, TransformResult } from "@jslab/transform";
+import type { BuildOptions, Diagnostic, Language, TransformOptions, TransformResult } from "@jslab/transform";
 import type { BunRunnerProcess } from "./bun-runner-process";
 import { createEventMapper } from "./event-mapper";
 
@@ -18,6 +18,7 @@ export interface RunnerSettings {
   loopProtectionMaxIterations: number;
   maxEntries: number;
   unresponsiveTimeoutMs: number;
+  build?: BuildOptions;
 }
 
 export interface RunCoordinatorDeps {
@@ -170,6 +171,7 @@ export class RunCoordinator {
         loopProtection: settings.loopProtection,
         loopProtectionMaxIterations: settings.loopProtectionMaxIterations,
         logpoints: request.logpoints,
+        ...(settings.build ? { build: settings.build } : {}),
       });
       if (!this.#isCurrent(run)) return;
       this.deps.onDiagnostics(run.tabId, run.runId, result.diagnostics);

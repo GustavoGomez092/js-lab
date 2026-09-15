@@ -1,11 +1,27 @@
 export type Language = "typescript" | "javascript" | "tsx" | "jsx";
 
+/** `build.decorators` (spec §8 Build). */
+export type DecoratorMode = "none" | "2023-11" | "legacy";
+
+/** The Build tab (spec §8): the syntax proposals the transform enables. */
+export interface BuildOptions {
+  decorators: DecoratorMode;
+  pipelineOperator: boolean;
+  doExpressions: boolean;
+  throwExpressions: boolean;
+  functionSent: boolean;
+  regexpModifiers: boolean;
+  optionalChainingAssign: boolean;
+}
+
 export interface TransformOptions {
   language: Language;
   autoLog: boolean;
   loopProtection: boolean;
   loopProtectionMaxIterations: number;
   logpoints: readonly number[];
+  /** Defaults to DEFAULT_BUILD_OPTIONS (the spec §8 defaults). */
+  build?: BuildOptions;
 }
 
 export type DiagnosticCode =

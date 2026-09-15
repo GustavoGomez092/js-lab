@@ -3,8 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunEvent, RunState } from "@jslab/rpc-schema";
-import type { TransformOptions, TransformResult } from "@jslab/transform";
-import { transform } from "@jslab/transform";
+import { buildSettings, defaultSettings } from "@jslab/shared";
+import type { BuildOptions, TransformOptions, TransformResult } from "@jslab/transform";
+import { DEFAULT_BUILD_OPTIONS, transform } from "@jslab/transform";
 import { BunRunnerProcess } from "../../src/main/runs/bun-runner-process";
 import { RunCoordinator, type RunnerSettings } from "../../src/main/runs/run-coordinator";
 import { SparePool } from "../../src/main/runs/spare-pool";
@@ -593,4 +594,29 @@ describe("RunCoordinator", () => {
     expect(h.states.some((s) => s.runId === runId && s.state === "killed")).toBe(false);
     expect(h.events.filter((e) => e.kind === "error")).toEqual([]);
   }, 15_000);
+
+  test("build settings reach the transform (spec §8 Build)", async () => {
+    // R-M3-T15-TYPES-1: fails typecheck if @jslab/shared's BuildSettings and @jslab/transform's BuildOptions diverge.
+    const buildTypeGuard: BuildOptions = buildSettings(defaultSettings());
+    expect(buildTypeGuard.decorators).toBe("2023-11");
+    const seen: TransformOptions[] = [];
+    const harness = await createHarness(
+      { build: { ...DEFAULT_BUILD_OPTIONS, pipelineOperator: true } },
+      {
+        transform: async (source, options) => {
+          seen.push(options);
+          return transform(source, options);
+        },
+      },
+    );
+    const { runId } = harness.coordinator.start({
+      tabId: "t1",
+      code: "1 |> % + 1",
+      language: "typescript",
+      logpoints: [],
+    });
+    await harness.waitForState("idle", runId);
+    expect(seen[0]?.build?.pipelineOperator).toBe(true);
+    expect(harness.events.find((event) => event.kind === "result")).toMatchObject({ value: { t: "number", v: "2" } });
+  });
 });

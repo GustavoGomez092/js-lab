@@ -14,6 +14,12 @@ export interface BuildOptions {
   optionalChainingAssign: boolean;
 }
 
+/** A tab's working directory (spec §5.3): `dir` is the WD, `filename` is `<WD>/<script name>`. */
+export interface WorkingDirectoryOptions {
+  dir: string;
+  filename: string;
+}
+
 export interface TransformOptions {
   language: Language;
   autoLog: boolean;
@@ -22,6 +28,7 @@ export interface TransformOptions {
   logpoints: readonly number[];
   /** Defaults to DEFAULT_BUILD_OPTIONS (the spec §8 defaults). */
   build?: BuildOptions;
+  workingDirectory?: WorkingDirectoryOptions;
 }
 
 export type DiagnosticCode =

@@ -2,6 +2,7 @@ import * as Babel from "@babel/standalone";
 import { DEFAULT_BUILD_OPTIONS, proposalPlugins } from "./build";
 import { createInstrumentPlugin } from "./instrument";
 import type { Diagnostic, Language, RawSourceMap, TransformOptions, TransformResult } from "./types";
+import { createWorkingDirectoryPlugin } from "./working-directory";
 
 const FILENAMES: Record<Language, string> = {
   typescript: "entry.ts",
@@ -40,6 +41,7 @@ export function transform(source: string, options: TransformOptions): TransformR
       plugins: [
         createInstrumentPlugin(options, source, diagnostics),
         ...proposalPlugins(options.build ?? DEFAULT_BUILD_OPTIONS),
+        ...(options.workingDirectory ? [createWorkingDirectoryPlugin(options.workingDirectory)] : []),
       ],
       parserOpts: { allowAwaitOutsideFunction: true },
     });

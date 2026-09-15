@@ -62,4 +62,8 @@ export const strings = {
     tabsDropped: (count: number) =>
       `${count} ${count === 1 ? "tab" : "tabs"} in session.json couldn't be read and were skipped. Their buffer files were kept.`,
   },
+  runs: {
+    /** Spec §12.2. */
+    workingDirectoryNotFound: (path: string) => `Working directory not found: ${path}`,
+  },
 } as const;

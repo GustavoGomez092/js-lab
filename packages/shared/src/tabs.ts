@@ -89,3 +89,19 @@ export function moveTab(order: string[], id: string, toIndex: number): string[] 
   const target = Math.max(0, Math.min(rest.length, toIndex));
   return [...rest.slice(0, target), id, ...rest.slice(target)];
 }
+
+/** `/`, `:` and a backslash: the characters a title can't keep in a file name. */
+const TITLE_SEPARATORS = new RegExp(`[/:${String.fromCharCode(92, 92)}]`, "g");
+
+/**
+ * The base name `__filename` reports when a tab has a working directory (spec §5.3): a saved file's own name, else the
+ * tab title (with `/`, `:` and a backslash replaced) plus the language extension.
+ */
+export function scriptFileName(
+  tab: Pick<TabState, "title" | "titleIsCustom" | "filePath" | "language">,
+  code: string,
+): string {
+  if (tab.filePath) return baseName(tab.filePath);
+  const title = deriveTitle(tab, code).replace(TITLE_SEPARATORS, "-").replace(/…$/, "").trim() || "Untitled";
+  return `${title.replace(/[.](?:[mc]?[jt]sx?)$/i, "")}.${extensionFor(tab.language)}`;
+}

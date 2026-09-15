@@ -49,6 +49,8 @@ describe("requests", () => {
       code: "1 + 1",
       language: "typescript",
       logpoints: [],
+      workingDirectory: null,
+      scriptName: "1 + 1.ts",
     });
   });
 
@@ -78,6 +80,20 @@ describe("requests", () => {
     expect(deps.coordinator.expand).toHaveBeenCalledWith("t1", runId, "h3");
     expect(() => handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "nope" })).toThrow(
       InvalidPayloadError,
+    );
+  });
+
+  test("run.start passes the tab's working directory and script name from the session (spec §5.3)", () => {
+    const { handlers, deps } = setup();
+    deps.session.session.tabs.t1 = {
+      ...(deps.session.session.tabs.t1 as NonNullable<(typeof deps.session.session.tabs)["t1"]>),
+      workingDirectory: "/work/api",
+      title: "fetch users",
+      titleIsCustom: true,
+    };
+    handlers.requests["run.start"](validStart);
+    expect(deps.coordinator.start).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDirectory: "/work/api", scriptName: "fetch users.ts" }),
     );
   });
 });

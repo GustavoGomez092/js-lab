@@ -1,7 +1,8 @@
-import { mkdir, readdir, unlink } from "node:fs/promises";
+import { mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { EncodedValue, RunEvent, RunnerToMain, RunState } from "@jslab/rpc-schema";
 import type { BuildOptions, Diagnostic, Language, TransformOptions, TransformResult } from "@jslab/transform";
+import { strings } from "../strings";
 import type { BunRunnerProcess } from "./bun-runner-process";
 import { createEventMapper } from "./event-mapper";
 
@@ -10,6 +11,10 @@ export interface RunStartRequest {
   code: string;
   language: Language;
   logpoints: number[];
+  /** The tab's working directory, or null (spec §5.3). */
+  workingDirectory?: string | null;
+  /** `__filename`'s base name (scriptFileName). */
+  scriptName?: string;
 }
 
 export interface RunnerSettings {
@@ -34,6 +39,7 @@ export interface RunCoordinatorDeps {
   stopGraceMs?: number;
   idleRunnerTtlMs?: number;
   expandTimeoutMs?: number;
+  directoryExists?(path: string): Promise<boolean>;
 }
 
 interface ActiveRun {
@@ -59,6 +65,17 @@ const STOPPABLE_STATES: ReadonlySet<RunState> = new Set(["transpiling", "evaluat
 
 /** Maximum events per `run.events` message sent to the UI (spec §4.2, verified by M0-S7). */
 const UI_BATCH_EVENTS = 200;
+
+/** The error name of a run whose working directory is gone; the UI offers Change… for it (spec §12.2). */
+export const WORKING_DIRECTORY_ERROR = "WorkingDirectoryError";
+
+async function directoryExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 export class RunCoordinator {
   readonly #runs = new Map<string, ActiveRun>();
@@ -164,6 +181,23 @@ export class RunCoordinator {
 
   async #execute(run: ActiveRun, request: RunStartRequest): Promise<void> {
     try {
+      const workingDirectory = request.workingDirectory ?? null;
+      if (workingDirectory && !(await (this.deps.directoryExists ?? directoryExists)(workingDirectory))) {
+        if (!this.#isCurrent(run)) return;
+        this.deps.onEvents(run.tabId, run.runId, [
+          {
+            kind: "error",
+            phase: "runner",
+            name: WORKING_DIRECTORY_ERROR,
+            message: strings.runs.workingDirectoryNotFound(workingDirectory),
+            stack: [],
+            seq: 1,
+            t: Date.now(),
+          },
+        ]);
+        this.#setState(run, "failed");
+        return;
+      }
       const settings = this.deps.settings();
       const result = await this.deps.transform(request.code, {
         language: request.language,
@@ -172,6 +206,14 @@ export class RunCoordinator {
         loopProtectionMaxIterations: settings.loopProtectionMaxIterations,
         logpoints: request.logpoints,
         ...(settings.build ? { build: settings.build } : {}),
+        ...(workingDirectory
+          ? {
+              workingDirectory: {
+                dir: workingDirectory,
+                filename: join(workingDirectory, request.scriptName ?? "Untitled.ts"),
+              },
+            }
+          : {}),
       });
       if (!this.#isCurrent(run)) return;
       this.deps.onDiagnostics(run.tabId, run.runId, result.diagnostics);

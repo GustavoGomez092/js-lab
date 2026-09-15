@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RawRunEvent, RunnerToMain } from "@jslab/rpc-schema";
@@ -13,12 +13,32 @@ let dir = "";
 const procs: Subprocess[] = [];
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), "jslab-bootstrap-"));
+  // FLAKE-8 (flake-8-analysis.md): realpath removes the macOS /var symlink form. Bun 1.4.0's resolver can
+  // report "Cannot find module" for a file written into a directory it already scanned (here, the runner's
+  // own cwd at startup) when the import path goes through that symlink. Bun 1.3.13 never fails either way.
+  dir = await realpath(await mkdtemp(join(tmpdir(), "jslab-bootstrap-")));
 });
 afterEach(async () => {
   for (const proc of procs.splice(0)) proc.kill("SIGKILL");
   await rm(dir, { recursive: true, force: true });
 });
+
+// FLAKE-8: if the runner's own entry fails to resolve, fail fast with a diagnostic that names itself instead of
+// looking like a timeout or an "aborted work" failure (flake-8-analysis.md, flake-8-brief.md Part 1.3).
+function checkFlake8(messages: RunnerToMain[], entry: string, runnerDir: string) {
+  if (!entry) return;
+  const base = entry.slice(entry.lastIndexOf("/") + 1);
+  for (const m of messages) {
+    if (m.type !== "events") continue;
+    for (const e of m.events) {
+      if (e.kind === "error" && e.name === "ResolveMessage" && e.message.includes(base)) {
+        throw new Error(
+          `FLAKE-8: the runner could not import its entry; entry=${entry}; dir=${runnerDir}; messages=${JSON.stringify(messages)}`,
+        );
+      }
+    }
+  }
+}
 
 function startRunner() {
   const messages: RunnerToMain[] = [];
@@ -32,21 +52,29 @@ function startRunner() {
     serialization: "json",
   });
   procs.push(proc);
+  let lastEntry = "";
   const until = async (predicate: (message: RunnerToMain) => boolean, timeoutMs = 5000) => {
     const started = Date.now();
     while (!messages.some(predicate)) {
+      checkFlake8(messages, lastEntry, dir);
       if (Date.now() - started > timeoutMs) throw new Error(`timed out; received ${JSON.stringify(messages)}`);
       await Bun.sleep(10);
     }
   };
   const events = (): RawRunEvent[] => messages.flatMap((m) => (m.type === "events" ? m.events : []));
   const run = async (source: string) => {
-    const entry = join(dir, `entry-${crypto.randomUUID()}.mjs`);
+    // Production layout (run-coordinator.ts): entries live under runs/<tabId>, a subfolder the runner never
+    // scans at startup, never directly in the runner's own cwd (removes FLAKE-8 condition 1).
+    const entryDir = join(dir, "runs", "t1");
+    await mkdir(entryDir, { recursive: true });
+    const entry = join(entryDir, `entry-${crypto.randomUUID()}.mjs`);
     await Bun.write(entry, source);
+    lastEntry = entry;
     await until((m) => m.type === "ready");
     proc.send({ type: "run", runId: "run-1", entry, settings: { maxEntries: 100 } });
   };
-  return { proc, messages, until, events, run };
+  const entry = () => lastEntry;
+  return { proc, messages, until, events, run, entry };
 }
 
 test("reports ready with its Bun version and sends heartbeats", async () => {
@@ -202,6 +230,7 @@ test("stop does not report errors from work it aborted", async () => {
     // poll only checked `requests`, so a fetch that failed immediately still read as a 5s hang.
     const started = Date.now();
     while (requests < 2) {
+      checkFlake8(runner.messages, runner.entry(), dir);
       const errors = runner.events().filter((e) => e.kind === "error");
       const settledEarly = runner.messages.some(
         (m) => m.type === "state" && (m.state === "idle" || m.state === "stopped"),

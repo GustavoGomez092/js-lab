@@ -205,6 +205,12 @@ export interface NpmListResult {
   installed: InstalledPackage[];
   outdatedCheckedAt: number | null;
   outdatedError: NpmOpError | null;
+  /**
+   * R-M3-OUTDATED-1: a monotonically increasing counter, stamped by `NpmService` at the moment this result's data
+   * snapshot is taken (not when it's sent), so the UI store can drop a reply that loses a delivery-order race
+   * against a newer `npm.changed` push instead of letting it overwrite fresher data (last-writer-wins was the bug).
+   */
+  revision: number;
 }
 
 export interface NpmSearchResult {

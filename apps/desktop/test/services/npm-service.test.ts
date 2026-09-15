@@ -489,6 +489,8 @@ describe("NpmService (spec §11.3)", () => {
       installed: [{ name: "zod", version: "4.0.0", latest: "4.6.4" }],
       outdatedCheckedAt: 1_000_000,
       outdatedError: null,
+      // R-M3-OUTDATED-1: the first list() (revision 1) triggered this refresh; its own push is revision 2.
+      revision: 2,
     });
     now += 60_000;
     await service.list({ refreshOutdated: true });
@@ -839,5 +841,64 @@ describe("NpmService (spec §11.3)", () => {
     service.remove("x");
     await service.whenIdle();
     expect(calls.map((call) => call.argv.at(-1))).toEqual(["x@1.0.0", "x"]);
+  });
+
+  // R-M3-OUTDATED-1: this is the mechanism behind the npm-panel E2E flake (analysis H6). A `list()` reply taken
+  // before the background refresh completes must carry a lower revision than the `npm.changed` push that follows
+  // it, whatever order delivery to the UI actually takes.
+  test("list results carry increasing revisions, and the post-refresh push is newest", async () => {
+    const table = "│ Package │ Current │ Update │ Latest │\n│ zod │ 4.0.0 │ 4.0.0 │ 4.6.4 │\n";
+    const { service, changed } = await setup({
+      respond: async (argv) =>
+        argv[0] === "outdated" ? { exitCode: 0, stdout: table, stderr: "" } : { exitCode: 0, stdout: "", stderr: "" },
+    });
+    const response = await service.list({ refreshOutdated: true });
+    await service.whenIdle();
+    expect(changed.at(-1)?.revision).toBeGreaterThan(response.revision);
+  });
+
+  // R-M3-OUTDATED-1: the queue is serial, so without preemption a stalled `bun outdated` would hold every install,
+  // remove, update and Update all behind it for up to the queue's 5-minute timeout. This proves both halves of the
+  // fix: preemption (never waits) and the outdated-specific deadline (never blames the queue's own timeout).
+  test("a user operation preempts a running or queued update check", async () => {
+    const { service, calls } = await setup({
+      respond: (argv, options) =>
+        argv[0] === "outdated"
+          ? new Promise<NpmSpawnResult>((resolve) => {
+              // Stands in for createBunSpawn: the real spawn never rejects on abort, it kills the child and
+              // resolves with whatever the streams gave.
+              options.signal.addEventListener("abort", () => resolve({ exitCode: null, stdout: "", stderr: "" }));
+            })
+          : Promise.resolve({ exitCode: 0, stdout: "installed ok@1.0.0\n", stderr: "" }),
+    });
+
+    void service.list({ refreshOutdated: true });
+    // Let the refresh's own queue task actually start (spawn) before the operation preempts it.
+    await Bun.sleep(5);
+    const outdatedCall = calls.find((call) => call.argv[0] === "outdated");
+    expect(outdatedCall).toBeDefined();
+    expect(outdatedCall?.signal.aborted).toBe(false);
+
+    service.install("ok@1.0.0");
+    await service.whenIdle();
+
+    expect(outdatedCall?.signal.aborted).toBe(true);
+    expect(calls.some((call) => call.argv.includes("ok@1.0.0"))).toBe(true);
+    expect((await service.list({ refreshOutdated: false })).outdatedError).toBeNull();
+
+    // Separately: an outdated check that exceeds its own (short, injected) deadline records `timeout`, never the
+    // queue's 5-minute one — no real 30 s wait.
+    const { service: slow } = await setup({
+      outdatedTimeoutMs: 10,
+      respond: (argv, options) =>
+        argv[0] === "outdated"
+          ? new Promise<NpmSpawnResult>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve({ exitCode: null, stdout: "", stderr: "" }));
+            })
+          : Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }),
+    });
+    await slow.list({ refreshOutdated: true });
+    await slow.whenIdle();
+    expect((await slow.list({ refreshOutdated: false })).outdatedError).toEqual({ kind: "timeout", log: "" });
   });
 });

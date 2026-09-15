@@ -91,6 +91,12 @@ export interface NpmUiState {
    */
   rawTargets: Record<string, string>;
   lastAdded: { name: string; at: number } | null;
+  /**
+   * R-M3-OUTDATED-1: the highest `NpmListResult.revision` applied so far. The store is recreated with the window
+   * and Main's own counter never resets while Main runs, so a fresh store starts below any real revision and
+   * accepts the first result it sees, whichever channel (response or push) delivers it.
+   */
+  lastRevision: number;
 }
 
 export const initialNpm = (): NpmUiState => ({
@@ -103,6 +109,7 @@ export const initialNpm = (): NpmUiState => ({
   carries: {},
   rawTargets: {},
   lastAdded: null,
+  lastRevision: -1,
 });
 
 /**
@@ -608,6 +615,10 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       receiveNpmList(list, now = Date.now()) {
         const previous = get().npm;
+        // R-M3-OUTDATED-1: a result older than the last one applied is dropped. This is what makes delivery
+        // order-independent — the sheet's own `npm.list` response and a `npm.changed` push race with no ordering
+        // guarantee, and the higher revision must always win, whichever channel delivers it later.
+        if (list.revision < previous.lastRevision) return;
         const key = (installed: InstalledPackage[]) => installed.map((pkg) => `${pkg.name}@${pkg.version}`).join("\n");
         const known = new Set(previous.installed.map((pkg) => pkg.name));
         // Spec §11.2: only a package that appears after the list was already loaded is "newly added".
@@ -620,6 +631,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
             outdatedCheckedAt: list.outdatedCheckedAt,
             outdatedError: list.outdatedError,
             lastAdded: added ? { name: added.name, at: now } : previous.lastAdded,
+            lastRevision: list.revision,
           },
           ...(key(previous.installed) !== key(list.installed) ? { packagesRevision: get().packagesRevision + 1 } : {}),
         });

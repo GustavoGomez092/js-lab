@@ -31,6 +31,9 @@ const NL = String.fromCharCode(10);
  * registry below, instead of failing before ever attempting one.
  * N-5: the lockfile's own tarball URLs (127.0.0.1:4900) are never fetched here — node_modules is already
  * seeded, and `bun outdated` reads only package manifests from `.npmrc`'s registry, never a tarball.
+ * R-M3-OUTDATED-1 (outdated-1-analysis.md §2.3): this lockfile needs the app's bundled Bun (>= 1.4.0). Bun 1.3.13
+ * rejects `"lockfileVersion": 2` before any network I/O ("Unknown lockfile version"), which would classify as
+ * `unknown`, not `network` — a different scenario than the one this test exercises.
  */
 const FIXTURE_BUN_LOCK =
   [
@@ -91,4 +94,17 @@ test("⌘I opens the installed table from the packages project; a dead registry 
   expect(npm.outdatedError).toBe("network");
   await current.key("escape");
   await waitFor(async () => (await current.state()).ui.modal === null || null);
+
+  // R-M3-OUTDATED-1: reopening the sheet exercises the cached-response path (the 10-minute TTL means no new
+  // refresh runs), which stays order-independent regardless of the delivery-race fix above.
+  await current.key("cmd+i");
+  const reopened = await waitFor(
+    async () => {
+      const ui = (await current.state()).ui;
+      const snapshot = ui.npm as NpmSnapshot;
+      return ui.modal === "npm" && snapshot.outdatedError ? snapshot : null;
+    },
+    { timeoutMs: 90_000, message: "the reopened sheet never reported the cached outdated error" },
+  );
+  expect(reopened.outdatedError).toBe("network");
 });

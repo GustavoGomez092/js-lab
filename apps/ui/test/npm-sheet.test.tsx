@@ -13,6 +13,7 @@ const LIST: NpmListResult = {
   ],
   outdatedCheckedAt: 1,
   outdatedError: null,
+  revision: 1,
 };
 
 function fakeApi(list: NpmListResult) {
@@ -244,6 +245,7 @@ describe("NPM Packages sheet (spec §11.2)", () => {
       installed: [{ name: "@types/fixture-a", version: "1.0.0", latest: null }],
       outdatedCheckedAt: null,
       outdatedError: null,
+      revision: 1,
     };
     const { api } = setup(onlyTypes);
     await waitFor(() => expect(api.npmList).toHaveBeenCalledWith(true));
@@ -338,5 +340,49 @@ describe("NPM Packages sheet (spec §11.2)", () => {
       }),
     );
     expect(screen.queryByRole("option")).toBeNull();
+  });
+
+  // R-M3-OUTDATED-1: this reproduces the npm-panel E2E flake at unit level (analysis H6). The sheet's own
+  // `npm.list(true)` response can resolve AFTER a `npm.changed` push has already landed in the store; the response
+  // must never erase the push's error because it's actually the older result (a lower revision).
+  test("the network hint survives a list reply that arrives after the change push", async () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    let resolveList!: (list: NpmListResult) => void;
+    const api = fakeApi(LIST);
+    api.npmList.mockImplementation(
+      (_refresh: boolean) =>
+        new Promise<NpmListResult>((resolve) => {
+          resolveList = resolve;
+        }),
+    );
+    render(<NpmSheet store={store} api={api} />);
+    act(() => store.getState().openModal({ kind: "npm" }));
+    await waitFor(() => expect(api.npmList).toHaveBeenCalledWith(true));
+
+    // The `npm.changed` push (App.tsx's api.on("npm.changed", ...) listener) delivers the newer, network-failed
+    // result first — before the sheet's own deferred response settles.
+    act(() =>
+      store.getState().receiveNpmList({
+        installed: [],
+        outdatedCheckedAt: 5,
+        outdatedError: { kind: "network", log: "connection refused" },
+        revision: 2,
+      }),
+    );
+
+    // Now the sheet's own npmList(true) response resolves, carrying the stale, lower revision.
+    await act(async () => {
+      resolveList({ installed: [], outdatedCheckedAt: null, outdatedError: null, revision: 1 });
+      await Bun.sleep(1);
+    });
+
+    expect(await screen.findByText(strings.npm.outdatedFailed(strings.npm.hints.network))).toBeTruthy();
   });
 });

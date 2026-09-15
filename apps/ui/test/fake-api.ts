@@ -55,6 +55,7 @@ export function createFakeApi() {
         installed: [],
         outdatedCheckedAt: null,
         outdatedError: null,
+        revision: 0,
       }),
     ),
     npmSearch: mock(async (_query: string): Promise<NpmSearchResponse> => ({ results: [], error: null })),

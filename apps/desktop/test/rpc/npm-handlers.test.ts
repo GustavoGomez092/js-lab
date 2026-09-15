@@ -13,6 +13,7 @@ function setup() {
       installed: [],
       outdatedCheckedAt: null,
       outdatedError: null,
+      revision: 0,
     })),
     search: mock(async (_query: string) => ({ results: [], error: null })),
   };
@@ -27,6 +28,7 @@ describe("npm handlers (spec §11)", () => {
       installed: [],
       outdatedCheckedAt: null,
       outdatedError: null,
+      revision: 0,
     });
     expect(npm.list).toHaveBeenCalledWith({ refreshOutdated: true });
     await handlers.requests["npm.search"]({ query: " zod " });

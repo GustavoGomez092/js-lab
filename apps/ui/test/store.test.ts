@@ -278,20 +278,26 @@ describe("app store", () => {
   test("the npm slice keeps the list, upserts operations and marks a newly added package (spec §11.2)", () => {
     const store = createAppStore();
     const before = store.getState().packagesRevision;
-    store
-      .getState()
-      .receiveNpmList(
-        { installed: [{ name: "zod", version: "4.6.4", latest: null }], outdatedCheckedAt: null, outdatedError: null },
-        500,
-      );
+    store.getState().receiveNpmList(
+      {
+        installed: [{ name: "zod", version: "4.6.4", latest: null }],
+        outdatedCheckedAt: null,
+        outdatedError: null,
+        revision: 1,
+      },
+      500,
+    );
     expect([store.getState().npm.loaded, store.getState().npm.lastAdded]).toEqual([true, null]);
     expect(store.getState().packagesRevision).toBe(before + 1);
-    store
-      .getState()
-      .receiveNpmList(
-        { installed: [{ name: "zod", version: "4.6.4", latest: "4.7.0" }], outdatedCheckedAt: 1, outdatedError: null },
-        900,
-      );
+    store.getState().receiveNpmList(
+      {
+        installed: [{ name: "zod", version: "4.6.4", latest: "4.7.0" }],
+        outdatedCheckedAt: 1,
+        outdatedError: null,
+        revision: 2,
+      },
+      900,
+    );
     expect(store.getState().packagesRevision).toBe(before + 1);
     store.getState().receiveNpmList(
       {
@@ -301,6 +307,7 @@ describe("app store", () => {
         ],
         outdatedCheckedAt: 1,
         outdatedError: null,
+        revision: 3,
       },
       1000,
     );
@@ -347,6 +354,36 @@ describe("app store", () => {
     expect(ids).not.toContain("f0");
     expect(ids).toContain("running1");
     expect(ids).toContain("f49");
+  });
+
+  // R-M3-OUTDATED-1: receiveNpmList is no longer last-writer-wins. A push and a response can arrive in either
+  // order (the E2E flake's root cause); the higher revision always wins, whichever order delivery takes.
+  test("an older npm list result never overwrites a newer one", () => {
+    const store = createAppStore();
+    store.getState().receiveNpmList({
+      installed: [],
+      outdatedCheckedAt: 10,
+      outdatedError: { kind: "network", log: "x" },
+      revision: 5,
+    });
+    store.getState().receiveNpmList({ installed: [], outdatedCheckedAt: null, outdatedError: null, revision: 4 });
+    expect(store.getState().npm.outdatedError?.kind).toBe("network");
+
+    // The reverse order (response first, then push) ends at the same, newer state too.
+    const reversed = createAppStore();
+    reversed.getState().receiveNpmList({ installed: [], outdatedCheckedAt: null, outdatedError: null, revision: 4 });
+    reversed.getState().receiveNpmList({
+      installed: [],
+      outdatedCheckedAt: 10,
+      outdatedError: { kind: "network", log: "x" },
+      revision: 5,
+    });
+    expect(reversed.getState().npm.outdatedError?.kind).toBe("network");
+
+    // An equal revision re-applies (idempotent), rather than being treated as stale.
+    reversed.getState().receiveNpmList({ installed: [], outdatedCheckedAt: 20, outdatedError: null, revision: 5 });
+    expect(reversed.getState().npm.outdatedError).toBeNull();
+    expect(reversed.getState().npm.outdatedCheckedAt).toBe(20);
   });
 
   // R-M3-T26-LOGCAP-2 (parked R-M3-T18-LOGCAP-1): a per-opId cap, trimmed from the front, one buffer per operation.

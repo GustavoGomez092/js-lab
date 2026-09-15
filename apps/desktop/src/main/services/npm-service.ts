@@ -54,6 +54,8 @@ export interface NpmServiceDeps {
    * Defaults to `LIST_RETRY_DELAY_MS`.
    */
   listRetryWait?: () => Promise<void>;
+  /** R-M3-OUTDATED-1: overrides `OUTDATED_TIMEOUT_MS` for tests, so a short deadline needs no real 30 s wait. */
+  outdatedTimeoutMs?: number;
   onOperation(operation: NpmOperation): void;
   onLog(opId: string, text: string): void;
   onChanged(list: NpmListResult): void;
@@ -68,6 +70,12 @@ const LIST_RETRY_DELAY_MS = 100;
 
 /** Spec §11.3: `bun outdated` runs at most every 10 minutes. */
 export const OUTDATED_TTL_MS = 10 * 60_000;
+/**
+ * R-M3-OUTDATED-1: `bun outdated`'s own deadline, far below the queue's 5-minute `NPM_OPERATION_TIMEOUT_MS` — a
+ * stalled registry (a blackholed connect, a DNS stall) must never hold up an install, remove, update or Update all
+ * queued behind it for anywhere near that long.
+ */
+export const OUTDATED_TIMEOUT_MS = 30_000;
 export const SEARCH_TIMEOUT_MS = 8_000;
 /** Fix round 1 (M-3): a search response body is never buffered past this many bytes. */
 export const MAX_SEARCH_BODY_BYTES = 1_048_576;
@@ -124,6 +132,10 @@ export class NpmService {
   #idle: Promise<void> = Promise.resolve();
   #outdated: { at: number; latest: Map<string, string>; error: NpmOpError | null } | null = null;
   #refreshing = false;
+  /** R-M3-OUTDATED-1: stamps every `list()` snapshot; monotonic for the life of this service (never resets). */
+  #listRevision = 0;
+  /** R-M3-OUTDATED-1: aborts the current refresh, whether it's already spawned or still waiting in the queue. */
+  #outdatedPreempt: AbortController | null = null;
 
   constructor(protected readonly deps: NpmServiceDeps) {
     this.queue = deps.queue ?? new OperationQueue();
@@ -189,6 +201,10 @@ export class NpmService {
     if (options.refreshOutdated && (!this.#outdated || now - this.#outdated.at >= OUTDATED_TTL_MS)) {
       void this.#refreshOutdated();
     }
+    // R-M3-OUTDATED-1: stamped here, at snapshot time (this line and the next read the exact state this result
+    // reflects), not when the result is later sent — so a result computed earlier can never carry a higher
+    // revision than one computed after it, whatever order the response and a `npm.changed` push are delivered in.
+    const revision = ++this.#listRevision;
     const cache = this.#outdated;
     const latest = cache?.latest ?? new Map<string, string>();
     let installed: InstalledPackage[];
@@ -198,7 +214,7 @@ export class NpmService {
       await (this.deps.listRetryWait ?? (() => Bun.sleep(LIST_RETRY_DELAY_MS)))();
       installed = await this.installedPackages(latest);
     }
-    return { installed, outdatedCheckedAt: cache?.at ?? null, outdatedError: cache?.error ?? null };
+    return { installed, outdatedCheckedAt: cache?.at ?? null, outdatedError: cache?.error ?? null, revision };
   }
 
   /** Registry search (spec §11.3): `GET <registry>/-/v1/search`, with the registry/token resolved from `.npmrc`. */
@@ -252,6 +268,10 @@ export class NpmService {
     /** Task 12: runs once, after a genuinely successful op's post-change steps (e.g. the auto-@types check). */
     afterSucceeded?: () => Promise<void>,
   ): NpmOperation {
+    // R-M3-OUTDATED-1: a user operation preempts an outdated refresh that's queued or already running, so it
+    // never waits behind it. Queued: the refresh task checks this abort as its first statement and returns
+    // without spawning. Running: the abort kills the child through the same signal `spawnStep` already honours.
+    this.#outdatedPreempt?.abort();
     const op: NpmOperation = {
       id: (this.deps.newId ?? (() => crypto.randomUUID()))(),
       kind,
@@ -439,21 +459,45 @@ export class NpmService {
     this.#idle = this.#idle.then(() => guarded);
   }
 
-  /** Runs `bun outdated` at most once at a time, through the queue, and caches the result (spec §11.3). */
+  /**
+   * Runs `bun outdated` at most once at a time, through the queue, and caches the result (spec §11.3).
+   * R-M3-OUTDATED-1: the check gets its own `OUTDATED_TIMEOUT_MS` deadline, far below the queue's 5-minute one,
+   * and a user operation can preempt it (queued or running) through `#outdatedPreempt`. A preempted refresh is
+   * advisory: it never records an error and never overwrites `#outdated`, so the next sheet open just re-checks.
+   */
   async #refreshOutdated(): Promise<void> {
     if (this.#refreshing) return;
     this.#refreshing = true;
-    const run = this.queue.run((signal) => this.spawnStep(["outdated"], signal, () => {}));
+    const preempt = new AbortController();
+    this.#outdatedPreempt = preempt;
+    const timeoutMs = this.deps.outdatedTimeoutMs ?? OUTDATED_TIMEOUT_MS;
+    const run = this.queue.run((signal) => {
+      // (a) from the analysis: a refresh still queued when it's preempted never spawns at all, so the operation
+      // right behind it in the queue starts as soon as this task's promise settles, not after a spawn+kill.
+      if (preempt.signal.aborted) return Promise.resolve(null);
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      const combined = AbortSignal.any([signal, preempt.signal, timeoutSignal]);
+      return this.spawnStep(["outdated"], combined, () => {}).then(
+        (result): { result: NpmSpawnResult; timedOut: boolean } => ({ result, timedOut: timeoutSignal.aborted }),
+      );
+    });
     const done = run
       .then(
-        (result) => {
-          const error = classifyNpmFailure(result);
+        (outcome) => {
+          // Preempted, whether it never spawned (outcome is null) or was aborted mid-spawn: leave the cache as
+          // it was, and record no error, so an absent `latest` never shows a hint that nothing actually failed.
+          if (outcome === null || preempt.signal.aborted) return;
+          const error = classifyNpmFailure({ ...outcome.result, timedOut: outcome.timedOut });
           const latest = new Map(
-            parseOutdated(`${result.stdout}\n${result.stderr}`).map((entry) => [entry.name, entry.latest]),
+            parseOutdated(`${outcome.result.stdout}\n${outcome.result.stderr}`).map((entry) => [
+              entry.name,
+              entry.latest,
+            ]),
           );
           this.#outdated = { at: (this.deps.now ?? Date.now)(), latest: error ? new Map() : latest, error };
         },
         (error: unknown) => {
+          if (preempt.signal.aborted) return;
           // R-M3-T12-KIND-1: classify like `operation()` does, instead of always recording "timeout".
           this.#outdated = {
             at: (this.deps.now ?? Date.now)(),
@@ -469,6 +513,7 @@ export class NpmService {
       // guard stuck forever.
       .finally(() => {
         this.#refreshing = false;
+        if (this.#outdatedPreempt === preempt) this.#outdatedPreempt = null;
       });
     this.#track(done);
   }

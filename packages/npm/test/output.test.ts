@@ -64,6 +64,28 @@ describe("bun output parsing (captured from the bundled Bun, Task 9)", () => {
     expect(error?.log).toContain(network.stderr.trim().split("\n").at(-1) ?? "");
   });
 
+  // R-M3-OUTDATED-1 (outdated-1-analysis.md §2.2): `bun outdated`'s stderr on Bun 1.4.0 against a dead loopback
+  // registry (38/38 runs, ≤ 18 ms). Immediate retries with no backoff, then the ConnectionRefused error, for each
+  // requested manifest. No hang: this locks in that the same classifier the analysis exonerated still calls it
+  // "network" after the R-M3-OUTDATED-1 refactor (the outdated-specific deadline, `AbortSignal.any` combining).
+  test("Bun 1.4.0's connection-refused stderr for outdated classifies as network", () => {
+    const stderr = [
+      "warn: ConnectionRefused downloading package manifest fixture-a. Retry 1/5...",
+      "warn: ConnectionRefused downloading package manifest fixture-a. Retry 2/5...",
+      "warn: ConnectionRefused downloading package manifest fixture-a. Retry 3/5...",
+      "warn: ConnectionRefused downloading package manifest fixture-a. Retry 4/5...",
+      "warn: ConnectionRefused downloading package manifest fixture-a. Retry 5/5...",
+      "error: ConnectionRefused downloading package manifest fixture-a",
+      "warn: ConnectionRefused downloading package manifest @types/fixture-a. Retry 1/5...",
+      "warn: ConnectionRefused downloading package manifest @types/fixture-a. Retry 2/5...",
+      "warn: ConnectionRefused downloading package manifest @types/fixture-a. Retry 3/5...",
+      "warn: ConnectionRefused downloading package manifest @types/fixture-a. Retry 4/5...",
+      "warn: ConnectionRefused downloading package manifest @types/fixture-a. Retry 5/5...",
+      "error: ConnectionRefused downloading package manifest @types/fixture-a",
+    ].join(String.fromCharCode(10));
+    expect(classifyNpmFailure({ exitCode: 1, stdout: "", stderr })?.kind).toBe("network");
+  });
+
   test("classifies the captured not-found and no-matching-version failures", () => {
     expect(classifyNpmFailure(fixture("add-not-found"))?.kind).toBe("notFound");
     expect(classifyNpmFailure(fixture("add-no-matching-version"))?.kind).toBe("noMatchingVersion");

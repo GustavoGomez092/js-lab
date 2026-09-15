@@ -17,15 +17,20 @@ const URL_PATTERN = /[a-zA-Z][a-zA-Z0-9+.-]{0,31}:\/\/[^\s"']+/g;
 const USERINFO_FALLBACK_PATTERN = /([a-zA-Z][a-zA-Z0-9+.-]{0,31}:\/\/)[^@\s/]*@/g;
 const MASKED_USERINFO = "***";
 
-// Fix round 3 (N-c): `_authToken|_auth|_password` counts only as a whole key, preceded by start-of-text or one of
-// whitespace, a quote, `/`, `:`, `{`, `,`, `;` (group 1, re-emitted), then an optional quote and spaces, then `:` or
-// `=`. So `my_auth: enabled` stays, while `//r/:_authToken=x`, `"_authToken": "x"` and `_auth = x` are masked.
-// `_authToken` stays ahead of `_auth` so the longer key wins. A quoted value may contain spaces.
-const AUTH_VALUE_PATTERN = /(^|[\s"'/:{,;])(_authToken|_auth|_password)(["']?\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|\S+)/gi;
+// Fix round 3 (N-c): `_authToken|_auth|_password` counts only as a whole key, preceded by start-of-text or a
+// non-alphanumeric character (group 1, re-emitted), then an optional quote and spaces, then `:` or `=`. So
+// `my_auth: enabled` stays, while `//r/:_authToken=x`, `"_authToken": "x"` and `_auth = x` are masked. Fix round 4
+// (NI3-1): the boundary is any non-alphanumeric, not an allowlist, so `npm_config__authToken=x`, `config._auth=x` and
+// `(_authToken=x)` are masked too. Fix round 4 (NM3-1): separators are spaces or tabs, never a line break, so a key
+// is never joined to a value on the next line and masking is line-local. `_authToken` stays ahead of `_auth` so the
+// longer key wins. A quoted value may contain spaces.
+const AUTH_VALUE_PATTERN =
+  /(^|[^A-Za-z0-9])(_authToken|_auth|_password)(["']?[ \t]*[:=][ \t]*)("[^"\n]*"|'[^'\n]*'|\S+)/gi;
 
 // Fix round 3 (N-c): an Authorization (or Proxy-Authorization) header only with Bearer or Basic and a token-like
-// value of at least 8 non-space characters, so `authorization: basic setup` in prose stays intact.
-const AUTHORIZATION_HEADER_PATTERN = /(authorization:\s*(?:bearer|basic)\s+)\S{8,}/gi;
+// value of at least 8 non-space characters, so `authorization: basic setup` in prose stays intact. Fix round 4
+// (NM3-1): the separators are spaces or tabs, so the header and a token on the next line are never joined.
+const AUTHORIZATION_HEADER_PATTERN = /(authorization:[ \t]*(?:bearer|basic)[ \t]+)\S{8,}/gi;
 
 /** A URL whose only userinfo is the fallback's own marker is already masked; re-parsing it must not change it. */
 function redactUrl(match: string): string {

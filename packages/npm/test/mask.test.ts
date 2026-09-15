@@ -3,6 +3,27 @@ import { maskCredentials } from "../src/mask";
 
 const NL = String.fromCharCode(10);
 
+// Fix round 3 (N-c, Nm-2): benign text that must never change. Fix round 4 reuses the same list.
+const UNCHANGED = [
+  "my_auth: enabled",
+  "no_auth = required",
+  "authorization: basic setup",
+  "See authorization: basic setup in docs",
+  "node_modules//@types",
+  "node_modules//@types/node",
+  "https://registry.example//@scope/pkg",
+  "//TODO@me fix",
+  "_authentication=true",
+  "_authorization=enabled",
+  "the authorization: step failed",
+  "oauth_password_reset=1",
+  "email me at foo@bar.com",
+  "// comment @decorator",
+  "file:///Users/x/@scope/pkg",
+  "https://registry.npmjs.org/@types%2fnode",
+  "GET https://registry.example/zod 200",
+];
+
 describe("maskCredentials (R-M3-T26-FIX-3: one masker shared by Main and the UI)", () => {
   // Moved from apps/ui/test/npm-panel.test.ts (M-6, extended in fix round 2 for M-1).
   test("maskCredentials strips URL userinfo and _authToken/_auth/_password values, keeping the host visible", () => {
@@ -69,26 +90,7 @@ describe("maskCredentials (R-M3-T26-FIX-3: one masker shared by Main and the UI)
   // Fix round 3 (N-c, Nm-2): a key inside a longer identifier, prose after "authorization:", and a scoped path
   // after a double slash are not credentials; masking must also be a fixed point for every shape it touches.
   test("masking has no false positives and is idempotent", () => {
-    const unchanged = [
-      "my_auth: enabled",
-      "no_auth = required",
-      "authorization: basic setup",
-      "See authorization: basic setup in docs",
-      "node_modules//@types",
-      "node_modules//@types/node",
-      "https://registry.example//@scope/pkg",
-      "//TODO@me fix",
-      "_authentication=true",
-      "_authorization=enabled",
-      "the authorization: step failed",
-      "oauth_password_reset=1",
-      "email me at foo@bar.com",
-      "// comment @decorator",
-      "file:///Users/x/@scope/pkg",
-      "https://registry.npmjs.org/@types%2fnode",
-      "GET https://registry.example/zod 200",
-    ];
-    for (const text of unchanged) {
+    for (const text of UNCHANGED) {
       expect(maskCredentials(text)).toBe(text);
     }
 
@@ -110,8 +112,8 @@ describe("maskCredentials (R-M3-T26-FIX-3: one masker shared by Main and the UI)
       ["authorization: basic abc12345", ["abc12345"]],
       ["AUTHORIZATION:Bearer abc12345", ["abc12345"]],
       ["Proxy-Authorization: Basic abc12345", ["abc12345"]],
-      [`Authorization: Bearer${NL}abc12345`, ["abc12345"]],
-      [`_authToken=${NL}abc123`, ["abc123"]],
+      // Fix round 4 (NM3-1): a key or header and its value on separate lines are no longer joined; masking is
+      // line-local, which the "masking is line-local" test below asserts for those two shapes.
       ['{"registry":"https://user:secret@r.example/","//r/:_authToken":"abc123"}', ["secret", "abc123"]],
       ["git+https://ghp_FAKE12345@github.com/o/r.git", ["ghp_FAKE12345"]],
       ["GET https://user:secret@registry.example/zod - ConnectionRefused", ["secret"]],
@@ -124,7 +126,7 @@ describe("maskCredentials (R-M3-T26-FIX-3: one masker shared by Main and the UI)
       }
       expect(maskCredentials(once)).toBe(once);
     }
-    for (const text of unchanged) {
+    for (const text of UNCHANGED) {
       expect(maskCredentials(maskCredentials(text))).toBe(maskCredentials(text));
     }
     // The host stays readable after the userinfo is gone.
@@ -132,5 +134,40 @@ describe("maskCredentials (R-M3-T26-FIX-3: one masker shared by Main and the UI)
     expect(maskCredentials("GET https://user:secret@registry.example/zod - ConnectionRefused")).toBe(
       "GET https://registry.example/zod - ConnectionRefused",
     );
+  });
+
+  // Fix round 4 (NI3-1, NM3-1): a key after any non-alphanumeric character is a whole key (fix round 3's allowlist
+  // left `npm_config__authToken=`, `config._authToken=` and `(_authToken=` in clear), and a separator never spans a
+  // line break, so masking a whole text equals masking it line by line, as Main does.
+  test("keys after punctuation are masked, and masking is line-local", () => {
+    const leaks = [
+      "npm_config__authToken=abc123",
+      "+ export NPM_CONFIG__AUTH=abc123",
+      "config._authToken=abc123",
+      "(_authToken=abc123)",
+      "[_auth=abc123]",
+      '{"_password":"abc123"}',
+      "x=1;_authToken=abc123",
+      "a,_auth=abc123",
+      "'_authToken'='abc123'",
+      '"//r/:_authToken=abc123"',
+    ];
+    for (const text of leaks) {
+      const once = maskCredentials(text);
+      if (once.includes("abc123") || !once.includes("***")) {
+        throw new Error(`${JSON.stringify(text)} was not masked: ${JSON.stringify(once)}`);
+      }
+      expect(once.includes("abc123")).toBe(false);
+      expect(maskCredentials(once)).toBe(once);
+    }
+
+    for (const text of UNCHANGED) {
+      expect(maskCredentials(text)).toBe(text);
+    }
+
+    for (const text of [`Authorization: Bearer${NL}abc12345`, `_authToken=${NL}abc123`]) {
+      const perLine = text.split(NL).map(maskCredentials).join(NL);
+      expect(maskCredentials(text)).toBe(perLine);
+    }
   });
 });

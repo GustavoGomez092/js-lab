@@ -1,11 +1,53 @@
 import { describe, expect, test } from "bun:test";
-import { collectLocalTypes, collectPackageTypes, MAX_PACKAGE_TYPE_FILES, type TypesFs } from "../src/type-closure";
+import {
+  collectLocalTypes,
+  collectPackageTypes,
+  MAX_LOCAL_TYPE_FILES,
+  MAX_PACKAGE_TYPE_FILES,
+  type TypesFs,
+} from "../src/type-closure";
 
-function memoryFs(files: Record<string, string>, links: Record<string, string> = {}): TypesFs {
+/**
+ * `unresolvable` forces `realpath` to null for specific paths (M-1). A path is treated as an existing directory
+ * (resolving to itself) when some file or link key lies under it, matching how a real filesystem's `realpath`
+ * behaves for an ordinary (non-symlinked) directory.
+ */
+function memoryFs(
+  files: Record<string, string>,
+  links: Record<string, string> = {},
+  unresolvable: readonly string[] = [],
+): TypesFs {
+  const isDir = (path: string) =>
+    Object.keys(files).some((f) => f.startsWith(`${path}/`)) ||
+    Object.keys(links).some((l) => l.startsWith(`${path}/`));
   return {
     readText: async (path) => files[path] ?? (path in links ? (files[links[path] as string] ?? null) : null),
     isFile: async (path) => path in files || path in links,
-    realpath: async (path) => links[path] ?? (path in files ? path : null),
+    realpath: async (path) => {
+      if (unresolvable.includes(path)) return null;
+      if (path in links) return links[path] as string;
+      if (path in files) return path;
+      return isDir(path) ? path : null;
+    },
+  };
+}
+
+/** Wraps a `TypesFs`, recording every `isFile`/`readText` path so tests can assert probe/read counts. */
+function countingFs(fs: TypesFs): TypesFs & { isFileCalls: string[]; readTextCalls: string[] } {
+  const isFileCalls: string[] = [];
+  const readTextCalls: string[] = [];
+  return {
+    isFileCalls,
+    readTextCalls,
+    readText: async (path) => {
+      readTextCalls.push(path);
+      return fs.readText(path);
+    },
+    isFile: async (path) => {
+      isFileCalls.push(path);
+      return fs.isFile(path);
+    },
+    realpath: (path) => fs.realpath(path),
   };
 }
 
@@ -128,6 +170,47 @@ describe("package type closure (spec §6.2)", () => {
     expect(result.files.length).toBe(MAX_PACKAGE_TYPE_FILES);
     expect(result.truncated).toBe(true);
   });
+
+  // I-2: package.json read is gated on the real path too, not just the .d.ts closure.
+  test("a package.json symlinked outside the package is ignored", async () => {
+    const fs = memoryFs(
+      {
+        "/n/node_modules/lib/index.d.ts": "export declare const v: 1;\n",
+        "/outside/package.json": JSON.stringify({ name: "lib", types: "index.d.ts" }),
+      },
+      { "/n/node_modules/lib/package.json": "/outside/package.json" },
+    );
+    const result = await collectPackageTypes(fs, { name: "lib", nodeModulesDirs: ["/n/node_modules"] });
+    expect(result.hasTypes).toBe(false);
+    expect(result.files).toEqual([]);
+  });
+
+  // I-3: `/// <reference types>` values are validated as package names, and a package never lists itself.
+  test("reference types values that aren't package names never become dependencies", async () => {
+    const fs = memoryFs({
+      "/n/lib/package.json": JSON.stringify({ name: "lib", types: "index.d.ts" }),
+      "/n/lib/index.d.ts":
+        '/// <reference types="../../../../Users/someone/project" />\n' +
+        '/// <reference types="lib" />\n' +
+        '/// <reference types="dep-ok" />\n',
+    });
+    const result = await collectPackageTypes(fs, { name: "lib", nodeModulesDirs: ["/n"] });
+    expect(result.dependencies).toEqual(["dep-ok"]);
+  });
+
+  // I-3: `collectPackageTypes` refuses a `name` that isn't itself a valid package name, before touching the fs.
+  test("collectPackageTypes refuses names that aren't package names", async () => {
+    const fs = countingFs(
+      memoryFs({
+        "/n/node_modules/other/package.json": JSON.stringify({ name: "other", types: "index.d.ts" }),
+        "/n/node_modules/other/index.d.ts": "export {};\n",
+      }),
+    );
+    const result = await collectPackageTypes(fs, { name: "../other", nodeModulesDirs: ["/n/node_modules"] });
+    expect(result.files).toEqual([]);
+    expect(result.hasTypes).toBe(false);
+    expect(fs.readTextCalls).toEqual([]);
+  });
 });
 
 describe("working-directory local types (spec §6.2)", () => {
@@ -162,5 +245,46 @@ describe("working-directory local types (spec §6.2)", () => {
     );
     const result = await collectLocalTypes(fs, { workingDirectory: "/wd", specifiers: ["./util"] });
     expect(result.files.map((file) => file.path).sort()).toEqual(["file:///tab/util.ts"]);
+  });
+
+  // M-5: pins the separator-safe prefix check with a sibling directory whose name starts with the root name.
+  test("a symlink to a sibling directory whose name starts with the root name is outside", async () => {
+    const fs = memoryFs({ "/wd-evil/x.ts": "export const EVIL = 1;\n" }, { "/wd/x.ts": "/wd-evil/x.ts" });
+    const result = await collectLocalTypes(fs, { workingDirectory: "/wd", specifiers: ["./x"] });
+    expect(result.files).toEqual([]);
+  });
+
+  // M-1: a WD whose real path can't be resolved fails closed, even though a file exists under it lexically.
+  test("local types return nothing when the working directory can't be resolved", async () => {
+    const fs = memoryFs({ "/wd/util.ts": "export const a = 1;\n" }, {}, ["/wd"]);
+    const result = await collectLocalTypes(fs, { workingDirectory: "/wd", specifiers: ["./util"] });
+    expect(result).toEqual({ files: [], packages: [], truncated: false });
+  });
+
+  // M-3: two symlink aliases resolving to the same real file are returned once, and it's read once.
+  test("two symlink aliases to the same file are returned once", async () => {
+    const fs = countingFs(
+      memoryFs(
+        { "/wd/real.ts": "export const a = 1;\n" },
+        { "/wd/alias1.ts": "/wd/real.ts", "/wd/alias2.ts": "/wd/real.ts" },
+      ),
+    );
+    const result = await collectLocalTypes(fs, {
+      workingDirectory: "/wd",
+      specifiers: ["./alias1", "./alias2", "./real"],
+    });
+    expect(result.files).toEqual([{ path: "file:///tab/alias1.ts", content: "export const a = 1;\n" }]);
+    expect(fs.readTextCalls.filter((path) => path === "/wd/real.ts").length).toBe(1);
+  });
+
+  // I-1: a file with far more missing relative specifiers than the probe budget stays bounded and truncates.
+  test("missing relative specifiers stop at the probe budget and report truncated", async () => {
+    const missingCount = MAX_LOCAL_TYPE_FILES * 16 + 50;
+    const lines: string[] = [];
+    for (let i = 0; i < missingCount; i++) lines.push(`import "./missing${i}";`);
+    const fs = countingFs(memoryFs({ "/wd/a.ts": `${lines.join("\n")}\n` }));
+    const result = await collectLocalTypes(fs, { workingDirectory: "/wd", specifiers: ["./a"] });
+    expect(result.truncated).toBe(true);
+    expect(fs.isFileCalls.length).toBeLessThanOrEqual(MAX_LOCAL_TYPE_FILES * 16 + 20);
   });
 });

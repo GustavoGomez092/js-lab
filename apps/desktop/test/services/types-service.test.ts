@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TypesFs } from "@jslab/npm";
 import { TypesService } from "../../src/main/services/types-service";
 
 let dir = "";
@@ -64,5 +65,51 @@ describe("TypesService", () => {
     const result = await service.local("t1", ["./secret", "./real"]);
     expect(result.files.some((file) => file.content.includes(outsideMarker))).toBe(false);
     expect(result.files.some((file) => file.content.includes(insideMarker))).toBe(true);
+  });
+
+  // M-6: the package cache is bounded, evicting the least recently used entry once it would grow past the cap.
+  test("the package types cache keeps at most 200 entries and evicts the least recently used", async () => {
+    const modules = "/packages/node_modules";
+    const manifestReads: string[] = [];
+    const fakeFs: TypesFs = {
+      async readText(path) {
+        if (path.endsWith("/package.json")) {
+          manifestReads.push(path);
+          const name = path.slice(modules.length + 1, path.length - "/package.json".length);
+          return JSON.stringify({ name, types: "index.d.ts" });
+        }
+        if (path.endsWith("/index.d.ts")) return "export declare const v: 1;\n";
+        return null;
+      },
+      async isFile(path) {
+        return path.endsWith("/package.json") || path.endsWith("/index.d.ts");
+      },
+      async realpath(path) {
+        return path;
+      },
+    };
+    const service = new TypesService({
+      nodeModulesDirsFor: () => [modules],
+      workingDirectoryFor: () => null,
+      fs: fakeFs,
+    });
+
+    await service.packages("t1", ["pkg0"]);
+    for (let i = 1; i < 200; i++) await service.packages("t1", [`pkg${i}`]);
+    // The cache now holds pkg0..pkg199 (200 entries, at the cap).
+
+    manifestReads.length = 0;
+    await service.packages("t1", ["pkg0"]); // Refresh pkg0's recency: it's now the most recently used.
+    expect(manifestReads).toEqual([]);
+
+    await service.packages("t1", ["pkg200"]); // The 201st distinct entry evicts the least recently used: pkg1.
+
+    manifestReads.length = 0;
+    await service.packages("t1", ["pkg1"]);
+    expect(manifestReads.length).toBeGreaterThan(0); // Evicted: went back to the fs.
+
+    manifestReads.length = 0;
+    await service.packages("t1", ["pkg0"]);
+    expect(manifestReads).toEqual([]); // Still cached: the refresh above kept it.
   });
 });

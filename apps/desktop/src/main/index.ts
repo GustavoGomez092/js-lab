@@ -56,7 +56,7 @@ import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
 import { startupNotices } from "./startup-notices";
 import { strings } from "./strings";
-import { createUiFlushHandlers, createUiFlushWaiter } from "./ui-flush";
+import { afterUiFlush, createUiFlushHandlers, createUiFlushWaiter } from "./ui-flush";
 import { onReload, shouldReloadView } from "./ui-watchdog";
 import { type DisplayInfo, displayForFrame, frameToSave, restoreFrame } from "./windows/frame-restore";
 import { createMainWindowController } from "./windows/main-window";
@@ -247,7 +247,10 @@ async function start(): Promise<void> {
       const current = mainWindow.window;
       if (current) current.setFullScreen(!current.isFullScreen());
     },
-    closeWindow: () => mainWindow.close(),
+    // M-2 (R-M3-T19-FIX-1): the UI flushes pending edits before the window closes. `uiFlush` is declared below and read
+    // only when this runs, after startup.
+    // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
+    closeWindow: () => void afterUiFlush({ uiFlush, then: () => mainWindow.close() })(),
     openSettings: () => void settingsWindow.open(),
   };
   const appHandlers = createAppHandlers(appHandlerDeps);
@@ -555,11 +558,8 @@ async function start(): Promise<void> {
     // Final review T14: a hung flush must not keep JSLab from quitting. FA-I1: settings writes are awaited too.
     // A quit started by a startup failure keeps its exit code 1 (FA-I3).
     void flushBeforeQuit(
-      () =>
-        uiFlush
-          .request()
-          .then(() => Promise.all([session.flush(), settings.flush()]))
-          .then(() => {}),
+      // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
+      () => afterUiFlush({ uiFlush, then: () => Promise.all([session.flush(), settings.flush()]) })(),
       log,
     ).finally(() => Utils.quit(errorPolicy.exitCode));
   });

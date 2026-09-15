@@ -32,7 +32,11 @@ export function createBufferSync(
   return {
     changed(tabId, content) {
       const existing = pending.get(tabId);
-      if (existing) timers.clearTimeout(existing.handle);
+      // M-3: a throttle, not a debounce. A pending tab keeps its timer and only takes the newer content.
+      if (existing) {
+        existing.content = content;
+        return;
+      }
       pending.set(tabId, {
         content,
         handle: timers.setTimeout(() => flushOne(tabId), options.delayMs ?? BUFFER_SYNC_DELAY_MS),
@@ -42,6 +46,7 @@ export function createBufferSync(
       if (tabId !== undefined) flushOne(tabId);
       else for (const id of [...pending.keys()]) flushOne(id);
     },
+    /** Drops pending edits and timers. Not terminal: a later `changed` re-arms (App's memo relies on it across StrictMode remounts). */
     dispose() {
       for (const entry of pending.values()) timers.clearTimeout(entry.handle);
       pending.clear();

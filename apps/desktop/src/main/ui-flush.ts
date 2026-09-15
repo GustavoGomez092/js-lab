@@ -35,6 +35,17 @@ export function createUiFlushWaiter(deps: { send(): void; isOpen(): boolean; tim
   };
 }
 
+/** Waits for the UI to flush (flushed, timed out, closed or failed), then runs `then` exactly once (X1, R-M3-T19-FIX-1). */
+export function afterUiFlush(deps: {
+  uiFlush: Pick<UiFlushWaiter, "request">;
+  then: () => unknown;
+}): () => Promise<void> {
+  return async () => {
+    await deps.uiFlush.request().catch(() => "failed" as const);
+    await deps.then();
+  };
+}
+
 export function createUiFlushHandlers(waiter: Pick<UiFlushWaiter, "received">, log: Log) {
   const { message } = createValidators(log);
   return {

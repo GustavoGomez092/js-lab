@@ -103,8 +103,11 @@ export function App({
   useEffect(() => {
     const flushAll = () => bufferSync.flush();
     window.addEventListener("beforeunload", flushAll);
+    // M-2: WebKit fires pagehide more reliably than beforeunload when the view goes away.
+    window.addEventListener("pagehide", flushAll);
     return () => {
       window.removeEventListener("beforeunload", flushAll);
+      window.removeEventListener("pagehide", flushAll);
       bufferSync.flush();
       bufferSync.dispose();
     };

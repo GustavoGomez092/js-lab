@@ -281,6 +281,15 @@ describe("App shell", () => {
     setEditorHandle(null);
   });
 
+  // M-2 (R-M3-T19-FIX-1): WebKit fires pagehide more reliably than beforeunload when the view goes away.
+  test("a pending edit is sent when the page hides", () => {
+    const { store, api } = renderApp();
+    act(() => store.getState().editCode("4 + 4"));
+    expect(api.bufferChanged).not.toHaveBeenCalled();
+    window.dispatchEvent(new Event("pagehide"));
+    expect(api.bufferChanged.mock.calls).toEqual([["t1", "4 + 4"]]);
+  });
+
   test("Help menu commands are forwarded to Main", async () => {
     const { api, emit } = renderApp();
     await emit("menu.command", { command: "help.copyDebugLog" });

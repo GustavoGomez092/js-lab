@@ -4,9 +4,11 @@ import { createBufferSync } from "../src/state/buffer-sync";
 
 function manualTimers() {
   let next = 1;
+  let armedCount = 0;
   const pending = new Map<number, () => void>();
   const timers: TimerApi = {
     setTimeout: (callback) => {
+      armedCount++;
       const id = next++;
       pending.set(id, callback);
       return id;
@@ -21,7 +23,7 @@ function manualTimers() {
       callback();
     }
   };
-  return { timers, fire };
+  return { timers, fire, armed: () => armedCount };
 }
 
 describe("buffer sync (X5)", () => {
@@ -35,9 +37,10 @@ describe("buffer sync (X5)", () => {
     sync.changed("a", "123");
     expect(send).not.toHaveBeenCalled();
     fire();
+    // M-3 throttle: tab a's timer was armed by its first edit, before b's, so a is sent first (with its last content).
     expect(send.mock.calls).toEqual([
-      ["b", "x"],
       ["a", "123"],
+      ["b", "x"],
     ]);
   });
 
@@ -54,6 +57,25 @@ describe("buffer sync (X5)", () => {
     expect(send.mock.calls).toEqual([
       ["a", "1"],
       ["b", "2"],
+    ]);
+  });
+
+  // M-3 (R-M3-T19-FIX-1): a throttle, not a debounce. A pending tab keeps its timer and only takes the newer content.
+  test("sustained edits are sent every 150 ms with the latest content, not only after a pause", () => {
+    const send = mock((_tabId: string, _content: string) => {});
+    const { timers, fire, armed } = manualTimers();
+    const sync = createBufferSync(send, { timers });
+    sync.changed("t1", "a");
+    expect(armed()).toBe(1);
+    sync.changed("t1", "ab");
+    expect(armed()).toBe(1);
+    fire();
+    expect(send.mock.calls).toEqual([["t1", "ab"]]);
+    sync.changed("t1", "abc");
+    fire();
+    expect(send.mock.calls).toEqual([
+      ["t1", "ab"],
+      ["t1", "abc"],
     ]);
   });
 

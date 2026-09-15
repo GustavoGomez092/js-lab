@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
 import type { Plugin } from "vite";
@@ -12,19 +12,20 @@ export const TYPE_LIB_PACKS: Record<Pack, readonly string[]> = {
   bun: ["bun-types"],
 };
 
-/** Both packs together stay below this many characters of declaration source. */
+/** Both packs together stay below this many UTF-8 bytes of declaration source. */
 export const MAX_TYPE_LIB_BYTES = 8_000_000;
 
 export function resolvePackageDir(name: string, fromDir: string): string {
   return dirname(createRequire(join(fromDir, "package.json")).resolve(`${name}/package.json`));
 }
 
+/** Collects files under `dir`, skipping nested `node_modules` and never following symlinks out of the package. */
 function walk(dir: string, out: string[]): void {
-  for (const entry of readdirSync(dir)) {
-    if (entry === "node_modules") continue;
-    const path = join(dir, entry);
-    if (statSync(path).isDirectory()) walk(path, out);
-    else if (entry.endsWith(".d.ts") || path === join(dir, "package.json")) out.push(path);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink() || entry.name === "node_modules") continue;
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) walk(path, out);
+    else if (entry.name.endsWith(".d.ts") || path === join(dir, "package.json")) out.push(path);
   }
 }
 
@@ -58,9 +59,10 @@ export function jslabTypeLibs(root: string = join(import.meta.dirname, "..")): P
     },
     load(id: string) {
       if (!id.startsWith(`${NUL}${PREFIX}`)) return null;
-      const pack = id.slice(PREFIX.length + 1) as Pack;
-      const names = TYPE_LIB_PACKS[pack];
-      if (!names) return null;
+      const pack = id.slice(PREFIX.length + 1);
+      // Own keys only: an inherited name such as "constructor" is not a pack.
+      if (!Object.hasOwn(TYPE_LIB_PACKS, pack)) return null;
+      const names = TYPE_LIB_PACKS[pack as Pack];
       return `export default ${JSON.stringify(collectTypeLibPack(names.map((name) => ({ name, dir: resolvePackageDir(name, root) }))))};`;
     },
   };

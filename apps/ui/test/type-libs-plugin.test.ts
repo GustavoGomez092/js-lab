@@ -27,7 +27,7 @@ describe("bundled type libraries (spec §6.2)", () => {
       true,
     );
     expect(paths.every((path) => path.endsWith(".d.ts") || path.endsWith("/package.json"))).toBe(true);
-    const bytes = [...node, ...bun].reduce((sum, file) => sum + file.content.length, 0);
+    const bytes = [...node, ...bun].reduce((sum, file) => sum + Buffer.byteLength(file.content, "utf8"), 0);
     expect(bytes).toBeLessThan(MAX_TYPE_LIB_BYTES);
     expect(
       JSON.parse(node.find((file) => file.path.endsWith("@types/node/package.json"))?.content ?? "{}").version,
@@ -43,5 +43,7 @@ describe("bundled type libraries (spec §6.2)", () => {
     const code = load(`${NUL}virtual:jslab-type-libs/bun`) ?? "";
     expect(code.startsWith("export default [")).toBe(true);
     expect(load(`${NUL}something-else`)).toBeNull();
+    // An inherited Object.prototype key is not a pack.
+    expect(load(resolveId("virtual:jslab-type-libs/constructor") ?? "")).toBeNull();
   });
 });

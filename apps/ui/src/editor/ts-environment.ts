@@ -76,15 +76,47 @@ export interface TsEnvironmentState {
 }
 
 export interface TsEnvironment {
-  /** Makes Monaco's global TypeScript defaults match the shown tab (spec §6.1). */
+  /**
+   * Makes Monaco's global TypeScript defaults match the shown tab (spec §6.1).
+   *
+   * Rejects when a runtime pack fails to load. The options, diagnostics, package libs and local libs are still applied
+   * without that pack, and the next `apply` retries the load. Callers catch and log the rejection.
+   */
   apply(state: TsEnvironmentState): Promise<void>;
   setPackageFiles(name: string, files: readonly TypeFile[]): void;
   hasPackage(name: string): boolean;
   clearPackages(): void;
   setLocalFiles(tabId: string, files: readonly TypeFile[]): void;
   clearLocal(tabId?: string): void;
-  /** The extra-lib paths last applied (E2E and tests). */
+  /** A copy of the extra-lib paths last applied, each path once (E2E and tests). */
   libPaths(): string[];
+}
+
+/** Two file lists are equal when they hold the same paths and contents in the same order. */
+function sameFiles(a: readonly TypeFile[], b: readonly TypeFile[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((file, index) => file.path === b[index]?.path && file.content === b[index]?.content)
+  );
+}
+
+/**
+ * A cheap content identity for the extra-lib key: the length plus a 32-bit FNV-1a hash of the UTF-16 code units.
+ * Cached per file object, so a bundled pack is hashed once when it first applies, never on every sync.
+ */
+const fingerprints = new WeakMap<TypeFile, string>();
+function fingerprintOf(file: TypeFile): string {
+  let fingerprint = fingerprints.get(file);
+  if (fingerprint === undefined) {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < file.content.length; index++) {
+      hash ^= file.content.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    fingerprint = `${file.content.length}:${(hash >>> 0).toString(36)}`;
+    fingerprints.set(file, fingerprint);
+  }
+  return fingerprint;
 }
 
 export function createTsEnvironment(deps: {
@@ -93,12 +125,14 @@ export function createTsEnvironment(deps: {
 }): TsEnvironment {
   const packs = new Map<RuntimePack, Promise<readonly TypeFile[]>>();
   const loadedPacks = new Map<RuntimePack, readonly TypeFile[]>();
+  /** Packs whose load failed for the current state; they apply as empty until the next `apply` retries them. */
+  const unavailablePacks = new Set<RuntimePack>();
   const packages = new Map<string, readonly TypeFile[]>();
   const local = new Map<string, readonly TypeFile[]>();
   let state: TsEnvironmentState | null = null;
-  let applied = { options: "", diagnostics: "", libs: "" };
+  // null never equals a computed key, so the first sync sends all three values.
+  let applied: { options: string; diagnostics: string; libs: string } | null = null;
   let appliedPaths: string[] = [];
-  let version = 0;
 
   const loadPack = (pack: RuntimePack) => {
     let entry = packs.get(pack);
@@ -116,24 +150,27 @@ export function createTsEnvironment(deps: {
   const sync = () => {
     if (!state) return;
     const runtimePacks = packsFor(state.runtime);
-    if (!runtimePacks.every((pack) => loadedPacks.has(pack))) return;
+    // A pack that is still loading holds the sync; a pack that failed for this state doesn't.
+    if (!runtimePacks.every((pack) => loadedPacks.has(pack) || unavailablePacks.has(pack))) return;
     const options = compilerOptionsFor(state.runtime, state.decorators);
     const diagnostics = diagnosticsOptionsFor(state.linting);
-    const libs = [
-      ...runtimePacks.flatMap((pack) => loadedPacks.get(pack) ?? []),
-      ...[...packages.values()].flat(),
-      ...(state.tabId ? (local.get(state.tabId) ?? []) : []),
-    ];
+    // One entry per path. Later sources win: runtime packs, then packages, then the shown tab's local files.
+    const byPath = new Map<string, TypeFile>();
+    for (const pack of runtimePacks) for (const file of loadedPacks.get(pack) ?? []) byPath.set(file.path, file);
+    for (const files of packages.values()) for (const file of files) byPath.set(file.path, file);
+    for (const file of (state.tabId ? local.get(state.tabId) : undefined) ?? []) byPath.set(file.path, file);
+    const libs = [...byPath.values()];
     const next = {
       options: JSON.stringify(options),
       diagnostics: JSON.stringify(diagnostics),
-      libs: [String(version), ...libs.map((file) => file.path)].join(NEWLINE),
+      libs: libs.map((file) => `${file.path} ${fingerprintOf(file)}`).join(NEWLINE),
     };
     for (const defaults of deps.defaults) {
-      if (next.options !== applied.options) defaults.setCompilerOptions(options);
-      if (next.diagnostics !== applied.diagnostics) defaults.setDiagnosticsOptions(diagnostics);
-      if (next.libs !== applied.libs)
+      if (next.options !== applied?.options) defaults.setCompilerOptions(options);
+      if (next.diagnostics !== applied?.diagnostics) defaults.setDiagnosticsOptions(diagnostics);
+      if (next.libs !== applied?.libs) {
         defaults.setExtraLibs(libs.map((file) => ({ content: file.content, filePath: file.path })));
+      }
     }
     applied = next;
     appliedPaths = libs.map((file) => file.path);
@@ -142,36 +179,49 @@ export function createTsEnvironment(deps: {
   return {
     async apply(next) {
       state = next;
-      await Promise.all(packsFor(next.runtime).map(loadPack));
-      if (state !== next) return;
-      sync();
+      unavailablePacks.clear();
+      const runtimePacks = packsFor(next.runtime);
+      const results = await Promise.allSettled(runtimePacks.map(loadPack));
+      if (state === next) {
+        results.forEach((result, index) => {
+          const pack = runtimePacks[index];
+          if (result.status === "rejected" && pack) unavailablePacks.add(pack);
+        });
+        sync();
+      }
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure) throw failure.reason;
     },
     setPackageFiles(name, files) {
+      const previous = packages.get(name);
       packages.set(name, files);
-      version++;
-      sync();
+      if (!previous || !sameFiles(previous, files)) sync();
     },
     hasPackage(name) {
       return packages.has(name);
     },
     clearPackages() {
+      const hadPackages = packages.size > 0;
       packages.clear();
-      version++;
-      sync();
+      if (hadPackages) sync();
     },
     setLocalFiles(tabId, files) {
+      const previous = local.get(tabId);
       local.set(tabId, files);
-      version++;
-      sync();
+      if (tabId === state?.tabId && !(previous && sameFiles(previous, files))) sync();
     },
     clearLocal(tabId) {
-      if (tabId === undefined) local.clear();
-      else local.delete(tabId);
-      version++;
-      sync();
+      const shownTabId = state?.tabId ?? null;
+      if (tabId === undefined) {
+        const shownHadFiles = shownTabId !== null && local.has(shownTabId);
+        local.clear();
+        if (shownHadFiles) sync();
+        return;
+      }
+      if (local.delete(tabId) && tabId === shownTabId) sync();
     },
     libPaths() {
-      return appliedPaths;
+      return [...appliedPaths];
     },
   };
 }

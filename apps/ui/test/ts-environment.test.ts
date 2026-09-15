@@ -146,6 +146,89 @@ describe("per-runtime TypeScript environment (spec §6.1)", () => {
     expect(state.options?.lib).toEqual(["lib.esnext.d.ts", "lib.dom.d.ts", "lib.dom.iterable.d.ts"]);
   });
 
+  test("extra libs are sent only when the shown tab's set changes", async () => {
+    const { defaults, calls, state } = fakeDefaults();
+    const libCalls = () => calls.filter((call) => call === "libs").length;
+    const env = createTsEnvironment({ defaults: [defaults], loadPack: async () => [] });
+    await env.apply({ tabId: "a", runtime: "browser", decorators: "2023-11", linting: true });
+    const start = libCalls();
+
+    env.setLocalFiles("b", [{ path: "file:///tab/b.ts", content: "b" }]);
+    expect(libCalls()).toBe(start);
+    env.clearLocal("missing");
+    expect(libCalls()).toBe(start);
+    env.setLocalFiles("a", [{ path: "file:///tab/a.ts", content: "a" }]);
+    const afterA = libCalls();
+    env.setLocalFiles("a", [{ path: "file:///tab/a.ts", content: "a" }]);
+    expect(libCalls()).toBe(afterA);
+    env.clearLocal("b");
+    expect(libCalls()).toBe(afterA);
+    env.setPackageFiles("p", [{ path: "file:///node_modules/p/index.d.ts", content: "p" }]);
+    const afterPackage = libCalls();
+    env.setPackageFiles("p", [{ path: "file:///node_modules/p/index.d.ts", content: "p" }]);
+    expect(libCalls()).toBe(afterPackage);
+
+    env.setLocalFiles("a", [{ path: "file:///tab/a.ts", content: "changed" }]);
+    expect(libCalls()).toBe(afterPackage + 1);
+    env.clearLocal("a");
+    expect(libCalls()).toBe(afterPackage + 2);
+    expect(state.libs).toEqual(["file:///node_modules/p/index.d.ts"]);
+  });
+
+  test("a failed pack load still applies options and other libs, rejects, and a later apply retries", async () => {
+    const { defaults, calls, state } = fakeDefaults();
+    let failing = true;
+    const env = createTsEnvironment({
+      defaults: [defaults],
+      loadPack: async (pack) => {
+        if (failing) throw new Error(`the ${pack} pack failed to load`);
+        return [packFile(pack)];
+      },
+    });
+    const bunState = { tabId: "a", runtime: "bun", decorators: "2023-11", linting: true } as const;
+    await expect(env.apply(bunState)).rejects.toThrow("failed to load");
+    expect(calls).toContain("options");
+    expect(calls).toContain("diagnostics");
+    expect(state.options?.lib).toEqual(["lib.esnext.d.ts"]);
+
+    const libCalls = () => calls.filter((call) => call === "libs").length;
+    const before = libCalls();
+    env.setLocalFiles("a", [{ path: "file:///tab/util.ts", content: "u" }]);
+    expect(libCalls()).toBe(before + 1);
+    expect(state.libs).toEqual(["file:///tab/util.ts"]);
+
+    failing = false;
+    await env.apply({ ...bunState });
+    expect(env.libPaths()).toEqual([
+      "file:///node_modules/bun-pack/index.d.ts",
+      "file:///node_modules/node-pack/index.d.ts",
+      "file:///tab/util.ts",
+    ]);
+  });
+
+  test("extra libs are deduplicated by path, with packages over packs and local over packages", async () => {
+    const sent: { content: string; filePath?: string }[][] = [];
+    const defaults: TsDefaultsLike = {
+      setCompilerOptions: () => {},
+      setDiagnosticsOptions: () => {},
+      setExtraLibs: (libs) => {
+        sent.push(libs);
+      },
+    };
+    const globals = "file:///node_modules/@types/node/globals.d.ts";
+    const env = createTsEnvironment({
+      defaults: [defaults],
+      loadPack: async () => [{ path: globals, content: "pack" }],
+    });
+    await env.apply({ tabId: "a", runtime: "browser-node", decorators: "2023-11", linting: true });
+    env.setPackageFiles("@types/node", [{ path: globals, content: "pkg" }]);
+    expect(sent.at(-1)?.filter((lib) => lib.filePath === globals)).toEqual([{ content: "pkg", filePath: globals }]);
+    expect(env.libPaths()).toEqual([globals]);
+    env.setLocalFiles("a", [{ path: globals, content: "local" }]);
+    expect(sent.at(-1)?.filter((lib) => lib.filePath === globals)).toEqual([{ content: "local", filePath: globals }]);
+    expect(new Set(env.libPaths()).size).toBe(env.libPaths().length);
+  });
+
   test("Monaco's TypeScriptWorker: console, setTimeout and URL resolve in every runtime, and runtime globals are scoped (R-M2-BUG-1)", async () => {
     const uiRoot = join(import.meta.dir, "..");
     const packs: Record<RuntimePack, TypeFile[]> = {

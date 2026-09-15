@@ -197,6 +197,45 @@ export const strings = {
     /** R24-4: a relative module-not-found row offers to set a working directory when the tab has none. */
     setWorkingDirectory: "Set Working Directory…",
   },
+  env: {
+    title: "Environment Variables",
+    help: "Every tab uses these variables. Paste a .env file into Key to add several at once. Changes apply from the next run.",
+    key: "Key",
+    value: "Value",
+    keyOf: (row: number) => `Key, row ${row}`,
+    valueOf: (key: string) => `Value of ${key}`,
+    reveal: (key: string) => `Show value of ${key}`,
+    hide: (key: string) => `Hide value of ${key}`,
+    remove: (key: string) => `Remove ${key}`,
+    newKey: "New key",
+    newValue: "New value",
+    add: "Add",
+    save: "Save",
+    cancel: "Cancel",
+    // R25-6: the reveal button's visible word, with the keycap glyphs kept out of the accessible name.
+    showButton: "Show",
+    hideButton: "Hide",
+    empty: "No variables yet. Type a key below, or paste a .env file.",
+    // R25-2: a failed load disables Save, so a transient read failure can't wipe every saved variable.
+    loadFailed:
+      "Couldn't read your saved variables, so Save is off to protect them. Close this sheet and open it again.",
+    saveFailed: (error: string) => `Couldn't save env.json (${error}). Your changes are still here.`,
+    // R25-5: states the "next run" effect, since env changes have no other visible effect.
+    saved: (count: number) =>
+      count === 0
+        ? "Removed all environment variables. The next run starts without them."
+        : `Saved ${count} environment variable${count === 1 ? "" : "s"}. The next run uses them.`,
+    // R25-3: shown after a .env block is pasted into New key.
+    pasted: (count: number) =>
+      `Added ${count} variable${count === 1 ? "" : "s"} from the paste. Check them, then Save.`,
+    // R-M3-T25-SAVE-1: the client-side limit checks that mirror @jslab/shared's envVarsSchema.
+    tooMany: (max: number) => `At most ${max} environment variables. Remove some before saving.`,
+    valueTooLong: (key: string, max: number) => `${key}'s value is longer than ${max} characters.`,
+    errors: {
+      invalidKey: "Use letters, digits and _, and don't start with a digit.",
+      duplicateKey: "Another row already uses this key.",
+    },
+  },
   settings: {
     windowTitle: "Settings",
     search: "Search settings",

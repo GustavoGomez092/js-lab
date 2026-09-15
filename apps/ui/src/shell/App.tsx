@@ -18,6 +18,7 @@ import { createViewCommands } from "../commands/view-commands";
 import { createE2EAgent } from "../e2e/agent";
 import { Editor } from "../editor/Editor";
 import { getEditorHandle } from "../editor/editor-handle";
+import { EnvVarsSheet } from "../env/EnvVarsSheet";
 import { createFileCommands } from "../files/file-commands";
 import { createFileFlows } from "../files/file-flows";
 import { createFormatActions } from "../format/format-actions";
@@ -530,6 +531,7 @@ export function App({
       )}
       <RenameDialog store={store} />
       <ConfirmDialog store={store} dialogs={dialogs} />
+      <EnvVarsSheet store={store} api={api} />
       <CommandPalette store={store} registry={registry} bindings={bindings} />
       {runState === "unresponsive" && (
         <UnresponsiveDialog onKill={() => registry.execute("run.kill")} onWait={() => api.wait(tabId)} />

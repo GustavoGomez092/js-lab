@@ -556,6 +556,72 @@ button:disabled {
   color: var(--fg-error);
 }
 
+/* ---------- sheets (Environment Variables, and NPM Packages in Task 26; spec §7.5) ---------- */
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 96px);
+  padding: 16px 20px;
+  overflow: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow: 0 28px 70px -20px color-mix(in srgb, var(--bg-scrim) 85%, transparent);
+}
+
+.sheet h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.sheet-help,
+.sheet-status {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.dialog-actions .sheet-status {
+  margin-right: auto;
+}
+
+.dialog-actions .primary .kbd {
+  color: var(--fg-onAccent);
+}
+
+.sheet input::placeholder {
+  color: var(--fg-muted);
+}
+
+.env-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.env-table input {
+  width: 100%;
+  padding: 4px 6px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  color: inherit;
+}
+
+.env-value {
+  display: flex;
+  gap: 4px;
+}
+
+.env-table tr.invalid input {
+  border-color: var(--fg-error);
+}
+
+.env-error {
+  color: var(--fg-error);
+  font-size: 11px;
+}
+
 /* Startup failure (review finding: Task 9's failure screen had no styles). */
 .startup-failure {
   display: flex;

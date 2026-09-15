@@ -1,4 +1,14 @@
-import type { BootstrapPayload, DiagnosticPayload, RunEvent, RunState, StartupNotice } from "@jslab/rpc-schema";
+import type {
+  BootstrapPayload,
+  DiagnosticPayload,
+  InstalledPackage,
+  NpmListResult,
+  NpmOpError,
+  NpmOperation,
+  RunEvent,
+  RunState,
+  StartupNotice,
+} from "@jslab/rpc-schema";
 import {
   type KeybindingRule,
   type Language,
@@ -8,6 +18,7 @@ import {
   tabAfterClose,
 } from "@jslab/shared";
 import { createStore } from "zustand/vanilla";
+import { MAX_NPM_LOG_CHARS, MAX_NPM_OPERATIONS, maskCredentials } from "../npm/npm-panel";
 import type { TimerApi } from "./auto-run";
 import { applyRunEvents, applyRunState, initialOutput, type OutputState } from "./output";
 import { clampEditorSize, EDITOR_SIZE_RESET, insertAfterActive, isPermutation, renamePatch } from "./workspace";
@@ -53,6 +64,33 @@ export type Modal =
   | { kind: "npm" }
   | { kind: "env" };
 
+export interface NpmUiState {
+  /** False until the first list arrives, so the initial load highlights nothing. */
+  loaded: boolean;
+  installed: InstalledPackage[];
+  outdatedCheckedAt: number | null;
+  outdatedError: NpmOpError | null;
+  operations: NpmOperation[];
+  /**
+   * R-M3-T26-LOGCAP-2 (parked R-M3-T18-LOGCAP-1): the live `npm.log` stream, kept per `opId` (never one merged
+   * blob) so the drawer for one operation can't evict another's diagnostic output. Each buffer is masked
+   * (M-6) before it is stored, capped at MAX_NPM_LOG_CHARS by trimming from the front, and deleted once its
+   * operation is dismissed or ages out of `operations`.
+   */
+  logs: Record<string, string>;
+  lastAdded: { name: string; at: number } | null;
+}
+
+export const initialNpm = (): NpmUiState => ({
+  loaded: false,
+  installed: [],
+  outdatedCheckedAt: null,
+  outdatedError: null,
+  operations: [],
+  logs: {},
+  lastAdded: null,
+});
+
 export interface AppState {
   ready: boolean;
   settings: Settings | null;
@@ -84,6 +122,8 @@ export interface AppState {
   sideBarPanel: "snippets" | "ai";
   /** Bumped on every `npm.changed` message, so the editor's type feeder invalidates its package cache (Task 23). */
   packagesRevision: number;
+  /** The NPM Packages sheet (spec §11.2, Task 26). */
+  npm: NpmUiState;
 
   // Mirrors of the active tab, so M1 components keep reading a single tab.
   tab: TabState | null;
@@ -146,6 +186,13 @@ export interface AppState {
   setFontFallback(value: boolean): void;
   setSideBarPanel(panel: "snippets" | "ai"): void;
   bumpPackagesRevision(): void;
+  /** Spec §11.2. Bumps `packagesRevision` when the installed name@version set changes (not on `latest` alone). */
+  receiveNpmList(list: NpmListResult, now?: number): void;
+  receiveNpmOperation(operation: NpmOperation): void;
+  /** R-M3-T26-M6-1: `text` is masked (`maskCredentials`) before it is stored. */
+  appendNpmLog(opId: string, text: string): void;
+  /** R-M3-T26-LOGCAP-2: frees a dismissed operation's log buffer (R26-4's Dismiss). */
+  dismissNpmLog(opId: string): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -241,6 +288,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       fontFallback: false,
       sideBarPanel: "snippets",
       packagesRevision: 0,
+      npm: initialNpm(),
       tab: null,
       code: "",
       autoRunArmed: false,
@@ -519,6 +567,48 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       bumpPackagesRevision() {
         set({ packagesRevision: get().packagesRevision + 1 });
+      },
+
+      receiveNpmList(list, now = Date.now()) {
+        const previous = get().npm;
+        const key = (installed: InstalledPackage[]) => installed.map((pkg) => `${pkg.name}@${pkg.version}`).join("\n");
+        const known = new Set(previous.installed.map((pkg) => pkg.name));
+        // Spec §11.2: only a package that appears after the list was already loaded is "newly added".
+        const added = previous.loaded ? list.installed.find((pkg) => !known.has(pkg.name)) : undefined;
+        set({
+          npm: {
+            ...previous,
+            loaded: true,
+            installed: list.installed,
+            outdatedCheckedAt: list.outdatedCheckedAt,
+            outdatedError: list.outdatedError,
+            lastAdded: added ? { name: added.name, at: now } : previous.lastAdded,
+          },
+          ...(key(previous.installed) !== key(list.installed) ? { packagesRevision: get().packagesRevision + 1 } : {}),
+        });
+      },
+
+      receiveNpmOperation(operation) {
+        const previous = get().npm;
+        const merged = [...previous.operations.filter((existing) => existing.id !== operation.id), operation];
+        const kept = merged.slice(-MAX_NPM_OPERATIONS);
+        // R-M3-T26-LOGCAP-2: an operation's log buffer is freed the moment it ages out of this bounded list.
+        const keptIds = new Set(kept.map((op) => op.id));
+        const logs = Object.fromEntries(Object.entries(previous.logs).filter(([id]) => keptIds.has(id)));
+        set({ npm: { ...previous, operations: kept, logs } });
+      },
+
+      appendNpmLog(opId, text) {
+        const previous = get().npm;
+        // R-M3-T26-M6-1: masked before storage, so the drawer, Copy Log and this record itself never hold a
+        // credential. R-M3-T26-LOGCAP-2: capped per opId, trimmed from the front.
+        const next = ((previous.logs[opId] ?? "") + maskCredentials(text)).slice(-MAX_NPM_LOG_CHARS);
+        set({ npm: { ...previous, logs: { ...previous.logs, [opId]: next } } });
+      },
+
+      dismissNpmLog(opId) {
+        const { [opId]: _removed, ...logs } = get().npm.logs;
+        set({ npm: { ...get().npm, logs } });
       },
     };
   });

@@ -9,6 +9,7 @@ import {
   sessionSchema,
   type TabState,
 } from "@jslab/shared";
+import { MAX_NPM_LOG_CHARS } from "../src/npm/npm-panel";
 import { createAppStore, STATUS_MESSAGE_MS, shouldAutoRun } from "../src/state/store";
 
 function payload(overrides: Partial<BootstrapPayload> = {}): BootstrapPayload {
@@ -271,5 +272,55 @@ describe("app store", () => {
       before.output,
       before.diagnostics,
     ]);
+  });
+
+  // LOGCAP-2 keeps the log stream per opId, so the store test below no longer asserts on a single flat string.
+  test("the npm slice keeps the list, upserts operations and marks a newly added package (spec §11.2)", () => {
+    const store = createAppStore();
+    const before = store.getState().packagesRevision;
+    store
+      .getState()
+      .receiveNpmList(
+        { installed: [{ name: "zod", version: "4.6.4", latest: null }], outdatedCheckedAt: null, outdatedError: null },
+        500,
+      );
+    expect([store.getState().npm.loaded, store.getState().npm.lastAdded]).toEqual([true, null]);
+    expect(store.getState().packagesRevision).toBe(before + 1);
+    store
+      .getState()
+      .receiveNpmList(
+        { installed: [{ name: "zod", version: "4.6.4", latest: "4.7.0" }], outdatedCheckedAt: 1, outdatedError: null },
+        900,
+      );
+    expect(store.getState().packagesRevision).toBe(before + 1);
+    store.getState().receiveNpmList(
+      {
+        installed: [
+          { name: "fixture-a", version: "1.0.0", latest: null },
+          { name: "zod", version: "4.6.4", latest: "4.7.0" },
+        ],
+        outdatedCheckedAt: 1,
+        outdatedError: null,
+      },
+      1000,
+    );
+    expect(store.getState().npm.lastAdded).toEqual({ name: "fixture-a", at: 1000 });
+    expect(store.getState().packagesRevision).toBe(before + 2);
+    const op = { id: "op1", kind: "install", target: "zod", status: "running", error: null, notice: null } as const;
+    store.getState().receiveNpmOperation(op);
+    store.getState().receiveNpmOperation({ ...op, status: "succeeded" });
+    expect(store.getState().npm.operations.map((o) => o.status)).toEqual(["succeeded"]);
+  });
+
+  // R-M3-T26-LOGCAP-2 (parked R-M3-T18-LOGCAP-1): a per-opId cap, trimmed from the front, one buffer per operation.
+  test("appendNpmLog caps each operation's own buffer at MAX_NPM_LOG_CHARS and leaves other operations untouched", () => {
+    const store = createAppStore();
+    store.getState().appendNpmLog("op1", "a".repeat(30_000));
+    store.getState().appendNpmLog("op1", "b".repeat(30_000));
+    store.getState().appendNpmLog("op1", "c".repeat(30_000));
+    store.getState().appendNpmLog("op2", "untouched");
+    expect(store.getState().npm.logs.op1?.length).toBe(MAX_NPM_LOG_CHARS);
+    expect(store.getState().npm.logs.op1?.endsWith("c".repeat(30_000))).toBe(true);
+    expect(store.getState().npm.logs.op2).toBe("untouched");
   });
 });

@@ -24,6 +24,8 @@ import { createFileFlows } from "../files/file-flows";
 import { createFormatActions } from "../format/format-actions";
 import { type Formatter, shouldFormatBeforeRun } from "../format/formatter";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
+import { NpmSheet } from "../npm/NpmSheet";
+import { operationStatusMessage } from "../npm/npm-panel";
 import { OutputPanel } from "../output/OutputPanel";
 import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
@@ -95,6 +97,7 @@ export function App({
   const settings = useStore(store, (s) => s.settings);
   const sideBarPanel = useStore(store, (s) => s.sideBarPanel);
   const tabCount = useStore(store, (s) => s.tabOrder.length);
+  const npmOpen = useStore(store, (s) => s.modal?.kind === "npm");
 
   const lastTypedAt = useRef(0);
   // T16-rr1: the React-owned slot the Editor puts the Vim status node into, always rendered before the status bar.
@@ -256,7 +259,12 @@ export function App({
   const resolver = useMemo(() => new KeybindingResolver(bindings), [bindings]);
   // FB-m3: chrome keycaps follow the effective bindings, as the palette and the menu do.
   const keycaps = useMemo(
-    () => ({ run: keysFor("run.start"), stop: keysFor("run.stop"), settings: keysFor("app.settings") }),
+    () => ({
+      run: keysFor("run.start"),
+      stop: keysFor("run.stop"),
+      settings: keysFor("app.settings"),
+      npm: keysFor("tools.npmPackages"),
+    }),
     [keysFor],
   );
 
@@ -296,8 +304,18 @@ export function App({
         registry.execute(command, args);
       }),
       api.on("settings.changed", ({ settings }) => store.getState().receiveSettings(settings)),
-      // R-M3-T23: Main's npm queue finished, so the type feeder's package cache may be stale (Task 26 bumps this too).
-      api.on("npm.changed", () => store.getState().bumpPackagesRevision()),
+      // Task 26: Main's npm list changed; receiveNpmList bumps packagesRevision itself when names/versions change,
+      // so the type feeder's package cache still invalidates without a separate, redundant bump here.
+      api.on("npm.changed", (list) => store.getState().receiveNpmList(list)),
+      api.on("npm.op", (operation) => {
+        store.getState().receiveNpmOperation(operation);
+        // R26-6: a finished operation still reports itself in the status bar when its sheet isn't open to show it.
+        if (store.getState().modal?.kind !== "npm") {
+          const message = operationStatusMessage(operation, keycaps.run);
+          if (message) store.getState().setStatusMessage(message);
+        }
+      }),
+      api.on("npm.log", ({ opId, text }) => store.getState().appendNpmLog(opId, text)),
       // Task 24: the working directory changed (wd.pick/wd.clear); the editor's own subscription invalidates
       // the type feeder for the active tab once the store's tab is updated (Editor.tsx, unchanged here).
       api.on("wd.changed", ({ tab }) => store.getState().applyTabUpdate(tab)),
@@ -321,7 +339,7 @@ export function App({
     return () => {
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
-  }, [store, api, registry, flows, coalescer, bufferSync]);
+  }, [store, api, registry, flows, coalescer, bufferSync, keycaps]);
 
   useEffect(() => {
     if (!e2e) return;
@@ -494,10 +512,13 @@ export function App({
             runKeys={keycaps.run}
             stopKeys={keycaps.stop}
             settingsKeys={keycaps.settings}
+            npmOpen={npmOpen}
+            npmKeys={keycaps.npm}
             onRun={() => registry.execute("run.start")}
             onStop={() => registry.execute("run.stop")}
             onPanel={togglePanel}
             onSettings={() => registry.execute("app.settings")}
+            onNpm={() => registry.execute("tools.npmPackages")}
           />
         )}
         {settings.view.sideBar && <SideBar panel={sideBarPanel} />}
@@ -532,6 +553,7 @@ export function App({
       <RenameDialog store={store} />
       <ConfirmDialog store={store} dialogs={dialogs} />
       <EnvVarsSheet store={store} api={api} />
+      <NpmSheet store={store} api={api} />
       <CommandPalette store={store} registry={registry} bindings={bindings} />
       {runState === "unresponsive" && (
         <UnresponsiveDialog onKill={() => registry.execute("run.kill")} onWait={() => api.wait(tabId)} />

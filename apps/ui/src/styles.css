@@ -629,6 +629,94 @@ button:disabled {
   font-size: 11px;
 }
 
+/* ---------- NPM Packages sheet (Task 26, spec §11.2) ---------- */
+.npm-search {
+  width: 100%;
+}
+
+.npm-results {
+  margin: 0;
+  padding: 0;
+}
+
+.npm-result {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+/* R26-2: the palette's aria-selected idiom, reused for keyboard-navigated search results. */
+.npm-result[aria-selected="true"] {
+  background: var(--bg-activeRow);
+}
+
+.npm-results p {
+  margin: 2px 0;
+  color: var(--fg-muted);
+}
+
+.npm-version,
+.npm-downloads {
+  color: var(--fg-muted);
+}
+
+.npm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.npm-installed {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.npm-installed table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.npm-installed thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+  text-align: left;
+}
+
+.npm-installed tr.npm-new {
+  background: var(--bg-accentMuted);
+  transition: background 0.4s;
+}
+
+/* R26-1: a semver-major crossing. 8.9:1 on elevated. */
+.npm-major {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--fg-warn);
+  font-size: 11px;
+}
+
+/* R26-3: --fg-muted is 3.58:1 on the .npm-new highlight and fails AA; a row's own status stays legible there. */
+.npm-row-status {
+  color: var(--fg-default);
+}
+
+.npm-failure {
+  color: var(--fg-error);
+}
+
+.npm-log pre,
+.npm-failure pre {
+  max-height: 160px;
+  overflow: auto;
+  color: var(--fg-default);
+  font-family: var(--mono);
+  white-space: pre-wrap;
+}
+
 /* Startup failure (review finding: Task 9's failure screen had no styles). */
 .startup-failure {
   display: flex;

@@ -239,6 +239,86 @@ export const strings = {
       duplicateKey: "Another row already uses this key.",
     },
   },
+  npm: {
+    title: "NPM Packages",
+    searchLabel: "Search npm packages",
+    searchPlaceholder: "Search npm, or type name@version",
+    weekly: (count: number) => `${count.toLocaleString("en-US")} weekly downloads`,
+    add: (name: string) => `Add ${name}`,
+    addButton: "Add",
+    // R26-3: a result with a pending install shows this instead of Add.
+    adding: "Adding…",
+    // R26-2: a result already in the installed table shows this instead of Add.
+    installedVersion: (version: string) => `Installed ${version}`,
+    name: "Name",
+    version: "Installed",
+    latest: "Latest",
+    update: (name: string) => `Update ${name}`,
+    updateButton: "Update",
+    remove: (name: string) => `Remove ${name}`,
+    updateAll: "Update All",
+    // R26-1: the toolbar's Update All tooltip, distinct from its (unchanged) accessible name.
+    updateAllTitle: (count: number, majors: number) =>
+      `Update ${count} package${count === 1 ? "" : "s"} to their latest versions${
+        majors > 0 ? `, including ${majors} major update${majors === 1 ? "" : "s"}` : ""
+      }.`,
+    showTypes: "Show @types",
+    allowScripts: "Allow install scripts",
+    // R26-5: shown only once the first list has loaded, so a load-in-progress sheet never flashes "no packages".
+    none: "No packages yet. Search above, or type name@version and press Return.",
+    noResults: (query: string) => `No packages match "${query}".`,
+    typesHidden: (count: number) => `${count} @types package${count === 1 ? "" : "s"} hidden.`,
+    log: "Log",
+    // R26-3 adds a `queued` count; do-not-change list R-M3: this is one of the two allowed signature changes.
+    running: (kind: string, target: string, queued: number) => {
+      const verb =
+        kind === "remove" ? "Removing" : kind === "update" || kind === "updateAll" ? "Updating" : "Installing";
+      const subject = kind === "updateAll" ? "all packages" : target;
+      return `${verb} ${subject}…${queued > 0 ? ` ${queued} more queued.` : ""}`;
+    },
+    // R26-3: shown in the affected row's Latest cell while that row has a queued or running operation.
+    rowStatus: (kind: string, status: string) => {
+      if (status === "queued") return "Queued";
+      return kind === "remove" ? "Removing…" : kind === "update" || kind === "updateAll" ? "Updating…" : "Installing…";
+    },
+    // R26-4 adds `kind`; do-not-change list R-M3: the second of the two allowed signature changes.
+    failed: (kind: string, target: string) =>
+      kind === "updateAll"
+        ? "Couldn't update all packages."
+        : `Couldn't ${kind === "remove" ? "remove" : kind === "update" ? "update" : "install"} ${target}.`,
+    // R26-4: the failure-card action row.
+    retry: "Retry",
+    allowAndRetry: "Allow Scripts and Retry",
+    copyLog: "Copy Log",
+    dismiss: "Dismiss",
+    scriptBlocked:
+      "Installed without running install scripts. To run them, turn on Allow install scripts and install again.",
+    // R26-1: the Major badge and its tooltip.
+    major: "Major",
+    majorTitle: (name: string, from: string | null, to: string | null) =>
+      `${name} ${from ?? "?"} → ${to ?? "?"} is a major update and may include breaking changes.`,
+    // R26-1: "Checked N min ago", above the installed table.
+    checkedAgo: (minutes: number) => `Checked for updates ${minutes < 1 ? "just now" : `${minutes} min ago`}`,
+    // R26-6: reported in the status bar when a finished operation's sheet isn't open to show it inline.
+    done: (kind: string, target: string, keys: string | null) => {
+      const verb = kind === "remove" ? "Removed" : kind === "update" || kind === "updateAll" ? "Updated" : "Installed";
+      const subject = kind === "updateAll" ? "all packages" : target;
+      return `${verb} ${subject}.${keys ? ` Press ${keys} to run again.` : ""}`;
+    },
+    doneFailed: (kind: string, target: string, hint: string) => `${strings.npm.failed(kind, target)} ${hint}`,
+    outdatedFailed: (hint: string) => `Couldn't check for updates. ${hint}`,
+    hints: {
+      network: "Check your connection and the registry in Settings → NPM.",
+      notFound: "The registry has no package with this name. Check the spelling.",
+      noMatchingVersion: "No published version matches. Try name@latest.",
+      peerConflict: "It needs a different version of a package you already have. The log names it.",
+      scriptBlocked: "Install scripts were blocked. Turn on Allow install scripts.",
+      nativeBuild: "A native module failed to build. See the log for the compiler error.",
+      disk: "JSLab couldn't write the packages folder. Check disk space and permissions.",
+      timeout: "Stopped after 5 minutes. Check your connection, then retry.",
+      unknown: "Open the log below to see what Bun reported.",
+    },
+  },
   settings: {
     windowTitle: "Settings",
     search: "Search settings",

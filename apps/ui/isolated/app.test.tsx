@@ -657,7 +657,7 @@ describe("App shell", () => {
     await click(strings.shell.snippets);
     expect(state()).toEqual([false, "snippets", 2]);
     const npm = screen.getByRole("button", { name: strings.shell.npm }) as HTMLButtonElement;
-    expect([npm.disabled, npm.title]).toEqual([true, strings.shell.laterMilestone]);
+    expect([npm.disabled, npm.getAttribute("aria-pressed")]).toEqual([false, "false"]);
     expect((screen.getByRole("button", { name: strings.shell.settings }) as HTMLButtonElement).disabled).toBe(false);
   });
 

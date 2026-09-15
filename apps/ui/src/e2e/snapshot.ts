@@ -52,6 +52,11 @@ export interface UiSnapshot {
   themeId: string;
   vimMode: string | null;
   fontFallback: boolean;
+  npm: {
+    installed: { name: string; version: string | null; latest: string | null }[];
+    operations: { kind: string; target: string; status: string; errorKind: string | null; notice: string | null }[];
+    outdatedError: string | null;
+  };
 }
 
 export interface OutputSnapshotEntry {
@@ -111,6 +116,17 @@ export function snapshotState(state: AppState): UiSnapshot {
     themeId: state.themeId,
     vimMode: state.vimMode,
     fontFallback: state.fontFallback,
+    npm: {
+      installed: state.npm.installed.map(({ name, version, latest }) => ({ name, version, latest })),
+      operations: state.npm.operations.map((op) => ({
+        kind: op.kind,
+        target: op.target,
+        status: op.status,
+        errorKind: op.error?.kind ?? null,
+        notice: op.notice,
+      })),
+      outdatedError: state.npm.outdatedError?.kind ?? null,
+    },
   };
 }
 

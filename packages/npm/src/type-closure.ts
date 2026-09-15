@@ -1,4 +1,4 @@
-import { dirname, join, normalize, relative } from "node:path/posix";
+import { dirname, isAbsolute, join, normalize, relative } from "node:path/posix";
 import type { LocalTypesResult, PackageTypesResult, TypeFile } from "@jslab/rpc-schema";
 import { packageNameFromSpecifier, typesPackageName } from "./specifiers";
 
@@ -14,6 +14,8 @@ export const MAX_LOCAL_TYPE_FILES = 200;
 export const MAX_PACKAGE_TYPE_FILES = 2000;
 /** Probe (`isFile`) budget per closure, independent of the file cap (R-M3-T13-FIX-1 I-1). */
 const PROBE_BUDGET_PER_FILE = 16;
+/** Manifest-declared entries (`types`/`typings`/`exports`/`main`) probed per package, deduped first (R-M3-T13-FIX-2 #1). */
+export const MAX_DECLARED_TYPE_ENTRIES = 64;
 
 const encoder = new TextEncoder();
 
@@ -40,13 +42,13 @@ async function isInside(fs: TypesFs, rootReal: string, path: string): Promise<st
   return real === rootReal || real.startsWith(`${rootReal}/`) ? real : null;
 }
 
-/** Unbounded probe, used only for the finite, non attacker-scalable candidate lists (manifest entries, requested specifiers). */
+/** Unbounded probe. Used only for a caller's own finite, explicitly-requested specifier list (never for candidates driven by scanned file content or an untrusted manifest — those share the budgeted `probeFile` below). */
 async function firstFile(fs: TypesFs, candidates: string[]): Promise<string | null> {
   for (const candidate of candidates) if (await fs.isFile(candidate)) return candidate;
   return null;
 }
 
-/** Budgeted, deduped probe used inside `closure()`'s walk, where candidates are driven by scanned file content. */
+/** Budgeted, deduped probe shared by `closure()`'s walk and manifest-entry resolution, both driven by untrusted input. */
 async function probeFile(
   fs: TypesFs,
   candidates: string[],
@@ -100,18 +102,44 @@ async function readManifest(fs: TypesFs, dir: string): Promise<Record<string, un
   }
 }
 
-async function entryFiles(fs: TypesFs, dir: string, manifest: Record<string, unknown>): Promise<string[]> {
+/**
+ * Resolves `types`/`typings`/`exports`-condition/`main` entries to real files, all inside `dir` (#2), capped and
+ * deduped before ever probing one (#1), sharing the caller's probe budget and cache.
+ */
+async function entryFiles(
+  fs: TypesFs,
+  dir: string,
+  manifest: Record<string, unknown>,
+  probeCache: Map<string, boolean>,
+  probes: { left: number },
+): Promise<{ files: string[]; truncated: boolean }> {
   const declared: string[] = [];
   for (const key of ["types", "typings"]) if (typeof manifest[key] === "string") declared.push(manifest[key] as string);
   typesConditions(manifest.exports, declared);
   if (declared.length === 0 && typeof manifest.main === "string") declared.push(manifest.main);
   if (declared.length === 0) declared.push("index.d.ts");
-  const files: string[] = [];
+
+  // #1: dedupe on the normalized path and cap before any of them is ever probed.
+  const seenBases = new Set<string>();
+  const bases: string[] = [];
   for (const entry of declared) {
-    const found = await firstFile(fs, declarationCandidates(normalize(join(dir, entry))));
+    const base = normalize(join(dir, entry));
+    if (seenBases.has(base)) continue;
+    seenBases.add(base);
+    bases.push(base);
+    if (bases.length >= MAX_DECLARED_TYPE_ENTRIES) break;
+  }
+
+  const files: string[] = [];
+  let truncated = false;
+  for (const base of bases) {
+    // #2: an entry outside the package is never probed.
+    if (!(base === dir || base.startsWith(`${dir}/`))) continue;
+    const found = await probeFile(fs, declarationCandidates(base), probeCache, probes);
+    if (probes.left <= 0) truncated = true;
     if (found && !files.includes(found)) files.push(found);
   }
-  return files;
+  return { files, truncated };
 }
 
 async function closure(
@@ -124,14 +152,15 @@ async function closure(
     maxFiles: number;
     resolve: (from: string, specifier: string) => string[];
     ownName: string | null;
+    probeCache: Map<string, boolean>;
+    probes: { left: number };
   },
 ): Promise<{ files: TypeFile[]; bare: string[]; truncated: boolean }> {
   const files: TypeFile[] = [];
   const bare = new Set<string>();
   const seen = new Set<string>();
   const seenReal = new Set<string>();
-  const probeCache = new Map<string, boolean>();
-  const probes = { left: input.maxFiles * PROBE_BUDGET_PER_FILE };
+  const { probeCache, probes } = input;
   const queue = [...input.roots];
   let bytes = 0;
   let truncated = false;
@@ -142,7 +171,7 @@ async function closure(
 
   const insideLexically = (path: string) => path === input.within || path.startsWith(`${input.within}/`);
 
-  probeLoop: while (queue.length > 0) {
+  while (queue.length > 0) {
     const file = queue.shift() as string;
     if (seen.has(file)) continue;
     seen.add(file);
@@ -164,17 +193,17 @@ async function closure(
     bytes += size;
     files.push({ path: input.toPath(file), content });
 
+    // #5: exhausting the budget stops PROBING new candidates (`probeFile` no-ops once `probes.left` hits 0, free on
+    // a cache hit), but never discards a candidate that already succeeded, and never skips scanning the rest of
+    // this file's text for bare dependencies below, which cost no probes. The queue keeps draining afterward,
+    // still gated by `isInside`, `seenReal` and the byte/file caps.
     for (const match of content.matchAll(REFERENCE_PATH)) {
-      // I-1: drop lexically out-of-root candidates before ever probing them.
       const candidates = declarationCandidates(normalize(join(dirname(file), match[1] as string))).filter(
         insideLexically,
       );
       const found = await probeFile(fs, candidates, probeCache, probes);
-      if (probes.left <= 0) {
-        truncated = true;
-        break probeLoop;
-      }
       if (found) queue.push(found);
+      if (probes.left <= 0) truncated = true;
     }
 
     for (const match of content.matchAll(REFERENCE_TYPES)) {
@@ -187,11 +216,8 @@ async function closure(
       if (specifier.startsWith(".")) {
         const candidates = input.resolve(file, specifier).filter(insideLexically);
         const found = await probeFile(fs, candidates, probeCache, probes);
-        if (probes.left <= 0) {
-          truncated = true;
-          break probeLoop;
-        }
         if (found) queue.push(found);
+        if (probes.left <= 0) truncated = true;
         continue;
       }
       const name = packageNameFromSpecifier(specifier);
@@ -219,6 +245,10 @@ export async function collectPackageTypes(
   // I-3: refuse a `name` that isn't itself a valid package name (rejects `../other`, absolute paths, subpaths, `node:x`).
   if (packageNameFromSpecifier(input.name) !== input.name) return empty(null);
 
+  // #1: one probe budget and cache for the whole call, shared by manifest-entry resolution and every closure it runs.
+  const probeCache = new Map<string, boolean>();
+  const probes = { left: MAX_PACKAGE_TYPE_FILES * PROBE_BUDGET_PER_FILE };
+
   const locate = async (name: string) => {
     for (const modules of input.nodeModulesDirs) {
       const dir = join(modules, name);
@@ -228,26 +258,37 @@ export async function collectPackageTypes(
     return null;
   };
 
-  const collect = async (name: string, found: { dir: string; manifest: Record<string, unknown> }) => {
-    const roots = await entryFiles(fs, found.dir, found.manifest);
-    if (roots.length === 0) return null;
+  type CollectResult = { files: TypeFile[]; bare: string[]; truncated: boolean };
+
+  const collect = async (
+    name: string,
+    found: { dir: string; manifest: Record<string, unknown> },
+  ): Promise<CollectResult | null> => {
+    const entries = await entryFiles(fs, found.dir, found.manifest, probeCache, probes);
+    if (entries.files.length === 0) return null;
     const packageJson = join(found.dir, "package.json");
     const result = await closure(fs, {
-      roots: [packageJson, ...roots],
+      roots: [packageJson, ...entries.files],
       within: found.dir,
       toPath: (file) => `file:///node_modules/${name}/${relative(found.dir, file)}`,
       maxBytes,
       maxFiles: MAX_PACKAGE_TYPE_FILES,
       resolve: (from, specifier) => declarationCandidates(normalize(join(dirname(from), specifier))),
       ownName: name,
+      probeCache,
+      probes,
     });
-    return result;
+    return { ...result, truncated: result.truncated || entries.truncated };
   };
+
+  // #2: `hasTypes` only when an actual declaration file (not just `package.json`) was read into `files`.
+  const hasDeclarations = (result: CollectResult | null): result is CollectResult =>
+    Boolean(result?.files.some((file) => !file.path.endsWith("/package.json")));
 
   const own = await locate(input.name);
   if (!own) return empty(null);
   const ownTypes = await collect(input.name, own);
-  if (ownTypes) {
+  if (hasDeclarations(ownTypes)) {
     return {
       name: input.name,
       files: ownTypes.files,
@@ -261,7 +302,7 @@ export async function collectPackageTypes(
   if (!typesName) return empty(null);
   const typesPkg = await locate(typesName);
   const typed = typesPkg ? await collect(typesName, typesPkg) : null;
-  if (!typed) return empty(typesName);
+  if (!hasDeclarations(typed)) return empty(typesName);
   return {
     name: input.name,
     files: typed.files,
@@ -301,20 +342,25 @@ export async function collectLocalTypes(
 ): Promise<LocalTypesResult> {
   const wd = normalize(input.workingDirectory).replace(/\/$/, "");
   // M-1: `/`, empty, or a WD that becomes empty after trimming slashes never walks the filesystem root.
-  if (wd === "" || wd === ".") return { files: [], packages: [], truncated: false };
+  // #4: a relative WD would otherwise resolve against Main's cwd; only an absolute WD is honored.
+  if (wd === "" || wd === "." || !isAbsolute(input.workingDirectory))
+    return { files: [], packages: [], truncated: false };
   const roots: string[] = [];
   for (const specifier of input.specifiers) {
     const found = await firstFile(fs, localCandidates(normalize(join(wd, specifier))));
     if (found) roots.push(found);
   }
+  const maxFiles = input.maxFiles ?? MAX_LOCAL_TYPE_FILES;
   const result = await closure(fs, {
     roots,
     within: wd,
     toPath: (file) => `file:///tab/${relative(wd, file)}`,
     maxBytes: input.maxBytes ?? MAX_PACKAGE_TYPES_BYTES,
-    maxFiles: input.maxFiles ?? MAX_LOCAL_TYPE_FILES,
+    maxFiles,
     resolve: (from, specifier) => localCandidates(normalize(join(dirname(from), specifier))),
     ownName: null,
+    probeCache: new Map<string, boolean>(),
+    probes: { left: maxFiles * PROBE_BUDGET_PER_FILE },
   });
   return { files: result.files, packages: result.bare, truncated: result.truncated };
 }

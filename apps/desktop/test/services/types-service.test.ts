@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TypesFs } from "@jslab/npm";
-import { TypesService } from "../../src/main/services/types-service";
+import { collectPackageTypes, type TypesFs } from "@jslab/npm";
+import { nodeTypesFs, TypesService } from "../../src/main/services/types-service";
 
 let dir = "";
 beforeEach(async () => {
@@ -112,4 +112,31 @@ describe("TypesService", () => {
     await service.packages("t1", ["pkg0"]);
     expect(manifestReads).toEqual([]); // Still cached: the refresh above kept it.
   });
+
+  // #3: opening a FIFO must never hang (regression from fix round 1's M-2 open-before-fstat change).
+  test("reading a FIFO returns null without hanging", async () => {
+    const fifoDir = await mkdtemp(join(tmpdir(), "jslab-types-fifo-"));
+    try {
+      const fifoPath = join(fifoDir, "fifo");
+      const mkfifo1 = Bun.spawn(["mkfifo", fifoPath]);
+      await mkfifo1.exited;
+
+      const result = await nodeTypesFs.readText(fifoPath);
+      expect(result).toBeNull();
+
+      const pkgDir = join(fifoDir, "node_modules", "lib");
+      await mkdir(pkgDir, { recursive: true });
+      const pkgJsonFifo = join(pkgDir, "package.json");
+      const mkfifo2 = Bun.spawn(["mkfifo", pkgJsonFifo]);
+      await mkfifo2.exited;
+
+      const pkgResult = await collectPackageTypes(nodeTypesFs, {
+        name: "lib",
+        nodeModulesDirs: [join(fifoDir, "node_modules")],
+      });
+      expect(pkgResult.hasTypes).toBe(false);
+    } finally {
+      await rm(fifoDir, { recursive: true, force: true });
+    }
+  }, 5000);
 });

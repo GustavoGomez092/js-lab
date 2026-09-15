@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   collectLocalTypes,
   collectPackageTypes,
+  MAX_DECLARED_TYPE_ENTRIES,
   MAX_LOCAL_TYPE_FILES,
   MAX_PACKAGE_TYPE_FILES,
   type TypesFs,
@@ -211,6 +212,35 @@ describe("package type closure (spec §6.2)", () => {
     expect(result.hasTypes).toBe(false);
     expect(fs.readTextCalls).toEqual([]);
   });
+
+  // #1: manifest-declared entries are capped and deduped, and share closure()'s probe budget.
+  test("manifest types entries are capped and share the probe budget", async () => {
+    const exportsField: Record<string, unknown> = {};
+    for (let i = 0; i < 5000; i++) exportsField[`./e${i}`] = { types: `./e${i}` };
+    const fs = countingFs(
+      memoryFs({
+        "/n/lib/package.json": JSON.stringify({ name: "lib", exports: exportsField }),
+      }),
+    );
+    const result = await collectPackageTypes(fs, { name: "lib", nodeModulesDirs: ["/n"] });
+    expect(fs.isFileCalls.length).toBeLessThanOrEqual(MAX_DECLARED_TYPE_ENTRIES * 4);
+    expect(result.hasTypes).toBe(false);
+  });
+
+  // #2: a manifest entry pointing outside the package is never probed, and yields no types.
+  test("manifest types outside the package are never probed and give no types", async () => {
+    const fs = countingFs(
+      memoryFs({
+        "/n/orc/package.json": JSON.stringify({ name: "orc", types: "../../secret/x.d.ts" }),
+        "/secret/x.d.ts": "export declare const leaked = 1;\n",
+      }),
+    );
+    const result = await collectPackageTypes(fs, { name: "orc", nodeModulesDirs: ["/n"] });
+    expect(fs.isFileCalls.every((path) => path.startsWith("/n/orc/"))).toBe(true);
+    expect(fs.readTextCalls.every((path) => path.startsWith("/n/orc/"))).toBe(true);
+    expect(result.hasTypes).toBe(false);
+    expect(result.typesPackage).toBe("@types/orc");
+  });
 });
 
 describe("working-directory local types (spec §6.2)", () => {
@@ -286,5 +316,31 @@ describe("working-directory local types (spec §6.2)", () => {
     const result = await collectLocalTypes(fs, { workingDirectory: "/wd", specifiers: ["./a"] });
     expect(result.truncated).toBe(true);
     expect(fs.isFileCalls.length).toBeLessThanOrEqual(MAX_LOCAL_TYPE_FILES * 16 + 20);
+  });
+
+  // #4: a relative working directory would otherwise resolve against Main's cwd; it must be rejected instead.
+  test("a relative working directory returns nothing", async () => {
+    const fs = countingFs(memoryFs({ "cwdwd/util.ts": "export const a = 1;\n" }));
+    const result = await collectLocalTypes(fs, { workingDirectory: "cwdwd", specifiers: ["./util"] });
+    expect(result).toEqual({ files: [], packages: [], truncated: false });
+    expect(fs.readTextCalls).toEqual([]);
+  });
+
+  // #5: exhausting the probe budget must not discard files already found, or the current file's bare dependencies.
+  test("budget exhaustion keeps files and dependencies already found", async () => {
+    const missingCount = 400;
+    const lines: string[] = ['import "./a";'];
+    for (let i = 0; i < missingCount; i++) lines.push(`import "./missing${i}";`);
+    lines.push('import "dep-ok";');
+    const fs = countingFs(
+      memoryFs({
+        "/wd/root.ts": `${lines.join("\n")}\n`,
+        "/wd/a.ts": "export const a = 1;\n",
+      }),
+    );
+    const result = await collectLocalTypes(fs, { workingDirectory: "/wd", specifiers: ["./root"] });
+    expect(result.files.some((file) => file.path === "file:///tab/a.ts")).toBe(true);
+    expect(result.packages).toContain("dep-ok");
+    expect(result.truncated).toBe(true);
   });
 });

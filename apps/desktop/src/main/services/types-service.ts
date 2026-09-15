@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import { collectLocalTypes, collectPackageTypes, type TypesFs } from "@jslab/npm";
 import type { LocalTypesResult, PackageTypesResult } from "@jslab/rpc-schema";
@@ -7,13 +8,15 @@ const MAX_TYPE_FILE_BYTES = 5 * 1024 * 1024;
 /**
  * Reads only regular files; a file over 5 MB is skipped (its package reports truncated). Opens the path once and
  * fstats and reads that same handle (R-M3-T13-FIX-1 M-2), so the size that was checked is the size that gets read,
- * and a path swapped to a symlink after the check can't redirect the read.
+ * and a path swapped to a symlink after the check can't redirect the read. Opens with `O_NONBLOCK` (R-M3-T13-FIX-2
+ * #3) so a FIFO — for example a crafted `package.json` — returns null instead of blocking until a writer appears;
+ * this doesn't affect reads of regular files.
  */
 export const nodeTypesFs: TypesFs = {
   async readText(path) {
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      handle = await open(path, "r");
+      handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
       const info = await handle.stat();
       if (!info.isFile() || info.size > MAX_TYPE_FILE_BYTES) return null;
       const buffer = Buffer.alloc(info.size);
@@ -27,7 +30,12 @@ export const nodeTypesFs: TypesFs = {
     } catch {
       return null;
     } finally {
-      await handle?.close();
+      // #7: closing must not escape the "any error returns null" contract.
+      try {
+        await handle?.close();
+      } catch {
+        // Closing failed (EIO/EBADF); the read already returned its result or null above.
+      }
     }
   },
   async isFile(path) {

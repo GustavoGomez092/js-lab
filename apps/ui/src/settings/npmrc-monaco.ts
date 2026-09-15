@@ -2,13 +2,19 @@ import * as monaco from "monaco-editor";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import type { TextEditorLike } from "./NpmrcEditor";
 
+let configured = false;
+
 /**
  * The Settings → NPM editor (spec §11.5): plain Monaco in ini mode, with only the editor worker (no TypeScript
  * worker), so this module is never loaded by unit tests — `NpmrcEditor` swaps it for a fake through `createEditor`.
  * Graphite theme parity and ⌘S (R27-6) are deferred to M5.
  */
 export function createNpmrcMonaco(host: HTMLElement, value: string): TextEditorLike {
-  self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
+  // F4: register the worker environment once per module, matching editor/monaco-setup.ts's idiom.
+  if (!configured) {
+    configured = true;
+    self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
+  }
   const editor = monaco.editor.create(host, {
     value,
     language: "ini",

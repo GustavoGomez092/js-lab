@@ -26,6 +26,15 @@ type Status = { kind: "ok" | "error"; text: string };
 const createMonacoEditor: CreateTextEditor = async (host, value) =>
   (await import("./npmrc-monaco")).createNpmrcMonaco(host, value);
 
+// F2: an fs error's message can carry an absolute path (`EACCES: permission denied, open '/Users/.../.npmrc'`).
+// Only the leading error code is ever shown, never the raw message — the same rule N1-1 applies to a failed reset.
+const ERROR_CODE = /^(E[A-Z0-9]+)(?=[:,\s]|$)/;
+
+function extractErrorCode(message: string): string | null {
+  const match = ERROR_CODE.exec(message);
+  return match?.[1] ?? null;
+}
+
 /** Settings → NPM (spec §11.5): the `<packages>/.npmrc` editor with Save and Reset. */
 export function NpmrcEditor({
   api,
@@ -38,16 +47,30 @@ export function NpmrcEditor({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<TextEditorLike | null>(null);
+  const confirmButton = useRef<HTMLButtonElement>(null);
   // Set right before a programmatic setValue (Reset), so the following onChange doesn't mark the fresh content
   // dirty — Monaco (and the test fake) fire onChange for both user typing and setValue alike.
   const suppressNext = useRef(false);
+  // F3: guards against setting state after the component (the whole Settings window, in practice) unmounts while
+  // a save or reset request is still in flight.
+  const mounted = useRef(true);
   const [saved, setSaved] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [status, setStatus] = useState<Status | null>(null);
   // R27-1: the first Reset click only asks for confirmation; the second (Confirm Reset) commits it.
   const [confirmReset, setConfirmReset] = useState(false);
+  // F3: while a save or reset request is in flight, both the Reset/Confirm Reset and Save buttons are disabled,
+  // and a second save()/reset() call is a no-op.
+  const [busy, setBusy] = useState<"save" | "reset" | null>(null);
   const latest = useRef({ saved, text, status });
   latest.current = { saved, text, status };
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -86,20 +109,49 @@ export function NpmrcEditor({
     };
   }, [api, createEditor]);
 
+  // F1: "Confirm Reset" disarms as soon as the user moves on without confirming — a pointerdown or focus change
+  // outside the button itself, or the whole window losing focus. Document-level, because in WKWebView clicking a
+  // button doesn't focus it, so a plain onBlur on the button would never fire.
+  useEffect(() => {
+    if (!confirmReset) return;
+    const doc = host.current?.ownerDocument ?? document;
+    const win = doc.defaultView;
+    const disarm = (event: Event) => {
+      const button = confirmButton.current;
+      if (button && event.target instanceof Node && button.contains(event.target)) return;
+      setConfirmReset(false);
+    };
+    const onWindowBlur = () => setConfirmReset(false);
+    doc.addEventListener("pointerdown", disarm);
+    doc.addEventListener("focusin", disarm);
+    win?.addEventListener("blur", onWindowBlur);
+    return () => {
+      doc.removeEventListener("pointerdown", disarm);
+      doc.removeEventListener("focusin", disarm);
+      win?.removeEventListener("blur", onWindowBlur);
+    };
+  }, [confirmReset]);
+
   const save = async () => {
+    if (busy) return;
+    setBusy("save");
     setConfirmReset(false);
     const content = editor.current?.getValue() ?? latest.current.text;
     try {
       const result = await api.saveNpmrc(content);
+      if (!mounted.current) return;
       if (result.ok) {
         setSaved(content);
         setStatus({ kind: "ok", text: strings.settings.npmrc.saved });
       } else {
-        setStatus({ kind: "error", text: strings.settings.npmrc.saveFailed(result.error) });
+        setStatus({ kind: "error", text: strings.settings.npmrc.saveFailed(extractErrorCode(result.error)) });
       }
     } catch (error) {
+      if (!mounted.current) return;
       const message = error instanceof Error ? error.message : String(error);
-      setStatus({ kind: "error", text: strings.settings.npmrc.saveFailed(message) });
+      setStatus({ kind: "error", text: strings.settings.npmrc.saveFailed(extractErrorCode(message)) });
+    } finally {
+      if (mounted.current) setBusy(null);
     }
   };
 
@@ -107,16 +159,22 @@ export function NpmrcEditor({
   // rejection here must never surface the raw error (which can carry an absolute path) and must leave the editor's
   // content exactly as it was.
   const reset = async () => {
+    if (busy) return;
+    setBusy("reset");
     setConfirmReset(false);
     try {
       const content = await api.resetNpmrc();
+      if (!mounted.current) return;
       suppressNext.current = true;
       editor.current?.setValue(content);
       setSaved(content);
       setText(content);
       setStatus({ kind: "ok", text: strings.settings.npmrc.resetDone });
     } catch {
+      if (!mounted.current) return;
       setStatus({ kind: "error", text: strings.settings.npmrc.resetFailed });
+    } finally {
+      if (mounted.current) setBusy(null);
     }
   };
 
@@ -134,7 +192,8 @@ export function NpmrcEditor({
   });
 
   const warnings = npmrcWarnings(text);
-  const saveDisabled = saved === null || text === saved;
+  const saveDisabled = busy !== null || saved === null || text === saved;
+  const resetAreaDisabled = busy !== null;
 
   return (
     <section className="npmrc">
@@ -158,11 +217,17 @@ export function NpmrcEditor({
       </details>
       <div className="settings-actions">
         {confirmReset ? (
-          <button type="button" className="danger" onClick={() => void reset()}>
+          <button
+            ref={confirmButton}
+            type="button"
+            className="danger"
+            disabled={resetAreaDisabled}
+            onClick={() => void reset()}
+          >
             {strings.settings.confirmReset}
           </button>
         ) : (
-          <button type="button" onClick={() => setConfirmReset(true)}>
+          <button type="button" disabled={resetAreaDisabled} onClick={() => setConfirmReset(true)}>
             {strings.settings.npmrc.reset}
           </button>
         )}

@@ -360,7 +360,10 @@ export const strings = {
       resetDone: "Restored the default registry",
       resetFailed: "Couldn't reset .npmrc.",
       loadFailed: "Couldn't read .npmrc",
-      saveFailed: (error: string) => `Couldn't save .npmrc: ${error}`,
+      saveFailed: (code: string | null) =>
+        code
+          ? `Couldn't save .npmrc (${code}). Your changes are still here.`
+          : "Couldn't save .npmrc. Your changes are still here.",
       examples: "Examples",
       exampleText: `@acme:registry=https://npm.acme.dev/${NL}//npm.acme.dev/:_authToken=<token>`,
       warnings: {

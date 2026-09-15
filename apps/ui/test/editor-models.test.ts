@@ -56,7 +56,12 @@ describe("ModelCache", () => {
     first.model.setValue("edited");
     const tsx = cache.ensure("t1", "tsx", "stale");
     expect(tsx.recreated).toBe(true);
-    expect([tsx.model.value, tsx.model.language, first.model.disposed]).toEqual(["edited", "tsx", true]);
+    expect([tsx.model.value, tsx.model.language, tsx.previous, first.model.disposed]).toEqual([
+      "edited",
+      "tsx",
+      first.model,
+      false,
+    ]);
     expect(create).toHaveBeenCalledTimes(2);
   });
 

@@ -10,6 +10,9 @@ import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
 import { installPasteGuard, pasteInto } from "./paste-guard";
 import { createTabView } from "./tab-view";
+import { createTsEnvironment } from "./ts-environment";
+import { tsStateFor } from "./ts-state";
+import { loadRuntimePack } from "./type-libs";
 import { defineClipboardRegister, startVim, type VimController } from "./vim";
 import { createVimStatusNode } from "./vim-status";
 
@@ -56,6 +59,20 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
       scrollBeyondLastLine: false,
       ...toMonacoOptions(editorOptionsFor(initial.settings, initial.fontFallback)),
     });
+
+    // Spec §6.1: Monaco's TypeScript defaults are global, so they follow the shown tab.
+    const tsEnvironment = createTsEnvironment({
+      defaults: [monaco.typescript.typescriptDefaults, monaco.typescript.javascriptDefaults],
+      loadPack: loadRuntimePack,
+    });
+    const applyTypeScript = (state: AppState) => {
+      const next = tsStateFor(state);
+      if (next) {
+        tsEnvironment
+          .apply(next)
+          .catch((error: unknown) => console.error("[editor] failed to apply the TypeScript environment", error));
+      }
+    };
 
     const applyMonacoTheme = (themeId: string) => {
       const theme = getTheme(themeId);
@@ -154,6 +171,7 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
         // A new model starts with no markers or decorations (as built in M1): reapply both.
         applyMarkers(store.getState());
         applyHover(store.getState().hoveredLine);
+        applyTypeScript(store.getState());
       },
     });
 
@@ -248,6 +266,31 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
         view.saveActive();
         view.flush();
       },
+      typeDiagnostics: async () => {
+        const model = editor.getModel();
+        if (!model) return [];
+        return monaco.editor
+          .getModelMarkers({ resource: model.uri })
+          .filter((marker) => marker.owner === "typescript" || marker.owner === "javascript")
+          .map((marker) => ({
+            code: Number(typeof marker.code === "object" ? marker.code?.value : marker.code),
+            message: marker.message,
+            line: marker.startLineNumber,
+          }));
+      },
+      completionsAt: async (offset) => {
+        const model = editor.getModel();
+        if (!model) return [];
+        const getWorker =
+          model.getLanguageId() === "javascript"
+            ? monaco.typescript.getJavaScriptWorker
+            : monaco.typescript.getTypeScriptWorker;
+        const worker = await (await getWorker())(model.uri);
+        const info = (await worker.getCompletionsAtPosition(model.uri.toString(), offset)) as
+          | { entries?: { name: string }[] }
+          | undefined;
+        return (info?.entries ?? []).map((entry) => entry.name);
+      },
     });
 
     // T18-m-paste: the model attached at paste time is captured, and the text goes in only if it is still attached
@@ -271,6 +314,14 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
       if ((state.settings !== previous.settings || state.fontFallback !== previous.fontFallback) && state.settings) {
         editor.updateOptions(toMonacoOptions(editorOptionsFor(state.settings, state.fontFallback)));
         syncVim(state.settings.editor.vimKeys);
+      }
+      if (
+        state.activeTabId !== previous.activeTabId ||
+        state.tab?.runtime !== previous.tab?.runtime ||
+        state.settings?.build.decorators !== previous.settings?.build.decorators ||
+        state.settings?.editor.linting !== previous.settings?.editor.linting
+      ) {
+        applyTypeScript(state);
       }
       if (
         state.activeTabId !== previous.activeTabId ||

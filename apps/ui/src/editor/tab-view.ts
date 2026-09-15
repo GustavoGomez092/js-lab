@@ -83,13 +83,15 @@ export function createTabView<M extends ModelLike, V>(deps: TabViewDeps<M, V>): 
       previousModel && !deps.models.matches(id, tab.language) && deps.editor.getModel() === previousModel
         ? deps.editor.saveViewState()
         : null;
-    const { model } = deps.models.ensure(id, tab.language, state.buffers[id] ?? "");
+    const { model, previous } = deps.models.ensure(id, tab.language, state.buffers[id] ?? "");
     if (deps.editor.getModel() !== model) {
       deps.editor.setModel(model);
       const viewState = carried ?? (tab.viewState as V | null);
       if (viewState) deps.editor.restoreViewState(viewState);
       deps.onShown(id, model);
     }
+    // T12-m3: the new model is attached (above) before the old one goes away.
+    previous?.dispose();
     const code = state.buffers[id] ?? "";
     // FB-I2: the buffer is usually the exact string the content listener just read from this model, so the model
     // already holds it and a full-buffer compare can be skipped.

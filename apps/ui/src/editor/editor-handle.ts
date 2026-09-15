@@ -4,6 +4,12 @@ export interface OffsetEdit {
   text: string;
 }
 
+export interface TsDiagnostic {
+  code: number;
+  message: string;
+  line: number;
+}
+
 /** The mounted Monaco editor, as seen by commands, formatting and E2E automation. */
 export interface EditorHandle {
   /** Types text at the cursor, like a keyboard would. `replace` selects the whole buffer first. */
@@ -28,6 +34,10 @@ export interface EditorHandle {
   getOptions(): Record<string, unknown>;
   /** Sends every pending view-state save now (X1, before quit). */
   flushViewState(): void;
+  /** Monaco's current TypeScript markers for the shown model (E2E verification). */
+  typeDiagnostics(): Promise<TsDiagnostic[]>;
+  /** TypeScript completion names at an offset in the shown model (E2E verification). */
+  completionsAt(offset: number): Promise<string[]>;
 }
 
 let active: EditorHandle | null = null;

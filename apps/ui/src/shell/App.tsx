@@ -312,6 +312,8 @@ export function App({
       missingEditorActions: () => getEditorHandle()?.missingActions(Object.values(EDITOR_ACTIONS)) ?? [],
       editorOptions: () => getEditorHandle()?.getOptions() ?? null,
       registeredCommands: () => registry.list().map((spec) => spec.id),
+      tsDiagnostics: () => getEditorHandle()?.typeDiagnostics() ?? Promise.resolve([]),
+      completions: (offset) => getEditorHandle()?.completionsAt(offset) ?? Promise.resolve([]),
       regions: () => ({
         toolbar: document.querySelector(".toolbar") !== null,
         activityBar: document.querySelector(".activity-bar") !== null,

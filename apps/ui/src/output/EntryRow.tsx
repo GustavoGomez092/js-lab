@@ -1,5 +1,5 @@
 import type { RunEvent } from "@jslab/rpc-schema";
-import { runtimeMissingPackage } from "../editor/install-assist";
+import { runtimeMissingPackage, runtimeMissingRelative } from "../editor/install-assist";
 import type { OutputEntry } from "../state/output";
 import { strings } from "../strings";
 import { entryLevel } from "./filters";
@@ -14,6 +14,9 @@ interface EntryRowProps {
   onHover(line: number | null): void;
   showLineNumbers?: boolean;
   onInstall?(name: string): void;
+  onChangeWorkingDirectory?(): void;
+  /** R24-4: a primitive selector; when false, a relative module-not-found row offers to set a WD. */
+  hasWorkingDirectory?: boolean;
 }
 
 type ErrorEvent = Extract<RunEvent, { kind: "error" }>;
@@ -31,6 +34,8 @@ export function EntryRow({
   onHover,
   showLineNumbers = true,
   onInstall,
+  onChangeWorkingDirectory,
+  hasWorkingDirectory,
 }: EntryRowProps) {
   const { event } = entry;
   const line = event.kind === "result" || event.kind === "console" || event.kind === "error" ? event.line : undefined;
@@ -48,7 +53,15 @@ export function EntryRow({
         {event.kind === "result" && <ValueView value={event.value} expand={expand} />}
         {event.kind === "console" && <ConsoleBody event={event} expand={expand} />}
         {(event.kind === "stdout" || event.kind === "stderr") && <pre className="entry-stream">{event.text}</pre>}
-        {event.kind === "error" && <ErrorBody event={event} onReveal={onReveal} onInstall={onInstall} />}
+        {event.kind === "error" && (
+          <ErrorBody
+            event={event}
+            onReveal={onReveal}
+            onInstall={onInstall}
+            onChangeWorkingDirectory={onChangeWorkingDirectory}
+            hasWorkingDirectory={hasWorkingDirectory}
+          />
+        )}
       </div>
       {showLineNumbers && line !== undefined && (
         <button
@@ -107,10 +120,14 @@ function ErrorBody({
   event,
   onReveal,
   onInstall,
+  onChangeWorkingDirectory,
+  hasWorkingDirectory,
 }: {
   event: ErrorEvent;
   onReveal(line: number): void;
   onInstall?(name: string): void;
+  onChangeWorkingDirectory?(): void;
+  hasWorkingDirectory?: boolean;
 }) {
   const userFrames = event.stack.filter((frame) => frame.user && frame.line != null);
   const internal = event.stack.length - userFrames.length;
@@ -133,6 +150,16 @@ function ErrorBody({
         </button>
       ))}
       {internal > 0 && <span className="entry-internal">{strings.output.internalFrames(internal)}</span>}
+      {event.name === "WorkingDirectoryError" && onChangeWorkingDirectory && (
+        <button type="button" className="entry-action" onClick={onChangeWorkingDirectory}>
+          {strings.output.changeWorkingDirectory}
+        </button>
+      )}
+      {!hasWorkingDirectory && onChangeWorkingDirectory && runtimeMissingRelative(event.message) && (
+        <button type="button" className="entry-action" onClick={onChangeWorkingDirectory}>
+          {strings.output.setWorkingDirectory}
+        </button>
+      )}
       {(() => {
         const missing = onInstall ? runtimeMissingPackage(event.message) : null;
         return missing ? (

@@ -6,6 +6,7 @@ import { runStateKind } from "../src/shell/labels";
 import { SplitPane } from "../src/shell/SplitPane";
 import { StatusBar } from "../src/shell/StatusBar";
 import { createAppStore } from "../src/state/store";
+import { strings } from "../src/strings";
 import { createFakeApi } from "./fake-api";
 
 function hydrated() {
@@ -168,5 +169,72 @@ describe("layout", () => {
     commands.get("view.layoutHorizontal")?.run();
     expect(store.getState().tab?.layout.orientation).toBe("horizontal");
     expect(api.updateSettings).toHaveBeenCalledTimes(updateSettingsCallsBefore);
+  });
+
+  test("the WD chip shows the folder with its path as a tooltip, opens the picker and clears (TF-19, spec §12.2)", () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1", workingDirectory: "/work/api" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const onPick = mock(() => {});
+    const onClear = mock(() => {});
+    const { rerender } = render(
+      <StatusBar
+        store={store}
+        onToggleLayout={() => {}}
+        runKeys="⌘R"
+        onPickWorkingDirectory={onPick}
+        onClearWorkingDirectory={onClear}
+      />,
+    );
+    const chip = screen.getByRole("button", { name: strings.shell.workingDirectory.change("/work/api") });
+    expect([chip.textContent, chip.getAttribute("title")]).toEqual(["api", "/work/api"]);
+    fireEvent.click(chip);
+    fireEvent.click(screen.getByRole("button", { name: strings.shell.workingDirectory.clear }));
+    expect([onPick.mock.calls.length, onClear.mock.calls.length]).toEqual([1, 1]);
+
+    // R24-1: with no working directory, the empty chip explains itself before the click.
+    const store2 = hydrated();
+    rerender(
+      <StatusBar
+        store={store2}
+        onToggleLayout={() => {}}
+        runKeys="⌘R"
+        onPickWorkingDirectory={onPick}
+        onClearWorkingDirectory={onClear}
+      />,
+    );
+    const emptyChip = screen.getByRole("button", { name: strings.shell.workingDirectory.set });
+    expect(emptyChip.getAttribute("title")).toBe(strings.shell.workingDirectory.setHelp);
+  });
+
+  // R24-2: the chip keeps showing "Working directory not found" after the output scrolls away.
+  test("the chip shows a missing-directory state after a WorkingDirectoryError (R24-2)", () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1", workingDirectory: "/work/api" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    store.getState().receiveState("r1", "transpiling");
+    store.getState().receiveEvents("r1", [
+      {
+        kind: "error",
+        phase: "runner",
+        name: "WorkingDirectoryError",
+        message: "Working directory not found: /work/api",
+        stack: [],
+        seq: 1,
+        t: 0,
+      },
+    ]);
+    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
+    expect(screen.getByRole("button", { name: strings.shell.workingDirectory.missing("/work/api") })).toBeTruthy();
   });
 });

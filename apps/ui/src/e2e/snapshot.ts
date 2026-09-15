@@ -1,5 +1,13 @@
 import type { RunState } from "@jslab/rpc-schema";
-import { deriveTitle, isDirty, type Language, type Runtime, type Settings, type TabLayout } from "@jslab/shared";
+import {
+  deriveTitle,
+  isDirty,
+  type Language,
+  type Runtime,
+  type Settings,
+  type TabLayout,
+  tabLabel,
+} from "@jslab/shared";
 import { filterCounts } from "../output/filters";
 import { entryToText } from "../output/text";
 import { initialOutput, visibleEntries } from "../state/output";
@@ -8,6 +16,8 @@ import type { AppState } from "../state/store";
 export interface TabSnapshot {
   id: string;
   title: string;
+  label: string;
+  workingDirectory: string | null;
   titleIsCustom: boolean;
   language: Language;
   runtime: Runtime;
@@ -62,6 +72,8 @@ export function snapshotState(state: AppState): UiSnapshot {
       {
         id,
         title: deriveTitle(tab, code),
+        label: tabLabel(deriveTitle(tab, code), tab.workingDirectory),
+        workingDirectory: tab.workingDirectory,
         titleIsCustom: tab.titleIsCustom,
         language: tab.language,
         runtime: tab.runtime,

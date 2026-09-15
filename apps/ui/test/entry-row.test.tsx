@@ -174,4 +174,60 @@ describe("EntryRow", () => {
     fireEvent.click(screen.getByRole("button", { name: strings.output.installPackage("zod") }));
     expect(onInstall).toHaveBeenCalledWith("zod");
   });
+
+  test("a missing working directory offers Change… (spec §12.2)", () => {
+    const onChange = mock(() => {});
+    render(
+      <EntryRow
+        entry={{
+          key: "wd",
+          event: {
+            kind: "error",
+            phase: "runner",
+            name: "WorkingDirectoryError",
+            message: "Working directory not found: /gone",
+            stack: [],
+            seq: 1,
+            t: 0,
+          } as DisplayEvent,
+        }}
+        stale={false}
+        expand={noExpand}
+        onReveal={() => {}}
+        onHover={() => {}}
+        onChangeWorkingDirectory={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: strings.output.changeWorkingDirectory }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  // R24-4: a relative module-not-found row offers to set a working directory when the tab has none.
+  test("a relative module-not-found row offers Set Working Directory… when the tab has no working directory", () => {
+    const onChange = mock(() => {});
+    render(
+      <EntryRow
+        entry={{
+          key: "e",
+          event: {
+            kind: "error",
+            phase: "runtime",
+            name: "ResolveMessage",
+            message: "Cannot find module './util' from '/data/runs/t1/entry-1.mjs'",
+            stack: [],
+            seq: 1,
+            t: 0,
+          } as DisplayEvent,
+        }}
+        stale={false}
+        expand={noExpand}
+        onReveal={() => {}}
+        onHover={() => {}}
+        onChangeWorkingDirectory={onChange}
+        hasWorkingDirectory={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: strings.output.setWorkingDirectory }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
 });

@@ -165,6 +165,17 @@ describe("E2E agent", () => {
       actions: [{ title: "Install package zod", spec: "zod" }],
     });
   });
+
+  test("tab snapshots carry the working directory and the suffixed label", async () => {
+    const { store, agent } = setup();
+    store.getState().applyTabUpdate({
+      ...(store.getState().tabs.t1 as NonNullable<ReturnType<typeof store.getState>["tabs"]["t1"]>),
+      workingDirectory: "/work/api",
+    });
+    expect(await agent("state", {})).toMatchObject({
+      tabs: [{ id: "t1", workingDirectory: "/work/api", label: "scratch · api" }],
+    });
+  });
 });
 
 describe("keyEventInit", () => {

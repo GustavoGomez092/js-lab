@@ -7,6 +7,7 @@ import { createFileFlows, formatSize } from "../src/files/file-flows";
 import { ConfirmDialog } from "../src/shell/ConfirmDialog";
 import { createDialogs } from "../src/shell/dialogs";
 import { createAppStore } from "../src/state/store";
+import { strings } from "../src/strings";
 import { createTabActions } from "../src/tabs/tab-actions";
 import { createFakeApi } from "./fake-api";
 
@@ -273,7 +274,7 @@ describe("file flows", () => {
       [{ title: "notes.tsx", titleIsCustom: true, language: "tsx", content: "const a = 1" }],
     ]);
     expect(store.getState().statusMessage).toBe(
-      "pic.png isn't a text file. · huge.js is larger than 50 MB and can't be opened. · Dropping a folder sets the working directory, which arrives with working directories.",
+      `pic.png isn't a text file. · huge.js is larger than 50 MB and can't be opened. · ${strings.files.folderDrop}`,
     );
   });
 
@@ -367,5 +368,13 @@ describe("file flows", () => {
     expect(api.saveAsDialog).toHaveBeenCalledTimes(2);
     flows.handleSaveCancelled({ tabId: "f" });
     expect(await second).toBe(false);
+  });
+});
+
+describe("folder drops (R-M3-SPIKE-1 Branch B)", () => {
+  test("a dropped folder points at Set Working Directory", async () => {
+    const { store, flows } = setup();
+    await flows.dropFiles([new File([""], "api")], new Set(["api"]));
+    expect(store.getState().statusMessage).toBe(strings.files.folderDrop);
   });
 });

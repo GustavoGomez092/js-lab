@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type * as Monaco from "monaco-editor";
-import { installActionsFor, registerInstallAssist, runtimeMissingPackage } from "../src/editor/install-assist";
+import {
+  installActionsFor,
+  registerInstallAssist,
+  runtimeMissingPackage,
+  runtimeMissingRelative,
+} from "../src/editor/install-assist";
 import { strings } from "../src/strings";
 
 /**
@@ -56,6 +61,12 @@ describe("install assist (spec §6.3, §11.4)", () => {
     expect(runtimeMissingPackage("Cannot find module '@acme/tool/x' from '/p'")).toBe("@acme/tool");
     expect(runtimeMissingPackage("Cannot find module './local' from '/p'")).toBeNull();
     expect(runtimeMissingPackage("x is not defined")).toBeNull();
+    // R24-4: the relative specifier a Bun runtime module-not-found error names, and the package/relative
+    // split stays mutually exclusive so the Install and Set buttons never both show for one row.
+    expect(runtimeMissingRelative("Cannot find module './local' from '/p'")).toBe("./local");
+    expect(runtimeMissingRelative("Cannot find module '../lib/x' from '/p'")).toBe("../lib/x");
+    expect(runtimeMissingRelative("Cannot find package 'zod' from '/data/runs/t1/entry-1.mjs'")).toBeNull();
+    expect(runtimeMissingRelative("x is not defined")).toBeNull();
   });
 
   test("each install action carries only its own marker, and only a single action is preferred", () => {

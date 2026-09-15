@@ -165,3 +165,13 @@ describe("tab bar", () => {
     tabButton.remove();
   });
 });
+
+describe("working directory label (EX-33)", () => {
+  test("a tab with a working directory shows the folder name after its title", () => {
+    const { store } = setup();
+    act(() =>
+      store.getState().applyTabUpdate({ ...(store.getState().tabs.c as TabState), workingDirectory: "/work/api" }),
+    );
+    expect(screen.getByText("Mine · api")).toBeTruthy();
+  });
+});

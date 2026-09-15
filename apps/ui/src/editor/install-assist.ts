@@ -21,6 +21,16 @@ export function runtimeMissingPackage(message: string): string | null {
 }
 
 /**
+ * The relative specifier a Bun module-not-found runtime error names (R24-4), or null. Uses the same regex as
+ * `runtimeMissingPackage`, so a specifier is claimed by exactly one of the two: a package name here means a
+ * `./`- or `../`-prefixed specifier, never both a missing package and a missing relative import for one row.
+ */
+export function runtimeMissingRelative(message: string): string | null {
+  const specifier = /Cannot find (?:package|module) ['"]([^'"]+)['"]/.exec(message)?.[1];
+  return specifier && (specifier.startsWith("./") || specifier.startsWith("../")) ? specifier : null;
+}
+
+/**
  * Groups 2307 markers into install actions, keeping each action's own originating marker (Task 23 fix round 2,
  * M-8) — so the provider can attach only that one marker to `diagnostics`, instead of every marker in range.
  * `installActionsFor` is a thin wrapper over this that drops the marker, keeping its own signature and result shape

@@ -21,6 +21,11 @@ export function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
+/** Spec §12.2: the tab label shows the working directory's folder name as a suffix, e.g. "fetch users · api". */
+export function tabLabel(title: string, workingDirectory: string | null): string {
+  return workingDirectory ? `${title} · ${baseName(workingDirectory)}` : title;
+}
+
 export const TITLE_MAX = 30;
 
 const NON_WHITESPACE = /\S/g;

@@ -744,6 +744,31 @@ button:disabled {
   padding: 0 4px;
 }
 
+.status-wd {
+  display: inline-flex;
+  align-items: center;
+}
+
+.status-wd-clear {
+  color: var(--fg-muted);
+  /* R24-3: appears on hover or focus, matching the .tab-close idiom. */
+  opacity: 0;
+}
+
+.status-wd:hover .status-wd-clear,
+.status-wd:focus-within .status-wd-clear {
+  opacity: 1;
+}
+
+.status-wd-empty {
+  color: var(--fg-muted);
+}
+
+/* R24-2: 8.9:1 on chrome. */
+.status-wd-missing {
+  color: var(--fg-warn);
+}
+
 /* ---------- tab bar ---------- */
 .tab-bar {
   display: flex;

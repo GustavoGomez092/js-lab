@@ -70,7 +70,9 @@ export const strings = {
     location: (path: string) => `Save as ${path}?`,
     notText: (name: string) => `${name} isn't a text file.`,
     tooLarge: (name: string) => `${name} is larger than 50 MB and can't be opened.`,
-    folderDrop: "Dropping a folder sets the working directory, which arrives with working directories.",
+    // Branch B (R-M3-SPIKE-1 NO-GO): a dropped folder can't carry its path into the webview on Electrobun 2.0.1.
+    folderDrop:
+      "A dropped folder can't become the working directory here. Use Actions → Set Working Directory… or the status bar.",
   },
   fonts: {
     fallback: (font: string) => `Font "${font}" isn't available; using JetBrains Mono.`,
@@ -97,6 +99,15 @@ export const strings = {
     cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
     runtime: "Runtime",
     language: "Language",
+    workingDirectory: {
+      // R24-1: the ellipsis signals that this opens a picker and matches the menu title.
+      set: "Set Working Directory…",
+      setHelp: "Run this tab in a folder: relative imports, .env and node_modules resolve there.",
+      change: (path: string) => `Working directory: ${path}. Change…`,
+      // R24-2: the chip keeps naming the problem and its fix after the output that reported it scrolls away.
+      missing: (path: string) => `Working directory not found: ${path}. Change…`,
+      clear: "Clear Working Directory",
+    },
     /** A button's tooltip with its shortcut, when it has one (FB-m3). */
     withKeys: (label: string, keys: string | null) => (keys ? `${label} (${keys})` : label),
     dismiss: (message: string) => `Dismiss: ${message}`,
@@ -181,6 +192,10 @@ export const strings = {
     anonymous: "<anonymous>",
     /** Spec §6.3: a runtime module-not-found error offers to install the missing package. */
     installPackage: (name: string) => `Install ${name}`,
+    /** Spec §12.2: a WorkingDirectoryError row offers to change the working directory. */
+    changeWorkingDirectory: "Change…",
+    /** R24-4: a relative module-not-found row offers to set a working directory when the tab has none. */
+    setWorkingDirectory: "Set Working Directory…",
   },
   settings: {
     windowTitle: "Settings",

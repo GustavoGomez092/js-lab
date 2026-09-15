@@ -1,5 +1,12 @@
 import { appNoticeSchema, MAX_TEXT_CHARS } from "@jslab/rpc-schema";
-import { commandMeta, DEFAULT_KEYBINDINGS, formatChord, resolveKeybindings, shortcutFor } from "@jslab/shared";
+import {
+  commandMeta,
+  DEFAULT_KEYBINDINGS,
+  formatChord,
+  resolveKeybindings,
+  shortcutFor,
+  tabLabel,
+} from "@jslab/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
@@ -73,7 +80,9 @@ export function App({
   const outputVisible = useStore(store, (s) => s.tab?.layout.outputVisible ?? true);
   // FB-m9: the single-tab toolbar title follows edits; the summary cache keeps this selector cheap per keystroke.
   const [titles] = useState(createTabSummaryCache);
-  const toolbarTitle = useStore(store, (s) => (s.tab ? titles.title(s.tab, s.code) : ""));
+  const toolbarTitle = useStore(store, (s) =>
+    s.tab ? tabLabel(titles.title(s.tab, s.code), s.tab.workingDirectory) : "",
+  );
   // RR2-m1: this cache only ever needs the active tab's entry, so prune it to that one tab whenever it changes.
   // Otherwise every tab that was ever active, and its last buffer string, stays reachable for the window's life.
   useEffect(() => {
@@ -288,6 +297,9 @@ export function App({
       api.on("settings.changed", ({ settings }) => store.getState().receiveSettings(settings)),
       // R-M3-T23: Main's npm queue finished, so the type feeder's package cache may be stale (Task 26 bumps this too).
       api.on("npm.changed", () => store.getState().bumpPackagesRevision()),
+      // Task 24: the working directory changed (wd.pick/wd.clear); the editor's own subscription invalidates
+      // the type feeder for the active tab once the store's tab is updated (Editor.tsx, unchanged here).
+      api.on("wd.changed", ({ tab }) => store.getState().applyTabUpdate(tab)),
       api.on("file.opened", (payload) => void flows.handleOpened(payload)),
       api.on("file.saved", (payload) => flows.handleSaved(payload)),
       api.on("file.saveCancelled", (payload) => flows.handleSaveCancelled(payload)),
@@ -508,7 +520,13 @@ export function App({
       </div>
       <div className="vim-slot" ref={vimSlot} />
       {settings.view.statusBar && (
-        <StatusBar store={store} onToggleLayout={() => registry.execute("view.toggleLayout")} runKeys={keycaps.run} />
+        <StatusBar
+          store={store}
+          onToggleLayout={() => registry.execute("view.toggleLayout")}
+          runKeys={keycaps.run}
+          onPickWorkingDirectory={() => registry.execute("wd.set")}
+          onClearWorkingDirectory={() => registry.execute("wd.clear")}
+        />
       )}
       <RenameDialog store={store} />
       <ConfirmDialog store={store} dialogs={dialogs} />

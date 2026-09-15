@@ -9,7 +9,7 @@ import {
   sessionSchema,
   type TabState,
 } from "@jslab/shared";
-import { MAX_NPM_LOG_CHARS } from "../src/npm/npm-panel";
+import { MAX_NPM_LOG_CHARS, maskCredentials } from "../src/npm/npm-panel";
 import { createAppStore, STATUS_MESSAGE_MS, shouldAutoRun } from "../src/state/store";
 
 function payload(overrides: Partial<BootstrapPayload> = {}): BootstrapPayload {
@@ -310,6 +310,43 @@ describe("app store", () => {
     store.getState().receiveNpmOperation(op);
     store.getState().receiveNpmOperation({ ...op, status: "succeeded" });
     expect(store.getState().npm.operations.map((o) => o.status)).toEqual(["succeeded"]);
+
+    // Fix round 2 (N-3): trimming to MAX_NPM_OPERATIONS evicts the oldest *finished* operations first, and never
+    // a queued or running one while a finished one is still available to evict.
+    const fresh = createAppStore();
+    for (let i = 0; i < 49; i += 1) {
+      fresh.getState().receiveNpmOperation({
+        id: `f${i}`,
+        kind: "install",
+        target: `pkg${i}`,
+        status: "succeeded",
+        error: null,
+        notice: null,
+      });
+    }
+    fresh.getState().receiveNpmOperation({
+      id: "running1",
+      kind: "install",
+      target: "still-running",
+      status: "running",
+      error: null,
+      notice: null,
+    });
+    expect(fresh.getState().npm.operations.map((o) => o.id)).toContain("running1");
+    // One more finished op pushes the total to 51: the oldest finished (f0) is evicted, not the running one.
+    fresh.getState().receiveNpmOperation({
+      id: "f49",
+      kind: "install",
+      target: "pkg49",
+      status: "succeeded",
+      error: null,
+      notice: null,
+    });
+    const ids = fresh.getState().npm.operations.map((o) => o.id);
+    expect(ids).toHaveLength(50);
+    expect(ids).not.toContain("f0");
+    expect(ids).toContain("running1");
+    expect(ids).toContain("f49");
   });
 
   // R-M3-T26-LOGCAP-2 (parked R-M3-T18-LOGCAP-1): a per-opId cap, trimmed from the front, one buffer per operation.
@@ -318,9 +355,85 @@ describe("app store", () => {
     store.getState().appendNpmLog("op1", "a".repeat(30_000));
     store.getState().appendNpmLog("op1", "b".repeat(30_000));
     store.getState().appendNpmLog("op1", "c".repeat(30_000));
-    store.getState().appendNpmLog("op2", "untouched");
+    // Fix round 2 (I-1): a chunk with a trailing boundary (here, a space) flushes past the carry immediately;
+    // the 30,000-char runs above have no whitespace at all, so each one exceeds the carry bound and is flushed
+    // as a whole on its own turn.
+    store.getState().appendNpmLog("op2", "untouched ");
     expect(store.getState().npm.logs.op1?.length).toBe(MAX_NPM_LOG_CHARS);
     expect(store.getState().npm.logs.op1?.endsWith("c".repeat(30_000))).toBe(true);
-    expect(store.getState().npm.logs.op2).toBe("untouched");
+    expect(store.getState().npm.logs.op2).toBe("untouched ");
+  });
+
+  // Fix round 2 (I-1): Main forwards every pipe read as its own npm.log chunk, so a credential can split across
+  // two chunks at any point. A hidden per-opId carry holds the unmasked tail back until a whitespace boundary
+  // (or a terminal op, or the 4 KiB carry bound) so the store never holds the split-open credential in clear.
+  test("credentials split across log chunks are never stored in clear, both mid-stream and at the terminal flush", () => {
+    const NL = String.fromCharCode(10);
+    const splits: [string, string, string][] = [
+      ["token-value", "//registry.example/:_authToken=abc", `123${NL}`],
+      ["key", "//registry.example/:_authTo", `ken=abc123${NL}`],
+      ["url-password-after-scheme", "GET https://user:sec", `ret@registry.example/zod${NL}`],
+      ["url-password-in-userinfo", "GET https:", `//user:secret@registry.example/zod${NL}`],
+    ];
+    const store = createAppStore();
+    for (const [opId, a, b] of splits) {
+      store.getState().appendNpmLog(opId, a);
+      // Mid-stream: the split-open half must never appear, even before the boundary-completing chunk arrives.
+      expect((store.getState().npm.logs[opId] ?? "").includes("secret")).toBe(false);
+      expect((store.getState().npm.logs[opId] ?? "").includes("abc123")).toBe(false);
+      store.getState().appendNpmLog(opId, b);
+      store.getState().receiveNpmOperation({
+        id: opId,
+        kind: "install",
+        target: "fixture-a",
+        status: "succeeded",
+        error: null,
+        notice: null,
+      });
+      const final = store.getState().npm.logs[opId] ?? "";
+      expect(final.includes("secret")).toBe(false);
+      expect(final.includes("abc123")).toBe(false);
+      expect(final.includes("registry.example")).toBe(true);
+    }
+
+    // The terminal flush itself: a carry with no trailing whitespace at all is still masked and flushed once the
+    // operation finishes, not left dangling forever.
+    store.getState().appendNpmLog("op5", "_authToken=abc123");
+    expect(store.getState().npm.logs.op5 ?? "").toBe("");
+    store.getState().receiveNpmOperation({
+      id: "op5",
+      kind: "install",
+      target: "fixture-a",
+      status: "failed",
+      error: { kind: "unknown", log: "" },
+      notice: null,
+    });
+    expect((store.getState().npm.logs.op5 ?? "").includes("abc123")).toBe(false);
+
+    // Masking is idempotent: re-masking an already-masked buffer (as the terminal flush of an already-masked
+    // segment would) changes nothing further.
+    const masked = maskCredentials("https://user:secret@registry.example/ _authToken=abc123");
+    expect(maskCredentials(masked)).toBe(masked);
+  });
+
+  // Fix round 2 (M-2): a spec or a raw log can itself carry a credential (an install spec URL, a registry error
+  // echoing the auth token). receiveNpmOperation masks both once, on arrival, so every consumer (the running
+  // line, the failure card, the R26-6 status bar, the E2E snapshot) only ever sees masked data. Retry still needs
+  // the real spec, kept in a private, non-rendered, non-exported rawTargets map.
+  test("operations are stored with masked targets and logs, and rawTargets keeps the raw spec for retry", () => {
+    const store = createAppStore();
+    const rawTarget = "git+https://ghp_FAKE@github.com/o/r.git";
+    store.getState().receiveNpmOperation({
+      id: "op1",
+      kind: "install",
+      target: rawTarget,
+      status: "failed",
+      error: { kind: "unknown", log: "install failed: _authToken=abc123" },
+      notice: null,
+    });
+    const stored = store.getState().npm.operations[0];
+    expect(stored?.target.includes("ghp_FAKE")).toBe(false);
+    expect(stored?.error?.log.includes("abc123")).toBe(false);
+    expect(store.getState().npm.rawTargets.op1).toBe(rawTarget);
   });
 });

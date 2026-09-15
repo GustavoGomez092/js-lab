@@ -690,6 +690,13 @@ button:disabled {
   transition: background 0.4s;
 }
 
+/* Fix round 2 (N-4). */
+@media (prefers-reduced-motion: reduce) {
+  .npm-installed tr.npm-new {
+    transition: none;
+  }
+}
+
 /* R26-1: a semver-major crossing. 8.9:1 on elevated. */
 .npm-major {
   padding: 0 5px;

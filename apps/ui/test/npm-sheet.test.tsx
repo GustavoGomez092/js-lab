@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { NpmListResult } from "@jslab/rpc-schema";
+import type { NpmListResult, NpmSearchResult } from "@jslab/rpc-schema";
 import { createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { NpmSheet } from "../src/npm/NpmSheet";
@@ -19,7 +19,7 @@ function fakeApi(list: NpmListResult) {
   return {
     npmList: mock(async (_refresh: boolean) => list),
     npmSearch: mock(async (_query: string) => ({
-      results: [{ name: "zod", version: "4.6.4", description: "schemas", weeklyDownloads: 1234 }],
+      results: [{ name: "zod", version: "4.6.4", description: "schemas", weeklyDownloads: 1234 }] as NpmSearchResult[],
       error: null,
     })),
     npmInstall: mock((_spec: string) => {}),
@@ -99,10 +99,18 @@ describe("NPM Packages sheet (spec §11.2)", () => {
     fireEvent.click(screen.getByRole("button", { name: strings.npm.retry }));
     expect(api.npmInstall).toHaveBeenCalledWith("missing-pkg");
 
-    // M-6 (closed here): a leaked credential in a raw log must never reach the drawer or the Copy Log payload.
+    // M-6 (closed here); fix round 2 (M-3) adds the drawer assertion: a leaked credential in a raw log must
+    // never reach the drawer's own stream, the failure card or the Copy Log payload.
     const writeText = mock(async (_text: string) => {});
     const originalClipboard = navigator.clipboard;
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    // Fix round 2 (M-3): the log drawer reads the appendNpmLog stream (npm.logs), not error.log, so it needs its
+    // own credential to prove the store masks that path too — the earlier "op10" test never called this.
+    act(() =>
+      store
+        .getState()
+        .appendNpmLog("op10", "https://user:secret@registry.example/ //registry.example/:_authToken=abc123"),
+    );
     act(() =>
       store.getState().receiveNpmOperation({
         id: "op10",
@@ -115,13 +123,34 @@ describe("NPM Packages sheet (spec §11.2)", () => {
     );
     expect(screen.queryByText(/secret/)).toBeNull();
     expect(screen.queryByText(/abc123/)).toBeNull();
-    expect(screen.getByText(/registry\.example/)).toBeTruthy();
+    // Both the failure card's disclosure and the log drawer now show this masked text, so more than one element
+    // matches.
+    expect(screen.getAllByText(/registry\.example/).length).toBeGreaterThan(0);
+    const drawerText = document.querySelector(".npm-log pre")?.textContent ?? "";
+    expect(drawerText.includes("secret")).toBe(false);
+    expect(drawerText.includes("abc123")).toBe(false);
+    expect(drawerText.includes("registry.example")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: strings.npm.copyLog }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     const copied = writeText.mock.calls[0]?.[0] as string;
     expect(copied.includes("secret")).toBe(false);
     expect(copied.includes("abc123")).toBe(false);
     Object.defineProperty(navigator, "clipboard", { value: originalClipboard, configurable: true });
+
+    // Fix round 2 (M-2): the stored target is masked, but Retry must still send the real spec.
+    act(() =>
+      store.getState().receiveNpmOperation({
+        id: "op11",
+        kind: "install",
+        target: "git+https://ghp_FAKE@github.com/o/r.git",
+        status: "failed",
+        error: { kind: "unknown", log: "clone failed" },
+        notice: null,
+      }),
+    );
+    expect(screen.queryByText(/ghp_FAKE/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: strings.npm.retry }));
+    expect(api.npmInstall).toHaveBeenCalledWith("git+https://ghp_FAKE@github.com/o/r.git");
   });
 
   test("↑/↓ selects a result for Return to install, and Escape clears a non-empty search before closing the sheet (R26-2)", async () => {
@@ -143,7 +172,7 @@ describe("NPM Packages sheet (spec §11.2)", () => {
   });
 
   test("a running operation shows in its row, disables that row's buttons, and the status line counts anything queued (R26-3)", async () => {
-    const { store } = setup();
+    const { store, api } = setup();
     await screen.findByText("fixture-a");
     act(() =>
       store.getState().receiveNpmOperation({
@@ -173,6 +202,36 @@ describe("NPM Packages sheet (spec §11.2)", () => {
       }),
     );
     expect(screen.getByText(strings.npm.running("update", "fixture-a", 1))).toBeTruthy();
+
+    // Fix round 2 (M-6): a result row shows "Adding…" only for a pending *install* of that exact package, by
+    // name, not any pending operation whose target happens to equal the name.
+    const search = screen.getByRole("searchbox", { name: strings.npm.searchLabel });
+    fireEvent.change(search, { target: { value: "zod" } });
+    await waitFor(() => expect(api.npmSearch).toHaveBeenCalledWith("zod"), { timeout: 1000 });
+    await screen.findByRole("option");
+    act(() =>
+      store.getState().receiveNpmOperation({
+        id: "r1",
+        kind: "remove",
+        target: "zod",
+        status: "queued",
+        error: null,
+        notice: null,
+      }),
+    );
+    expect(screen.getByRole("button", { name: strings.npm.add("zod") })).toBeTruthy();
+    act(() =>
+      store.getState().receiveNpmOperation({
+        id: "r2",
+        kind: "install",
+        target: "zod@4.6.4",
+        status: "queued",
+        error: null,
+        notice: null,
+      }),
+    );
+    expect(screen.queryByRole("button", { name: strings.npm.add("zod") })).toBeNull();
+    expect(screen.getByText(strings.npm.adding)).toBeTruthy();
   });
 
   test("a search with no matches shows a message, and an @types-only install shows a hidden count (R26-5)", async () => {
@@ -189,5 +248,90 @@ describe("NPM Packages sheet (spec §11.2)", () => {
     api.npmSearch.mockImplementation(async (_query: string) => ({ results: [], error: null }));
     await waitFor(() => expect(api.npmSearch).toHaveBeenCalledWith("nothingmatches"), { timeout: 1000 });
     expect(await screen.findByText(strings.npm.noResults("nothingmatches"))).toBeTruthy();
+  });
+
+  // Fix round 2 (M-4): row buttons disable only once Main's queued echo makes the round trip, so a double click
+  // before that echo arrives must still queue only one operation.
+  test("double-clicking an action queues it once, and Update all disables while one is queued", async () => {
+    const { store, api } = setup();
+    await screen.findByText("fixture-a");
+    const remove = screen.getByRole("button", { name: strings.npm.remove("fixture-a") });
+    fireEvent.click(remove);
+    fireEvent.click(remove);
+    expect(api.npmRemove.mock.calls).toEqual([["fixture-a"]]);
+
+    const updateAll = screen.getByRole("button", { name: strings.npm.updateAll });
+    fireEvent.click(updateAll);
+    fireEvent.click(updateAll);
+    expect(api.npmUpdateAll.mock.calls.length).toBe(1);
+
+    act(() =>
+      store.getState().receiveNpmOperation({
+        id: "ua1",
+        kind: "updateAll",
+        target: "",
+        status: "queued",
+        error: null,
+        notice: null,
+      }),
+    );
+    expect((screen.getByRole("button", { name: strings.npm.updateAll }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  // Fix round 2 (M-5): the resolver always called setResults with no check that its query was still current.
+  test("an out-of-order search response doesn't replace newer results, and a post-install response leaves the list empty", async () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    type SearchResponse = { results: NpmSearchResult[]; error: null };
+    const resolve: Record<string, (value: SearchResponse) => void> = {};
+    const api = fakeApi(LIST);
+    api.npmSearch.mockImplementation(
+      (query: string) =>
+        new Promise<SearchResponse>((res) => {
+          resolve[query] = res;
+        }),
+    );
+    render(<NpmSheet store={store} api={api} />);
+    act(() => store.getState().openModal({ kind: "npm" }));
+    await screen.findByText("fixture-a");
+    const search = screen.getByRole("searchbox", { name: strings.npm.searchLabel });
+
+    fireEvent.change(search, { target: { value: "zod" } });
+    await waitFor(() => expect(resolve.zod).toBeTruthy(), { timeout: 1000 });
+    fireEvent.change(search, { target: { value: "zodiac" } });
+    await waitFor(() => expect(resolve.zodiac).toBeTruthy(), { timeout: 1000 });
+
+    act(() =>
+      resolve.zodiac?.({
+        results: [{ name: "zodiac", version: "1.0.0", description: "", weeklyDownloads: null }],
+        error: null,
+      }),
+    );
+    await screen.findByText("zodiac");
+    act(() =>
+      resolve.zod?.({
+        results: [{ name: "zod", version: "4.6.4", description: "", weeklyDownloads: null }],
+        error: null,
+      }),
+    );
+    expect(screen.queryByText("zod")).toBeNull();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+
+    fireEvent.change(search, { target: { value: "another" } });
+    await waitFor(() => expect(resolve.another).toBeTruthy(), { timeout: 1000 });
+    fireEvent.click(screen.getByRole("button", { name: strings.npm.add("zodiac") }));
+    act(() =>
+      resolve.another?.({
+        results: [{ name: "another", version: "1.0.0", description: "", weeklyDownloads: null }],
+        error: null,
+      }),
+    );
+    expect(screen.queryByRole("option")).toBeNull();
   });
 });

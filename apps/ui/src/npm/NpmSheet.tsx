@@ -13,9 +13,9 @@ import {
   installTargetFor,
   isHighlighted,
   isMajorUpdate,
-  maskCredentials,
   minutesSince,
   pendingFor,
+  pendingInstallFor,
   shouldSearch,
   visibleInstalled,
 } from "./npm-panel";
@@ -57,11 +57,21 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
   // R25 pattern: a synchronous guard, since a second click in the same tick must not fire Allow Scripts and
   // Retry twice (writeSetting is async, like EnvVarsSheet's save()).
   const allowScriptsRetrying = useRef(false);
+  // Fix round 2 (M-4): row buttons disable only once Main's queued echo makes the round trip, so a synchronous
+  // guard covers the gap: one `kind:target` key per in-flight click, added before the API call and cleared once
+  // a matching `npm.op` (queued, running or terminal) arrives.
+  const pendingRef = useRef<Set<string>>(new Set());
+  // Fix round 2 (M-5): invalidates an in-flight search response that resolves after a newer one, or after the
+  // query was cleared by an install.
+  const searchSeq = useRef(0);
 
   const scheduler = useMemo(
     () =>
       createSearchScheduler((text) => {
+        searchSeq.current += 1;
+        const seq = searchSeq.current;
         void api.npmSearch(text).then((response) => {
+          if (searchSeq.current !== seq) return;
           setResults(response.results);
           setSearchError(response.error);
           setSearchedFor(text);
@@ -74,7 +84,11 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
   useEffect(() => {
     void api.npmList(true).then((list) => store.getState().receiveNpmList(list));
     search.current?.focus();
-    return () => scheduler.cancel();
+    return () => {
+      scheduler.cancel();
+      // M-4: a closed sheet's pending guard must never leak into the next opening.
+      pendingRef.current.clear();
+    };
   }, [api, store, scheduler]);
 
   useEffect(() => {
@@ -83,6 +97,22 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
     const timer = setTimeout(() => setNow(Date.now()), HIGHLIGHT_MS + 50);
     return () => clearTimeout(timer);
   }, [npm.lastAdded]);
+
+  // Fix round 2 (N-1): "Checked N min ago" otherwise keeps its mount-time value for as long as the sheet stays
+  // open.
+  useEffect(() => {
+    if (npm.outdatedCheckedAt === null) return;
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [npm.outdatedCheckedAt]);
+
+  // Fix round 2 (M-4): a key clears the moment Main's own echo of that kind/target arrives, whatever its status.
+  useEffect(() => {
+    for (const op of npm.operations) {
+      const target = npm.rawTargets[op.id] ?? op.target;
+      pendingRef.current.delete(`${op.kind}:${op.kind === "updateAll" ? "" : target}`);
+    }
+  }, [npm.operations, npm.rawTargets]);
 
   // R25 pattern: this panel exists only while the sheet is open, so its own mount/unmount is the open/close
   // transition.
@@ -103,20 +133,33 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [store]);
 
+  /** M-4: runs `action` unless `key` is already pending; marks it pending synchronously, before the API call. */
+  const guarded = (key: string, action: () => void) => {
+    if (pendingRef.current.has(key)) return;
+    pendingRef.current.add(key);
+    action();
+  };
+
   const install = (spec: string) => {
-    api.npmInstall(spec);
+    guarded(`install:${spec}`, () => api.npmInstall(spec));
     setQuery("");
     setResults([]);
     setSearchedFor(null);
     setActive(null);
+    // M-5: a still-in-flight search for the cleared query must not repopulate the list once it resolves.
+    searchSeq.current += 1;
     scheduler.cancel();
   };
 
+  // M-2: the stored target is masked; Retry needs the real spec, kept apart in npm.rawTargets.
+  const rawTargetFor = (op: NpmOperation) => npm.rawTargets[op.id] ?? op.target;
+
   const retry = (op: NpmOperation) => {
-    if (op.kind === "install") api.npmInstall(op.target);
-    else if (op.kind === "update") api.npmUpdate(op.target);
-    else if (op.kind === "remove") api.npmRemove(op.target);
-    else api.npmUpdateAll();
+    const target = rawTargetFor(op);
+    if (op.kind === "install") guarded(`install:${target}`, () => api.npmInstall(target));
+    else if (op.kind === "update") guarded(`update:${target}`, () => api.npmUpdate(target));
+    else if (op.kind === "remove") guarded(`remove:${target}`, () => api.npmRemove(target));
+    else guarded("updateAll:", () => api.npmUpdateAll());
   };
 
   const allowScriptsAndRetry = async (op: NpmOperation) => {
@@ -130,8 +173,9 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
     }
   };
 
+  // I-2: the store already masks `error.log` once, on arrival (receiveNpmOperation); never re-mask at render.
   const copyLog = async (log: string) => {
-    const result = await copyEntriesToClipboard(maskCredentials(log));
+    const result = await copyEntriesToClipboard(log);
     setCopyStatus(result);
   };
 
@@ -147,6 +191,10 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
   const outdated = npm.installed.filter((pkg) => pkg.latest !== null);
   const majors = outdated.filter((pkg) => isMajorUpdate(pkg.version, pkg.latest)).length;
   const allTypesHidden = npm.loaded && npm.installed.length > 0 && !showTypes && visible.length === 0;
+  // M-4: Update all also disables while an updateAll is already queued or running, not only when nothing's outdated.
+  const updateAllPending = npm.operations.some(
+    (op) => op.kind === "updateAll" && (op.status === "queued" || op.status === "running"),
+  );
 
   return (
     <div className="dialog-backdrop">
@@ -168,6 +216,7 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
             if (shouldSearch(value)) {
               scheduler.input(value.trim());
             } else {
+              searchSeq.current += 1;
               scheduler.cancel();
               setResults([]);
               setSearchError(null);
@@ -183,6 +232,7 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
               setSearchError(null);
               setSearchedFor(null);
               setActive(null);
+              searchSeq.current += 1;
               scheduler.cancel();
               return;
             }
@@ -221,7 +271,8 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
           <div id="npm-results" role="listbox" className="npm-results">
             {results.map((result, index) => {
               const installedPkg = npm.installed.find((pkg) => pkg.name === result.name);
-              const pendingInstall = pendingFor(npm.operations, result.name);
+              // M-6: only a pending *install* of this exact package, matched by name (not the literal spec).
+              const pendingInstall = pendingInstallFor(npm.operations, result.name);
               return (
                 <div
                   key={result.name}
@@ -271,9 +322,9 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
           </label>
           <button
             type="button"
-            disabled={outdated.length === 0}
+            disabled={outdated.length === 0 || updateAllPending}
             title={strings.npm.updateAllTitle(outdated.length, majors)}
-            onClick={() => api.npmUpdateAll()}
+            onClick={() => guarded("updateAll:", () => api.npmUpdateAll())}
           >
             {strings.npm.updateAll}
           </button>
@@ -294,7 +345,7 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
             </p>
             <details>
               <summary>{strings.npm.log}</summary>
-              <pre>{maskCredentials(failedOp.error.log)}</pre>
+              <pre>{failedOp.error.log}</pre>
             </details>
             <div className="dialog-actions">
               <button type="button" onClick={() => retry(failedOp)}>
@@ -308,13 +359,9 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
               <button type="button" onClick={() => void copyLog(failedOp.error.log)}>
                 {strings.npm.copyLog}
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setDismissed((current) => new Set(current).add(failedOp.id));
-                  store.getState().dismissNpmLog(failedOp.id);
-                }}
-              >
+              {/* N-2: Dismiss is local only (R26-4); it no longer frees the store's log buffer, which age-out
+                  already bounds, so a dismissed card's drawer doesn't go empty if it's reopened. */}
+              <button type="button" onClick={() => setDismissed((current) => new Set(current).add(failedOp.id))}>
                 {strings.npm.dismiss}
               </button>
             </div>
@@ -362,7 +409,7 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
                           type="button"
                           aria-label={strings.npm.update(pkg.name)}
                           disabled={Boolean(rowPending)}
-                          onClick={() => api.npmUpdate(pkg.name)}
+                          onClick={() => guarded(`update:${pkg.name}`, () => api.npmUpdate(pkg.name))}
                         >
                           {strings.npm.updateButton}
                         </button>
@@ -373,7 +420,7 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
                         type="button"
                         aria-label={strings.npm.remove(pkg.name)}
                         disabled={Boolean(rowPending)}
-                        onClick={() => api.npmRemove(pkg.name)}
+                        onClick={() => guarded(`remove:${pkg.name}`, () => api.npmRemove(pkg.name))}
                       >
                         ×
                       </button>

@@ -29,6 +29,8 @@ const NL = String.fromCharCode(10);
  * binary, via a throwaway loopback responder, never the public registry) for fixture-a and @types/fixture-a, then
  * pasted here as a literal. Seeding it lets `bun outdated` reach a real connection attempt against the dead
  * registry below, instead of failing before ever attempting one.
+ * N-5: the lockfile's own tarball URLs (127.0.0.1:4900) are never fetched here — node_modules is already
+ * seeded, and `bun outdated` reads only package manifests from `.npmrc`'s registry, never a tarball.
  */
 const FIXTURE_BUN_LOCK =
   [

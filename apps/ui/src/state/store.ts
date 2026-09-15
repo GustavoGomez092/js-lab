@@ -18,7 +18,7 @@ import {
   tabAfterClose,
 } from "@jslab/shared";
 import { createStore } from "zustand/vanilla";
-import { MAX_NPM_LOG_CHARS, MAX_NPM_OPERATIONS, maskCredentials } from "../npm/npm-panel";
+import { MAX_NPM_LOG_CHARS, MAX_NPM_OPERATIONS, maskCredentials, splitLogChunk } from "../npm/npm-panel";
 import type { TimerApi } from "./auto-run";
 import { applyRunEvents, applyRunState, initialOutput, type OutputState } from "./output";
 import { clampEditorSize, EDITOR_SIZE_RESET, insertAfterActive, isPermutation, renamePatch } from "./workspace";
@@ -78,6 +78,18 @@ export interface NpmUiState {
    * operation is dismissed or ages out of `operations`.
    */
   logs: Record<string, string>;
+  /**
+   * Fix round 2 (I-1): the unmasked tail of each operation's log stream, held back past the last whitespace
+   * boundary (see `splitLogChunk`) so a credential split across two `npm.log` chunks is never stored, rendered
+   * or copied in clear. Never read outside `appendNpmLog`/`receiveNpmOperation`; not in the E2E snapshot.
+   */
+  carries: Record<string, string>;
+  /**
+   * Fix round 2 (M-2): the unmasked spec behind each operation's (masked) `target`, so Retry can still resend
+   * the real spec. Never rendered and never spread into the E2E snapshot (`snapshot.ts` maps `operations`
+   * field by field).
+   */
+  rawTargets: Record<string, string>;
   lastAdded: { name: string; at: number } | null;
 }
 
@@ -88,8 +100,34 @@ export const initialNpm = (): NpmUiState => ({
   outdatedError: null,
   operations: [],
   logs: {},
+  carries: {},
+  rawTargets: {},
   lastAdded: null,
 });
+
+/**
+ * Fix round 2 (N-3): trims `operations` to `MAX_NPM_OPERATIONS`, evicting the oldest *finished* (succeeded or
+ * failed) operations first, and only falling back to the oldest operation overall (queued or running included)
+ * once every finished one is already gone.
+ */
+function evictOperations(operations: readonly NpmOperation[]): NpmOperation[] {
+  if (operations.length <= MAX_NPM_OPERATIONS) return [...operations];
+  let toRemove = operations.length - MAX_NPM_OPERATIONS;
+  const removeAt = new Set<number>();
+  for (let index = 0; index < operations.length && toRemove > 0; index += 1) {
+    const op = operations[index];
+    if (op && (op.status === "succeeded" || op.status === "failed")) {
+      removeAt.add(index);
+      toRemove -= 1;
+    }
+  }
+  for (let index = 0; index < operations.length && toRemove > 0; index += 1) {
+    if (removeAt.has(index)) continue;
+    removeAt.add(index);
+    toRemove -= 1;
+  }
+  return operations.filter((_, index) => !removeAt.has(index));
+}
 
 export interface AppState {
   ready: boolean;
@@ -188,11 +226,10 @@ export interface AppState {
   bumpPackagesRevision(): void;
   /** Spec §11.2. Bumps `packagesRevision` when the installed name@version set changes (not on `latest` alone). */
   receiveNpmList(list: NpmListResult, now?: number): void;
+  /** Fix round 2 (M-2): stores `target` and `error.log` masked; the raw target goes to `npm.rawTargets` for Retry. */
   receiveNpmOperation(operation: NpmOperation): void;
-  /** R-M3-T26-M6-1: `text` is masked (`maskCredentials`) before it is stored. */
+  /** Fix round 2 (I-1): `text` is carried past its last whitespace boundary, then masked before it is stored. */
   appendNpmLog(opId: string, text: string): void;
-  /** R-M3-T26-LOGCAP-2: frees a dismissed operation's log buffer (R26-4's Dismiss). */
-  dismissNpmLog(opId: string): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -590,25 +627,49 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       receiveNpmOperation(operation) {
         const previous = get().npm;
-        const merged = [...previous.operations.filter((existing) => existing.id !== operation.id), operation];
-        const kept = merged.slice(-MAX_NPM_OPERATIONS);
-        // R-M3-T26-LOGCAP-2: an operation's log buffer is freed the moment it ages out of this bounded list.
+        // Fix round 2 (M-2): the running line, the failure card, the R26-6 status bar and the E2E snapshot all
+        // read straight off `operations`, so masking once here (instead of at every render) also closes I-2's
+        // per-render masking cost. Retry still needs the real spec, kept apart in `rawTargets`.
+        const maskedOperation: NpmOperation = {
+          ...operation,
+          target: maskCredentials(operation.target),
+          error: operation.error ? { ...operation.error, log: maskCredentials(operation.error.log) } : null,
+        };
+        const merged = [...previous.operations.filter((existing) => existing.id !== operation.id), maskedOperation];
+        const kept = evictOperations(merged);
+        // R-M3-T26-LOGCAP-2 / fix round 2 (N-3): an operation's log, carry and raw-target entries are freed the
+        // moment it ages out of this bounded, finished-first-evicted list.
         const keptIds = new Set(kept.map((op) => op.id));
         const logs = Object.fromEntries(Object.entries(previous.logs).filter(([id]) => keptIds.has(id)));
-        set({ npm: { ...previous, operations: kept, logs } });
+        const carries = Object.fromEntries(Object.entries(previous.carries).filter(([id]) => keptIds.has(id)));
+        const rawTargets = Object.fromEntries(
+          Object.entries({ ...previous.rawTargets, [operation.id]: operation.target }).filter(([id]) =>
+            keptIds.has(id),
+          ),
+        );
+        // Fix round 2 (I-1): a terminal status flushes whatever's left in this op's carry, masked, even with no
+        // trailing whitespace boundary — it can't wait for a chunk that will never arrive.
+        if ((operation.status === "succeeded" || operation.status === "failed") && carries[operation.id]) {
+          logs[operation.id] = ((logs[operation.id] ?? "") + maskCredentials(carries[operation.id] as string)).slice(
+            -MAX_NPM_LOG_CHARS,
+          );
+          delete carries[operation.id];
+        }
+        set({ npm: { ...previous, operations: kept, logs, carries, rawTargets } });
       },
 
       appendNpmLog(opId, text) {
         const previous = get().npm;
-        // R-M3-T26-M6-1: masked before storage, so the drawer, Copy Log and this record itself never hold a
-        // credential. R-M3-T26-LOGCAP-2: capped per opId, trimmed from the front.
-        const next = ((previous.logs[opId] ?? "") + maskCredentials(text)).slice(-MAX_NPM_LOG_CHARS);
-        set({ npm: { ...previous, logs: { ...previous.logs, [opId]: next } } });
-      },
-
-      dismissNpmLog(opId) {
-        const { [opId]: _removed, ...logs } = get().npm.logs;
-        set({ npm: { ...get().npm, logs } });
+        // Fix round 2 (I-1): hold the tail past the last whitespace boundary in the carry, so a credential split
+        // across two chunks is never masked (and stored) half-open.
+        const { ready, carry } = splitLogChunk((previous.carries[opId] ?? "") + text);
+        const logs = ready
+          ? {
+              ...previous.logs,
+              [opId]: ((previous.logs[opId] ?? "") + maskCredentials(ready)).slice(-MAX_NPM_LOG_CHARS),
+            }
+          : previous.logs;
+        set({ npm: { ...previous, logs, carries: { ...previous.carries, [opId]: carry } } });
       },
     };
   });

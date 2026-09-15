@@ -91,7 +91,7 @@ describe("NPM panel logic (spec §11.2)", () => {
     );
   });
 
-  // M-6 (parked, closed here): a leaked registry credential must never reach the store, the drawer or Copy Log.
+  // M-6 (parked, closed here); extended in fix round 2 (M-1) for the remaining shapes the review found.
   test("maskCredentials strips URL userinfo and _authToken/_auth/_password values, keeping the host visible", () => {
     const NL = String.fromCharCode(10);
     const text = [
@@ -105,5 +105,39 @@ describe("NPM panel logic (spec §11.2)", () => {
     expect(masked.includes("abc123")).toBe(false);
     expect(masked.includes("registry.example")).toBe(true);
     expect(maskCredentials("plain log, no credentials here")).toBe("plain log, no credentials here");
+
+    // Fix round 2 (M-1): case-insensitive keys, the JSON/colon form, a quoted value with a space, a URL whose
+    // password contains a quote (redactRegistryUrl can't parse it, so a linear userinfo fallback applies), and
+    // an Authorization header.
+    expect(maskCredentials("_AUTHTOKEN=abc123").includes("abc123")).toBe(false);
+    expect(maskCredentials("//r.example/:_AuthToken=abc123").includes("abc123")).toBe(false);
+    expect(maskCredentials('"_authToken": "abc123"').includes("abc123")).toBe(false);
+    const quotedSpace = maskCredentials('_authToken="xx abc123"');
+    expect(quotedSpace.includes("abc123")).toBe(false);
+    expect(quotedSpace.includes("xx abc123")).toBe(false);
+    const quotedPassword = maskCredentials('https://user:pa"ss@registry.example/');
+    expect(quotedPassword.includes('pa"ss')).toBe(false);
+    expect(maskCredentials("Authorization: Bearer abc123").includes("abc123")).toBe(false);
+  });
+
+  // Fix round 2 (I-2): the review measured the unbounded URL scheme quantifier at 2.2 s for 64k chars and
+  // 9.7 s for 128k (quadratic); a bounded scheme keeps this linear.
+  test("credential masking stays fast on long token-like runs", () => {
+    const budgetMs = 200;
+
+    const start64 = performance.now();
+    maskCredentials("a".repeat(64_000));
+    expect(performance.now() - start64).toBeLessThan(budgetMs);
+
+    const start128 = performance.now();
+    maskCredentials("a".repeat(128_000));
+    expect(performance.now() - start128).toBeLessThan(budgetMs);
+
+    const NL = String.fromCharCode(10);
+    const mixedLine = "npm info install ok, resolving dependencies for @scope/pkg version 1.2.3 from registry";
+    const mixedLog = new Array(700).fill(mixedLine).join(NL);
+    const startMixed = performance.now();
+    maskCredentials(mixedLog);
+    expect(performance.now() - startMixed).toBeLessThan(budgetMs);
   });
 });

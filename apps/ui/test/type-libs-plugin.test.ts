@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  BUNDLED_TYPESCRIPT_VERSION,
   collectTypeLibPack,
   jslabTypeLibs,
   MAX_TYPE_LIB_BYTES,
   resolvePackageDir,
   TYPE_LIB_PACKS,
+  typesVersionsRangeMatches,
 } from "../vite-plugins/type-libs-plugin";
 
 const uiRoot = join(import.meta.dir, "..");
@@ -45,5 +49,75 @@ describe("bundled type libraries (spec §6.2)", () => {
     expect(load(`${NUL}something-else`)).toBeNull();
     // An inherited Object.prototype key is not a pack.
     expect(load(resolveId("virtual:jslab-type-libs/constructor") ?? "")).toBeNull();
+  });
+
+  test("the pinned TypeScript version matches the one Monaco bundles", async () => {
+    const monacoDir = resolvePackageDir("monaco-editor", uiRoot);
+    const content = await readFile(
+      join(monacoDir, "esm/vs/languages/features/typescript/lib/typescriptServices.js"),
+      "utf8",
+    );
+    const match = /versionMajorMinor\s*=\s*"([^"]+)"/.exec(content);
+    expect(match?.[1]).toBe(BUNDLED_TYPESCRIPT_VERSION);
+  });
+
+  test("runtime packs leave out declarations for other TypeScript versions", () => {
+    const node = pack("node");
+    const bun = pack("bun");
+    const paths = [...node, ...bun].map((file) => file.path);
+    expect(paths.some((path) => path.includes("/bun-types/ts7.1/"))).toBe(false);
+    expect(paths.some((path) => path.includes("/@types/node/ts5.6/"))).toBe(false);
+    expect(paths).toContain("file:///node_modules/bun-types/index.d.ts");
+    expect(paths).toContain("file:///node_modules/@types/node/index.d.ts");
+  });
+
+  test("typesVersions ranges are matched in order, and unsupported entries fail loudly", async () => {
+    expect(typesVersionsRangeMatches("*", "5.9")).toBe(true);
+    expect(typesVersionsRangeMatches(">=7.1", "5.9")).toBe(false);
+    expect(typesVersionsRangeMatches("<=5.6", "5.9")).toBe(false);
+    expect(typesVersionsRangeMatches("<6", "5.9")).toBe(true);
+    expect(typesVersionsRangeMatches("5.9", "5.9")).toBe(true);
+    expect(typesVersionsRangeMatches(">5.9.0", "5.9")).toBe(false);
+    expect(typesVersionsRangeMatches(">=5.9.1", "5.9")).toBe(false);
+    expect(() => typesVersionsRangeMatches(">=4.0 || <3", "5.9")).toThrow(/>=4.0 \|\| <3/);
+
+    const excludeDir = await mkdtemp(join(tmpdir(), "jslab-typelibs-exclude-"));
+    try {
+      await writeFile(
+        join(excludeDir, "package.json"),
+        JSON.stringify({
+          name: "fixture-exclude",
+          version: "0.0.0",
+          typesVersions: { ">=99.0": { "*": ["ts99/*"] } },
+        }),
+      );
+      await writeFile(join(excludeDir, "index.d.ts"), "export {};");
+      await mkdir(join(excludeDir, "ts99"), { recursive: true });
+      await writeFile(join(excludeDir, "ts99", "extra.d.ts"), "export {};");
+      const files = collectTypeLibPack([{ name: "fixture-exclude", dir: excludeDir }]);
+      const paths = files.map((file) => file.path);
+      expect(paths).toContain("file:///node_modules/fixture-exclude/index.d.ts");
+      expect(paths.some((path) => path.includes("/ts99/"))).toBe(false);
+    } finally {
+      await rm(excludeDir, { recursive: true, force: true });
+    }
+
+    const redirectDir = await mkdtemp(join(tmpdir(), "jslab-typelibs-redirect-"));
+    try {
+      await writeFile(
+        join(redirectDir, "package.json"),
+        JSON.stringify({
+          name: "fixture-redirect",
+          version: "0.0.0",
+          typesVersions: { "*": { "*": ["redirect/*"] } },
+        }),
+      );
+      await writeFile(join(redirectDir, "index.d.ts"), "export {};");
+      expect(() => collectTypeLibPack([{ name: "fixture-redirect", dir: redirectDir }])).toThrow(
+        /typesVersions entry "\*" for TypeScript 5\.9/,
+      );
+    } finally {
+      await rm(redirectDir, { recursive: true, force: true });
+    }
   });
 });

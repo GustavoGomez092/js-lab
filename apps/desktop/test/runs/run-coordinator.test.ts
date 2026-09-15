@@ -26,6 +26,8 @@ interface Harness {
 interface HarnessHooks {
   onLockAdd?: (runId: string) => void;
   onDiagnostics?: (tabId: string, runId: string) => void;
+  /** Called as soon as the spare pool asks for a runner, before `BunRunnerProcess.start` resolves. */
+  onRunnerRequested?: () => void;
   onRunnerStart?: (runner: BunRunnerProcess) => void;
   transform?: (source: string, options: TransformOptions) => Promise<TransformResult>;
   /** A stand-in runner script (see fixtures/) instead of the real bootstrap. */
@@ -52,6 +54,7 @@ async function createHarness(overrides: Partial<RunnerSettings> = {}, hooks: Har
   const locks = new Set<string>();
   const spares = new SparePool(
     async (config) => {
+      hooks.onRunnerRequested?.();
       const runner = await BunRunnerProcess.start(config);
       hooks.onRunnerStart?.(runner);
       return runner;
@@ -226,9 +229,16 @@ describe("RunCoordinator", () => {
 
   test("disposing during a run does not leave runners behind", async () => {
     const runners: BunRunnerProcess[] = [];
-    const h = await createHarness({}, { onRunnerStart: (runner) => runners.push(runner) });
+    let requested!: () => void;
+    const runnerRequested = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    const h = await createHarness(
+      {},
+      { onRunnerRequested: () => requested(), onRunnerStart: (runner) => runners.push(runner) },
+    );
     h.coordinator.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
-    await Bun.sleep(5);
+    await runnerRequested;
     h.coordinator.dispose();
     await Bun.sleep(1500);
     expect(runners.length).toBeGreaterThan(0);
@@ -239,15 +249,18 @@ describe("RunCoordinator", () => {
   }, 15_000);
 
   test("closing a tab while a runner is being taken leaves no runners behind", async () => {
-    // No deterministic hook exists for "take() is awaiting spare.promise" specifically (as opposed to
-    // "a runner finished starting", which onRunnerStart already covers) without adding new harness plumbing;
-    // reusing the same short-sleep timing as "disposing during a run does not leave runners behind" above is
-    // reliable here because BunRunnerProcess.start() (real process spawn + IPC ready handshake) takes tens of ms,
-    // far longer than the 5ms we wait before closing the tab.
+    // onRunnerRequested fires while take() is awaiting the spare, which is the window this test is named for.
     const runners: BunRunnerProcess[] = [];
-    const h = await createHarness({}, { onRunnerStart: (runner) => runners.push(runner) });
+    let requested!: () => void;
+    const runnerRequested = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    const h = await createHarness(
+      {},
+      { onRunnerRequested: () => requested(), onRunnerStart: (runner) => runners.push(runner) },
+    );
     h.coordinator.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
-    await Bun.sleep(5);
+    await runnerRequested;
     h.coordinator.disposeTab("t1"); // deliberately not coordinator.dispose(): that path is already covered above.
     await Bun.sleep(2000);
     expect(runners.length).toBeGreaterThan(0);

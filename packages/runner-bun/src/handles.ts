@@ -1,5 +1,19 @@
 // biome-ignore-all lint/suspicious/noExplicitAny: wrapping untyped host APIs
+import type { RunnerState } from "@jslab/rpc-schema";
+
 type AnyFn = (...args: any[]) => any;
+
+/** What the runner does when its tracked-handle count changes (FW1: a caught process.exit disposes new handles at once). */
+export function handleCountAction(
+  state: RunnerState,
+  exiting: boolean,
+  count: number,
+): "dispose" | "idle" | "settled" | null {
+  if ((state === "stopped" || exiting) && count > 0) return "dispose";
+  if (state === "settled" && count === 0) return "idle";
+  if (state === "idle" && count > 0) return "settled";
+  return null;
+}
 
 /** Tracks handles that keep a run "active" (timers, servers, sockets, requests, child processes). */
 export class HandleTracker {

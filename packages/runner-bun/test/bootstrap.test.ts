@@ -364,3 +364,21 @@ test("a caught process.exit ends the run: no later output, later timers are disp
   expect(texts).not.toContain("after exit");
   expect(texts).not.toContain("tick");
 }, 15000);
+
+test("a caught process.exit with a non-integer or negative code still exits, reporting the real exit status (FW1)", async () => {
+  const nanRunner = startRunner();
+  const nanSource = ["try { process.exit(NaN) } catch {}", "export {};"].join(NL) + NL;
+  await nanRunner.run(nanSource);
+  const nanExited = await Promise.race([nanRunner.proc.exited.then(() => true), Bun.sleep(4000).then(() => false)]);
+  expect(nanExited).toBe(true);
+  expect(nanRunner.messages.find((m) => m.type === "exitRequested")).toMatchObject({ code: 1 });
+  expect(nanRunner.proc.exitCode).toBe(1);
+
+  const negRunner = startRunner();
+  const negSource = ["try { process.exit(-1) } catch {}", "export {};"].join(NL) + NL;
+  await negRunner.run(negSource);
+  const negExited = await Promise.race([negRunner.proc.exited.then(() => true), Bun.sleep(4000).then(() => false)]);
+  expect(negExited).toBe(true);
+  expect(negRunner.messages.find((m) => m.type === "exitRequested")).toMatchObject({ code: 255 });
+  expect(negRunner.proc.exitCode).toBe(255);
+}, 15000);

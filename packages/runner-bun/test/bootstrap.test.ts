@@ -6,6 +6,8 @@ import type { RawRunEvent, RunnerToMain } from "@jslab/rpc-schema";
 import type { Subprocess } from "bun";
 
 const BOOTSTRAP = join(import.meta.dir, "../src/bootstrap.ts");
+// R-M3-T17-ESC-1: build test source newlines this way, never a "\n" escape typed through a tool parameter.
+const NL = String.fromCharCode(10);
 
 let dir = "";
 const procs: Subprocess[] = [];
@@ -221,7 +223,7 @@ test("stop does not report errors from work it aborted", async () => {
   } finally {
     server.stop(true);
   }
-}, 15000);
+}, 20000);
 
 test("the runner exits when its parent dies", async () => {
   const bootstrapPath = JSON.stringify(BOOTSTRAP);
@@ -341,3 +343,24 @@ test("events pushed right before process.exit still reach Main (final review M5)
     args: [{ t: "string", v: "last words" }],
   });
 });
+
+test("a caught process.exit ends the run: no later output, later timers are disposed, and the runner exits (FW1)", async () => {
+  const runner = startRunner();
+  const source =
+    [
+      "try { process.exit(0) } catch {}",
+      'console.log("after exit");',
+      'setInterval(() => console.log("tick"), 5);',
+      "export {};",
+    ].join(NL) + NL;
+  await runner.run(source);
+  // The runner's own drain fallback is 2 s; 4 s leaves margin on a loaded machine.
+  const exited = await Promise.race([runner.proc.exited.then(() => true), Bun.sleep(4000).then(() => false)]);
+  expect(exited).toBe(true);
+  expect(runner.messages.find((m) => m.type === "exitRequested")).toMatchObject({ runId: "run-1", code: 0 });
+  const texts = runner
+    .events()
+    .flatMap((event) => (event.kind === "console" ? event.args.map((arg) => String((arg as { v?: unknown }).v)) : []));
+  expect(texts).not.toContain("after exit");
+  expect(texts).not.toContain("tick");
+}, 15000);

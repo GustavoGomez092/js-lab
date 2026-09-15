@@ -40,6 +40,7 @@ export interface RunCoordinatorDeps {
   idleRunnerTtlMs?: number;
   expandTimeoutMs?: number;
   directoryExists?(path: string): Promise<boolean>;
+  exitGraceMs?: number;
 }
 
 interface ActiveRun {
@@ -51,6 +52,8 @@ interface ActiveRun {
   expectedExit: boolean;
   stopTimer?: ReturnType<typeof setTimeout>;
   idleTimer?: ReturnType<typeof setTimeout>;
+  exitTimer?: ReturnType<typeof setTimeout>;
+  exitRequestedCode?: number;
   unsubscribe?: () => void;
   // Last known activeHandles, and the state to restore when recovering from "unresponsive" (I5): the run may have
   // gone unresponsive from "settled", not just "evaluating".
@@ -68,6 +71,9 @@ const UI_BATCH_EVENTS = 200;
 
 /** The error name of a run whose working directory is gone; the UI offers Change… for it (spec §12.2). */
 export const WORKING_DIRECTORY_ERROR = "WorkingDirectoryError";
+
+/** How long Main waits after exitRequested before ending a runner that didn't exit (the runner's own drain is 2 s). */
+export const EXIT_KILL_GRACE_MS = 2500;
 
 async function directoryExists(path: string): Promise<boolean> {
   try {
@@ -283,12 +289,18 @@ export class RunCoordinator {
     }
     if (!this.#isCurrent(run)) return;
     switch (message.type) {
+      case "exitRequested":
+        run.exitRequestedCode = message.code;
+        clearTimeout(run.exitTimer);
+        run.exitTimer = setTimeout(() => run.runner?.kill(), this.deps.exitGraceMs ?? EXIT_KILL_GRACE_MS);
+        return;
       case "heartbeat":
         if (run.state === "unresponsive") this.#setState(run, run.resumeState ?? "evaluating", run.activeHandles);
         return;
       case "events": {
         // Output from code that resumed after Stop (or from a killed runner's last gasp) is never shown (I1).
-        if (run.state === "stopped" || run.state === "killed") return;
+        // FW1: output after a caught process.exit is dropped too (the runner's buffer is already closed).
+        if (run.state === "stopped" || run.state === "killed" || run.exitRequestedCode !== undefined) return;
         // Re-batch for the UI (spec §4.2): at most 200 events per run.events message, whatever the runner sent.
         const events = message.events.map(mapper);
         for (let i = 0; i < events.length; i += UI_BATCH_EVENTS) {
@@ -316,9 +328,14 @@ export class RunCoordinator {
     }
   }
 
-  #onRunnerExit(run: ActiveRun, code: number | null, signal: string | null = null): void {
+  #onRunnerExit(run: ActiveRun, exitCode: number | null, exitSignal: string | null = null): void {
     clearTimeout(run.stopTimer);
     clearTimeout(run.idleTimer);
+    clearTimeout(run.exitTimer);
+    // FW1: a runner Main ended after exitRequested reports the code user code asked for.
+    const endedAfterExit = run.exitRequestedCode !== undefined && exitSignal === "SIGKILL";
+    const code = endedAfterExit ? (run.exitRequestedCode as number) : exitCode;
+    const signal = endedAfterExit ? null : exitSignal;
     // A dead runner can't answer: settle its pending expands now instead of after the expand timeout.
     for (const pending of [...this.#pendingExpands.values()]) {
       if (pending.runner === run.runner) pending.settle(null);
@@ -387,6 +404,7 @@ export class RunCoordinator {
     previous.expectedExit = true;
     clearTimeout(previous.stopTimer);
     clearTimeout(previous.idleTimer);
+    clearTimeout(previous.exitTimer);
     previous.unsubscribe?.();
     previous.runner?.kill();
     this.deps.runLock.remove(previous.runId);

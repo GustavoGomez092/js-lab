@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./specifiers": "./src/specifiers.ts",
     "./output": "./src/output.ts",
-    "./npmrc": "./src/npmrc.ts"
+    "./npmrc": "./src/npmrc.ts",
+    "./mask": "./src/mask.ts"
   },
   "dependencies": {
     "@jslab/rpc-schema": "workspace:*",

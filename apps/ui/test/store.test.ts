@@ -355,13 +355,14 @@ describe("app store", () => {
     store.getState().appendNpmLog("op1", "a".repeat(30_000));
     store.getState().appendNpmLog("op1", "b".repeat(30_000));
     store.getState().appendNpmLog("op1", "c".repeat(30_000));
-    // Fix round 2 (I-1): a chunk with a trailing boundary (here, a space) flushes past the carry immediately;
-    // the 30,000-char runs above have no whitespace at all, so each one exceeds the carry bound and is flushed
-    // as a whole on its own turn.
-    store.getState().appendNpmLog("op2", "untouched ");
+    // Fix round 3: the carry holds text after the last line break (never after whitespace), so a complete line
+    // (here, ending in a newline) is stored immediately. The 30,000-char runs above have no line break: they
+    // stay carried until the third one pushes the carry past MAX_NPM_LOG_CHARS, which flushes it whole.
+    const NL = String.fromCharCode(10);
+    store.getState().appendNpmLog("op2", `untouched${NL}`);
     expect(store.getState().npm.logs.op1?.length).toBe(MAX_NPM_LOG_CHARS);
     expect(store.getState().npm.logs.op1?.endsWith("c".repeat(30_000))).toBe(true);
-    expect(store.getState().npm.logs.op2).toBe("untouched ");
+    expect(store.getState().npm.logs.op2).toBe(`untouched${NL}`);
   });
 
   // Fix round 2 (I-1): Main forwards every pipe read as its own npm.log chunk, so a credential can split across
@@ -414,6 +415,85 @@ describe("app store", () => {
     // segment would) changes nothing further.
     const masked = maskCredentials("https://user:secret@registry.example/ _authToken=abc123");
     expect(maskCredentials(masked)).toBe(masked);
+  });
+
+  // Fix round 3 (NI-1, NI-2): credentials can contain whitespace, so a whitespace carry stored their values in
+  // clear; and a forced flush of a long line re-joined a split credential. The carry is now line-based, and a
+  // line past MAX_NPM_LOG_CHARS is masked as one piece.
+  test("whitespace-containing credentials are never stored in clear under any chunking", () => {
+    const NL = String.fromCharCode(10);
+    const store = createAppStore();
+    let seq = 0;
+    const fragments = (secret: string) => {
+      const parts: string[] = [];
+      for (let index = 0; index + 3 <= secret.length; index += 1) parts.push(secret.slice(index, index + 3));
+      return parts;
+    };
+    const assertClean = (opId: string, secret: string, where: string) => {
+      const stored = store.getState().npm.logs[opId] ?? "";
+      for (const fragment of fragments(secret)) {
+        if (stored.includes(fragment)) throw new Error(`${where}: ${JSON.stringify(fragment)} in ${stored}`);
+      }
+      expect(stored.includes(secret)).toBe(false);
+    };
+    const finish = (opId: string) =>
+      store.getState().receiveNpmOperation({
+        id: opId,
+        kind: "install",
+        target: "fixture-a",
+        status: "failed",
+        error: { kind: "unknown", log: "" },
+        notice: null,
+      });
+    const deliver = (chunks: string[], secret: string, label: string) => {
+      seq += 1;
+      const opId = `ws${seq}`;
+      for (const [index, chunk] of chunks.entries()) {
+        store.getState().appendNpmLog(opId, chunk);
+        assertClean(opId, secret, `${label} after chunk ${index}`);
+      }
+      finish(opId);
+      assertClean(opId, secret, `${label} after the terminal flush`);
+      expect((store.getState().npm.logs[opId] ?? "").includes("***")).toBe(true);
+    };
+
+    const cases: [string, string][] = [
+      ["Authorization: Bearer abc12345", "abc12345"],
+      ["_auth = abc123", "abc123"],
+      ['"_authToken": "abc123"', "abc123"],
+    ];
+    for (const [line, secret] of cases) {
+      for (const text of [`${line}${NL}`, line]) {
+        for (let offset = 0; offset <= text.length; offset += 1) {
+          deliver([text.slice(0, offset), text.slice(offset)], secret, `${JSON.stringify(text)} split at ${offset}`);
+        }
+        deliver(text.split(""), secret, `${JSON.stringify(text)} one character at a time`);
+      }
+    }
+
+    // A single line longer than MAX_NPM_LOG_CHARS with a credential near the middle, and no whitespace at all,
+    // delivered in 1,000-character chunks whose boundary splits the credential, and as one chunk.
+    const longLine = `${"x".repeat(39_990)}https://user:secret@registry.example/${"y".repeat(40_000)}`;
+    const thousands: string[] = [];
+    for (let index = 0; index < longLine.length; index += 1000) thousands.push(longLine.slice(index, index + 1000));
+    for (const [label, chunks] of [
+      ["1,000-character chunks", thousands],
+      ["one chunk", [longLine]],
+    ] as [string, string[]][]) {
+      seq += 1;
+      const opId = `long${seq}`;
+      for (const chunk of chunks) {
+        store.getState().appendNpmLog(opId, chunk);
+        const stored = store.getState().npm.logs[opId] ?? "";
+        expect(stored.includes("secret")).toBe(false);
+        expect(stored.includes("user:")).toBe(false);
+      }
+      finish(opId);
+      const stored = store.getState().npm.logs[opId] ?? "";
+      if (stored.includes("secret")) throw new Error(`${label}: the long line kept the password`);
+      expect(stored.includes("secret")).toBe(false);
+      expect(stored.includes("https://registry.example/")).toBe(true);
+    }
   });
 
   // Fix round 2 (M-2): a spec or a raw log can itself carry a credential (an install spec URL, a registry error

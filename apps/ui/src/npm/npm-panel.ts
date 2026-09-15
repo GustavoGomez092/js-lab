@@ -1,4 +1,4 @@
-import { redactRegistryUrl } from "@jslab/npm/npmrc";
+import { lastLineBreakEnd, maskCredentials } from "@jslab/npm/mask";
 import { MAX_NPM_LOG_CHARS } from "@jslab/npm/output";
 import { parseInstallSpec } from "@jslab/npm/specifiers";
 import type { InstalledPackage, NpmOperation, NpmSearchResult } from "@jslab/rpc-schema";
@@ -10,7 +10,8 @@ export const HIGHLIGHT_MS = 2000;
 export const MAX_NPM_OPERATIONS = 50;
 // R-M3-T26-IMPORT-1/LOGCAP-2: the per-operation log cap comes from @jslab/npm (never a UI-local duplicate),
 // imported through the browser-safe `./output` subpath so `apps/ui` never touches the package's Node-only root.
-export { MAX_NPM_LOG_CHARS };
+// R-M3-T26-FIX-3: the one masker lives in @jslab/npm (shared with Main); re-exported for existing UI imports.
+export { MAX_NPM_LOG_CHARS, maskCredentials };
 
 export function visibleInstalled(installed: readonly InstalledPackage[], showTypes: boolean): InstalledPackage[] {
   return showTypes ? [...installed] : installed.filter((pkg) => !pkg.name.startsWith("@types/"));
@@ -112,79 +113,31 @@ export function pendingInstallFor(operations: readonly NpmOperation[], name: str
   return undefined;
 }
 
-/** R26-6: null while queued or running; a status-bar sentence for a finished operation, once the sheet is closed. */
+/**
+ * R26-6: null while queued or running; a status-bar sentence for a finished operation, once the sheet is closed.
+ * Fix round 3 (R-1): the caller passes Main's own operation, whose target may carry a credential, so the target is
+ * masked here; that covers the status bar and the E2E snapshot's `statusMessage`.
+ */
 export function operationStatusMessage(op: NpmOperation, runKeys: string | null): string | null {
-  if (op.status === "succeeded") return strings.npm.done(op.kind, op.target, runKeys);
+  const target = maskCredentials(op.target);
+  if (op.status === "succeeded") return strings.npm.done(op.kind, target, runKeys);
   if (op.status === "failed" && op.error)
-    return strings.npm.doneFailed(op.kind, op.target, strings.npm.hints[op.error.kind]);
+    return strings.npm.doneFailed(op.kind, target, strings.npm.hints[op.error.kind]);
   return null;
 }
 
-// M-6 (parked, closed here): a URL-shaped substring, up to whitespace or a quote (matches redactRegistryUrl's
-// contract, which parses a bare URL).
-// Fix round 2 (I-2): the scheme is bounded ({0,31}); an unbounded `*` let the engine retry the whole run at
-// every starting position within a long token-like run with no `://`, which is quadratic (measured: 64k chars
-// took 2.2 s, 128k took 9.7 s). `git+https://tok@github.com/x` still matches (9-char scheme).
-const URL_PATTERN = /[a-zA-Z][a-zA-Z0-9+.-]{0,31}:\/\/[^\s"']+/g;
-// Fix round 2 (M-1): case-insensitive `_authToken`/`_auth`/`_password`, with or without a leading `//host/path:`
-// npmrc-style prefix (left untouched: only the value is replaced), the JSON/colon form (`"_authToken": "…"`),
-// and a single- or double-quoted value that may itself contain spaces. `_authToken` stays ahead of `_auth` so
-// the longer key wins. No nested quantifiers over the same class, so this stays linear-time.
-const AUTH_VALUE_PATTERN = /(_authToken|_auth|_password)(["']?\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|\S+)/gi;
-// Fix round 2 (M-1): an HTTP Authorization header value (Bearer or Basic token), case-insensitive.
-const AUTHORIZATION_HEADER_PATTERN = /(authorization:\s*(?:bearer|basic)\s+)(\S+)/gi;
-// Fix round 2 (M-1): when a URL-shaped match doesn't actually get its credentials stripped by `redactRegistryUrl`
-// (for example a quote inside the password stops the URL_PATTERN match short, so it never parses as a full URL),
-// this catches any remaining `//<userinfo>@` fragment directly. A no-op on an already-redacted URL, which has no
-// more `@` between `//` and the next `/`. A single negated-class scan, so it stays linear-time.
-const USERINFO_FALLBACK_PATTERN = /\/\/[^@\s/]*@/g;
-
 /**
- * R-M3-T26-M6-1 (parked M-6), extended in fix round 2 (I-2, M-1): masks registry credentials before a log
- * reaches the store, the drawer or Copy Log. `redactRegistryUrl` (spec §11.5) already strips URL userinfo with
- * no separate "marker" text, so a masked value elsewhere uses the same no-marker convention: `***`. Never
- * throws. Every pass here is linear-time (bounded quantifiers, or a single unambiguous scan) — see I-2.
+ * Fix round 3 (NI-1, NI-2): defense in depth behind Main's per-stream line masking. Credentials can contain
+ * whitespace (`Authorization: Bearer <token>`, `_auth = <value>`), so the carry holds only the text after the last
+ * line break (`\n` or `\r`), never after whitespace. `ready` is `carry` plus the new text through its last line
+ * break (complete lines, safe to mask as a whole); the remainder becomes the new carry. `carry` never holds a line
+ * break, so only `text` is scanned. A remainder past MAX_NPM_LOG_CHARS is returned whole in `ready` (masked as one
+ * piece by the caller, never appended raw): a credential is split only by a single line longer than 64,000
+ * characters, which is accepted.
  */
-export function maskCredentials(text: string): string {
-  try {
-    const withoutUrlCredentials = text.replace(URL_PATTERN, (match) => redactRegistryUrl(match));
-    const withoutUserinfo = withoutUrlCredentials.replace(USERINFO_FALLBACK_PATTERN, "//***@");
-    const withoutAuthValues = withoutUserinfo.replace(
-      AUTH_VALUE_PATTERN,
-      (_full, key: string, separator: string, value: string) => {
-        const quote = value.startsWith('"') || value.startsWith("'") ? value[0] : "";
-        return `${key}${separator}${quote}***${quote}`;
-      },
-    );
-    return withoutAuthValues.replace(AUTHORIZATION_HEADER_PATTERN, (_full, prefix: string) => `${prefix}***`);
-  } catch {
-    return text;
-  }
-}
-
-/** Fix round 2 (I-1): past this many carried characters, flush anyway rather than wait indefinitely for a boundary. */
-export const LOG_CARRY_BOUND_CHARS = 4096;
-
-const isBoundaryChar = (ch: string): boolean =>
-  ch === " " || ch === "\n" || ch === "\r" || ch === "\t" || ch === "\f" || ch === "\v";
-
-/**
- * Fix round 2 (I-1): Main forwards every pipe read as its own `npm.log` chunk, so a credential can split across
- * two chunks anywhere. Splits `pending` (the previous carry plus the new chunk) into a `ready` prefix — up to
- * and including the last whitespace/newline, safe to mask and store now — and the unmasked `carry` remainder to
- * hold until the next chunk completes it. When there's no boundary, or the remainder itself would exceed
- * `LOG_CARRY_BOUND_CHARS`, the whole thing is treated as if it ended at a boundary instead of waiting forever.
- */
-export function splitLogChunk(pending: string): { ready: string; carry: string } {
-  let boundary = -1;
-  for (let index = pending.length - 1; index >= 0; index -= 1) {
-    const ch = pending[index];
-    if (ch !== undefined && isBoundaryChar(ch)) {
-      boundary = index;
-      break;
-    }
-  }
-  const ready = boundary === -1 ? "" : pending.slice(0, boundary + 1);
-  const carry = boundary === -1 ? pending : pending.slice(boundary + 1);
-  return carry.length > LOG_CARRY_BOUND_CHARS ? { ready: ready + carry, carry: "" } : { ready, carry };
+export function splitLogChunk(carry: string, text: string): { ready: string; carry: string } {
+  const breakEnd = lastLineBreakEnd(text);
+  const ready = breakEnd === -1 ? "" : carry + text.slice(0, breakEnd);
+  const rest = breakEnd === -1 ? carry + text : text.slice(breakEnd);
+  return rest.length > MAX_NPM_LOG_CHARS ? { ready: ready + rest, carry: "" } : { ready, carry: rest };
 }

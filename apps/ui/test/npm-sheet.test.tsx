@@ -106,10 +106,15 @@ describe("NPM Packages sheet (spec §11.2)", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     // Fix round 2 (M-3): the log drawer reads the appendNpmLog stream (npm.logs), not error.log, so it needs its
     // own credential to prove the store masks that path too — the earlier "op10" test never called this.
+    // Fix round 3: the store's carry is line-based, so the line ends in a newline to reach the complete-line
+    // masking path (not only the terminal flush).
     act(() =>
       store
         .getState()
-        .appendNpmLog("op10", "https://user:secret@registry.example/ //registry.example/:_authToken=abc123"),
+        .appendNpmLog(
+          "op10",
+          `https://user:secret@registry.example/ //registry.example/:_authToken=abc123${String.fromCharCode(10)}`,
+        ),
     );
     act(() =>
       store.getState().receiveNpmOperation({

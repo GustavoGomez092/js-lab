@@ -79,8 +79,8 @@ export interface NpmUiState {
    */
   logs: Record<string, string>;
   /**
-   * Fix round 2 (I-1): the unmasked tail of each operation's log stream, held back past the last whitespace
-   * boundary (see `splitLogChunk`) so a credential split across two `npm.log` chunks is never stored, rendered
+   * Fix round 2 (I-1), line-based since fix round 3: the unmasked tail of each operation's log stream after its
+   * last line break (see `splitLogChunk`), so a credential split across `npm.log` chunks is never stored, rendered
    * or copied in clear. Never read outside `appendNpmLog`/`receiveNpmOperation`; not in the E2E snapshot.
    */
   carries: Record<string, string>;
@@ -228,7 +228,7 @@ export interface AppState {
   receiveNpmList(list: NpmListResult, now?: number): void;
   /** Fix round 2 (M-2): stores `target` and `error.log` masked; the raw target goes to `npm.rawTargets` for Retry. */
   receiveNpmOperation(operation: NpmOperation): void;
-  /** Fix round 2 (I-1): `text` is carried past its last whitespace boundary, then masked before it is stored. */
+  /** Fix round 3: complete lines are masked and stored; the text after the last line break is carried. */
   appendNpmLog(opId: string, text: string): void;
 }
 
@@ -660,9 +660,9 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       appendNpmLog(opId, text) {
         const previous = get().npm;
-        // Fix round 2 (I-1): hold the tail past the last whitespace boundary in the carry, so a credential split
-        // across two chunks is never masked (and stored) half-open.
-        const { ready, carry } = splitLogChunk((previous.carries[opId] ?? "") + text);
+        // Fix round 3: hold the text after the last line break in the carry, so a credential split across chunks
+        // (or containing whitespace) is only ever masked as part of its complete line. Never stored unmasked.
+        const { ready, carry } = splitLogChunk(previous.carries[opId] ?? "", text);
         const logs = ready
           ? {
               ...previous.logs,

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createTab, defaultSettings, mergeSettings, normalizeSession, sessionSchema } from "@jslab/shared";
-import { tsEnvironmentChanged, tsStateFor } from "../src/editor/ts-state";
+import { tsEnvironmentChanged, tsStateFor, workingDirectoryChanged } from "../src/editor/ts-state";
 import { createAppStore } from "../src/state/store";
 
 describe("tsStateFor", () => {
@@ -59,5 +59,38 @@ describe("tsEnvironmentChanged", () => {
     const beforeSwitch = store.getState();
     store.getState().activateTab("b");
     expect(tsEnvironmentChanged(store.getState(), beforeSwitch)).toBe(false);
+  });
+});
+
+describe("workingDirectoryChanged", () => {
+  test("workingDirectoryChanged ignores tab switches", () => {
+    const aWithWd = createTab({ id: "a", workingDirectory: "/work/api" });
+    const aWithoutWd = createTab({ id: "a", workingDirectory: null });
+    const bWithWd = createTab({ id: "b", workingDirectory: "/work/other" });
+    const bWithoutWd = createTab({ id: "b", workingDirectory: null });
+
+    // The same active tab with a changed WD.
+    expect(
+      workingDirectoryChanged(
+        { activeTabId: "a", tabs: { a: aWithWd } },
+        { activeTabId: "a", tabs: { a: aWithoutWd } },
+      ),
+    ).toBe(true);
+
+    // Switching from a tab without a WD to a tab with one.
+    expect(
+      workingDirectoryChanged(
+        { activeTabId: "a", tabs: { a: aWithWd, b: bWithWd } },
+        { activeTabId: "b", tabs: { a: aWithWd, b: bWithoutWd } },
+      ),
+    ).toBe(false);
+
+    // The same tab with the same WD.
+    expect(
+      workingDirectoryChanged({ activeTabId: "a", tabs: { a: aWithWd } }, { activeTabId: "a", tabs: { a: aWithWd } }),
+    ).toBe(false);
+
+    // A null active tab.
+    expect(workingDirectoryChanged({ activeTabId: null, tabs: {} }, { activeTabId: null, tabs: {} })).toBe(false);
   });
 });

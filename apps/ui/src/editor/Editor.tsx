@@ -12,7 +12,7 @@ import { languageId, modelUri, setupMonaco } from "./monaco-setup";
 import { installPasteGuard, pasteInto } from "./paste-guard";
 import { createTabView } from "./tab-view";
 import { createTsEnvironment } from "./ts-environment";
-import { tsEnvironmentChanged, tsStateFor } from "./ts-state";
+import { tsEnvironmentChanged, tsStateFor, workingDirectoryChanged } from "./ts-state";
 import { createTypeFeeder } from "./type-feeder";
 import { loadRuntimePack } from "./type-libs";
 import { defineClipboardRegister, startVim, type VimController } from "./vim";
@@ -88,8 +88,8 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
       environment: tsEnvironment,
       log: (message, detail) => console.warn(`[jslab] ${message}`, detail),
     });
-    const feed = (tabId: string, model: Monaco.editor.ITextModel) =>
-      feeder.schedule(tabId, model.getValue(), Boolean(store.getState().tabs[tabId]?.workingDirectory));
+    const feed = (tabId: string, model: Monaco.editor.ITextModel, options?: { immediate?: boolean }) =>
+      feeder.schedule(tabId, model.getValue(), Boolean(store.getState().tabs[tabId]?.workingDirectory), options);
     const installAssist = registerInstallAssist(monaco, {
       untyped: () => feeder.untyped(),
       install: (spec) => install.current?.(spec),
@@ -372,12 +372,15 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
       if (tsEnvironmentChanged(state, previous)) {
         applyTypeScript(state);
       }
-      if (
-        state.packagesRevision !== previous.packagesRevision ||
-        state.tab?.workingDirectory !== previous.tab?.workingDirectory
-      ) {
-        if (state.tab && state.tab.workingDirectory !== previous.tab?.workingDirectory)
-          feeder.invalidateLocal(state.tab.id);
+      // Task 23 fix round 2, I-1: workingDirectoryChanged only fires for the *same* active tab's own working
+      // directory actually changing — a tab switch between tabs whose WDs differ is never a WD change (handled
+      // below instead, where it invalidates nothing).
+      if (workingDirectoryChanged(state, previous) && state.activeTabId) {
+        feeder.invalidateLocal(state.activeTabId);
+        feeder.invalidatePackages();
+        const model = editor.getModel();
+        if (model) feed(state.activeTabId, model, { immediate: true });
+      } else if (state.packagesRevision !== previous.packagesRevision) {
         feeder.invalidatePackages();
         const model = editor.getModel();
         if (state.activeTabId && model) feed(state.activeTabId, model);
@@ -389,8 +392,20 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
       ) {
         view.show(state);
       }
+      // Task 23 fix round 2, I-1: a genuine tab switch invalidates nothing — the newly shown tab's local and
+      // package caches are still valid — but feeds immediately. `view.show`'s `onShown` just scheduled a debounced
+      // feed for the newly shown model; immediate mode cancels that timer and feeds right away instead, so the tab
+      // doesn't show false "Cannot find module" markers for the 500 ms the debounce would otherwise wait out.
+      if (state.activeTabId !== previous.activeTabId && state.activeTabId) {
+        const model = editor.getModel();
+        if (model) feed(state.activeTabId, model, { immediate: true });
+      }
       if (state.tabOrder !== previous.tabOrder) {
-        for (const closed of models.prune(new Set(state.tabOrder))) view.cancel(closed);
+        for (const closed of models.prune(new Set(state.tabOrder))) {
+          view.cancel(closed);
+          // Task 23 fix round 2, M-1: release a closed tab's local type files and cancel any pending feed for it.
+          feeder.forget(closed);
+        }
       }
       if (state.hoveredLine !== previous.hoveredLine) applyHover(state.hoveredLine);
       if (state.revealRequest && state.revealRequest !== previous.revealRequest) {

@@ -57,7 +57,9 @@ describe("bundled type libraries (spec §6.2)", () => {
       join(monacoDir, "esm/vs/languages/features/typescript/lib/typescriptServices.js"),
       "utf8",
     );
-    const match = /versionMajorMinor\s*=\s*"([^"]+)"/.exec(content);
+    // Task 23 fix round 2, M-7: the full patch version, not versionMajorMinor — TypeScript compares typesVersions
+    // ranges against its full version, and a patch-level range matters (Monaco's real TypeScript here is 5.9.3).
+    const match = /\bversion\s*=\s*"([^"]+)"/.exec(content);
     expect(match?.[1]).toBe(BUNDLED_TYPESCRIPT_VERSION);
   });
 
@@ -72,14 +74,17 @@ describe("bundled type libraries (spec §6.2)", () => {
   });
 
   test("typesVersions ranges are matched in order, and unsupported entries fail loudly", async () => {
-    expect(typesVersionsRangeMatches("*", "5.9")).toBe(true);
-    expect(typesVersionsRangeMatches(">=7.1", "5.9")).toBe(false);
-    expect(typesVersionsRangeMatches("<=5.6", "5.9")).toBe(false);
-    expect(typesVersionsRangeMatches("<6", "5.9")).toBe(true);
-    expect(typesVersionsRangeMatches("5.9", "5.9")).toBe(true);
-    expect(typesVersionsRangeMatches(">5.9.0", "5.9")).toBe(false);
-    expect(typesVersionsRangeMatches(">=5.9.1", "5.9")).toBe(false);
-    expect(() => typesVersionsRangeMatches(">=4.0 || <3", "5.9")).toThrow(/>=4.0 \|\| <3/);
+    // Task 23 fix round 2, M-7: compared against the full 5.9.3 pin, not just 5.9 (5.9.0). Two rows change from the
+    // fix-round-1 truth table: ">5.9.0" and ">=5.9.1" are now true, since 5.9.3's patch (3) is greater than both
+    // ranges' patch component (0 and 1) — a range with no patch still treats a missing patch as 0 on both sides.
+    expect(typesVersionsRangeMatches("*", "5.9.3")).toBe(true);
+    expect(typesVersionsRangeMatches(">=7.1", "5.9.3")).toBe(false);
+    expect(typesVersionsRangeMatches("<=5.6", "5.9.3")).toBe(false);
+    expect(typesVersionsRangeMatches("<6", "5.9.3")).toBe(true);
+    expect(typesVersionsRangeMatches("5.9", "5.9.3")).toBe(true);
+    expect(typesVersionsRangeMatches(">5.9.0", "5.9.3")).toBe(true);
+    expect(typesVersionsRangeMatches(">=5.9.1", "5.9.3")).toBe(true);
+    expect(() => typesVersionsRangeMatches(">=4.0 || <3", "5.9.3")).toThrow(/>=4.0 \|\| <3/);
 
     const excludeDir = await mkdtemp(join(tmpdir(), "jslab-typelibs-exclude-"));
     try {
@@ -118,6 +123,60 @@ describe("bundled type libraries (spec §6.2)", () => {
       );
     } finally {
       await rm(redirectDir, { recursive: true, force: true });
+    }
+
+    // Task 23 fix round 2, M-6: a leading "./" is normalised away before the first path segment is taken.
+    const dotSlashDir = await mkdtemp(join(tmpdir(), "jslab-typelibs-dotslash-"));
+    try {
+      await writeFile(
+        join(dotSlashDir, "package.json"),
+        JSON.stringify({
+          name: "fixture-dotslash",
+          version: "0.0.0",
+          typesVersions: { ">=99.0": { "*": ["./ts99/*"] } },
+        }),
+      );
+      await writeFile(join(dotSlashDir, "index.d.ts"), "export {};");
+      await mkdir(join(dotSlashDir, "ts99"), { recursive: true });
+      await writeFile(join(dotSlashDir, "ts99", "extra.d.ts"), "export {};");
+      const files = collectTypeLibPack([{ name: "fixture-dotslash", dir: dotSlashDir }]);
+      const paths = files.map((file) => file.path);
+      expect(paths).toContain("file:///node_modules/fixture-dotslash/index.d.ts");
+      expect(paths.some((path) => path.includes("/ts99/"))).toBe(false);
+    } finally {
+      await rm(dotSlashDir, { recursive: true, force: true });
+    }
+
+    // M-6: a target whose first segment would be "." (the package root) throws, instead of dropping every file.
+    const dotOnlyDir = await mkdtemp(join(tmpdir(), "jslab-typelibs-dotonly-"));
+    try {
+      await writeFile(
+        join(dotOnlyDir, "package.json"),
+        JSON.stringify({ name: "fixture-dotonly", version: "0.0.0", typesVersions: { ">=99.0": { "*": ["."] } } }),
+      );
+      await writeFile(join(dotOnlyDir, "index.d.ts"), "export {};");
+      expect(() => collectTypeLibPack([{ name: "fixture-dotonly", dir: dotOnlyDir }])).toThrow(/package root/);
+    } finally {
+      await rm(dotOnlyDir, { recursive: true, force: true });
+    }
+
+    // M-6: excluding the directory holding the package's own "types" entry throws.
+    const typesDir = await mkdtemp(join(tmpdir(), "jslab-typelibs-types-"));
+    try {
+      await writeFile(
+        join(typesDir, "package.json"),
+        JSON.stringify({
+          name: "fixture-types",
+          version: "0.0.0",
+          types: "dist/index.d.ts",
+          typesVersions: { ">=99.0": { "*": ["dist/legacy.d.ts"] } },
+        }),
+      );
+      await mkdir(join(typesDir, "dist"), { recursive: true });
+      await writeFile(join(typesDir, "dist", "index.d.ts"), "export {};");
+      expect(() => collectTypeLibPack([{ name: "fixture-types", dir: typesDir }])).toThrow(/types entry/);
+    } finally {
+      await rm(typesDir, { recursive: true, force: true });
     }
   });
 });

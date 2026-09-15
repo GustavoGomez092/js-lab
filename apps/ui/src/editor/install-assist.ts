@@ -20,11 +20,17 @@ export function runtimeMissingPackage(message: string): string | null {
   return specifier ? packageNameFromSpecifier(specifier) : null;
 }
 
-export function installActionsFor(
-  markers: readonly { code: number | string; message: string }[],
+/**
+ * Groups 2307 markers into install actions, keeping each action's own originating marker (Task 23 fix round 2,
+ * M-8) — so the provider can attach only that one marker to `diagnostics`, instead of every marker in range.
+ * `installActionsFor` is a thin wrapper over this that drops the marker, keeping its own signature and result shape
+ * exactly as Task 28 and `e2e.installActions` pin them.
+ */
+function installActionsWithMarkers<TMarker extends { code: number | string; message: string }>(
+  markers: readonly TMarker[],
   untyped: ReadonlyMap<string, string | null>,
-): InstallAction[] {
-  const actions = new Map<string, InstallAction>();
+): (InstallAction & { marker: TMarker })[] {
+  const actions = new Map<string, InstallAction & { marker: TMarker }>();
   for (const marker of markers) {
     if (Number(marker.code) !== MISSING_MODULE_CODE) continue;
     const specifier = missingModuleFromMessage(marker.message);
@@ -32,12 +38,19 @@ export function installActionsFor(
     if (!name) continue;
     if (untyped.has(name)) {
       const types = untyped.get(name) ?? typesPackageName(name);
-      if (types) actions.set(types, { title: strings.install.types(types), spec: types });
+      if (types) actions.set(types, { title: strings.install.types(types), spec: types, marker });
     } else {
-      actions.set(name, { title: strings.install.package(name), spec: name });
+      actions.set(name, { title: strings.install.package(name), spec: name, marker });
     }
   }
   return [...actions.values()];
+}
+
+export function installActionsFor(
+  markers: readonly { code: number | string; message: string }[],
+  untyped: ReadonlyMap<string, string | null>,
+): InstallAction[] {
+  return installActionsWithMarkers(markers, untyped).map(({ title, spec }) => ({ title, spec }));
 }
 
 const INSTALL_COMMAND = "jslab.installPackage";
@@ -51,22 +64,30 @@ export function registerInstallAssist(
     if (typeof spec === "string") deps.install(spec);
   });
   const provider = monaco.languages.registerCodeActionProvider(["typescript", "javascript"], {
-    provideCodeActions: (_model, _range, context) => ({
-      actions: installActionsFor(
+    provideCodeActions: (_model, _range, context) => {
+      const actions = installActionsWithMarkers(
         context.markers.map((marker) => ({
           code: typeof marker.code === "object" ? marker.code.value : (marker.code ?? ""),
           message: marker.message,
+          original: marker,
         })),
         deps.untyped(),
-      ).map((action) => ({
-        title: action.title,
-        kind: "quickfix",
-        isPreferred: true,
-        diagnostics: [...context.markers],
-        command: { id: INSTALL_COMMAND, title: action.title, arguments: [action.spec] },
-      })),
-      dispose: () => {},
-    }),
+      );
+      // M-8: preferred only when it's the single fix on offer — never when two unresolved imports (or an
+      // unrelated marker on the same line) would otherwise both claim the auto-fix keybinding.
+      const isPreferred = actions.length === 1;
+      return {
+        actions: actions.map((action) => ({
+          title: action.title,
+          kind: "quickfix",
+          isPreferred,
+          // Only this action's own originating marker — not every marker Monaco passed in range (M-8).
+          diagnostics: [action.marker.original],
+          command: { id: INSTALL_COMMAND, title: action.title, arguments: [action.spec] },
+        })),
+        dispose: () => {},
+      };
+    },
   });
   return {
     dispose: () => {

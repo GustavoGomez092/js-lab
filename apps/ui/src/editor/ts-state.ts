@@ -32,3 +32,19 @@ export function tsEnvironmentChanged(
   if (!next || !prev) return false;
   return next.runtime !== prev.runtime || next.decorators !== prev.decorators || next.linting !== prev.linting;
 }
+
+/**
+ * True only when the *same* shown tab's working directory changed between two states (Task 23 fix round 2, I-1). A
+ * tab switch is deliberately never a working-directory change, even when the newly shown tab's working directory
+ * differs from the previously shown tab's: `state.tab` mirrors whichever tab is active, so naively comparing it
+ * across a switch would wipe the new tab's still-valid local files and package types for no reason.
+ */
+export function workingDirectoryChanged(
+  state: Pick<AppState, "activeTabId" | "tabs">,
+  previous: Pick<AppState, "activeTabId" | "tabs">,
+): boolean {
+  if (state.activeTabId === null || state.activeTabId !== previous.activeTabId) return false;
+  const next = state.tabs[state.activeTabId]?.workingDirectory ?? null;
+  const prev = previous.tabs[state.activeTabId]?.workingDirectory ?? null;
+  return next !== prev;
+}

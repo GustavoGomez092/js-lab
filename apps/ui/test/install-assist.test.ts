@@ -1,6 +1,38 @@
 import { describe, expect, test } from "bun:test";
-import { installActionsFor, runtimeMissingPackage } from "../src/editor/install-assist";
+import type * as Monaco from "monaco-editor";
+import { installActionsFor, registerInstallAssist, runtimeMissingPackage } from "../src/editor/install-assist";
 import { strings } from "../src/strings";
+
+/**
+ * A minimal `monaco` fake: just enough of `editor.registerCommand` and `languages.registerCodeActionProvider` for
+ * `registerInstallAssist` to run, with a `provideCodeActions` helper that drives the captured provider directly
+ * (Task 23 fix round 2, M-8).
+ */
+function fakeMonaco() {
+  type Provider = {
+    provideCodeActions(
+      model: unknown,
+      range: unknown,
+      context: { markers: unknown[] },
+    ): { actions: { title: string; isPreferred: boolean; diagnostics: unknown[] }[]; dispose(): void };
+  };
+  let provider: Provider | null = null;
+  const monaco = {
+    editor: {
+      registerCommand: () => ({ dispose: () => {} }),
+    },
+    languages: {
+      registerCodeActionProvider: (_selector: unknown, p: Provider) => {
+        provider = p;
+        return { dispose: () => {} };
+      },
+    },
+  } as unknown as typeof Monaco;
+  return {
+    monaco,
+    provideCodeActions: (markers: unknown[]) => provider?.provideCodeActions(null, null, { markers }).actions ?? [],
+  };
+}
 
 describe("install assist (spec §6.3, §11.4)", () => {
   test("2307 markers offer the package, or its @types package when it is installed without types", () => {
@@ -24,5 +56,30 @@ describe("install assist (spec §6.3, §11.4)", () => {
     expect(runtimeMissingPackage("Cannot find module '@acme/tool/x' from '/p'")).toBe("@acme/tool");
     expect(runtimeMissingPackage("Cannot find module './local' from '/p'")).toBeNull();
     expect(runtimeMissingPackage("x is not defined")).toBeNull();
+  });
+
+  test("each install action carries only its own marker, and only a single action is preferred", () => {
+    const { monaco, provideCodeActions } = fakeMonaco();
+    registerInstallAssist(monaco, { untyped: () => new Map(), install: () => {} });
+
+    const markerA = { code: 2307, message: "Cannot find module 'zod' or its corresponding type declarations." };
+    const markerB = {
+      code: 2307,
+      message: "Cannot find module '@acme/tool' or its corresponding type declarations.",
+    };
+    const markerC = { code: 2322, message: "Type 'string' is not assignable to type 'number'." };
+
+    const twoActions = provideCodeActions([markerA, markerB, markerC]);
+    expect(twoActions.map((action) => action.diagnostics)).toEqual([[markerA], [markerB]]);
+    expect(twoActions.every((action) => action.isPreferred === false)).toBe(true);
+
+    const oneAction = provideCodeActions([markerA]);
+    expect(
+      oneAction.map((action) => ({
+        title: action.title,
+        isPreferred: action.isPreferred,
+        diagnostics: action.diagnostics,
+      })),
+    ).toEqual([{ title: strings.install.package("zod"), isPreferred: true, diagnostics: [markerA] }]);
   });
 });

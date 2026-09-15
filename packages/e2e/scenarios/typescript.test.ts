@@ -50,16 +50,37 @@ const flaggedNames = (diagnostics: TsDiagnostic[]) =>
     diagnostics.some((d) => d.message.includes(`'${name}'`)),
   );
 
-async function diagnosticsFor(tabId: string): Promise<TsDiagnostic[]> {
+const sameNames = (a: string[], b: string[]) => a.length === b.length && a.every((name, index) => name === b[index]);
+
+/**
+ * Polls until the shown tab's diagnostics are the expected, settled snapshot, not just the first one that includes
+ * 2322 (Task 21 fix round 1, I-1): on mount, Monaco can validate against the esnext-only startup defaults before
+ * the lazily loaded pack chunks finish, which would also flag names the final, pack-aware validation never flags.
+ */
+async function diagnosticsFor(tabId: string, expected: string[]): Promise<TsDiagnostic[]> {
   const current = app as LaunchedApp;
-  return waitFor(
-    async () => {
-      const ui = (await current.state()).ui;
-      const diagnostics = (ui.tsDiagnostics ?? []) as TsDiagnostic[];
-      return ui.activeTabId === tabId && diagnostics.some((d) => d.code === 2322) ? diagnostics : null;
-    },
-    { timeoutMs: 30_000, message: `TypeScript diagnostics never arrived for ${tabId}` },
-  );
+  let lastSeen: string[] = [];
+  let diagnostics: TsDiagnostic[];
+  try {
+    diagnostics = await waitFor(
+      async () => {
+        const ui = (await current.state()).ui;
+        const list = (ui.tsDiagnostics ?? []) as TsDiagnostic[];
+        lastSeen = flaggedNames(list);
+        const ready = ui.activeTabId === tabId && list.some((d) => d.code === 2322) && sameNames(lastSeen, expected);
+        return ready ? list : null;
+      },
+      {
+        timeoutMs: 30_000,
+        message: `TypeScript diagnostics for ${tabId} never settled on ${JSON.stringify(expected)}`,
+      },
+    );
+  } catch (error) {
+    throw new Error(`${(error as Error).message} (last saw ${JSON.stringify(lastSeen)})`);
+  }
+  // Belt-and-braces: the poll's own condition already checked this, but assert it explicitly too.
+  expect(flaggedNames(diagnostics)).toEqual(expected);
+  return diagnostics;
 }
 
 describe("TypeScript in the editor (spec §6.1, ED-09, ED-14)", () => {
@@ -71,11 +92,11 @@ describe("TypeScript in the editor (spec §6.1, ED-09, ED-14)", () => {
       { id: "web-tab", runtime: "browser", code: CODE },
     ]);
     app = await launchApp({ userData, settings: { version: 3, run: { autoRun: false } } });
-    expect(flaggedNames(await diagnosticsFor("bun-tab"))).toEqual(["document"]);
+    await diagnosticsFor("bun-tab", ["document"]);
     await app.command("tab.next");
-    expect(flaggedNames(await diagnosticsFor("node-tab"))).toEqual(["Bun"]);
+    await diagnosticsFor("node-tab", ["Bun"]);
     await app.command("tab.next");
-    expect(flaggedNames(await diagnosticsFor("web-tab"))).toEqual(["process", "Bun"]);
+    await diagnosticsFor("web-tab", ["process", "Bun"]);
   });
 
   test("autocomplete comes from the TypeScript worker, and Linting off clears diagnostics (ED-08, ED-09)", async () => {
@@ -84,7 +105,7 @@ describe("TypeScript in the editor (spec §6.1, ED-09, ED-14)", () => {
     await seedTabs(userData, [{ id: "bun-tab", runtime: "bun", code }]);
     app = await launchApp({ userData, settings: { version: 3, run: { autoRun: false } } });
     const current = app;
-    await diagnosticsFor("bun-tab");
+    await diagnosticsFor("bun-tab", []);
     const reply = await current.client.call<{ result: { completions: string[] } }>("e2e.command", {
       id: "e2e.completions",
       args: { offset: code.length },
@@ -97,8 +118,20 @@ describe("TypeScript in the editor (spec §6.1, ED-09, ED-14)", () => {
       async () => (((await current.state()).ui.tsDiagnostics ?? []) as TsDiagnostic[]).length === 0 || null,
       {
         timeoutMs: 30_000,
-        message: "diagnostics stayed after Linting was turned off",
+        message: "diagnostics never cleared after Linting was turned off",
       },
     );
+    // M-4(a): a transient revalidation gap can also read as empty. Require the empty reading to hold across several
+    // more polls covering at least 1000 ms, using the same Bun.sleep primitive waitFor uses, bounded by a small
+    // fixed count rather than an open-ended loop.
+    for (let reading = 0; reading < 6; reading++) {
+      await Bun.sleep(200);
+      const stillClear = ((await current.state()).ui.tsDiagnostics ?? []) as TsDiagnostic[];
+      if (stillClear.length > 0) {
+        throw new Error(
+          `diagnostics came back after Linting was turned off: ${JSON.stringify(stillClear.map((d) => d.code))}`,
+        );
+      }
+    }
   });
 });

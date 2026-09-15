@@ -283,4 +283,34 @@ describe("tab view", () => {
     expect(first.disposed).toBe(true);
     expect(editor.model).not.toBe(first);
   });
+
+  test("a replaced model is disposed even when showing the new one throws (M-3)", () => {
+    const store = twoTabs("a");
+    let disposeCalls = 0;
+    class DisposableModel extends FakeModel {
+      override dispose() {
+        disposeCalls++;
+      }
+    }
+    const editor = new FakeEditor();
+    const models = new ModelCache((_id, language: Language, value: string) => new DisposableModel(value, language));
+    let throwOnShown = false;
+    const view = createTabView({
+      store,
+      editor,
+      models,
+      persist: () => {},
+      onShown: () => {
+        if (throwOnShown) throw new Error("boom");
+      },
+      timers: manualTimers().timers,
+    });
+    view.show(store.getState());
+    const first = editor.model as DisposableModel;
+    store.getState().setLanguage("tsx");
+    throwOnShown = true;
+    expect(() => view.show(store.getState())).toThrow("boom");
+    expect(disposeCalls).toBe(1);
+    expect(editor.model).not.toBe(first);
+  });
 });

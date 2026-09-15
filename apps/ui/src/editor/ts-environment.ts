@@ -52,11 +52,16 @@ export function compilerOptionsFor(runtime: Runtime, decorators: DecoratorMode):
 export function diagnosticsOptionsFor(linting: boolean): {
   noSemanticValidation: boolean;
   noSyntaxValidation: boolean;
+  // Monaco's TypeScriptWorker gates suggestion diagnostics (for example TS6133, "declared but never read") behind
+  // this flag separately from noSemanticValidation (languageFeatures.js DiagnosticsAdapter._doValidate); without
+  // it, turning Linting off left suggestion-level markers on screen (Task 21 fix round 1, found via M-4(a)).
+  noSuggestionDiagnostics: boolean;
   diagnosticCodesToIgnore: number[];
 } {
   return {
     noSemanticValidation: !linting,
     noSyntaxValidation: !linting,
+    noSuggestionDiagnostics: !linting,
     diagnosticCodesToIgnore: [...IGNORED_DIAGNOSTIC_CODES],
   };
 }
@@ -90,6 +95,13 @@ export interface TsEnvironment {
   clearLocal(tabId?: string): void;
   /** A copy of the extra-lib paths last applied, each path once (E2E and tests). */
   libPaths(): string[];
+  /**
+   * Stops this environment from ever writing to `defaults` again (Task 21 fix round 1, M-2). A pending `apply`
+   * still resolves once its pack load settles, but skips the sync and never rejects, even if the load failed;
+   * every mutator becomes a no-op; `libPaths()` returns `[]`. Call this in the same effect cleanup that disposes
+   * the editor's models, so an unmounted Editor's environment can never desynchronise a newer Editor's globals.
+   */
+  dispose(): void;
 }
 
 /** Two file lists are equal when they hold the same paths and contents in the same order. */
@@ -133,6 +145,8 @@ export function createTsEnvironment(deps: {
   // null never equals a computed key, so the first sync sends all three values.
   let applied: { options: string; diagnostics: string; libs: string } | null = null;
   let appliedPaths: string[] = [];
+  // Task 21 fix round 1, M-2: once true, sync/apply/every mutator becomes a no-op.
+  let disposed = false;
 
   const loadPack = (pack: RuntimePack) => {
     let entry = packs.get(pack);
@@ -148,7 +162,7 @@ export function createTsEnvironment(deps: {
   };
 
   const sync = () => {
-    if (!state) return;
+    if (disposed || !state) return;
     const runtimePacks = packsFor(state.runtime);
     // A pack that is still loading holds the sync; a pack that failed for this state doesn't.
     if (!runtimePacks.every((pack) => loadedPacks.has(pack) || unavailablePacks.has(pack))) return;
@@ -178,10 +192,14 @@ export function createTsEnvironment(deps: {
 
   return {
     async apply(next) {
+      if (disposed) return;
       state = next;
       unavailablePacks.clear();
       const runtimePacks = packsFor(next.runtime);
       const results = await Promise.allSettled(runtimePacks.map(loadPack));
+      // Disposed while this apply's pack load was in flight: resolve without applying, even if the load failed,
+      // since nobody is listening any more (M-2).
+      if (disposed) return;
       if (state === next) {
         results.forEach((result, index) => {
           const pack = runtimePacks[index];
@@ -193,24 +211,28 @@ export function createTsEnvironment(deps: {
       if (failure) throw failure.reason;
     },
     setPackageFiles(name, files) {
+      if (disposed) return;
       const previous = packages.get(name);
       packages.set(name, files);
       if (!previous || !sameFiles(previous, files)) sync();
     },
     hasPackage(name) {
-      return packages.has(name);
+      return !disposed && packages.has(name);
     },
     clearPackages() {
+      if (disposed) return;
       const hadPackages = packages.size > 0;
       packages.clear();
       if (hadPackages) sync();
     },
     setLocalFiles(tabId, files) {
+      if (disposed) return;
       const previous = local.get(tabId);
       local.set(tabId, files);
       if (tabId === state?.tabId && !(previous && sameFiles(previous, files))) sync();
     },
     clearLocal(tabId) {
+      if (disposed) return;
       const shownTabId = state?.tabId ?? null;
       if (tabId === undefined) {
         const shownHadFiles = shownTabId !== null && local.has(shownTabId);
@@ -221,7 +243,10 @@ export function createTsEnvironment(deps: {
       if (local.delete(tabId) && tabId === shownTabId) sync();
     },
     libPaths() {
-      return [...appliedPaths];
+      return disposed ? [] : [...appliedPaths];
+    },
+    dispose() {
+      disposed = true;
     },
   };
 }

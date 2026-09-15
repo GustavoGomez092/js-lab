@@ -11,7 +11,7 @@ import { languageId, modelUri, setupMonaco } from "./monaco-setup";
 import { installPasteGuard, pasteInto } from "./paste-guard";
 import { createTabView } from "./tab-view";
 import { createTsEnvironment } from "./ts-environment";
-import { tsStateFor } from "./ts-state";
+import { tsEnvironmentChanged, tsStateFor } from "./ts-state";
 import { loadRuntimePack } from "./type-libs";
 import { defineClipboardRegister, startVim, type VimController } from "./vim";
 import { createVimStatusNode } from "./vim-status";
@@ -269,26 +269,40 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
       typeDiagnostics: async () => {
         const model = editor.getModel();
         if (!model) return [];
-        return monaco.editor
-          .getModelMarkers({ resource: model.uri })
-          .filter((marker) => marker.owner === "typescript" || marker.owner === "javascript")
-          .map((marker) => ({
-            code: Number(typeof marker.code === "object" ? marker.code?.value : marker.code),
-            message: marker.message,
-            line: marker.startLineNumber,
-          }));
+        return (
+          monaco.editor
+            .getModelMarkers({ resource: model.uri })
+            .filter((marker) => marker.owner === "typescript" || marker.owner === "javascript")
+            .map((marker) => ({
+              code: Number(typeof marker.code === "object" ? marker.code?.value : marker.code),
+              message: marker.message,
+              line: marker.startLineNumber,
+            }))
+            // A marker with no code becomes NaN above; drop it rather than report a nonsense code (Task 21 fix
+            // round 1, N-3).
+            .filter((diagnostic) => Number.isFinite(diagnostic.code))
+            // Deterministic order for a future toEqual-style scenario (N-3).
+            .sort((a, b) => a.line - b.line || a.code - b.code || a.message.localeCompare(b.message))
+        );
       },
       completionsAt: async (offset) => {
         const model = editor.getModel();
         if (!model) return [];
+        // A tab switch mid-call can detach or dispose `model` between awaits; re-check after each one rather than
+        // ask the worker about a URI that no longer exists (Task 21 fix round 1, N-3).
+        const isStale = () => model.isDisposed() || editor.getModel() !== model;
         const getWorker =
           model.getLanguageId() === "javascript"
             ? monaco.typescript.getJavaScriptWorker
             : monaco.typescript.getTypeScriptWorker;
-        const worker = await (await getWorker())(model.uri);
+        const accessor = await getWorker();
+        if (isStale()) return [];
+        const worker = await accessor(model.uri);
+        if (isStale()) return [];
         const info = (await worker.getCompletionsAtPosition(model.uri.toString(), offset)) as
           | { entries?: { name: string }[] }
           | undefined;
+        if (isStale()) return [];
         return (info?.entries ?? []).map((entry) => entry.name);
       },
     });
@@ -315,12 +329,10 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
         editor.updateOptions(toMonacoOptions(editorOptionsFor(state.settings, state.fontFallback)));
         syncVim(state.settings.editor.vimKeys);
       }
-      if (
-        state.activeTabId !== previous.activeTabId ||
-        state.tab?.runtime !== previous.tab?.runtime ||
-        state.settings?.build.decorators !== previous.settings?.build.decorators ||
-        state.settings?.editor.linting !== previous.settings?.editor.linting
-      ) {
+      // Task 21 fix round 1 (N-1): `tabId` is deliberately not compared here. A tab switch always reaches `onShown`
+      // below (a different tab always has a different Monaco model), which already calls `applyTypeScript`, so
+      // comparing `activeTabId` here only applied it twice per switch.
+      if (tsEnvironmentChanged(state, previous)) {
         applyTypeScript(state);
       }
       if (
@@ -361,6 +373,9 @@ export function Editor({ store, api, onLargePaste, vimSlot }: EditorProps) {
       vim?.dispose();
       vimStatus?.remove();
       editor.dispose();
+      // Task 21 fix round 1 (M-2): stop a pending apply from writing this environment's stale settings into
+      // Monaco's globals after this Editor is gone, before the models it was applying local files for are disposed.
+      tsEnvironment.dispose();
       models.disposeAll();
     };
   }, [store, api, vimSlot]);

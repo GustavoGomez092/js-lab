@@ -70,15 +70,20 @@ describe("per-runtime TypeScript environment (spec §6.1)", () => {
     expect([packsFor("bun"), packsFor("browser-node"), packsFor("browser")]).toEqual([["bun", "node"], ["node"], []]);
   });
 
-  test("editor.linting turns validation off, and 1375/1378 are always ignored", () => {
+  test("editor.linting turns validation and suggestion diagnostics off, and 1375/1378 are always ignored", () => {
     expect(diagnosticsOptionsFor(true)).toEqual({
       noSemanticValidation: false,
       noSyntaxValidation: false,
+      noSuggestionDiagnostics: false,
       diagnosticCodesToIgnore: [1375, 1378],
     });
+    // noSuggestionDiagnostics also follows `linting`: Monaco's worker gates suggestion-only markers (for example
+    // TS6133, "declared but never read") behind this flag separately from noSemanticValidation, so without it
+    // Linting off would leave suggestion diagnostics on screen (Task 21 fix round 1, found via M-4(a)).
     expect(diagnosticsOptionsFor(false)).toEqual({
       noSemanticValidation: true,
       noSyntaxValidation: true,
+      noSuggestionDiagnostics: true,
       diagnosticCodesToIgnore: [1375, 1378],
     });
   });
@@ -227,6 +232,31 @@ describe("per-runtime TypeScript environment (spec §6.1)", () => {
     env.setLocalFiles("a", [{ path: globals, content: "local" }]);
     expect(sent.at(-1)?.filter((lib) => lib.filePath === globals)).toEqual([{ content: "local", filePath: globals }]);
     expect(new Set(env.libPaths()).size).toBe(env.libPaths().length);
+  });
+
+  test("dispose stops a pending apply and later updates from touching the defaults (Task 21 fix round 1, M-2)", async () => {
+    const { defaults, calls } = fakeDefaults();
+    let releaseBun: () => void = () => {};
+    const env = createTsEnvironment({
+      defaults: [defaults],
+      loadPack: (pack) =>
+        pack === "bun"
+          ? new Promise((resolve) => {
+              releaseBun = () => resolve([packFile("bun")]);
+            })
+          : Promise.resolve([packFile(pack)]),
+    });
+    const pending = env.apply({ tabId: "a", runtime: "bun", decorators: "2023-11", linting: true });
+    const before = calls.length;
+    env.dispose();
+
+    releaseBun();
+    await expect(pending).resolves.toBeUndefined();
+    expect(calls.length).toBe(before);
+
+    env.setLocalFiles("a", [{ path: "file:///tab/util.ts", content: "u" }]);
+    expect(calls.length).toBe(before);
+    expect(env.libPaths()).toEqual([]);
   });
 
   test("Monaco's TypeScriptWorker: console, setTimeout and URL resolve in every runtime, and runtime globals are scoped (R-M2-BUG-1)", async () => {

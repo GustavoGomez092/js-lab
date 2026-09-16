@@ -106,12 +106,15 @@ Tasks are ordered so each one lands green on its own. Tasks 1–2 open the seam 
 | 13 | The dialog shim | Non-blocking `alert`/`confirm`/`prompt`, the console warning, and `JSLAB_E2E` scripting. | merged |
 | 14 | DOM serialization | Tag, attributes, child count, `outerHTML` preview. | merged |
 | 15 | Audio indicator and mute | Tracking, the tab icon, and per-tab persistence. | merged |
-| 16 | E2E scenarios | Web runtime basics, the tile, canvas/rAF, React, Three.js, Web Audio — the WV-04 exit — plus fetch and bridge errors. | blocked on 9b and 11 |
+| 16 | E2E scenarios | Web runtime basics, the tile, canvas/rAF, React, Three.js, Web Audio — the WV-04 exit — plus fetch and bridge errors. | in progress — 8 scenarios green; **found that no bridged Node call completes**, reopening R-M4-T11-1 |
+| 9g | Two shipped gaps found by running the app | `console.log(element)` renders as an empty entry — Task 14's `dom` encoding is emitted but nothing in the UI renders it; and the Web View toggle has no command id, menu item or keybinding, which parity WV-01 and TF-19 both expect. | queued |
 | 17 | Docs, parity and QA | The M4 checklist, parity and roadmap rows, README, and the full-suite run. | last |
 
-**Milestone exit conditions — BOTH NOW SATISFIED.** M4 could not close, and no release note could make the corresponding claim, until both held:
-1. **R-M4-C1-1** — browser tabs actually complete runs. **Satisfied** by Task 9b (merged `25a5e25`), proven live in a built app: a run streams its output and reaches a terminal state.
-2. **R-M4-T11-1** — `browser-node` actually provides the Node APIs it offers. **Satisfied** by Task 11 (merged `a4f83e8`): `fs/promises`, callback `fs` and `child_process` over the bridge, with the spec's refusals for everything that has none.
+**Milestone exit conditions — ONE SATISFIED, ONE REOPENED.**
+1. **R-M4-C1-1** — browser tabs actually complete runs. **Satisfied** by Task 9b (merged `25a5e25`), proven live in a built app: a run streams its output and reaches a terminal state. Independently re-confirmed by Task 16's scenario 1 against a built app.
+2. **R-M4-T11-1** — `browser-node` actually provides the Node APIs it offers. **REOPENED. I recorded this as satisfied and it is not.** Task 16, running the built app, measured that **no bridged Node call ever completes**: modules resolve, `fs.readFileSync` throws the spec's exact sentence, and `fetch` through Main works — but `await readFile(...)` hangs at `evaluating` indefinitely, an unawaited call leaves a promise that never resolves, and a `child_process.exec` callback never fires. The `fetch` path uses the **same** transport, relay schema and `host.send`, so the transport is sound and the fault is specific to the Node path. **Nothing is logged for a hanging run, while `refuse()` logs on every branch including an invalid payload — so the call does not reach the handler at all.**
+   - **Why my earlier verdict was wrong:** Task 11's live proof covered a plain run, a package import and the `fetch` pair. It **never demonstrated an `fs/promises` read end to end in a built app**, and its bridge tests use fakes on both sides — so a gap between the page client and Main's handler passes every unit test and hangs only in reality. This is the fourth time this milestone that an unregistered or unrouted handler has presented as a hang rather than an error.
+   - **No release note may describe `browser-node` as providing Node APIs** until a bridged call is shown completing in a built app.
 
 **What remains is no longer a blocker but a finish:** Tasks 16 (E2E scenarios), 17 (docs, parity, the M4 checklist), 9e (the webview generation token) and 9f (the vendored polyfill defects), then the milestone review. **A release note may now describe both capabilities** — but see Task 17's two accepted limitations, which must be recorded rather than claimed away.
 
@@ -645,6 +648,21 @@ Per spec §5.12 and M0-S4: `alert` shows JSLab's own non-blocking dialog and ret
 6. **A bridged command's default environment is Main's `process.env`, not the runner's layered environment.** The Bun runner composes `runnerEnvironment` from env.json plus a working directory's `.env`; `WebAdapterDeps` does not carry either, so a `child_process` call from a `browser-node` tab inherits something different from what the same code sees under `bun`. A caller-supplied `env` **is** honoured exactly, so this is the default path only. Either close the gap or record it as a known divergence — but do not leave it undocumented, since it is invisible until someone's `.env` silently fails to apply.
 
 - [ ] Steps: verify each defect at HEAD, one failing test per defect **that fails for the stated reason**, then each fix, regenerating vendor files through the script rather than editing generated output, then the gates. **Counts: measure your own baseline and report `baseline N → after M`.** No absolute total is given here on purpose.
+
+---
+
+### Task 9g: Two shipped gaps Task 16 found by running the app
+
+**Both were found by driving the built app, both are real, and neither appears anywhere in the ledger** — Task 16 checked that with controls before reporting them. Neither is in `packages/e2e`, so it correctly declined to fix them.
+
+**Files:**
+- Modify: `apps/ui/src/output/ValueView.tsx` and its formatting helpers (`formatPrimitive`, `summarize`, `childrenOf`), `packages/shared/src/commands.ts`, the menu and keybinding tables, `apps/ui/src/shell/StatusBar.tsx`
+- Test: `apps/ui/test/` — the value-rendering tests and a command-registration test
+
+1. **`console.log(someElement)` renders as an empty output entry.** Task 14 added the `dom` encoding and the serializer emits it (`t: "dom"`), but **nothing in the UI renders it**: `formatPrimitive` has no `dom` case and returns `null`, `summarize` falls through to `formatPrimitive(...) ?? ""`, `childrenOf` has no case, and `ValueView.tsx` has no branch. Measured: **0 occurrences of `t === "dom"` in `apps/ui/src`**, against a control of `case "handle"`, which *is* handled. So the entry arrives and displays as the empty string, and Copy All copies nothing for it. **Spec §5.9 requires tag, attributes, child count and an `outerHTML` preview.** Task 14 shipped the producer without the consumer; this is the consumer.
+2. **The Web View toggle has no command id, menu item or keybinding.** It exists only as a status-bar button (`StatusBar.tsx:91` → `store.toggleWebviewVisible()`). `packages/shared/src/commands.ts` holds 98 commands and **none** for tiles or the web view — so the toggle is unreachable from the command palette, the menu, and E2E automation. Parity **WV-01** ("Web View tile toggle") and **TF-19** ("Status bar: … web view toggle") both expect it. Give it a command id and wire the existing button to it, so the palette, the menu and a scenario can all drive one path.
+
+- [ ] Steps: a failing test per gap **that fails for the stated reason**, then each fix, then the gates. **Counts: measure your own baseline and report `baseline N → after M`.** No absolute total is given here on purpose.
 
 ---
 

@@ -60,4 +60,6 @@ export type RunnerToMain =
   | { type: "heartbeat" }
   | { type: "events"; runId: string; events: RawRunEvent[] }
   | { type: "state"; runId: string; state: RunnerState; activeHandles: number }
-  | { type: "expanded"; reqId: number; value: EncodedValue | null };
+  | { type: "expanded"; reqId: number; value: EncodedValue | null }
+  /** User code called process.exit (FW1): later output is ignored, and Main ends the runner if it doesn't exit. */
+  | { type: "exitRequested"; runId: string; code: number };

@@ -1,7 +1,15 @@
+import type { InstallAction } from "./install-assist";
+
 export interface OffsetEdit {
   start: number;
   end: number;
   text: string;
+}
+
+export interface TsDiagnostic {
+  code: number;
+  message: string;
+  line: number;
 }
 
 /** The mounted Monaco editor, as seen by commands, formatting and E2E automation. */
@@ -26,6 +34,14 @@ export interface EditorHandle {
   missingActions(ids: readonly string[]): string[];
   /** Settings-driven editor options currently in effect (E2E verification). */
   getOptions(): Record<string, unknown>;
+  /** Sends every pending view-state save now (X1, before quit). */
+  flushViewState(): void;
+  /** Monaco's current TypeScript markers for the shown model (E2E verification). */
+  typeDiagnostics(): Promise<TsDiagnostic[]>;
+  /** TypeScript completion names at an offset in the shown model (E2E verification). */
+  completionsAt(offset: number): Promise<string[]>;
+  /** The install-assist actions for the shown model's current markers (E2E verification). */
+  installActions(): Promise<InstallAction[]>;
 }
 
 let active: EditorHandle | null = null;

@@ -1,12 +1,21 @@
+import { join } from "node:path";
+import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
 import { effectiveRuntime, runnerSettings } from "@jslab/shared";
-import { type AppPaths, runnerEnvironment } from "./app-paths";
+import type { AppPaths } from "./app-paths";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
 import { RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
+import { createRunnerConfig } from "./runs/runner-config";
 import { SparePool } from "./runs/spare-pool";
+import { EnvStore } from "./services/env-store";
+import { NpmService } from "./services/npm-service";
+import { createBunSpawn, type NpmSpawn } from "./services/npm-spawn";
+import { ensurePackagesProject } from "./services/packages-project";
 import { consumeSafeModeFlag, detectSafeMode, type SafeModeState } from "./services/safe-mode";
 import { SessionStore } from "./services/session-store";
 import { SettingsStore } from "./services/settings-store";
+import { TypesService } from "./services/types-service";
+import { strings } from "./strings";
 import { CachingTransformHost, type TransformHost, WorkerTransformHost } from "./transform/transform-host";
 
 export interface MainServicesOptions {
@@ -21,11 +30,25 @@ export interface MainServicesOptions {
   /** Test seams. Production spawns real Bun runners and runs Babel in the bundled transform worker. */
   startRunner?: (config: RunnerSpawnConfig) => Promise<BunRunnerProcess>;
   transformHost?: TransformHost;
+  /** Main's log (index.ts passes the rotating log). Defaults to console.error. */
+  log?: (message: string, detail?: unknown) => void;
+  /** The user's real home folder (for the Bun cache location, spec §11.3). */
+  realHome: string;
+  /** E2E only: a temp Bun cache for npm operations instead of the user's. */
+  bunCacheDirOverride?: string;
+  npmSpawn?: NpmSpawn;
+  npmFetch?: typeof fetch;
+  onNpmOperation(operation: NpmOperation): void;
+  onNpmLog(opId: string, text: string): void;
+  onNpmChanged(list: NpmListResult): void;
 }
 
 export interface MainServices {
   settings: SettingsStore;
   session: SessionStore;
+  env: EnvStore;
+  npm: NpmService;
+  types: TypesService;
   runLock: RunLock;
   safeMode: SafeModeState;
   transform: TransformHost;
@@ -41,8 +64,11 @@ export interface MainServices {
  */
 export async function createMainServices(options: MainServicesOptions): Promise<MainServices> {
   const { paths } = options;
+  const log = options.log ?? ((message: string, detail?: unknown) => console.error(`[jslab] ${message}`, detail ?? ""));
   const runLock = new RunLock(paths.runLock);
-  const settings = await SettingsStore.open(paths.dataDir);
+  const settings = await SettingsStore.open(paths.dataDir, {
+    onWriteError: (error) => log(strings.log.settingsWriteFailed, String(error)),
+  });
   const session = await SessionStore.open(paths.dataDir, {
     tabDefaults: () => ({
       language: settings.current.run.defaultLanguage,
@@ -50,18 +76,23 @@ export async function createMainServices(options: MainServicesOptions): Promise<
       layout: { orientation: settings.current.view.layout, editorSize: 55, outputVisible: true },
     }),
   });
+  await ensurePackagesProject(paths, log);
+  const env = await EnvStore.open(paths.envFile);
   const safeMode = await detectSafeMode({
     uncleanPreviousExit: runLock.uncleanPreviousExit,
     manualRequested: consumeSafeModeFlag(paths.dataDir),
     shiftHeld: () => options.shiftHeld,
   });
   const transform = options.transformHost ?? new CachingTransformHost(new WorkerTransformHost(paths.transformWorker));
-  const spares = new SparePool(options.startRunner ?? ((config) => BunRunnerProcess.start(config)), () => ({
-    bunPath: paths.bunBinary,
-    bootstrapPath: paths.runnerBootstrap,
-    cwd: paths.dataDir,
-    env: runnerEnvironment(paths, options.env),
-  }));
+  const spares = new SparePool(
+    options.startRunner ?? ((config) => BunRunnerProcess.start(config)),
+    createRunnerConfig({
+      paths,
+      baseEnv: () => options.env,
+      envVars: () => env.variables,
+      workingDirectory: (tabId) => session.session.tabs[tabId]?.workingDirectory ?? null,
+    }),
+  );
   const coordinator = new RunCoordinator({
     transform: (source, transformOptions) => transform.transform(source, transformOptions),
     spares,
@@ -72,9 +103,42 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     onDiagnostics: options.onDiagnostics,
     runLock,
   });
+  // Spec §12.1: saving env.json recycles every tab's spare, so the next run gets the new values.
+  env.onChange(() => spares.invalidateAll());
+  const workingDirectoryFor = (tabId: string) => session.session.tabs[tabId]?.workingDirectory ?? null;
+  const types = new TypesService({
+    workingDirectoryFor,
+    nodeModulesDirsFor: (tabId) => {
+      const workingDirectory = workingDirectoryFor(tabId);
+      return workingDirectory
+        ? [join(workingDirectory, "node_modules"), paths.packagesNodeModules]
+        : [paths.packagesNodeModules];
+    },
+  });
+  const npm = new NpmService({
+    paths,
+    baseEnv: () => options.env,
+    realHome: options.realHome,
+    ...(options.bunCacheDirOverride ? { cacheDirOverride: options.bunCacheDirOverride } : {}),
+    settings: () => settings.current.npm,
+    spawn: options.npmSpawn ?? createBunSpawn(paths.bunBinary),
+    ...(options.npmFetch ? { fetch: options.npmFetch } : {}),
+    onOperation: options.onNpmOperation,
+    onLog: options.onNpmLog,
+    onChanged: options.onNpmChanged,
+    // Spec §11.3: after any change, spares are recycled and the type cache is invalidated (web vendor caches: M4).
+    afterChange: () => {
+      spares.invalidateAll();
+      types.invalidate();
+    },
+    log,
+  });
   return {
     settings,
     session,
+    env,
+    npm,
+    types,
     runLock,
     safeMode,
     transform,

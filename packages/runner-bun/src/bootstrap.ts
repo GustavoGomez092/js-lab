@@ -12,7 +12,7 @@ import {
 } from "@jslab/serializer";
 import { installConsole, installStdio } from "./console-hook";
 import { EventBuffer } from "./event-buffer";
-import { HandleTracker, installHandleTracking } from "./handles";
+import { HandleTracker, handleCountAction, installHandleTracking } from "./handles";
 
 // Capture host timers before user-facing wrappers are installed; JSLab's own timers are never tracked.
 const timers = {
@@ -76,10 +76,11 @@ const registry = new HandleRegistry();
 const tracker = new HandleTracker((count) => {
   if (!run) return;
   // Untracked continuations (an awaited Bun.sleep, an un-awaited promise) can resume after Stop and create new
-  // handles: dispose them at once so stopped user code can't keep timers, servers or sockets alive.
-  if (run.state === "stopped" && count > 0) tracker.disposeAll();
-  else if (run.state === "settled" && count === 0) setState("idle");
-  else if (run.state === "idle" && count > 0) setState("settled");
+  // handles: dispose them at once so stopped user code can't keep timers, servers or sockets alive. The same applies
+  // after a caught process.exit (FW1).
+  const action = handleCountAction(run.state, exiting, count);
+  if (action === "dispose") tracker.disposeAll();
+  else if (action) setState(action);
 });
 installHandleTracking(tracker);
 
@@ -190,13 +191,17 @@ process.exit = ((code?: number | string | null) => {
   const exitCode = code ?? process.exitCode;
   run?.buffer.close();
   tracker.disposeAll();
-  timers.setTimeout(() => exitProcess(exitCode), EXIT_DRAIN_TIMEOUT_MS);
+  const requested = Number(exitCode ?? 0);
+  // FW1 / R-M3-T17-FIX-1: the status a real process exit reports (8 bits); anything that isn't a safe integer is 1.
+  const exitStatus = Number.isSafeInteger(requested) ? ((requested % 256) + 256) % 256 : 1;
+  send({ type: "exitRequested", runId: run?.runId ?? "", code: exitStatus });
+  timers.setTimeout(() => exitProcess(exitStatus), EXIT_DRAIN_TIMEOUT_MS);
   try {
     // Bun calls this back once the message, and everything queued before it, has been written.
-    process.send?.({ type: "heartbeat" } satisfies RunnerToMain, undefined, undefined, () => exitProcess(exitCode));
-    if (!process.send) exitProcess(exitCode);
+    process.send?.({ type: "heartbeat" } satisfies RunnerToMain, undefined, undefined, () => exitProcess(exitStatus));
+    if (!process.send) exitProcess(exitStatus);
   } catch {
-    exitProcess(exitCode);
+    exitProcess(exitStatus);
   }
   throw EXIT_SIGNAL;
 }) as typeof process.exit;

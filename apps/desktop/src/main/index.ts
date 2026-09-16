@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { arch } from "node:os";
+import { mkdir, stat } from "node:fs/promises";
+import { arch, homedir } from "node:os";
 import { join } from "node:path";
 import type {
   MainMessages,
@@ -22,7 +22,7 @@ import Electrobun, {
   Updater,
   Utils,
 } from "electrobun/main";
-import { resolveAppPaths } from "./app-paths";
+import { e2eBunCacheDir, resolveAppPaths } from "./app-paths";
 import { E2EBridge } from "./cli/e2e-bridge";
 import { createSocketMethods } from "./cli/socket-methods";
 import { type SocketServer, startSocketServer } from "./cli/socket-server";
@@ -35,21 +35,28 @@ import { resolveMainViewUrl } from "./main-view-url";
 import { buildMenu, createMenuController, dispatchMenuAction } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
 import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
+import { mergeLoginEnv, readLoginShellEnv } from "./platform/login-shell-env";
 import { relaunchApp } from "./platform/relaunch";
 import { saveDialog } from "./platform/save-dialog";
 import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
 import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } from "./rpc/app-handlers";
+import { createEnvHandlers } from "./rpc/env-handlers";
 import { createFileHandlers } from "./rpc/file-handlers";
 import { createFontHandlers } from "./rpc/font-handlers";
+import { createNpmHandlers } from "./rpc/npm-handlers";
+import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
+import { createTypesHandlers } from "./rpc/types-handlers";
+import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
 import { startupNotices } from "./startup-notices";
 import { strings } from "./strings";
+import { afterUiFlush, createUiFlushHandlers, createUiFlushWaiter } from "./ui-flush";
 import { onReload, shouldReloadView } from "./ui-watchdog";
 import { type DisplayInfo, displayForFrame, frameToSave, restoreFrame } from "./windows/frame-restore";
 import { createMainWindowController } from "./windows/main-window";
@@ -120,7 +127,9 @@ async function start(): Promise<void> {
     env: process.env,
   });
 
-  const redact = createRedactor();
+  // Spec §18: env.json values are masked in logs and the debug report once the env store is open.
+  let envSecrets: () => readonly string[] = () => [];
+  const redact = createRedactor(() => envSecrets());
   const logsDir = join(paths.dataDir, "logs");
   const logger = new RotatingLog({ dir: logsDir, debug: process.env.JSLAB_DEBUG === "1", redact });
   log = (message, detail) => logger.warn(message, detail);
@@ -149,17 +158,32 @@ async function start(): Promise<void> {
 
   // Read the modifier keys as early as possible: the user may release Shift while stores load.
   const shiftHeld = isShiftHeld();
+  // Spec §4.6 loginShellEnv: a GUI app lacks the shell PATH. E2E launches skip it, so no scenario runs the user's
+  // shell profile.
+  const loginEnv = process.env.JSLAB_E2E === "1" ? null : await readLoginShellEnv({ shell: process.env.SHELL, log });
+  const baseEnv = mergeLoginEnv(process.env, loginEnv);
   // The composition root builds everything that doesn't need Electrobun (main-services.ts, tested without it).
+  // R-M3-T18-FIX-1 M-4: under E2E, npm operations never use the user's Bun cache
+  // (JSLAB_E2E_BUN_CACHE_DIR, else <dataDir>/e2e-bun-cache).
+  const cacheDir = e2eBunCacheDir(process.env, paths.dataDir);
   const services = await createMainServices({
     paths,
-    env: process.env,
+    env: baseEnv,
     shiftHeld,
+    log,
     onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
     onState: (tabId, runId, state, activeHandles) =>
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
     onDiagnostics: (tabId, runId, diagnostics) => rpc.send["run.diagnostics"]({ tabId, runId, diagnostics }),
+    realHome: homedir(),
+    ...(cacheDir ? { bunCacheDirOverride: cacheDir } : {}),
+    onNpmOperation: (operation) => rpc.send["npm.op"](operation),
+    // R-M3-T18-LOGCAP-1: a pass-through; the log drawer (Task 26) keeps the newest MAX_NPM_LOG_CHARS per operation.
+    onNpmLog: (opId, text) => rpc.send["npm.log"]({ opId, text }),
+    onNpmChanged: (list) => rpc.send["npm.changed"](list),
   });
-  const { settings, session, runLock, safeMode, transform, spares, coordinator } = services;
+  const { settings, session, env, npm, types, runLock, safeMode, transform, spares, coordinator } = services;
+  envSecrets = () => env.secrets();
   if (settings.recovered !== "none") log(`settings.json recovered from ${settings.recovered}`);
   if (session.recovered !== "none") log(`session.json recovered from ${session.recovered}`);
   if (settings.newerVersion !== null) {
@@ -223,11 +247,19 @@ async function start(): Promise<void> {
       const current = mainWindow.window;
       if (current) current.setFullScreen(!current.isFullScreen());
     },
-    closeWindow: () => mainWindow.close(),
+    // M-2 (R-M3-T19-FIX-1): the UI flushes pending edits before the window closes. `uiFlush` is declared below and read
+    // only when this runs, after startup.
+    // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
+    closeWindow: () => void afterUiFlush({ uiFlush, then: () => mainWindow.close() })(),
     openSettings: () => void settingsWindow.open(),
   };
   const appHandlers = createAppHandlers(appHandlerDeps);
 
+  // X1: before the quit flush, the UI flushes its pending view-state saves and buffer edits.
+  const uiFlush = createUiFlushWaiter({
+    send: () => rpc.send["app.flushState"]({}),
+    isOpen: () => mainWindow.isOpen(),
+  });
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
     handlers: mergeHandlers(
@@ -252,7 +284,36 @@ async function start(): Promise<void> {
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
+      createNpmHandlers({ npm, log }),
+      createEnvHandlers({ env, log }),
+      createTypesHandlers({ types, log }),
+      createWorkingDirectoryHandlers({
+        session,
+        documentsDir: Utils.paths.documents,
+        pickFolder: async ({ startingFolder }) =>
+          e2eEnabled
+            ? ((await readE2EOpenDialog(paths.dataDir))[0] ?? null)
+            : ((
+                await Utils.openFileDialog({
+                  startingFolder,
+                  allowedFileTypes: "*",
+                  canChooseFiles: false,
+                  canChooseDirectory: true,
+                  allowsMultipleSelection: false,
+                })
+              )[0] ?? null),
+        isDirectory: (path) =>
+          stat(path).then(
+            (info) => info.isDirectory(),
+            () => false,
+          ),
+        spares,
+        types,
+        send: { changed: (payload) => rpc.send["wd.changed"](payload) },
+        log,
+      }),
       appHandlers,
+      createUiFlushHandlers(uiFlush, log),
       createFileHandlers({
         files: new FileService(nodeFileSystem),
         session,
@@ -381,6 +442,7 @@ async function start(): Promise<void> {
     handlers: mergeHandlers(
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createFontHandlers({ fonts: systemFonts, log }),
+      createNpmrcHandlers({ path: paths.packagesNpmrc, onSaved: () => npm.resetOutdated(), log }),
       createSettingsAppHandlers(appHandlerDeps),
       createE2EResponseHandler(settingsE2E, log),
     ),
@@ -495,9 +557,11 @@ async function start(): Promise<void> {
     runLock.releaseAll();
     // Final review T14: a hung flush must not keep JSLab from quitting. FA-I1: settings writes are awaited too.
     // A quit started by a startup failure keeps its exit code 1 (FA-I3).
-    void flushBeforeQuit(() => Promise.all([session.flush(), settings.flush()]).then(() => {}), log).finally(() =>
-      Utils.quit(errorPolicy.exitCode),
-    );
+    void flushBeforeQuit(
+      // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
+      () => afterUiFlush({ uiFlush, then: () => Promise.all([session.flush(), settings.flush()]) })(),
+      log,
+    ).finally(() => Utils.quit(errorPolicy.exitCode));
   });
 }
 

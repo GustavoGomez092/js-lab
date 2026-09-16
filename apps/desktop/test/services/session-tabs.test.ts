@@ -158,6 +158,16 @@ describe("SessionStore tabs", () => {
     expect(store.findTabByPath("/w/b.ts")).toBeNull();
   });
 
+  test("setWorkingDirectory updates a known tab, persists it, and returns null for an unknown tab", async () => {
+    const store = await open();
+    expect(store.setWorkingDirectory("ghost", "/w/api")).toBeNull();
+    const tab = store.setWorkingDirectory("t1", "/w/api");
+    expect(tab).toMatchObject({ id: "t1", workingDirectory: "/w/api" });
+    await store.flush();
+    const reopened = await open();
+    expect(reopened.session.tabs.t1?.workingDirectory).toBe("/w/api");
+  });
+
   test("change listeners hear every mutation and can unsubscribe", async () => {
     const store = await open();
     const seen: Session[] = [];

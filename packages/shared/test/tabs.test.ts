@@ -9,7 +9,9 @@ import {
   languageForPath,
   moveTab,
   pushClosed,
+  scriptFileName,
   tabAfterClose,
+  tabLabel,
 } from "../src/tabs";
 
 describe("tab helpers", () => {
@@ -126,4 +128,27 @@ describe("tab helpers", () => {
     expect(moveTab(["a", "b", "c"], "c", -5)).toEqual(["c", "a", "b"]);
     expect(moveTab(["a", "b"], "zz", 0)).toEqual(["a", "b"]);
   });
+
+  test("tabLabel adds the working directory's folder name as a suffix (spec §12.2)", () => {
+    expect(tabLabel("fetch users", "/work/api")).toBe("fetch users · api");
+    expect(tabLabel("fetch users", "/work/api/")).toBe("fetch users · api");
+    expect(tabLabel("scratch", null)).toBe("scratch");
+  });
+});
+
+test("scriptFileName names __filename from the file, or from the title with the language extension (spec §5.3)", () => {
+  expect(scriptFileName(createTab({ filePath: "/p/api/client.mts", language: "typescript" }), "")).toBe("client.mts");
+  expect(scriptFileName(createTab({ title: "fetch users", titleIsCustom: true, language: "tsx" }), "")).toBe(
+    "fetch users.tsx",
+  );
+  expect(
+    scriptFileName(
+      createTab({ language: "javascript" }),
+      `// a/b:c${String.fromCharCode(92)}d${String.fromCharCode(10)}`,
+    ),
+  ).toBe("-- a-b-c-d.js");
+  expect(scriptFileName(createTab({ language: "typescript" }), "")).toBe("Untitled.ts");
+  expect(scriptFileName(createTab({ title: ".ts", titleIsCustom: true, language: "typescript" }), "")).toBe(
+    "Untitled.ts",
+  );
 });

@@ -1,6 +1,6 @@
 <div align="center">
 
-# JSLab
+# <img src="apps/desktop/assets/app-icon-1024.png" alt="" width="44" height="44" align="center"> JSLab
 
 **A fast, native JavaScript & TypeScript scratchpad for macOS**
 
@@ -16,7 +16,7 @@
 
 Write JavaScript or TypeScript and watch it run as you type. Each result, log and error appears beside the line that produced it. There's no project to set up and no build step: open a tab and start typing.
 
-> JSLab is under active development. Milestones M0–M2 (the core scratchpad and the workspace) are complete; package management, browser runtimes and signed releases are next. See the [roadmap](#roadmap).
+> JSLab is under active development. Milestones M0–M3 (the core scratchpad, the workspace, and language & packages) are complete; browser runtimes and signed releases are next. See the [roadmap](#roadmap).
 
 ## Why JSLab
 
@@ -146,7 +146,7 @@ Scripted launches must use a working directory on an internal disk. From an exte
 | M0 | Spikes: architecture risks retired | ✅ Done |
 | M1 | Core scratchpad: live results, console output, errors, recoverable hangs | ✅ Done |
 | M2 | Workspace: tabs, files, settings, themes, formatting, command palette | ✅ Done |
-| M3 | Language & packages: npm, types and autocomplete, working directory, env vars | 🚧 In progress |
+| M3 | Language & packages: npm, types and autocomplete, working directory, env vars | ✅ Done (manual QA items pending user) |
 | M4 | Browser runtimes: DOM, canvas, React and a live web view | Planned |
 | M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | Planned |
 | M6 | Ship: signing, notarization, auto-update, 1.0 | Planned |
@@ -158,6 +158,8 @@ Details are in the [roadmap](docs/superpowers/plans/2026-09-12-jslab-roadmap.md)
 - [Design specification](docs/superpowers/specs/2026-09-12-jslab-design.md)
 - [Feature parity checklist](docs/parity.md)
 - [M2 manual QA checklist](docs/qa/m2-checklist.md)
+- [Bun vs Node differences](docs/user/bun-vs-node.md)
+- [M3 manual QA checklist](docs/qa/m3-checklist.md)
 
 ## License
 

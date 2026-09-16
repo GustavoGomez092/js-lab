@@ -3,8 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunEvent, RunState } from "@jslab/rpc-schema";
-import type { TransformOptions, TransformResult } from "@jslab/transform";
-import { transform } from "@jslab/transform";
+import { buildSettings, defaultSettings } from "@jslab/shared";
+import type { BuildOptions, TransformOptions, TransformResult } from "@jslab/transform";
+import { DEFAULT_BUILD_OPTIONS, transform } from "@jslab/transform";
 import { BunRunnerProcess } from "../../src/main/runs/bun-runner-process";
 import { RunCoordinator, type RunnerSettings } from "../../src/main/runs/run-coordinator";
 import { SparePool } from "../../src/main/runs/spare-pool";
@@ -26,6 +27,8 @@ interface Harness {
 interface HarnessHooks {
   onLockAdd?: (runId: string) => void;
   onDiagnostics?: (tabId: string, runId: string) => void;
+  /** Called as soon as the spare pool asks for a runner, before `BunRunnerProcess.start` resolves. */
+  onRunnerRequested?: () => void;
   onRunnerStart?: (runner: BunRunnerProcess) => void;
   transform?: (source: string, options: TransformOptions) => Promise<TransformResult>;
   /** A stand-in runner script (see fixtures/) instead of the real bootstrap. */
@@ -52,6 +55,7 @@ async function createHarness(overrides: Partial<RunnerSettings> = {}, hooks: Har
   const locks = new Set<string>();
   const spares = new SparePool(
     async (config) => {
+      hooks.onRunnerRequested?.();
       const runner = await BunRunnerProcess.start(config);
       hooks.onRunnerStart?.(runner);
       return runner;
@@ -226,9 +230,16 @@ describe("RunCoordinator", () => {
 
   test("disposing during a run does not leave runners behind", async () => {
     const runners: BunRunnerProcess[] = [];
-    const h = await createHarness({}, { onRunnerStart: (runner) => runners.push(runner) });
+    let requested!: () => void;
+    const runnerRequested = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    const h = await createHarness(
+      {},
+      { onRunnerRequested: () => requested(), onRunnerStart: (runner) => runners.push(runner) },
+    );
     h.coordinator.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
-    await Bun.sleep(5);
+    await runnerRequested;
     h.coordinator.dispose();
     await Bun.sleep(1500);
     expect(runners.length).toBeGreaterThan(0);
@@ -239,15 +250,18 @@ describe("RunCoordinator", () => {
   }, 15_000);
 
   test("closing a tab while a runner is being taken leaves no runners behind", async () => {
-    // No deterministic hook exists for "take() is awaiting spare.promise" specifically (as opposed to
-    // "a runner finished starting", which onRunnerStart already covers) without adding new harness plumbing;
-    // reusing the same short-sleep timing as "disposing during a run does not leave runners behind" above is
-    // reliable here because BunRunnerProcess.start() (real process spawn + IPC ready handshake) takes tens of ms,
-    // far longer than the 5ms we wait before closing the tab.
+    // onRunnerRequested fires while take() is awaiting the spare, which is the window this test is named for.
     const runners: BunRunnerProcess[] = [];
-    const h = await createHarness({}, { onRunnerStart: (runner) => runners.push(runner) });
+    let requested!: () => void;
+    const runnerRequested = new Promise<void>((resolve) => {
+      requested = resolve;
+    });
+    const h = await createHarness(
+      {},
+      { onRunnerRequested: () => requested(), onRunnerStart: (runner) => runners.push(runner) },
+    );
     h.coordinator.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
-    await Bun.sleep(5);
+    await runnerRequested;
     h.coordinator.disposeTab("t1"); // deliberately not coordinator.dispose(): that path is already covered above.
     await Bun.sleep(2000);
     expect(runners.length).toBeGreaterThan(0);
@@ -580,4 +594,29 @@ describe("RunCoordinator", () => {
     expect(h.states.some((s) => s.runId === runId && s.state === "killed")).toBe(false);
     expect(h.events.filter((e) => e.kind === "error")).toEqual([]);
   }, 15_000);
+
+  test("build settings reach the transform (spec §8 Build)", async () => {
+    // R-M3-T15-TYPES-1: fails typecheck if @jslab/shared's BuildSettings and @jslab/transform's BuildOptions diverge.
+    const buildTypeGuard: BuildOptions = buildSettings(defaultSettings());
+    expect(buildTypeGuard.decorators).toBe("2023-11");
+    const seen: TransformOptions[] = [];
+    const harness = await createHarness(
+      { build: { ...DEFAULT_BUILD_OPTIONS, pipelineOperator: true } },
+      {
+        transform: async (source, options) => {
+          seen.push(options);
+          return transform(source, options);
+        },
+      },
+    );
+    const { runId } = harness.coordinator.start({
+      tabId: "t1",
+      code: "1 |> % + 1",
+      language: "typescript",
+      logpoints: [],
+    });
+    await harness.waitForState("idle", runId);
+    expect(seen[0]?.build?.pipelineOperator).toBe(true);
+    expect(harness.events.find((event) => event.kind === "result")).toMatchObject({ value: { t: "number", v: "2" } });
+  });
 });

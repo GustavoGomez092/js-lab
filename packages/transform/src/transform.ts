@@ -1,6 +1,8 @@
 import * as Babel from "@babel/standalone";
+import { DEFAULT_BUILD_OPTIONS, proposalPlugins } from "./build";
 import { createInstrumentPlugin } from "./instrument";
 import type { Diagnostic, Language, RawSourceMap, TransformOptions, TransformResult } from "./types";
+import { createWorkingDirectoryPlugin } from "./working-directory";
 
 const FILENAMES: Record<Language, string> = {
   typescript: "entry.ts",
@@ -14,10 +16,10 @@ type Presets = NonNullable<NonNullable<Parameters<typeof Babel.transform>[1]>["p
 function presetsFor(language: Language): Presets {
   switch (language) {
     case "typescript":
-      return [["typescript", {}]];
+      return [["typescript", { onlyRemoveTypeImports: false }]];
     case "tsx":
       return [
-        ["typescript", {}],
+        ["typescript", { onlyRemoveTypeImports: false }],
         ["react", { runtime: "automatic" }],
       ];
     case "jsx":
@@ -36,7 +38,11 @@ export function transform(source: string, options: TransformOptions): TransformR
       sourceType: "module",
       sourceMaps: true,
       presets: presetsFor(options.language),
-      plugins: [createInstrumentPlugin(options, source, diagnostics)],
+      plugins: [
+        createInstrumentPlugin(options, source, diagnostics),
+        ...proposalPlugins(options.build ?? DEFAULT_BUILD_OPTIONS),
+        ...(options.workingDirectory ? [createWorkingDirectoryPlugin(options.workingDirectory)] : []),
+      ],
       parserOpts: { allowAwaitOutsideFunction: true },
     });
     if (!out) throw new Error("Babel returned no output");

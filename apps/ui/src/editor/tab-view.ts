@@ -76,19 +76,24 @@ export function createTabView<M extends ModelLike, V>(deps: TabViewDeps<M, V>): 
       saver.flush(leaving);
     }
     activeId = id;
-    const previousModel = deps.models.get(id);
+    const cachedModel = deps.models.get(id);
     // The view state is carried across a language change only (the model is recreated). An unchanged model keeps its
     // own view state, so don't save one on every keystroke (T12-m5, FB-I2).
     const carried =
-      previousModel && !deps.models.matches(id, tab.language) && deps.editor.getModel() === previousModel
+      cachedModel && !deps.models.matches(id, tab.language) && deps.editor.getModel() === cachedModel
         ? deps.editor.saveViewState()
         : null;
-    const { model } = deps.models.ensure(id, tab.language, state.buffers[id] ?? "");
-    if (deps.editor.getModel() !== model) {
-      deps.editor.setModel(model);
-      const viewState = carried ?? (tab.viewState as V | null);
-      if (viewState) deps.editor.restoreViewState(viewState);
-      deps.onShown(id, model);
+    const { model, previous } = deps.models.ensure(id, tab.language, state.buffers[id] ?? "");
+    try {
+      if (deps.editor.getModel() !== model) {
+        deps.editor.setModel(model);
+        const viewState = carried ?? (tab.viewState as V | null);
+        if (viewState) deps.editor.restoreViewState(viewState);
+        deps.onShown(id, model);
+      }
+    } finally {
+      // T12-m3: the new model is attached (above) before the old one goes away, even if attaching it throws (M-3).
+      previous?.dispose();
     }
     const code = state.buffers[id] ?? "";
     // FB-I2: the buffer is usually the exact string the content listener just read from this model, so the model

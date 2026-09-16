@@ -10,6 +10,7 @@ export interface SettingsSnapshot {
   fieldCount: number;
   fontOptions: string[];
   settings: Settings | null;
+  npmrc: { content: string; dirty: boolean; status: string | null } | null;
 }
 
 /** Answers `e2e.*` calls routed with `window: "settings"`. */

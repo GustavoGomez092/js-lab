@@ -1,0 +1,8 @@
+{
+  "name": "add-script-blocked",
+  "argv": ["add", "--exact", "fixture-script@1.0.0"],
+  "exitCode": 0,
+  "stdout": "bun add v1.4.0 (<rev>)\n\ninstalled fixture-script@1.0.0\n\n1 package installed [<ms>]\n\nBlocked 1 postinstall. Run `bun pm untrusted` for details.\n",
+  "stderr": "Resolving dependencies\nResolved, downloaded and extracted [4]\nSaved lockfile\n",
+  "bunVersion": "1.4.0"
+}

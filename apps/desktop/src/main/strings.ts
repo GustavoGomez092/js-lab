@@ -19,6 +19,21 @@ export const strings = {
     quitFlushFailed: "Couldn't save the session and settings before quitting",
     quitFlushTimedOut: (timeoutMs: number) =>
       `Couldn't save the session and settings within ${timeoutMs} ms before quitting; quitting anyway`,
+    /** RR1-m2: a settings write that hung. */
+    settingsWriteTimedOut: (timeoutMs: number) => `settings.json write did not finish within ${timeoutMs} ms`,
+    settingsWriteFailed: "Couldn't save settings.json",
+    npmHomeNpmrcMoved: (path: string) =>
+      `Moved an .npmrc found in npm-home to ${path}; npm operations never read one there`,
+    npmPostChangeFailed: "npm post-change step failed",
+    npmTypesCheckFailed: "Couldn't check the registry for types",
+    /** Fix round 1 (I-2): packages/package.json exists but isn't a readable manifest; never replaced silently. */
+    npmManifestUnreadable: (path: string) => `npm's package.json at ${path} could not be read as JSON`,
+    /** FR-12 (fix round 2): the same anti-pattern as npmManifestUnreadable, in the registry-selection path. */
+    npmNpmrcUnreadable: (path: string) => `npm's .npmrc at ${path} could not be read`,
+    /** Fix round 1 (M-1): an onOperation subscriber threw; the queue's own bookkeeping must still proceed. */
+    npmOperationEventFailed: "npm operation event could not be delivered",
+    loginShellFailed: (reason: string) =>
+      `Couldn't read the login shell environment (${reason}); using the app's environment`,
   },
   dialogs: {
     startupFailed: (message: string) => `JSLab couldn't start: ${message}`,
@@ -48,5 +63,9 @@ export const strings = {
       `session.json was written by a newer version of JSLab (version ${version}). Tab changes in this window won't be saved to it.`,
     tabsDropped: (count: number) =>
       `${count} ${count === 1 ? "tab" : "tabs"} in session.json couldn't be read and were skipped. Their buffer files were kept.`,
+  },
+  runs: {
+    /** Spec §12.2. */
+    workingDirectoryNotFound: (path: string) => `Working directory not found: ${path}`,
   },
 } as const;

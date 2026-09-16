@@ -1,5 +1,12 @@
 import { appNoticeSchema, MAX_TEXT_CHARS } from "@jslab/rpc-schema";
-import { commandMeta, DEFAULT_KEYBINDINGS, formatChord, resolveKeybindings, shortcutFor } from "@jslab/shared";
+import {
+  commandMeta,
+  DEFAULT_KEYBINDINGS,
+  formatChord,
+  resolveKeybindings,
+  shortcutFor,
+  tabLabel,
+} from "@jslab/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
@@ -11,14 +18,18 @@ import { createViewCommands } from "../commands/view-commands";
 import { createE2EAgent } from "../e2e/agent";
 import { Editor } from "../editor/Editor";
 import { getEditorHandle } from "../editor/editor-handle";
+import { EnvVarsSheet } from "../env/EnvVarsSheet";
 import { createFileCommands } from "../files/file-commands";
 import { createFileFlows } from "../files/file-flows";
 import { createFormatActions } from "../format/format-actions";
 import { type Formatter, shouldFormatBeforeRun } from "../format/formatter";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
+import { NpmSheet } from "../npm/NpmSheet";
+import { operationStatusMessage } from "../npm/npm-panel";
 import { OutputPanel } from "../output/OutputPanel";
 import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
+import { createBufferSync } from "../state/buffer-sync";
 import { createEventCoalescer, createFrameScheduler } from "../state/event-coalescer";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
@@ -72,7 +83,9 @@ export function App({
   const outputVisible = useStore(store, (s) => s.tab?.layout.outputVisible ?? true);
   // FB-m9: the single-tab toolbar title follows edits; the summary cache keeps this selector cheap per keystroke.
   const [titles] = useState(createTabSummaryCache);
-  const toolbarTitle = useStore(store, (s) => (s.tab ? titles.title(s.tab, s.code) : ""));
+  const toolbarTitle = useStore(store, (s) =>
+    s.tab ? tabLabel(titles.title(s.tab, s.code), s.tab.workingDirectory) : "",
+  );
   // RR2-m1: this cache only ever needs the active tab's entry, so prune it to that one tab whenever it changes.
   // Otherwise every tab that was ever active, and its last buffer string, stays reachable for the window's life.
   useEffect(() => {
@@ -84,6 +97,7 @@ export function App({
   const settings = useStore(store, (s) => s.settings);
   const sideBarPanel = useStore(store, (s) => s.sideBarPanel);
   const tabCount = useStore(store, (s) => s.tabOrder.length);
+  const npmOpen = useStore(store, (s) => s.modal?.kind === "npm");
 
   const lastTypedAt = useRef(0);
   // T16-rr1: the React-owned slot the Editor puts the Vim status node into, always rendered before the status bar.
@@ -96,6 +110,21 @@ export function App({
     () => (formatter ? createFormatActions({ store, formatter, editor: getEditorHandle }) : null),
     [store, formatter],
   );
+
+  // X5: edits reach Main at most once per BUFFER_SYNC_DELAY_MS per tab; pending content is flushed on demand.
+  const bufferSync = useMemo(() => createBufferSync((tabId, content) => api.bufferChanged(tabId, content)), [api]);
+  useEffect(() => {
+    const flushAll = () => bufferSync.flush();
+    window.addEventListener("beforeunload", flushAll);
+    // M-2: WebKit fires pagehide more reliably than beforeunload when the view goes away.
+    window.addEventListener("pagehide", flushAll);
+    return () => {
+      window.removeEventListener("beforeunload", flushAll);
+      window.removeEventListener("pagehide", flushAll);
+      bufferSync.flush();
+      bufferSync.dispose();
+    };
+  }, [bufferSync]);
 
   const run = useCallback(
     (reason: "auto" | "manual") => {
@@ -119,6 +148,7 @@ export function App({
           fresh.setStatusMessage(strings.limits.tooLarge);
           return;
         }
+        bufferSync.flush(tabId);
         void api.startRun({ tabId, code, language: freshTab.language, logpoints: [], reason });
       };
       const wantsFormat =
@@ -133,7 +163,7 @@ export function App({
       if (wantsFormat && format) void format.formatTab(tabId).then(start, start);
       else start();
     },
-    [store, api, format],
+    [store, api, format, bufferSync],
   );
 
   const tabs = useMemo(() => createTabActions(store, api), [store, api]);
@@ -163,16 +193,31 @@ export function App({
 
   // The close guard is a side effect, so it lives in an effect and is cleared on unmount (fix round 1, m-6).
   useEffect(() => {
-    tabs.setBeforeClose((tabId) => flows.beforeClose(tabId));
+    tabs.setBeforeClose(async (tabId) => {
+      const allowed = await flows.beforeClose(tabId);
+      // Main moves the buffer file into buffers/closed/ on close, so it must have the latest content first.
+      if (allowed) bufferSync.flush(tabId);
+      return allowed;
+    });
     return () => tabs.setBeforeClose(null);
-  }, [tabs, flows]);
+  }, [tabs, flows, bufferSync]);
+
+  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
+  // R23-1: hoisted above the registry so app-commands' npm.install status message can show its keycap too.
+  const keysFor = useCallback(
+    (command: string) => {
+      const chord = shortcutFor(bindings, command);
+      return chord ? formatChord(chord) : null;
+    },
+    [bindings],
+  );
 
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>
       store.getState().setStatusMessage(strings.commands.failed(commandMeta(id)?.title ?? id, error)),
     );
     created.register(
-      ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle }),
+      ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle, keysFor }),
       ...createEditorCommands(getEditorHandle),
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
@@ -209,18 +254,19 @@ export function App({
       },
     );
     return created;
-  }, [store, api, tabs, run, flows, format]);
+  }, [store, api, tabs, run, flows, format, keysFor]);
 
-  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
   const resolver = useMemo(() => new KeybindingResolver(bindings), [bindings]);
   // FB-m3: chrome keycaps follow the effective bindings, as the palette and the menu do.
-  const keycaps = useMemo(() => {
-    const keysFor = (command: string) => {
-      const chord = shortcutFor(bindings, command);
-      return chord ? formatChord(chord) : null;
-    };
-    return { run: keysFor("run.start"), stop: keysFor("run.stop"), settings: keysFor("app.settings") };
-  }, [bindings]);
+  const keycaps = useMemo(
+    () => ({
+      run: keysFor("run.start"),
+      stop: keysFor("run.stop"),
+      settings: keysFor("app.settings"),
+      npm: keysFor("tools.npmPackages"),
+    }),
+    [keysFor],
+  );
 
   useEffect(() => {
     const stop = startAutoRun(store, () => run("auto"));
@@ -258,6 +304,21 @@ export function App({
         registry.execute(command, args);
       }),
       api.on("settings.changed", ({ settings }) => store.getState().receiveSettings(settings)),
+      // Task 26: Main's npm list changed; receiveNpmList bumps packagesRevision itself when names/versions change,
+      // so the type feeder's package cache still invalidates without a separate, redundant bump here.
+      api.on("npm.changed", (list) => store.getState().receiveNpmList(list)),
+      api.on("npm.op", (operation) => {
+        store.getState().receiveNpmOperation(operation);
+        // R26-6: a finished operation still reports itself in the status bar when its sheet isn't open to show it.
+        if (store.getState().modal?.kind !== "npm") {
+          const message = operationStatusMessage(operation, keycaps.run);
+          if (message) store.getState().setStatusMessage(message);
+        }
+      }),
+      api.on("npm.log", ({ opId, text }) => store.getState().appendNpmLog(opId, text)),
+      // Task 24: the working directory changed (wd.pick/wd.clear); the editor's own subscription invalidates
+      // the type feeder for the active tab once the store's tab is updated (Editor.tsx, unchanged here).
+      api.on("wd.changed", ({ tab }) => store.getState().applyTabUpdate(tab)),
       api.on("file.opened", (payload) => void flows.handleOpened(payload)),
       api.on("file.saved", (payload) => flows.handleSaved(payload)),
       api.on("file.saveCancelled", (payload) => flows.handleSaveCancelled(payload)),
@@ -268,11 +329,17 @@ export function App({
         const notice = appNoticeSchema.safeParse(payload);
         if (notice.success) store.getState().addNotice(notice.data);
       }),
+      // X1: Main is quitting. Flush view state and edits, then acknowledge so Main can write the session.
+      api.on("app.flushState", () => {
+        getEditorHandle()?.flushViewState();
+        bufferSync.flush();
+        api.stateFlushed();
+      }),
     ];
     return () => {
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
-  }, [store, api, registry, flows, coalescer]);
+  }, [store, api, registry, flows, coalescer, bufferSync, keycaps]);
 
   useEffect(() => {
     if (!e2e) return;
@@ -284,6 +351,9 @@ export function App({
       missingEditorActions: () => getEditorHandle()?.missingActions(Object.values(EDITOR_ACTIONS)) ?? [],
       editorOptions: () => getEditorHandle()?.getOptions() ?? null,
       registeredCommands: () => registry.list().map((spec) => spec.id),
+      tsDiagnostics: () => getEditorHandle()?.typeDiagnostics() ?? Promise.resolve([]),
+      completions: (offset) => getEditorHandle()?.completionsAt(offset) ?? Promise.resolve([]),
+      installActions: () => getEditorHandle()?.installActions() ?? Promise.resolve([]),
       regions: () => ({
         toolbar: document.querySelector(".toolbar") !== null,
         activityBar: document.querySelector(".activity-bar") !== null,
@@ -316,7 +386,7 @@ export function App({
             const content = state.buffers[id] ?? "";
             // Main rejects buffer.changed above MAX_TEXT_CHARS. Tell the user rather than dropping the edit silently.
             if (content.length > MAX_TEXT_CHARS) store.getState().setStatusMessage(strings.limits.tooLarge);
-            else api.bufferChanged(id, content);
+            else bufferSync.changed(id, content);
             if (id === state.activeTabId) lastTypedAt.current = Date.now();
           }
           // updateLayout (state/store.ts) always replaces the layout object, even when the clamped
@@ -343,7 +413,7 @@ export function App({
           }
         }
       }),
-    [store, api],
+    [store, api, bufferSync],
   );
 
   useEffect(() => {
@@ -382,6 +452,10 @@ export function App({
     },
     [store, registry],
   );
+
+  // R23-1: every install action (the editor's quick fix and the output row's button) dispatches npm.install, so the
+  // status bar confirms it started.
+  const install = useCallback((spec: string) => registry.execute("npm.install", { spec }), [registry]);
 
   if (!tabId || !settings) return null;
   const busy = runState !== null && BUSY_STATES.has(runState);
@@ -438,10 +512,13 @@ export function App({
             runKeys={keycaps.run}
             stopKeys={keycaps.stop}
             settingsKeys={keycaps.settings}
+            npmOpen={npmOpen}
+            npmKeys={keycaps.npm}
             onRun={() => registry.execute("run.start")}
             onStop={() => registry.execute("run.stop")}
             onPanel={togglePanel}
             onSettings={() => registry.execute("app.settings")}
+            onNpm={() => registry.execute("tools.npmPackages")}
           />
         )}
         {settings.view.sideBar && <SideBar panel={sideBarPanel} />}
@@ -451,16 +528,32 @@ export function App({
           secondVisible={outputVisible}
           onResize={(size) => store.getState().setEditorSize(size)}
           onReset={() => store.getState().resetEditorSize()}
-          first={<Editor store={store} api={api} onLargePaste={flows.confirmLargePaste} vimSlot={vimSlot} />}
-          second={<OutputPanel store={store} api={api} runKeys={keycaps.run} />}
+          first={
+            <Editor
+              store={store}
+              api={api}
+              onLargePaste={flows.confirmLargePaste}
+              onInstall={install}
+              vimSlot={vimSlot}
+            />
+          }
+          second={<OutputPanel store={store} api={api} runKeys={keycaps.run} onInstall={install} />}
         />
       </div>
       <div className="vim-slot" ref={vimSlot} />
       {settings.view.statusBar && (
-        <StatusBar store={store} onToggleLayout={() => registry.execute("view.toggleLayout")} runKeys={keycaps.run} />
+        <StatusBar
+          store={store}
+          onToggleLayout={() => registry.execute("view.toggleLayout")}
+          runKeys={keycaps.run}
+          onPickWorkingDirectory={() => registry.execute("wd.set")}
+          onClearWorkingDirectory={() => registry.execute("wd.clear")}
+        />
       )}
       <RenameDialog store={store} />
       <ConfirmDialog store={store} dialogs={dialogs} />
+      <EnvVarsSheet store={store} api={api} />
+      <NpmSheet store={store} api={api} />
       <CommandPalette store={store} registry={registry} bindings={bindings} />
       {runState === "unresponsive" && (
         <UnresponsiveDialog onKill={() => registry.execute("run.kill")} onWait={() => api.wait(tabId)} />

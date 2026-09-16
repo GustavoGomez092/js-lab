@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { defaultSettings, SETTINGS_SECTIONS } from "@jslab/shared";
-import { coerceFieldValue, fieldsFor, SETTINGS_FIELDS, SETTINGS_TABS } from "../src/settings/fields";
+import { coerceFieldValue, type FieldDef, fieldsFor, SETTINGS_FIELDS, SETTINGS_TABS } from "../src/settings/fields";
 import { strings } from "../src/strings";
 
 describe("settings fields", () => {
@@ -15,7 +15,15 @@ describe("settings fields", () => {
       expect(strings.settings.fields[field.key]?.help.length).toBeGreaterThan(0);
       expect(SETTINGS_TABS.map((tab) => tab.id)).toContain(field.tab);
     }
-    expect(SETTINGS_TABS.map((tab) => tab.id)).toEqual(["general", "editor", "formatting", "appearance", "advanced"]);
+    expect(SETTINGS_TABS.map((tab) => tab.id)).toEqual([
+      "general",
+      "editor",
+      "formatting",
+      "appearance",
+      "npm",
+      "build",
+      "advanced",
+    ]);
     expect(SETTINGS_FIELDS.find((field) => field.key === "app.uiLanguage")?.restart).toBe(true);
   });
 
@@ -37,5 +45,21 @@ describe("settings fields", () => {
     expect(fieldsFor(null, "print width").map((field) => field.key)).toEqual(["prettier.printWidth"]);
     expect(fieldsFor(null, "hoverDelayMs").map((field) => field.key)).toEqual(["editor.hoverDelayMs"]);
     expect(fieldsFor(null, "ligature").map((field) => field.key)).toEqual(["appearance.fontLigatures"]);
+  });
+
+  test("the NPM and Build tabs list their §8 fields in spec order", () => {
+    expect(fieldsFor("npm", "").map((field) => field.key)).toEqual(["npm.allowInstallScripts", "npm.autoInstallTypes"]);
+    expect(fieldsFor("build", "").map((field) => field.key)).toEqual([
+      "build.decorators",
+      "build.pipelineOperator",
+      "build.doExpressions",
+      "build.throwExpressions",
+      "build.functionSent",
+      "build.regexpModifiers",
+      "build.optionalChainingAssign",
+    ]);
+    const decorators = SETTINGS_FIELDS.find((field) => field.key === "build.decorators") as FieldDef;
+    expect(coerceFieldValue(decorators, "legacy")).toBe("legacy");
+    expect(coerceFieldValue(decorators, "stage-1")).toBeNull();
   });
 });

@@ -1,0 +1,8 @@
+{
+  "name": "add-not-found",
+  "argv": ["add", "--exact", "jslab-fixture-missing"],
+  "exitCode": 1,
+  "stdout": "bun add v1.4.0 (<rev>)\n",
+  "stderr": "Resolving dependencies\nResolved, downloaded and extracted [1]\nerror: GET <REGISTRY>/jslab-fixture-missing - 404\n",
+  "bunVersion": "1.4.0"
+}

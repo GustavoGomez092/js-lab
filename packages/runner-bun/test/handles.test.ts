@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { HandleTracker, installHandleTracking } from "../src/handles";
+import { HandleTracker, handleCountAction, installHandleTracking } from "../src/handles";
 
 // biome-ignore lint/suspicious/noExplicitAny: sandboxed global object
 function sandbox(): { tracker: HandleTracker; g: any } {
@@ -175,4 +175,21 @@ test("a child process that fails to spawn is no longer tracked", async () => {
   expect(errorFired).toBe(true);
   await Bun.sleep(10);
   expect(tracker.count).toBe(0);
+});
+
+test("handleCountAction disposes new handles after a stop or a caught process.exit, and tracks idle/settled otherwise", () => {
+  const cases: Array<[Parameters<typeof handleCountAction>[0], boolean, number, ReturnType<typeof handleCountAction>]> =
+    [
+      ["evaluating", true, 1, "dispose"],
+      ["settled", true, 2, "dispose"],
+      ["stopped", false, 1, "dispose"],
+      ["evaluating", false, 1, null],
+      ["settled", false, 0, "idle"],
+      ["idle", false, 1, "settled"],
+      ["stopped", false, 0, null],
+      ["evaluating", true, 0, null],
+    ];
+  for (const [state, exiting, count, expected] of cases) {
+    expect(handleCountAction(state, exiting, count)).toBe(expected);
+  }
 });

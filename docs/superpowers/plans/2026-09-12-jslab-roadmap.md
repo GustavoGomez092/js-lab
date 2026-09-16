@@ -32,7 +32,7 @@ These apply to every milestone plan:
 | M0 Spikes | `2026-09-12-jslab-m0-spikes.md` | Done (report: `docs/spikes/2026-09-m0-report.md`) |
 | M1 Core scratchpad | `2026-09-12-jslab-m1-core-scratchpad.md` (rulings: `2026-09-12-jslab-m1-rulings.md`) | Done: 268 tests, lint/typecheck clean, dev and packaged canary boot verified by script; manual QA Q1–Q16 pending (`docs/qa/m1-checklist.md`) |
 | M2 Workspace | `2026-09-13-jslab-m2-workspace.md` | Complete (manual QA items pending user) |
-| M3 Language & packages | to be written at M2 completion | Not started |
+| M3 Language & packages | `2026-09-14-jslab-m3-language-packages.md` | Complete (manual QA items pending user) |
 | M4 Browser runtimes | to be written at M3 completion | Not started |
 | M5 Productivity & extras | to be written at M4 completion | Not started |
 | M6 Ship | to be written at M5 completion | Not started |
@@ -106,6 +106,7 @@ M5 depends on M3 because snippets autocomplete, AI context and the CLI all use t
   8. `docs/user/bun-vs-node.md`.
 - **Parity rows:** EX-30..EX-33, LB-05, LB-07, ED-08..ED-14, ED-26, TL-01..TL-11, XT-12.
 - **Exit:** zod scenario works end to end; npm integration suite green against Verdaccio.
+- **Delivered beyond the original list:** the opt-in npm integration and E2E suites (`bun run test:npm`, `bun run e2e:npm`) with `@jslab/test-registry`; the login-shell environment adapter (§4.6); runner exit semantics after a caught `process.exit`; the M2 persistence and UI carries (FA-m9, FA-m12, RR1-m2, X1, X5, T12-m1, T12-m3, T19A-mock); the app icon (branding carry).
 
 ## M4: Browser runtimes
 

@@ -3,9 +3,15 @@ import type {
   BootstrapPayload,
   E2EResponse,
   EncodedValue,
+  EnvVars,
   FileSaveResult,
+  LocalTypesResult,
+  NpmListResult,
+  NpmSearchResponse,
+  PackageTypesResult,
   RunExpandParams,
   RunStartParams,
+  SaveResult,
   SettingsUpdateParams,
   TabCloseResult,
   TabCreateParams,
@@ -29,6 +35,7 @@ export interface MainApi {
   bufferChanged(tabId: string, content: string): void;
   patchTab(tabId: string, patch: TabPatch["patch"]): void;
   heartbeat(): void;
+  stateFlushed(): void;
 
   createTab(params: TabCreateParams): Promise<{ tab: TabState }>;
   closeTab(tabId: string): Promise<TabCloseResult>;
@@ -46,6 +53,22 @@ export interface MainApi {
   confirmSaveAs(token: string, confirmed: boolean): void;
   revealInFinder(tabId: string): void;
   copyPath(tabId: string): void;
+
+  npmList(refreshOutdated: boolean): Promise<NpmListResult>;
+  npmSearch(query: string): Promise<NpmSearchResponse>;
+  npmInstall(spec: string): void;
+  npmRemove(name: string): void;
+  npmUpdate(name: string): void;
+  npmUpdateAll(): void;
+
+  packageTypes(tabId: string, packages: string[]): Promise<PackageTypesResult[]>;
+  localTypes(tabId: string, specifiers: string[]): Promise<LocalTypesResult>;
+
+  getEnv(): Promise<EnvVars>;
+  saveEnv(variables: EnvVars): Promise<SaveResult>;
+
+  pickWorkingDirectory(tabId: string): void;
+  clearWorkingDirectory(tabId: string): void;
 
   appCommand(action: AppAction): void;
   e2eRespond(response: E2EResponse): void;

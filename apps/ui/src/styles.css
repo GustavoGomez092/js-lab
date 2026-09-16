@@ -310,6 +310,14 @@ button:disabled {
   text-align: left;
 }
 
+.entry-action {
+  margin-top: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--fg-accent);
+}
+
 .entry-codeframe,
 .entry-stream {
   margin: 0;
@@ -548,6 +556,174 @@ button:disabled {
   color: var(--fg-error);
 }
 
+/* ---------- sheets (Environment Variables, and NPM Packages in Task 26; spec §7.5) ---------- */
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 96px);
+  padding: 16px 20px;
+  overflow: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  box-shadow: 0 28px 70px -20px color-mix(in srgb, var(--bg-scrim) 85%, transparent);
+}
+
+.sheet h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.sheet-help,
+.sheet-status {
+  margin: 0;
+  color: var(--fg-muted);
+}
+
+.dialog-actions .sheet-status {
+  margin-right: auto;
+}
+
+.dialog-actions .primary .kbd {
+  color: var(--fg-onAccent);
+}
+
+.sheet input::placeholder {
+  color: var(--fg-muted);
+}
+
+.env-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.env-table input {
+  width: 100%;
+  padding: 4px 6px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  color: inherit;
+}
+
+.env-value {
+  display: flex;
+  gap: 4px;
+}
+
+.env-table tr.invalid input {
+  border-color: var(--fg-error);
+}
+
+.env-error {
+  color: var(--fg-error);
+  font-size: 11px;
+}
+
+/* Fix round 1 (M-2): the paste-result info line, kept apart from .sheet-status's role="alert" error text. */
+.env-info {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+/* ---------- NPM Packages sheet (Task 26, spec §11.2) ---------- */
+.npm-search {
+  width: 100%;
+}
+
+.npm-results {
+  margin: 0;
+  padding: 0;
+}
+
+.npm-result {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+/* R26-2: the palette's aria-selected idiom, reused for keyboard-navigated search results. */
+.npm-result[aria-selected="true"] {
+  background: var(--bg-activeRow);
+}
+
+.npm-results p {
+  margin: 2px 0;
+  color: var(--fg-muted);
+}
+
+.npm-version,
+.npm-downloads {
+  color: var(--fg-muted);
+}
+
+.npm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.npm-installed {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.npm-installed table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.npm-installed thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+  text-align: left;
+}
+
+.npm-installed tr.npm-new {
+  background: var(--bg-accentMuted);
+  transition: background 0.4s;
+}
+
+/* Fix round 2 (N-4). */
+@media (prefers-reduced-motion: reduce) {
+  .npm-installed tr.npm-new {
+    transition: none;
+  }
+}
+
+/* R26-1: a semver-major crossing. 8.9:1 on elevated. */
+.npm-major {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--fg-warn);
+  font-size: 11px;
+}
+
+/* R26-3: --fg-muted is 3.58:1 on the .npm-new highlight and fails AA; a row's own status stays legible there. */
+.npm-row-status {
+  color: var(--fg-default);
+}
+
+.npm-failure {
+  color: var(--fg-error);
+}
+
+.npm-log pre,
+.npm-failure pre {
+  max-height: 160px;
+  overflow: auto;
+  color: var(--fg-default);
+  font-family: var(--mono);
+  white-space: pre-wrap;
+}
+
 /* Startup failure (review finding: Task 9's failure screen had no styles). */
 .startup-failure {
   display: flex;
@@ -734,6 +910,31 @@ button:disabled {
 
 .status-item {
   padding: 0 4px;
+}
+
+.status-wd {
+  display: inline-flex;
+  align-items: center;
+}
+
+.status-wd-clear {
+  color: var(--fg-muted);
+  /* R24-3: appears on hover or focus, matching the .tab-close idiom. */
+  opacity: 0;
+}
+
+.status-wd:hover .status-wd-clear,
+.status-wd:focus-within .status-wd-clear {
+  opacity: 1;
+}
+
+.status-wd-empty {
+  color: var(--fg-muted);
+}
+
+/* R24-2: 8.9:1 on chrome. */
+.status-wd-missing {
+  color: var(--fg-warn);
 }
 
 /* ---------- tab bar ---------- */
@@ -1168,5 +1369,55 @@ button:disabled {
 
 .settings-actions .danger {
   background: var(--bg-errorRow);
+  color: var(--fg-error);
+}
+
+.npmrc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.npmrc h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.npmrc-editor {
+  height: 180px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.npmrc-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--fg-warn);
+  font-size: 12px;
+}
+
+.npmrc-examples {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.npmrc-examples pre {
+  margin: 6px 0;
+  padding: 8px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  font-size: 12px;
+  overflow-x: auto;
+}
+
+.npmrc-status {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.npmrc-status-error {
   color: var(--fg-error);
 }

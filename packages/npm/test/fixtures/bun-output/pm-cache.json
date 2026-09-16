@@ -1,0 +1,34 @@
+{
+  "bunVersion": "1.4.0",
+  "cases": [
+    {
+      "env": {
+        "BUN_INSTALL_CACHE_DIR": "<TMP>/cache-order/explicit"
+      },
+      "printed": "<TMP>/cache-order/explicit"
+    },
+    {
+      "env": {
+        "XDG_CACHE_HOME": "<TMP>/cache-order/xdg"
+      },
+      "printed": "<TMP>/cache-order/xdg/.bun/install/cache"
+    },
+    {
+      "env": {
+        "BUN_INSTALL": "<TMP>/cache-order/bun-install"
+      },
+      "printed": "<TMP>/cache-order/bun-install/install/cache"
+    },
+    {
+      "env": {
+        "XDG_CACHE_HOME": "<TMP>/cache-order/xdg",
+        "BUN_INSTALL": "<TMP>/cache-order/bun-install"
+      },
+      "printed": "<TMP>/cache-order/bun-install/install/cache"
+    },
+    {
+      "env": {},
+      "printed": "<TMP>/cache-order/home/.bun/install/cache"
+    }
+  ]
+}

@@ -25,7 +25,10 @@ export function effectiveRuntime(runtime: Runtime): Runtime {
 }
 
 export const UI_LANGUAGES = ["system", "en", "es", "ja", "zh", "pt"] as const;
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
+/** `build.decorators` (spec §8 Build): standard 2023-11 decorators, TypeScript's legacy decorators, or no decorators. */
+export const DECORATOR_MODES = ["none", "2023-11", "legacy"] as const;
+export type DecoratorMode = (typeof DECORATOR_MODES)[number];
 export const DEFAULT_DARK_THEME = "graphite";
 export const DEFAULT_LIGHT_THEME = "graphite-light";
 
@@ -116,6 +119,19 @@ export const settingsSchema = z.looseObject({
     auto: bool(true),
     channel: choice(["stable", "canary"], "stable"),
   }),
+  npm: section({
+    allowInstallScripts: bool(false),
+    autoInstallTypes: bool(false),
+  }),
+  build: section({
+    decorators: choice(DECORATOR_MODES, "2023-11"),
+    pipelineOperator: bool(false),
+    doExpressions: bool(false),
+    throwExpressions: bool(false),
+    functionSent: bool(false),
+    regexpModifiers: bool(true),
+    optionalChainingAssign: bool(true),
+  }),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
@@ -130,6 +146,8 @@ export const SETTINGS_SECTIONS = [
   "appearance",
   "view",
   "updates",
+  "npm",
+  "build",
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 export type SettingKey = `${SettingsSection}.${string}`;
@@ -177,12 +195,37 @@ export function nextZoom(current: number, direction: -1 | 0 | 1): number {
   return [...ZOOM_LEVELS].reverse().find((level) => level < current - 0.001) ?? ZOOM_LEVELS[0] ?? 0.5;
 }
 
+/** The Build tab (spec §8): syntax proposals the transform enables, and the editor's decorator mode. */
+export interface BuildSettings {
+  decorators: DecoratorMode;
+  pipelineOperator: boolean;
+  doExpressions: boolean;
+  throwExpressions: boolean;
+  functionSent: boolean;
+  regexpModifiers: boolean;
+  optionalChainingAssign: boolean;
+}
+
+export function buildSettings(settings: Settings): BuildSettings {
+  const build = settings.build;
+  return {
+    decorators: build.decorators,
+    pipelineOperator: build.pipelineOperator,
+    doExpressions: build.doExpressions,
+    throwExpressions: build.throwExpressions,
+    functionSent: build.functionSent,
+    regexpModifiers: build.regexpModifiers,
+    optionalChainingAssign: build.optionalChainingAssign,
+  };
+}
+
 export interface RunnerSettings {
   autoLog: boolean;
   loopProtection: boolean;
   loopProtectionMaxIterations: number;
   maxEntries: number;
   unresponsiveTimeoutMs: number;
+  build: BuildSettings;
 }
 
 export function runnerSettings(settings: Settings): RunnerSettings {
@@ -192,5 +235,6 @@ export function runnerSettings(settings: Settings): RunnerSettings {
     loopProtectionMaxIterations: settings.run.loopProtectionMaxIterations,
     maxEntries: settings.output.maxEntries,
     unresponsiveTimeoutMs: settings.run.unresponsiveTimeoutMs,
+    build: buildSettings(settings),
   };
 }

@@ -257,7 +257,7 @@ Each adapter lives in `apps/desktop/src/main/platform/`, exposes a small interfa
 | `systemFonts` | No `queryLocalFonts` in WKWebView | `system_profiler SPFontsDataType -json`, cached, run in the background |
 | `accelerators` | Menu accelerators are single-key with Cmd/Ctrl | Menu shows items; multi-modifier shortcuts are handled by the UI keybinding registry, and the menu label shows the shortcut text |
 | `secrets` | No keychain API | `security add-generic-password` / `find-generic-password` via `Bun.spawn` |
-| `loginShellEnv` | GUI apps lack the shell `PATH` | Run `$SHELL -ilc 'env -0'` once at startup (2 s timeout) and merge the result |
+| `loginShellEnv` | GUI apps lack the shell `PATH` | Run `$SHELL -ilc 'env -0'` once at startup (2 s timeout) and merge the result over the app's environment (`JSLAB_*` always comes from the app). `JSLAB_E2E=1` launches skip it. |
 | `webviewWatchdog` | WKWebView can freeze after sleep (#550) | Heartbeat RPC every 2 s; after 3 missed beats, reload the UI view and rehydrate from Main |
 
 ---
@@ -298,7 +298,7 @@ The default is set by `run.defaultRuntime`. Tabs change runtime from the status 
 - The entry file is `<appdata>/runs/<tabId>/entry-<runId>.mjs`. It is always `.mjs`: Babel output is plain ESM JavaScript, and a `.ts` extension would make Bun transpile it again. No `sourceMappingURL` comment is written, so Bun reports generated positions and Main does all source mapping.
   - It sits outside the packages project on purpose, so walk-up resolution finds nothing and `NODE_PATH` alone controls package lookup (below).
   - The file is written atomically, and its source map is written beside it.
-- Code runs as a real **ES module** through `await import(entryUrl + '?r=' + runId)` in the runner. Supported natively:
+- Code runs as a real **ES module** through `await import(pathToFileURL(entry))` in the runner; every run writes a new `entry-<runId>.mjs`, so no cache-busting query is needed. Supported natively:
   - top-level `await`
   - static and dynamic `import`
   - `import.meta`
@@ -306,7 +306,7 @@ The default is set by `run.defaultRuntime`. Tabs change runtime from the status 
   - `node:` specifiers
 - **Bare specifier resolution order** is implemented with `NODE_PATH`, set at spawn to `<WD>/node_modules:<appdata>/packages/node_modules` (without the WD entry when no WD is set). Bun's built-ins always resolve first. Verified on Bun 1.3.13 on 2026-09-12: `NODE_PATH` and walk-up resolution both work for a spawned runner, but a preload `Bun.plugin` `onResolve` hook does **not** intercept bare imports of dynamically imported modules, so no runtime plugin is used. M0-S3 re-verified `NODE_PATH` resolution on the bundled Bun 1.4.0; walk-up resolution and the `onResolve` result were not re-checked there.
 - **Relative specifiers** (`./x`, `../x`) resolve against the WD when a WD is set, and against the entry directory otherwise. Local `.ts` and `.tsx` files in the WD run natively through Bun; they are not instrumented.
-- **WD globals.** When a WD is set, `process.cwd()` is the WD. `__dirname` and `import.meta.dir` report the WD, and `__filename` and `import.meta.path` report `<WD>/<tab title>.<ext>`. This is done by defining those identifiers in the transform and passing `cwd` at spawn.
+- **WD globals.** When a WD is set, `process.cwd()` is the WD. `__dirname`, `import.meta.dir`, `import.meta.dirname` and `module.path` report the WD, and `__filename`, `import.meta.path`, `import.meta.filename` and `module.filename` report `<WD>/<tab title>.<ext>` (a saved file's own name when it has one); `import.meta.url` is that file's `file://` URL. The transform replaces those free identifiers and rewrites string-literal relative specifiers (static and dynamic imports, `export … from`, `require`, `require.resolve`) to absolute paths under the WD; a computed specifier resolves against the entry folder. `cwd` is passed at spawn. A WD that no longer exists fails the run before transform with `WorkingDirectoryError` (§12.2).
 - **Environment** is built at spawn, in this order (later entries override earlier ones):
   1. The login-shell environment (§4.6).
   2. `env.json` variables.
@@ -323,9 +323,9 @@ The pipeline lives in `packages/transform`. The Transform Worker runs:
 1. **Parse.** Uses `@babel/parser` with plugins chosen by language: `typescript` (with `dts: false`), `jsx`, plus the enabled proposals (§8, Build). `sourceType: "module"`, `allowAwaitOutsideFunction: true`.
 2. **Instrument** (the JSLab plugin, §5.5) on the original AST, before any other transform, so line numbers are the user's original lines.
 3. **Transform.**
-   - `@babel/preset-typescript` with `allowDeclareFields: true` (fixes RunJS #526) and `onlyRemoveTypeImports: false`.
+   - `@babel/preset-typescript` with `onlyRemoveTypeImports: false`. Babel 8 always supports `declare` fields (fixes RunJS #526) and rejects the old `allowDeclareFields` option.
    - `@babel/preset-react` with `runtime: "automatic"` for JSX and TSX. `importSource` is `react`, resolved from packages.
-   - Enabled proposal plugins.
+   - Enabled proposal plugins (§8 Build): `proposal-decorators` (`version: "2023-11"` or `"legacy"`), `proposal-pipeline-operator` (`proposal: "hack"`, `topicToken: "%"`), `proposal-do-expressions`, `proposal-throw-expressions`, `proposal-function-sent`, `transform-regexp-modifiers`, `proposal-optional-chaining-assign` (`version: "2023-07"`).
    - No `preset-env`. The target is `esnext`, because Bun and WKWebView support modern syntax.
 4. **Generate** code and a source map.
 5. **Return** `{ code, map, diagnostics[] }`. Syntax errors are returned as diagnostics with a code frame and position; nothing runs.
@@ -475,6 +475,7 @@ Special cases:
 | Runtime (thrown / unhandled rejection) | An error entry with name, message, and a source-mapped stack. Frames in user code are clickable (`L12:5`) and move the caret; internal frames are collapsed. The editor adds an inline error decoration on the throwing line. |
 | Runner crash (exit ≠ 0 without `done`) | "Runtime exited unexpectedly (code N / signal S)" plus the stderr tail. The next spare is used on the next run. |
 | User `process.exit` | Not an error. Pending output is flushed, and the runner exits once IPC drains, at most 2 s later. Code after the call doesn't run. |
+| A caught `process.exit` (for example inside `try/catch`) | Still ends the run: later output is dropped and handles created afterwards are disposed. If user code keeps the runner from exiting, Main ends it 2.5 s after the request and reports the requested exit code. |
 
 ### 5.12 Web runners (`browser`, `browser-node`)
 
@@ -540,17 +541,20 @@ Special cases:
   - Top-level await is valid (`moduleDetection: Force`).
   - Diagnostics never block execution.
 - **Diagnostics on/off** is controlled by `editor.linting`, through `setDiagnosticsOptions`.
+- **Per-tab application.** Monaco's TypeScript defaults are global, so JSLab re-applies the compiler options, diagnostics options and extra libraries whenever the shown tab, its runtime, `build.decorators` or `editor.linting` changes, and only when a value actually changes (each change restarts the TypeScript worker).
+- **`lib` file names.** `compilerOptions.lib` lists full lib file names (`lib.esnext.d.ts`, plus `lib.dom.d.ts` and `lib.dom.iterable.d.ts` for the browser runtimes). Monaco's worker reads each entry as a file name; tsconfig short names leave the DOM lib unloaded.
 - **Removed diagnostic codes:** 1375 and 1378 (top-level await) are always suppressed. 2307 ("Cannot find module") is shown with the install code action (§6.3).
 
 ### 6.2 Type feeder
 
-- **Built-in libraries:** `@types/node` and `bun-types` ship in the app and are added as extra libs for the runtimes that need them.
+- **Built-in libraries:** `@types/node` 22.20.2 (with `undici-types` 6.21.0) and `bun-types` 1.4.2 ship in the app as two lazily loaded UI chunks and are added as extra libs for the runtimes that need them (§5.2).
 - **Installed packages** are handled by the `npm/types` service in Main:
   1. It reads `package.json` `types`/`typings`/`exports[types]`.
   2. It falls back to `@types/<name>`.
   3. It collects the `.d.ts` closure, following relative references, up to 5 MB per package.
+- **Type-declaration versioning:** The bundled type packages' `typesVersions` maps are matched against Monaco's bundled TypeScript (5.9.3); non-matching version directories are excluded.
 - **Loading.** The UI requests types for the import specifiers found in the model (debounced 500 ms) and registers them with `addExtraLib(content, 'file:///node_modules/<pkg>/…')`. A registered package is never requested twice, and types are invalidated when packages change.
-- **WD-local modules:** `.ts`, `.d.ts`, and `.js` files imported relatively from the WD are fed the same way, limited to 200 files.
+- **WD-local modules:** `.ts`, `.d.ts`, and `.js` files imported relatively from the WD are fed the same way at `file:///tab/<path relative to the WD>`, limited to 200 files. A relative import that leaves the WD gets no editor types.
 
 ### 6.3 Code actions and editor affordances
 
@@ -698,7 +702,7 @@ Special cases:
 - **Confirm Close** (`tabs.confirmClose`) asks before closing any tab. Separately, a saved file with changes always prompts "Save changes to x.ts?" with Save, Don't Save, and Cancel.
 - Tabs reorder by dragging, and a saved-file tab's tooltip shows the full path.
 - **Closing the last tab** opens a fresh empty tab. `Cmd+W` on a single empty tab closes the window; the app stays in the Dock, and clicking the Dock icon reopens it.
-- **Dropped files** open in new tabs, one per file. The webview doesn't get a dropped file's path, so each opens as an unsaved scratch copy titled with the file's name and with no file path: ⌘S asks Save As, and Reveal in Finder and Copy Path are disabled. A Main-side native drop that keeps the path is planned for M3. Non-text files and files over 50 MB are rejected, and files over 5 MB open only after confirmation. A dropped folder sets the current tab's WD.
+- **Dropped files** open in new tabs, one per file. The webview doesn't get a dropped file's path, so each opens as an unsaved scratch copy titled with the file's name and with no file path: ⌘S asks Save As, and Reveal in Finder and Copy Path are disabled. A Main-side native drop that keeps the path is planned for M3. Non-text files and files over 50 MB are rejected, and files over 5 MB open only after confirmation. A dropped folder shows a notice pointing at Actions → Set Working Directory… (§12.2).
 
 ### 7.4 Application menu
 
@@ -887,6 +891,8 @@ Invalid files produce a readable error.
 - Everything is written atomically (`write tmp → fsync → rename`), and the previous file is kept as `.bak`.
 - On quit, pending writes are flushed.
 
+The session JSON is built when a write starts, not on every change (M3 FA-m9). Settings writes are bounded at 10 s each: a hung write fails, is logged, and never overwrites a newer file. Before the quit flush, the UI flushes pending view-state saves and buffer edits (at most 500 ms), and while typing it sends each tab's buffer at most every 150 ms.
+
 ### 10.2 Files
 
 - **Open** (`Cmd+O`) uses `Utils.openFileDialog`, filtered to `js, jsx, ts, tsx, mjs, cjs, mts, cts, json, txt`, with multi-select. Each file opens in a new tab, unless it's already open, in which case that tab is focused.
@@ -940,19 +946,20 @@ Each operation runs the bundled Bun (`process.execPath`) with `cwd = <appdata>/p
   - `NPM_CONFIG_USERCONFIG`: Bun ignores it (M0-S8, in-app).
   - `XDG_CONFIG_HOME` and `BUN_CONFIG_NO_GLOBAL_NPMRC=1`: `$HOME/.npmrc` is still read (M0-S8 out-of-app controls with the same bundled Bun).
   - `BUN_CONFIG_REGISTRY`, or a `registry=` line in the project `.npmrc`: these override only the default registry, and scoped `@scope:registry` keys from `~/.npmrc` still apply (M0-S8 out-of-app controls).
-- **`BUN_INSTALL_CACHE_DIR`:** set to the user's Bun cache, which is the login-shell `BUN_INSTALL_CACHE_DIR` if set. The package cache stays shared and never lands in `npm-home`. `<real HOME>/.bun/install/cache` is not a safe fixed fallback, because a login-shell `BUN_INSTALL` or `XDG_CACHE_HOME` may move the user's cache (not tested in M0). M3 must resolve the path itself and always set `BUN_INSTALL_CACHE_DIR` explicitly, never relying on a default derived from the environment or from the overridden `HOME`. M0-S8 verified that Bun honors this variable while `HOME` is overridden.
+- **`BUN_INSTALL_CACHE_DIR`:** set to the user's Bun cache, which is the login-shell `BUN_INSTALL_CACHE_DIR` if set. The package cache stays shared and never lands in `npm-home`. `<real HOME>/.bun/install/cache` is not a safe fixed fallback, because a login-shell `BUN_INSTALL` or `XDG_CACHE_HOME` may move the user's cache (verified for the bundled Bun 1.4.0 in M3 Task 9: `bun pm cache` precedence is `BUN_INSTALL_CACHE_DIR` > `$BUN_INSTALL/install/cache` > `$XDG_CACHE_HOME/.bun/install/cache` > `<real HOME>/.bun/install/cache`). M3 must resolve the path itself and always set `BUN_INSTALL_CACHE_DIR` explicitly, never relying on a default derived from the environment or from the overridden `HOME`. M0-S8 verified that Bun honors this variable while `HOME` is overridden.
 
-With `HOME` overridden, `~/.npmrc` no longer applies, and `<packages>/.npmrc` is the intended source of registry, scoped registry and auth settings; its `registry=` line takes effect (M0-S8). It is not guaranteed to be the only source: the spawn environment is the login-shell environment, and M0-S8 C3 showed Bun honours `BUN_CONFIG_REGISTRY`. M3's npm service must therefore strip inherited `BUN_CONFIG_*`, `NPM_CONFIG_*` and `npm_config_*` variables from the install environment. A login-shell `XDG_CONFIG_HOME` might also point Bun at a global `bunfig.toml` (not tested in M0); M3 checks this and strips or overrides it if so.
+With `HOME` overridden, `~/.npmrc` no longer applies, and `<packages>/.npmrc` is the intended source of registry, scoped registry and auth settings; its `registry=` line takes effect (M0-S8). It is not guaranteed to be the only source: the spawn environment is the login-shell environment, and M0-S8 C3 showed Bun honours `BUN_CONFIG_REGISTRY`. M3's npm service must therefore strip inherited `BUN_CONFIG_*`, `NPM_CONFIG_*` and `npm_config_*` variables from the install environment. A login-shell `XDG_CONFIG_HOME` could point Bun at a global `bunfig.toml`, so the npm environment strips it too, and sets `NO_COLOR=1` so output parses reliably. `BUN_INSTALL_CACHE_DIR` is resolved in this order, verified against `bun pm cache` on the bundled Bun (M3 Task 9): the login-shell `BUN_INSTALL_CACHE_DIR`, `$BUN_INSTALL/install/cache`, `$XDG_CACHE_HOME/.bun/install/cache`, `<real home>/.bun/install/cache`.
 
-Because `HOME` is overridden, git-URL specs and install scripts also see `npm-home`, with no `~/.gitconfig` or `~/.ssh`. M3 must test git-over-SSH specs. If they need something from the real home, pass that specific variable (for example `GIT_SSH_COMMAND`) instead of restoring `HOME`.
+Because `HOME` is overridden, git-URL specs and install scripts also see `npm-home`, with no `~/.gitconfig` or `~/.ssh`. `SSH_AUTH_SOCK` and `GIT_SSH_COMMAND` pass through unchanged, so git over SSH authenticates through the user's agent or an explicit command; `HOME` is never restored (a documented limitation, M3 QA Q8).
 
 | Operation | Command |
 |---|---|
 | Install | `bun add --exact <spec>`. With install scripts allowed, the package is also added to `trustedDependencies` before install. |
 | Remove | `bun remove <name>` |
-| Outdated | `bun outdated` (parsed); refreshed when the panel opens, at most every 10 min |
+| Outdated | `bun outdated` (parsed); refreshed when the panel opens, at most every 10 min; a failed check is cached for the same period; capped at 30 s and preempted (aborted, without recording an error) if the user installs, removes or updates a package while it runs |
 | Update | `bun add --exact <name>@latest` |
 | Search | HTTP GET `<registry>/-/v1/search?text=<q>&size=25`, with the registry and auth taken from `.npmrc` |
+| Update all | `bun add --exact` with every dependency `@latest` |
 
 - **Limits:** operations are serialized through a queue, with a timeout of 5 min each.
 - **Errors** are classified (network, 404/ETARGET, peer conflict, script blocked, native build failure, disk) and shown with a one-line fix hint and the raw log.
@@ -987,7 +994,7 @@ A Monaco editor (ini mode) for `<packages>/.npmrc`, with **Save** and **Reset** 
 
 ### 12.2 Working directory (per tab)
 
-- **Setting it:** Actions → Set Working Directory… (a folder picker), clicking the WD chip, or dropping a folder onto a tab.
+- **Setting it:** Actions → Set Working Directory… (a folder picker) or clicking the WD chip. Electrobun 2.0.1 gives the webview no dropped-folder path, so dropping a folder shows a notice pointing at these (M3 R-M3-SPIKE-1).
 - **Clearing it:** Actions → Clear Working Directory.
 - **Effects:** as described in §5.3 (cwd, relative imports, `__dirname`, `.env`, resolution order), §6.2 (local types), and §5.12 (CSS imports).
 - **Display:** the tab label shows the folder name as a suffix, e.g. "fetch users · api".
@@ -1140,7 +1147,7 @@ jslab --version | --help
 | RPC boundary | Every inbound payload is zod-validated in Main; path parameters are normalized; there is no generic "exec" or "read any file" endpoint for the UI. The file operations are open dialog, save to a user-chosen path, and read/write of a tab's own file path. |
 | Web runners | Separate partition per tab; a narrower RPC schema (`runner.*`, `nodeBridge.*` for `browser-node` only); no access to settings, secrets, or other tabs. |
 | User code | Runs with the user's OS permissions, like a terminal. JSLab guarantees process isolation and killability, not a sandbox. The docs say this plainly. |
-| Secrets | AI keys and the GitHub token live in the Keychain; `env.json` is 0600; logs redact values of `env.json`, `.npmrc` `_authToken`, `Authorization` headers, and anything matching common key patterns. |
+| Secrets | AI keys and the GitHub token live in the Keychain; `env.json` is 0600; logs redact values of `env.json`, `.npmrc` `_authToken`, `Authorization` headers, and anything matching common key patterns. npm output credentials are masked line by line, per output stream, before reaching the output window, and again in the window; a single line longer than about 64,000 characters can expose a credential split at the cut (an accepted caveat). |
 | CLI socket | 0600 permissions under the user's app data; `--run` required to execute code; `e2e.*` only with `JSLAB_E2E=1`. |
 | URL schemes / deep links | None registered in v1 |
 | Updates | Electrobun updater over HTTPS; artifacts signed and notarized; update JSON hosted with the releases |
@@ -1184,7 +1191,7 @@ jslab --version | --help
 | RPC | Validation failure | Rejected, logged with the method name; a dev build asserts |
 | Unexpected Main exception | Uncaught exception or unhandled rejection after startup | Logged; the user sees a dismissible notice banner ("Something went wrong…") with a Copy Debug Log button, and the app keeps running. A failure during startup shows one dialog and exits with code 1 |
 
-**Logging.** `logs/main.log` rotates (5 × 5 MB) with levels `error|warn|info|debug`; debug is enabled with `JSLAB_DEBUG=1`. Help → Copy Debug Log copies `{ version, bunVersion, electrobunVersion, macOS, arch, settings (redacted), last 500 log lines }`.
+**Logging.** `logs/main.log` rotates (5 × 5 MB) with levels `error|warn|info|debug`; debug is enabled with `JSLAB_DEBUG=1`. Help → Copy Debug Log copies `{ version, bunVersion, electrobunVersion, macOS, arch, settings (redacted), last 500 log lines }`. Redacted means: only schema-defined settings fields, every string masked for secrets, the home folder and any `/Users/<name>` prefix written as `~`, and `env.json` values masked everywhere; `.npmrc` content never appears.
 
 ---
 
@@ -1227,7 +1234,7 @@ jslab --version | --help
   - `.env` precedence, WD relative imports, and resolution order (WD `node_modules` over app packages)
   - output cap
   - handle expansion after the run finishes, and expiry
-- npm service against a local registry (Verdaccio in CI): install, remove, outdated, scripts off/on, `.npmrc` isolation: with an empty project `.npmrc` and a bad *scoped* registry key (for example `@scope:registry=http://127.0.0.1:9/`) in the test `HOME`'s `.npmrc`, a scoped install must succeed only with the isolation override. (A bad default `registry=` in `~/.npmrc` doesn't discriminate once the project `.npmrc` sets `registry=`: M0-S8 `projectRegistry`, C5/C8 and Deviation 1.)
+- npm service against a local registry (`@jslab/test-registry`, running a pinned Verdaccio per ruling R-M3-REG-1, started under a temp folder with a tracked PID; opt-in with `bun run test:npm`; never run by `bun run test` or CI): install, remove, outdated, search, scripts off/on, `.npmrc` isolation: with the project `.npmrc` pointing at the local registry and a bad *scoped* registry key (for example `@scope:registry=http://127.0.0.1:9/`) in the test `HOME`'s `.npmrc`, the scoped install fails with that `HOME` and succeeds with the isolation override. (A project default `registry=` doesn't stop scoped keys leaking: M0-S8 C5/C8.) The npm E2E scenarios, including the M3 exit scenario, run with `bun run e2e:npm`.
 - Session/settings persistence: atomic writes, `.bak` recovery, crash-loop `run.lock` detection.
 - AI adapters against recorded HTTP fixtures (streaming chunks, errors).
 - Gist client against recorded fixtures.

@@ -1,4 +1,11 @@
-import { type CommandId, isRuntimeAvailable, type Language, type Runtime, type SettingKey } from "@jslab/shared";
+import {
+  baseName,
+  type CommandId,
+  isRuntimeAvailable,
+  type Language,
+  type Runtime,
+  type SettingKey,
+} from "@jslab/shared";
 import type { MainApi } from "../api";
 import type { EditorHandle } from "../editor/editor-handle";
 import { copyEntriesToClipboard } from "../output/copy";
@@ -16,6 +23,9 @@ export interface AppCommandDeps {
   tabs: TabActions;
   run(reason: "manual"): void;
   editor(): EditorHandle | null;
+  /** R23-1: the effective keycap for a command, for the install-started status message. Optional so existing call
+   * sites and tests compile unchanged. */
+  keysFor?(command: string): string | null;
 }
 
 const RUNTIME_COMMANDS: [CommandId, Runtime][] = [
@@ -127,5 +137,41 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
     { id: "app.openDataFolder", run: () => deps.api.appCommand("openDataFolder") },
     { id: "app.settings", run: () => deps.api.appCommand("openSettings") },
     { id: "view.toggleFullScreen", run: () => deps.api.appCommand("toggleFullScreen") },
+
+    // M3: Tools sheets (spec §11.2, §12.1) and the working directory (spec §12.2).
+    {
+      id: "tools.npmPackages",
+      // R22-2: ⌘I toggles the sheet; Environment Variables keeps plain open behaviour since it holds unsaved edits.
+      run: () => (s().modal?.kind === "npm" ? s().closeModal() : s().openModal({ kind: "npm" })),
+    },
+    { id: "tools.environmentVariables", run: () => s().openModal({ kind: "env" }) },
+    {
+      id: "wd.set",
+      isEnabled: () => s().activeTabId !== null,
+      run: withActiveTab((id) => deps.api.pickWorkingDirectory(id)),
+      description: () => {
+        const wd = s().tab?.workingDirectory;
+        return wd ? strings.commands.folder(baseName(wd)) : null;
+      },
+    },
+    {
+      id: "wd.clear",
+      isEnabled: () => Boolean(s().tab?.workingDirectory),
+      run: withActiveTab((id) => deps.api.clearWorkingDirectory(id)),
+      description: () => {
+        const wd = s().tab?.workingDirectory;
+        return wd ? strings.commands.folder(baseName(wd)) : null;
+      },
+    },
+    {
+      id: "npm.install",
+      run: (args) => {
+        const spec = (args as { spec?: unknown } | undefined)?.spec;
+        const trimmed = typeof spec === "string" ? spec.trim() : "";
+        if (!trimmed) return;
+        deps.api.npmInstall(trimmed);
+        s().setStatusMessage(strings.install.started(trimmed, deps.keysFor?.("tools.npmPackages") ?? null));
+      },
+    },
   ];
 }

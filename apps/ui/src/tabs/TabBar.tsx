@@ -1,3 +1,4 @@
+import { tabLabel } from "@jslab/shared";
 import { useCallback, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
@@ -57,6 +58,7 @@ export function TabBar(props: {
         if (!tab) return null;
         const code = buffers[id] ?? "";
         const title = summaries.title(tab, code);
+        const label = tabLabel(title, tab.workingDirectory);
         const active = id === activeId;
         const dirty = summaries.dirty(tab, code);
         const dropClass = dropTarget?.id === id ? (dropTarget.after ? " drop-after" : " drop-before") : "";
@@ -67,7 +69,7 @@ export function TabBar(props: {
             aria-selected={active}
             tabIndex={active ? 0 : -1}
             className={`tab${active ? " on" : ""}${dropClass}`}
-            title={tab.filePath ?? title}
+            title={tab.filePath ?? tab.workingDirectory ?? title}
             draggable
             onClick={() => tabs.activate(id)}
             onKeyDown={(event) => {
@@ -107,7 +109,7 @@ export function TabBar(props: {
             }}
           >
             {dirty && <span className="tab-dirty" role="img" aria-label={strings.tabs.unsaved} />}
-            <span className="tab-title">{title}</span>
+            <span className="tab-title">{label}</span>
             <button
               type="button"
               className="tab-close"

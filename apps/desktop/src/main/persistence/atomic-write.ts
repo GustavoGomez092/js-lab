@@ -6,6 +6,11 @@ export interface AtomicWriteOptions {
   backup?: boolean;
   /** File mode for newly written files (default 0o644). */
   mode?: number;
+  /**
+   * Checked just before the rename. When it returns false, the temp file is removed and the target is left untouched,
+   * so a write that finished late never replaces a newer file (RR1-m2).
+   */
+  shouldCommit?(): boolean;
 }
 
 /** Writes via temp file + fsync + rename so readers never observe a partially written file. */
@@ -37,6 +42,11 @@ export async function writeFileAtomic(
     }
     // Ensure mode is applied even if umask interfered
     await chmod(tmp, mode);
+
+    if (options.shouldCommit && !options.shouldCommit()) {
+      await unlink(tmp).catch(() => {});
+      return;
+    }
 
     if (options.backup) {
       await copyFile(path, `${path}.bak`).catch((error: NodeJS.ErrnoException) => {

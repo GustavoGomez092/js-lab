@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { RunEvent } from "@jslab/rpc-schema";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
@@ -132,5 +132,36 @@ describe("OutputPanel", () => {
       store.getState().receiveEvents("r1", [log(1, 1)], "t1");
     });
     expect(screen.queryByTestId("output-empty")).toBeNull();
+  });
+
+  // Task 23 fix round 2, N-2: pins the R23-1 routing from the output row's own button, not just the command itself.
+  test("the output row's Install button calls onInstall with the package", () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const missingPackage: RunEvent = {
+      kind: "error",
+      phase: "runtime",
+      name: "ResolveMessage",
+      message: "Cannot find package 'zod' from '/data/runs/t1/entry-1.mjs'",
+      stack: [],
+      seq: 1,
+      t: 0,
+    };
+    act(() => {
+      store.getState().receiveState("r1", "transpiling", undefined, "t1");
+      store.getState().receiveEvents("r1", [missingPackage], "t1");
+    });
+    const { api } = createFakeApi();
+    const onInstall = mock((_spec: string) => {});
+    render(<OutputPanel store={store} api={api} onInstall={onInstall} />);
+    fireEvent.click(button(strings.output.installPackage("zod")));
+    expect(onInstall).toHaveBeenCalledTimes(1);
+    expect(onInstall).toHaveBeenCalledWith("zod");
   });
 });

@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { EnvVars } from "@jslab/shared";
 
 export interface AppPathsInput {
   /** Electrobun `PATHS.RESOURCES_FOLDER` (the bundle's Resources folder). */
@@ -15,6 +16,12 @@ export interface AppPaths {
   runsDir: string;
   runLock: string;
   packagesNodeModules: string;
+  packagesDir: string;
+  packagesJson: string;
+  packagesNpmrc: string;
+  /** The empty HOME of npm operations (spec §11.3, M0-S8). */
+  npmHome: string;
+  envFile: string;
   socketPath: string;
   screenshotsDir: string;
   runnerBootstrap: string;
@@ -37,6 +44,11 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     runsDir: join(dataDir, "runs"),
     runLock: join(dataDir, "run.lock"),
     packagesNodeModules: join(dataDir, "packages", "node_modules"),
+    packagesDir: join(dataDir, "packages"),
+    packagesJson: join(dataDir, "packages", "package.json"),
+    packagesNpmrc: join(dataDir, "packages", ".npmrc"),
+    npmHome: join(dataDir, "npm-home"),
+    envFile: join(dataDir, "env.json"),
     socketPath: join(dataDir, "jslab.sock"),
     screenshotsDir: join(dataDir, "e2e-screenshots"),
     runnerBootstrap: input.env.JSLAB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "bootstrap.js"),
@@ -45,13 +57,50 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
   };
 }
 
-/** Environment for runner processes (spec §5.3). The login-shell environment and `.env` loading arrive in M3. */
-export function runnerEnvironment(paths: AppPaths, base: Record<string, string | undefined>): Record<string, string> {
+/** Under E2E, npm uses a private Bun cache: JSLAB_E2E_BUN_CACHE_DIR, else <dataDir>/e2e-bun-cache. Never the user's cache. */
+export function e2eBunCacheDir(env: Record<string, string | undefined>, dataDir: string): string | undefined {
+  if (env.JSLAB_E2E !== "1") return undefined;
+  return env.JSLAB_E2E_BUN_CACHE_DIR ? env.JSLAB_E2E_BUN_CACHE_DIR : join(dataDir, "e2e-bun-cache");
+}
+
+export interface RunnerEnvironmentInput {
+  /** The login-shell environment (spec §4.6). */
+  base: Record<string, string | undefined>;
+  /** env.json (spec §12.1). */
+  variables?: EnvVars;
+  /** The WD's .env, parsed by JSLab (spec §5.3). */
+  dotenv?: Record<string, string>;
+  workingDirectory?: string | null;
+}
+
+/**
+ * Keys no layer may set in a runner's environment: JSLab's own, BUN_OPTIONS, and names that would corrupt `environ`
+ * (an empty key, or one containing = or NUL, e.g. "BUN_OPTIONS=--preload"; R-M3-T14-FIX-2 NEW-N4).
+ */
+function isReservedRunnerKey(key: string): boolean {
+  if (key === "" || key.includes("=") || key.includes(String.fromCharCode(0))) return true;
+  // R-M3-T14-BUNOPTS-1: JSLab owns the runner's Bun flags; BUN_OPTIONS could add --preload or --env-file.
+  return key.startsWith("JSLAB_") || key === "BUN_OPTIONS";
+}
+
+/**
+ * Environment for runner processes (spec §5.3): login shell → env.json → the WD's .env → JSLAB=1, later layers winning.
+ * JSLAB_* keys never reach a runner, and JSLab always sets NODE_PATH: the WD's node_modules first, then app packages.
+ */
+export function runnerEnvironment(
+  paths: Pick<AppPaths, "packagesNodeModules">,
+  input: RunnerEnvironmentInput,
+): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(base)) {
-    if (value !== undefined && !key.startsWith("JSLAB_")) env[key] = value;
+  for (const [key, value] of Object.entries(input.base)) {
+    if (value !== undefined && !isReservedRunnerKey(key)) env[key] = value;
+  }
+  for (const layer of [input.variables ?? {}, input.dotenv ?? {}]) {
+    for (const [key, value] of Object.entries(layer)) if (!isReservedRunnerKey(key)) env[key] = value;
   }
   env.JSLAB = "1";
-  env.NODE_PATH = paths.packagesNodeModules;
+  env.NODE_PATH = input.workingDirectory
+    ? `${join(input.workingDirectory, "node_modules")}:${paths.packagesNodeModules}`
+    : paths.packagesNodeModules;
   return env;
 }

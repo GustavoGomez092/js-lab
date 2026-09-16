@@ -10,7 +10,7 @@ import {
   tabParamsSchema,
   tabPatchSchema,
 } from "@jslab/rpc-schema";
-import type { KeybindingRule } from "@jslab/shared";
+import { type KeybindingRule, scriptFileName } from "@jslab/shared";
 import { createValidators, InvalidPayloadError } from "./rpc/validate";
 import type { RunCoordinator } from "./runs/run-coordinator";
 import type { SafeModeState } from "./services/safe-mode";
@@ -61,7 +61,16 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
           deps.log("Refused an automatic run while Safe Mode is active", { tabId });
           throw new RunRefusedError("Automatic runs are disabled in Safe Mode");
         }
-        return deps.coordinator.start({ tabId, code, language, logpoints });
+        const tab = deps.session.session.tabs[tabId];
+        return deps.coordinator.start({
+          tabId,
+          code,
+          language,
+          logpoints,
+          workingDirectory: tab?.workingDirectory ?? null,
+          // The run compiles as the request's language, so __filename's extension follows it (N-4).
+          scriptName: tab ? scriptFileName({ ...tab, language }, code) : "Untitled.ts",
+        });
       },
       "run.expand": (input: unknown): Promise<EncodedValue | null> => {
         const { tabId, runId, handleId } = parse(runExpandParamsSchema, "run.expand", input);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { resolveAppPaths, runnerEnvironment } from "../src/main/app-paths";
+import { join } from "node:path";
+import { e2eBunCacheDir, resolveAppPaths, runnerEnvironment } from "../src/main/app-paths";
 
 const input = {
   resourcesFolder: "/Applications/JSLab.app/Contents/Resources",
@@ -15,6 +16,11 @@ describe("resolveAppPaths", () => {
       runsDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/runs",
       runLock: "/Users/me/Library/Application Support/dev.jslab.app/stable/run.lock",
       packagesNodeModules: "/Users/me/Library/Application Support/dev.jslab.app/stable/packages/node_modules",
+      packagesDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/packages",
+      packagesJson: "/Users/me/Library/Application Support/dev.jslab.app/stable/packages/package.json",
+      packagesNpmrc: "/Users/me/Library/Application Support/dev.jslab.app/stable/packages/.npmrc",
+      npmHome: "/Users/me/Library/Application Support/dev.jslab.app/stable/npm-home",
+      envFile: "/Users/me/Library/Application Support/dev.jslab.app/stable/env.json",
       socketPath: "/Users/me/Library/Application Support/dev.jslab.app/stable/jslab.sock",
       screenshotsDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/e2e-screenshots",
       runnerBootstrap: "/Applications/JSLab.app/Contents/Resources/app/runner/bootstrap.js",
@@ -45,17 +51,52 @@ describe("resolveAppPaths", () => {
       "/tmp-e2e/u1/jslab.sock",
     ]);
   });
+
+  test("e2eBunCacheDir keeps E2E npm off the user's Bun cache", () => {
+    expect(e2eBunCacheDir({ JSLAB_E2E_BUN_CACHE_DIR: "/x" }, "/data")).toBeUndefined();
+    expect(e2eBunCacheDir({ JSLAB_E2E: "1", JSLAB_E2E_BUN_CACHE_DIR: "/x" }, "/data")).toBe("/x");
+    expect(e2eBunCacheDir({ JSLAB_E2E: "1" }, "/data")).toBe(join("/data", "e2e-bun-cache"));
+  });
 });
 
 describe("runnerEnvironment", () => {
   test("sets JSLAB and NODE_PATH, drops undefined values and JSLab overrides", () => {
     const paths = resolveAppPaths(input);
     expect(
-      runnerEnvironment(paths, { PATH: "/usr/bin", EMPTY: undefined, JSLAB_BUN_PATH: "/x", NODE_PATH: "/old" }),
+      runnerEnvironment(paths, {
+        base: { PATH: "/usr/bin", EMPTY: undefined, JSLAB_BUN_PATH: "/x", NODE_PATH: "/old" },
+      }),
     ).toEqual({
       PATH: "/usr/bin",
       JSLAB: "1",
       NODE_PATH: paths.packagesNodeModules,
     });
+  });
+
+  test("BUN_OPTIONS is dropped from every layer", () => {
+    const paths = resolveAppPaths(input);
+    const env = runnerEnvironment(paths, {
+      base: { BUN_OPTIONS: "--preload ./login.js", FROM_LOGIN: "1" },
+      variables: { BUN_OPTIONS: "--preload ./env-json.js", FROM_ENV_JSON: "1" },
+      dotenv: { BUN_OPTIONS: "--env-file=.env.local", FROM_DOTENV: "1" },
+    });
+    expect(Object.hasOwn(env, "BUN_OPTIONS")).toBe(false);
+    expect(env).toMatchObject({ FROM_LOGIN: "1", FROM_ENV_JSON: "1", FROM_DOTENV: "1" });
+  });
+
+  test("keys that are empty or contain = or NUL are dropped from every layer", () => {
+    const paths = resolveAppPaths(input);
+    const NUL = String.fromCharCode(0);
+    const env = runnerEnvironment(paths, {
+      base: { [`BAD${NUL}KEY`]: "x", OK_C: "3" },
+      variables: { "BUN_OPTIONS=--preload": "./p.js", OK_A: "1" },
+      dotenv: { "": "x", OK_B: "2" },
+    });
+    expect(env).toEqual({ OK_C: "3", OK_A: "1", OK_B: "2", JSLAB: "1", NODE_PATH: paths.packagesNodeModules });
+    for (const key of Object.keys(env)) {
+      expect(key).not.toBe("");
+      expect(key.includes("=")).toBe(false);
+      expect(key.includes(NUL)).toBe(false);
+    }
   });
 });

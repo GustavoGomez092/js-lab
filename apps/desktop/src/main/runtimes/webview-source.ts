@@ -7,11 +7,16 @@ import { createSequencedWebviewHost, type RawWebview, type WebviewHost, type Web
  * the source can be tested without an RPC, and so `index.ts` is the only file that knows how a message is sent.
  */
 export interface WebviewBridge {
-  /** Make sure this tab has a live webview, creating one if its Web View toggle was never switched on. */
-  ensure(tabId: string): void;
+  /**
+   * Make sure this tab has a live webview, creating one if its Web View toggle was never switched on.
+   * `generation` is the monotonic-per-tab counter this source mints for the entry it just created (T9e): the UI
+   * records it and stamps every `ready`/`exit` it reports for this tab with it, until a later `ensure` replaces it.
+   */
+  ensure(tabId: string, generation: number): void;
   execute(tabId: string, js: string): void;
   reload(tabId: string): void;
-  destroy(tabId: string): void;
+  /** T9e: carries the generation of the entry being torn down, paired with `ensure` above. */
+  destroy(tabId: string, generation: number): void;
 }
 
 export interface UiWebviewSourceDeps {
@@ -22,12 +27,20 @@ export interface UiWebviewSourceDeps {
 
 /** A `WebviewSource` that also accepts what the UI reports back about each tab's element. */
 export interface UiWebviewSource extends WebviewSource {
-  /** The tab's page reached `dom-ready`: whatever is waiting to inject script may do so now. */
-  ready(tabId: string): void;
+  /**
+   * The tab's page reached `dom-ready`: whatever is waiting to inject script may do so now. `generation` is the
+   * one the UI last stamped this tabId's forwarded events with (T9e); an event whose generation doesn't match the
+   * tab's current entry is a late report from an entry this source has already replaced, and is ignored.
+   */
+  ready(tabId: string, generation: number): void;
   /** One page → host envelope, relayed by the UI. Satisfies `WebRunnerMessageSink` (`../rpc/web-runner-handlers.ts`). */
   receive(tabId: string, raw: unknown): void;
-  /** The tab's webview died or was torn down by something other than this source's own `destroy`. */
-  exit(tabId: string): void;
+  /**
+   * The tab's webview died or was torn down by something other than this source's own `destroy`. Same
+   * generation-gating as `ready` above, and for the same reason: a crash reported by an entry this source has
+   * already replaced must not tear down the replacement (T9e).
+   */
+  exit(tabId: string, generation: number): void;
 }
 
 interface Entry {
@@ -35,6 +48,8 @@ interface Entry {
   loaded: Set<() => void>;
   messages: Set<(raw: unknown) => void>;
   crashed: Set<() => void>;
+  /** T9e: minted when this entry was created (see `ensure` below); gates `ready`/`exit` against a stale generation. */
+  generation: number;
 }
 
 /**
@@ -46,13 +61,21 @@ interface Entry {
  */
 export function createUiWebviewSource(deps: UiWebviewSourceDeps): UiWebviewSource {
   const entries = new Map<string, Entry>();
+  /**
+   * T9e: the next generation to mint for each tab. Kept apart from `entries` -- which loses the tabId the moment
+   * an entry is torn down -- because the counter must keep climbing across a destroy/recreate cycle rather than
+   * restart at the same value, or a stale event from the entry just destroyed could pass as current again.
+   */
+  const nextGeneration = new Map<string, number>();
   /** The bootstrap is identical for every tab and every run, so it is read once and shared. */
   let bootstrap: Promise<string> | null = null;
 
   /** Drops Main's side of a tab's webview and tells the UI to remove the element. Never reports an exit. */
   function teardown(tabId: string): void {
-    if (!entries.delete(tabId)) return;
-    deps.bridge.destroy(tabId);
+    const entry = entries.get(tabId);
+    if (!entry) return;
+    entries.delete(tabId);
+    deps.bridge.destroy(tabId, entry.generation);
   }
 
   function fire(listeners: Set<() => void> | undefined): void {
@@ -78,6 +101,9 @@ export function createUiWebviewSource(deps: UiWebviewSourceDeps): UiWebviewSourc
       if (raced) return raced.host;
 
       const tabId = tab.tabId;
+      // T9e: monotonic per tab, so a destroy/recreate cycle never reuses a value a late event could still carry.
+      const generation = (nextGeneration.get(tabId) ?? 0) + 1;
+      nextGeneration.set(tabId, generation);
       const loaded = new Set<() => void>();
       const messages = new Set<(raw: unknown) => void>();
       const crashed = new Set<() => void>();
@@ -98,10 +124,10 @@ export function createUiWebviewSource(deps: UiWebviewSourceDeps): UiWebviewSourc
         },
         destroy: () => teardown(tabId),
       };
-      const entry: Entry = { host: createSequencedWebviewHost(raw, source), loaded, messages, crashed };
+      const entry: Entry = { host: createSequencedWebviewHost(raw, source), loaded, messages, crashed, generation };
       entries.set(tabId, entry);
       // Sent after the entry exists, so a `webRunner.ready` the UI sends straight back finds a host to notify.
-      deps.bridge.ensure(tabId);
+      deps.bridge.ensure(tabId, generation);
       return entry.host;
     },
 
@@ -109,17 +135,26 @@ export function createUiWebviewSource(deps: UiWebviewSourceDeps): UiWebviewSourc
       teardown(tabId);
     },
 
-    ready(tabId: string): void {
-      fire(entries.get(tabId)?.loaded);
+    ready(tabId: string, generation: number): void {
+      const entry = entries.get(tabId);
+      // T9e: a `ready` for a generation that isn't this tab's current one is a late report from an entry this
+      // source has already replaced (destroy() ran, then a new ensure() created the one now in the map) -- the
+      // defect this gate exists for. Firing the replacement's `loaded` listeners for someone else's load would be
+      // wrong regardless of how harmless a plain reload-ready looks.
+      if (!entry || entry.generation !== generation) return;
+      fire(entry.loaded);
     },
 
     receive(tabId: string, raw: unknown): void {
       for (const listener of [...(entries.get(tabId)?.messages ?? [])]) listener(raw);
     },
 
-    exit(tabId: string): void {
+    exit(tabId: string, generation: number): void {
       const entry = entries.get(tabId);
-      if (!entry) return;
+      // T9e: same generation gate as `ready` -- a crash reported by an entry this source has already replaced
+      // must not delete the replacement or fire its `crashed` listeners as a spurious "Web runner exited
+      // unexpectedly." on a webview that is alive.
+      if (!entry || entry.generation !== generation) return;
       // Dropped before the listeners run: the webview is already gone, so the tab's next run must build a new one
       // rather than keep driving an element that no longer exists.
       entries.delete(tabId);

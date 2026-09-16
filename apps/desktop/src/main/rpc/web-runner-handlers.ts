@@ -11,9 +11,9 @@ export interface WebRunnerMessageSink {
   /** One page → host envelope for this tab. */
   receive(tabId: string, raw: unknown): void;
   /** This tab's page reached `dom-ready`: it is safe to inject script into it now. */
-  ready(tabId: string): void;
+  ready(tabId: string, generation: number): void;
   /** This tab's webview is gone for a reason Main didn't ask for (the tab closed, the view died). */
-  exit(tabId: string): void;
+  exit(tabId: string, generation: number): void;
 }
 
 export interface WebRunnerHandlerDeps {
@@ -37,11 +37,11 @@ export function createWebRunnerHandlers(deps: WebRunnerHandlerDeps) {
       "webRunner.message": message(webRunnerMessageParamsSchema, "webRunner.message", ({ tabId, raw }) => {
         deps.webviews.receive(tabId, raw);
       }),
-      "webRunner.ready": message(webRunnerTabSchema, "webRunner.ready", ({ tabId }) => {
-        deps.webviews.ready(tabId);
+      "webRunner.ready": message(webRunnerTabSchema, "webRunner.ready", ({ tabId, generation }) => {
+        deps.webviews.ready(tabId, generation);
       }),
-      "webRunner.exit": message(webRunnerTabSchema, "webRunner.exit", ({ tabId }) => {
-        deps.webviews.exit(tabId);
+      "webRunner.exit": message(webRunnerTabSchema, "webRunner.exit", ({ tabId, generation }) => {
+        deps.webviews.exit(tabId, generation);
       }),
     },
   };

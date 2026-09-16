@@ -389,6 +389,21 @@ describe("RunCoordinator", () => {
     });
   }, 15_000);
 
+  // Task 15 (spec §5.12, EX-35): `RunCoordinator.mute()` is a harmless no-op for a runtime whose `RunHandle` has no
+  // `mute` method at all (only `WebAdapter`'s sessions implement it) -- Bun has no audio concept, and the tab's
+  // saved preference still persists in session.json (packages/shared) regardless of what's currently running.
+  test("mute() is a harmless no-op when the running handle has no mute concept (Bun)", async () => {
+    const h = await createHarness();
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
+    await h.waitForState("idle", runId);
+    expect(() => h.coordinator.mute("t1", true)).not.toThrow();
+  }, 15_000);
+
+  test("mute() is a harmless no-op when nothing is running for that tab", async () => {
+    const h = await createHarness();
+    expect(() => h.coordinator.mute("no-such-tab", true)).not.toThrow();
+  });
+
   test("reports a runner that exits unexpectedly", async () => {
     const h = await createHarness();
     const { runId } = h.coordinator.start({

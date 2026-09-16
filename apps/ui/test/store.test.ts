@@ -141,6 +141,7 @@ describe("app store", () => {
       editorSize: 90,
       outputVisible: true,
       tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+      muted: false,
     });
   });
 

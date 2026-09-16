@@ -4,6 +4,7 @@ import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
+import { AudioIndicator } from "./AudioIndicator";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { reorderByDrop } from "./reorder";
 import type { TabActions } from "./tab-actions";
@@ -21,6 +22,9 @@ export function TabBar(props: {
   const byId = useStore(store, (s) => s.tabs);
   const buffers = useStore(store, (s) => s.buffers);
   const activeId = useStore(store, (s) => s.activeTabId);
+  // Task 15 (spec §5.12, EX-35): every tab's audio-active state, not just the active tab's -- the whole point is
+  // spotting which *background* tab is making noise.
+  const runtimes = useStore(store, (s) => s.runtimes);
   // FB-I2: the bar re-renders on every edit; only the tab whose buffer changed recomputes its title and dirty dot.
   const [summaries] = useState(createTabSummaryCache);
   summaries.retain(new Set(order));
@@ -110,6 +114,12 @@ export function TabBar(props: {
           >
             {dirty && <span className="tab-dirty" role="img" aria-label={strings.tabs.unsaved} />}
             <span className="tab-title">{label}</span>
+            <AudioIndicator
+              active={runtimes[id]?.audioActive ?? false}
+              muted={tab.layout.muted}
+              title={title}
+              onToggle={() => store.getState().toggleMuted(id)}
+            />
             <button
               type="button"
               className="tab-close"

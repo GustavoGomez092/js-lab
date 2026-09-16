@@ -87,6 +87,9 @@ export const tabPatchSchema = z.object({
               consoleSize: z.number().min(10).max(90),
             })
             .partial(),
+          // Task 15 (spec §5.12, EX-35): a sibling field of `tiles`, not nested inside it -- named here for the
+          // same reason `tiles` is (R-M4-T8-PATCH-1's comment above), or it is silently stripped in transit.
+          muted: z.boolean(),
         })
         .partial(),
     })
@@ -441,6 +444,12 @@ export type MainMessages = {
 export type ViewMessages = {
   "run.events": { tabId: string; runId: string; events: RunEvent[] };
   "run.state": { tabId: string; runId: string; state: RunState; activeHandles?: number };
+  /**
+   * Task 15 (spec §5.12, EX-35): pushed whenever a tab's audio-active state flips -- true while any AudioContext
+   * the web runner tracks is running or any media element is playing, false the instant neither is true anymore.
+   * Event-driven from the runner's own handle tracking (`packages/runner-web/src/handles.ts`), never polled.
+   */
+  "run.audio": { tabId: string; active: boolean };
   "run.diagnostics": { tabId: string; runId: string; diagnostics: DiagnosticPayload[] };
   "menu.command": { command: CommandId; args?: unknown };
   "e2e.request": E2ERequest;

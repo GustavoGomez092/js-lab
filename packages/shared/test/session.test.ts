@@ -227,4 +227,35 @@ describe("session", () => {
     });
     expect((future.session as Record<string, unknown>).somethingFromTheFuture).toBe(true);
   });
+
+  test("layout.muted defaults to false and lives beside tiles under the same v3 bump (Task 15)", () => {
+    // A v2 session has neither `tiles` nor `muted`; migrating it is still a no-op version bump, and `muted`
+    // comes from tabLayoutSchema's own .catch() default, exactly like `tiles` did in Task 8.
+    const migrated = parseSession({
+      version: 2,
+      tabOrder: ["a"],
+      activeTabId: "a",
+      tabs: { a: { id: "a", layout: { orientation: "horizontal", editorSize: 55, outputVisible: true } } },
+    });
+    expect(migrated.session.tabs.a?.layout.muted).toBe(false);
+  });
+
+  test("an invalid layout.muted falls back to false without discarding tiles or the other layout fields", () => {
+    const parsed = tabLayoutSchema.parse({
+      orientation: "vertical",
+      editorSize: 40,
+      outputVisible: false,
+      tiles: { arrangement: "side-by-side", order: ["console", "webview"], webviewVisible: true, consoleSize: 30 },
+      muted: "yes",
+    });
+    expect(parsed).toEqual({
+      orientation: "vertical",
+      editorSize: 40,
+      outputVisible: false,
+      tiles: { arrangement: "side-by-side", order: ["console", "webview"], webviewVisible: true, consoleSize: 30 },
+      muted: false,
+    });
+    // A valid `true` is preserved.
+    expect(tabLayoutSchema.parse({ muted: true }).muted).toBe(true);
+  });
 });

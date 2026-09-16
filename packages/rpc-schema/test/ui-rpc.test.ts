@@ -113,6 +113,15 @@ describe("inbound validators", () => {
     );
   });
 
+  // Task 15: `muted` is a sibling field of `tiles` in `tabLayoutSchema` (packages/shared), so it must be named here
+  // too -- the same whitelist gotcha F5 documents for `tiles` above (an unlisted field is silently stripped in
+  // transit: the UI updates, nothing persists, no error anywhere).
+  test("tab.patch's layout.muted accepts a bare patch without the rest of layout", () => {
+    const parsed = tabPatchSchema.parse({ tabId: "t1", patch: { layout: { muted: true } } });
+    expect(parsed.patch.layout).toEqual({ muted: true });
+    expect(tabPatchSchema.safeParse({ tabId: "t1", patch: { layout: { muted: "yes" } } }).success).toBe(false);
+  });
+
   test("e2e.response requires a positive request id and caps error text", () => {
     expect(e2eResponseSchema.safeParse({ reqId: 1, ok: true, result: { any: "thing" } }).success).toBe(true);
     expect(e2eResponseSchema.safeParse({ reqId: 0, ok: true }).success).toBe(false);

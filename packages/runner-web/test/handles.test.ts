@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { HandleTracker, handleCountAction, installHandleTracking } from "../src/handles";
+import { AudioController, HandleTracker, handleCountAction, installHandleTracking } from "../src/handles";
 
 // The test environment (bun:test) has no DOM: every host API the web runner touches is a small fake built here,
 // per the task brief ("build the fakes you need... rather than adding a DOM library").
@@ -14,9 +14,24 @@ function bucket<K, V>(map: Map<K, Set<V>>, key: K): Set<V> {
   return set;
 }
 
+/** What `createGain()` returns: enough of a real `GainNode` for the mute wiring -- a `.gain` AudioParam-alike
+ * with a settable `.value`, and a no-op `connect` (the fake never actually routes samples anywhere). */
+class FakeGainNode {
+  gain = { value: 1 };
+  connect(_destination: unknown): void {}
+}
+
 class FakeAudioContext {
-  state: "running" | "closed" = "running";
+  /** `startSuspended` (fix round 1, M1): a real `AudioContext` created without a user gesture starts life
+   * already `"suspended"` under autoplay policy -- the common case, not the rare one -- so tests need a way to
+   * construct one that never passed through `"running"` at all, not just one that later calls `suspend()`. */
+  state: "running" | "suspended" | "closed";
+  /** The real destination `handles.ts` reads *before* it shadows `this.destination` with the inserted gain node. */
+  destination = { kind: "real-destination" as const };
   #listeners = new Map<string, Set<() => void>>();
+  constructor(startSuspended = false) {
+    this.state = startSuspended ? "suspended" : "running";
+  }
   addEventListener(type: string, cb: () => void): void {
     bucket(this.#listeners, type).add(cb);
   }
@@ -25,6 +40,19 @@ class FakeAudioContext {
   }
   #emit(type: string): void {
     for (const cb of this.#listeners.get(type) ?? []) cb();
+  }
+  createGain(): FakeGainNode {
+    return new FakeGainNode();
+  }
+  async suspend(): Promise<void> {
+    if (this.state !== "running") return;
+    this.state = "suspended";
+    this.#emit("statechange");
+  }
+  async resume(): Promise<void> {
+    if (this.state !== "suspended") return;
+    this.state = "running";
+    this.#emit("statechange");
   }
   async close(): Promise<void> {
     if (this.state === "closed") return;
@@ -35,6 +63,9 @@ class FakeAudioContext {
 
 class FakeMediaElement {
   paused = true;
+  /** Fix round 1, M2: makes the next (only the next) `play()` call reject instead of resolve, the way a real
+   * browser does when autoplay is blocked, the source is missing, or decoding fails. */
+  rejectNextPlay = false;
   #listeners = new Map<string, Set<() => void>>();
   addEventListener(type: string, cb: () => void): void {
     bucket(this.#listeners, type).add(cb);
@@ -46,6 +77,10 @@ class FakeMediaElement {
     for (const cb of [...(this.#listeners.get(type) ?? [])]) cb();
   }
   play(): Promise<void> {
+    if (this.rejectNextPlay) {
+      this.rejectNextPlay = false;
+      return Promise.reject(new Error("NotAllowedError"));
+    }
     this.paused = false;
     return Promise.resolve();
   }
@@ -80,10 +115,19 @@ function fakeRaf() {
   };
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: sandboxed global object
-function sandbox(): { tracker: HandleTracker; g: any; raf: ReturnType<typeof fakeRaf> } {
+function sandbox(): {
+  tracker: HandleTracker;
+  // biome-ignore lint/suspicious/noExplicitAny: sandboxed global object
+  g: any;
+  raf: ReturnType<typeof fakeRaf>;
+  audio: AudioController;
+  /** Every `active` transition AudioController reported, in order -- proves it's event-driven, not polled. */
+  audioEvents: boolean[];
+} {
   const tracker = new HandleTracker(() => {});
   const raf = fakeRaf();
+  const audioEvents: boolean[] = [];
+  const audio = new AudioController((active) => audioEvents.push(active));
   const g = {
     setTimeout,
     clearTimeout,
@@ -96,8 +140,8 @@ function sandbox(): { tracker: HandleTracker; g: any; raf: ReturnType<typeof fak
     AudioContext: FakeAudioContext,
     HTMLMediaElement: FakeMediaElement,
   };
-  installHandleTracking(tracker, g);
-  return { tracker, g, raf };
+  installHandleTracking(tracker, g, audio);
+  return { tracker, g, raf, audio, audioEvents };
 }
 
 test("a timeout is tracked until it fires", async () => {
@@ -217,6 +261,108 @@ test("a media element is tracked while playing and untracked when it pauses or e
   expect(tracker.count).toBe(1);
   el.end();
   expect(tracker.count).toBe(0);
+});
+
+// Task 15 (spec §5.12, EX-35): AudioController tracks audio activity separately from HandleTracker's generic
+// idle/settled bookkeeping above, and reports only true/false transitions -- never polled.
+
+test("an open AudioContext counts as audio-active, and closing it clears that (spec section 5.12)", async () => {
+  const { g, audio, audioEvents } = sandbox();
+  expect(audio.active).toBe(false);
+  const ctx = new g.AudioContext();
+  expect(audio.active).toBe(true);
+  expect(audioEvents).toEqual([true]);
+  await ctx.close();
+  expect(audio.active).toBe(false);
+  expect(audioEvents).toEqual([true, false]);
+});
+
+test("a playing media element counts as audio-active, and stops counting once it pauses", () => {
+  const { g, audio, audioEvents } = sandbox();
+  const el = new g.HTMLMediaElement();
+  el.play();
+  expect(audio.active).toBe(true);
+  expect(audioEvents).toEqual([true]);
+  el.pause();
+  expect(audio.active).toBe(false);
+  expect(audioEvents).toEqual([true, false]);
+});
+
+test("muting zeroes a tracked AudioContext's destination gain without closing or suspending it", async () => {
+  const { g, audio } = sandbox();
+  const ctx = new g.AudioContext();
+  // `destination` is shadowed with the inserted gain node the moment the context is constructed (this is what
+  // makes muting possible without suspending: there is no public way to zero AudioDestinationNode itself).
+  expect(ctx.destination.gain.value).toBe(1);
+  audio.setMuted(true);
+  expect(ctx.destination.gain.value).toBe(0);
+  // Never suspended or closed: a suspended AudioContext stops its own clock, which would desync anything a run
+  // times off it (a rAF-driven visualisation, a scheduler) -- this is the distinction the task turns on.
+  expect(ctx.state).toBe("running");
+  audio.setMuted(false);
+  expect(ctx.destination.gain.value).toBe(1);
+  expect(ctx.state).toBe("running");
+});
+
+test("muting pauses playing media immediately, and media started while already muted is paused right away too", () => {
+  const { g, audio } = sandbox();
+  const el = new g.HTMLMediaElement();
+  el.play();
+  expect(el.paused).toBe(false);
+  audio.setMuted(true);
+  expect(el.paused).toBe(true);
+
+  // A second element that starts playing after mute was already toggled on must not audibly play either.
+  const el2 = new g.HTMLMediaElement();
+  el2.play();
+  expect(el2.paused).toBe(true);
+});
+
+// Fix round 1, M1: autoplay policy starts a gesture-less AudioContext "suspended", not "running" -- the common
+// case, not the rare one -- so audio-active tracking must follow `state`, not just construction/close.
+test("a suspended AudioContext does not count as audio-active until it resumes (fix round 1, M1)", async () => {
+  const { g, audio, audioEvents } = sandbox();
+  const ctx = new g.AudioContext(true); // constructed suspended, as autoplay policy would leave it
+  expect(audio.active).toBe(false);
+  expect(audioEvents).toEqual([]);
+
+  await ctx.resume();
+  expect(audio.active).toBe(true);
+  expect(audioEvents).toEqual([true]);
+
+  await ctx.suspend();
+  expect(audio.active).toBe(false);
+  expect(audioEvents).toEqual([true, false]);
+
+  // Closing while suspended must not double-report (it was already reported inactive above).
+  await ctx.close();
+  expect(audioEvents).toEqual([true, false]);
+});
+
+// Fix round 1, M2 (the most user-visible finding): a rejected play() -- exactly what a browser does until the
+// user has interacted with the page -- must not leave the tab claiming to make noise forever.
+test("a rejected play() releases the handle instead of leaving the indicator stuck on (fix round 1, M2)", async () => {
+  const { tracker, g, audio } = sandbox();
+  const el = new g.HTMLMediaElement();
+  el.rejectNextPlay = true;
+  el.play().catch(() => {}); // the run's own code would ordinarily handle or ignore this too
+  expect(tracker.count).toBe(1); // registered optimistically, before the promise settles
+  await Bun.sleep(0); // let the rejection settle and handles.ts's own .catch() run
+  expect(tracker.count).toBe(0);
+  expect(audio.active).toBe(false);
+});
+
+// Fix round 1, M3: a play attempt while already muted must not audibly play, but registering it as active and
+// then immediately pausing it back down emits a spurious true-then-false `audio` message pair for a play that
+// was never actually going to be heard.
+test("a play attempt while already muted emits no audio message at all (fix round 1, M3)", () => {
+  const { g, audio, audioEvents } = sandbox();
+  audio.setMuted(true);
+  const el = new g.HTMLMediaElement();
+  el.play();
+  expect(el.paused).toBe(true);
+  expect(audio.active).toBe(false);
+  expect(audioEvents).toEqual([]);
 });
 
 test("handleCountAction disposes new handles after a stop, and tracks idle/settled otherwise", () => {

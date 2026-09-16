@@ -88,6 +88,7 @@ describe("application menu", () => {
         editorSize: 55,
         outputVisible: false,
         tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+        muted: false,
       },
     });
     const menu = buildMenu(model({ settings, activeTab: tab, canReopen: true }));

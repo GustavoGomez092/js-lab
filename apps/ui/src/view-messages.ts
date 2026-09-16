@@ -5,6 +5,7 @@ export const VIEW_MESSAGES = [
   "run.events",
   "run.state",
   "run.diagnostics",
+  "run.audio",
   "menu.command",
   "e2e.request",
   "settings.changed",

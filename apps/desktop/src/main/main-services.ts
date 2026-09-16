@@ -30,6 +30,8 @@ export interface MainServicesOptions {
   onEvents: RunCoordinatorDeps["onEvents"];
   onState: RunCoordinatorDeps["onState"];
   onDiagnostics: RunCoordinatorDeps["onDiagnostics"];
+  /** Task 15 (spec §5.12, EX-35). Optional, like `RunCoordinatorDeps.onAudio` itself. */
+  onAudio?: RunCoordinatorDeps["onAudio"];
   /** Test seams. Production spawns real Bun runners and runs Babel in the bundled transform worker. */
   startRunner?: (config: RunnerSpawnConfig) => Promise<BunRunnerProcess>;
   transformHost?: TransformHost;
@@ -92,6 +94,8 @@ export async function createMainServices(options: MainServicesOptions): Promise<
         outputVisible: true,
         // M4 Task 8: matches tabTilesSchema's own `.catch()` defaults (packages/shared/src/session.ts).
         tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+        // Task 15: matches tabLayoutSchema's own `.catch()` default for `muted`.
+        muted: false,
       },
     }),
   });
@@ -141,6 +145,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     onEvents: options.onEvents,
     onState: options.onState,
     onDiagnostics: options.onDiagnostics,
+    onAudio: options.onAudio,
     runLock,
     stopGraceMs: options.stopGraceMs,
     idleRunnerTtlMs: options.idleRunnerTtlMs,

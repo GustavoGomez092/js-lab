@@ -1041,6 +1041,21 @@ button:disabled {
   opacity: 0;
 }
 
+/* Task 15 (spec §5.12, EX-35): unlike .tab-close, this stays visible whenever it renders at all (the tab has
+   audio activity) -- it's not merely a hover affordance, it's the thing that tells you which tab is making noise. */
+.tab-audio {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 16px;
+  font-size: 11px;
+}
+
+.tab-audio.muted {
+  opacity: 0.6;
+}
+
 .tab:hover .tab-close,
 .tab.on .tab-close,
 .tab-close:focus-visible {

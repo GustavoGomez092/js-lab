@@ -29,6 +29,10 @@ const defaultLayout = () => ({
   editorSize: 55,
   outputVisible: true,
   tiles: defaultTiles(),
+  // Task 15, spec §5.12/EX-35: whether the tab's audio (every tracked AudioContext, every media element) is
+  // muted. Lives beside `tiles` under the same v3 bump (R-M4-T8-VERSION-1) -- its own `.catch()` default is what
+  // lets it be additive with no further SESSION_VERSION bump.
+  muted: false,
 });
 
 /**
@@ -55,6 +59,7 @@ export const tabLayoutSchema = z
     editorSize: z.number().min(10).max(90).catch(55),
     outputVisible: z.boolean().catch(true),
     tiles: tabTilesSchema,
+    muted: z.boolean().catch(false),
   })
   .catch(defaultLayout);
 

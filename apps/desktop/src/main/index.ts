@@ -175,6 +175,7 @@ async function start(): Promise<void> {
     onState: (tabId, runId, state, activeHandles) =>
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
     onDiagnostics: (tabId, runId, diagnostics) => rpc.send["run.diagnostics"]({ tabId, runId, diagnostics }),
+    onAudio: (tabId, active) => rpc.send["run.audio"]({ tabId, active }),
     realHome: homedir(),
     ...(cacheDir ? { bunCacheDirOverride: cacheDir } : {}),
     onNpmOperation: (operation) => rpc.send["npm.op"](operation),

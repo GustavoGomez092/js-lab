@@ -20,7 +20,7 @@ import type { SettingsStore } from "./services/settings-store";
 export { InvalidPayloadError };
 
 export interface RpcHandlerDeps {
-  coordinator: Pick<RunCoordinator, "start" | "stop" | "kill" | "wait" | "expand">;
+  coordinator: Pick<RunCoordinator, "start" | "stop" | "kill" | "wait" | "expand" | "mute">;
   settings: Pick<SettingsStore, "current">;
   session: Pick<SessionStore, "session" | "readBuffers" | "setBuffer" | "patchTab">;
   safeMode: SafeModeState;
@@ -74,6 +74,8 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
           workingDirectory: tab?.workingDirectory ?? null,
           // The run compiles as the request's language, so __filename's extension follows it (N-4).
           scriptName: tab ? scriptFileName({ ...tab, language }, code) : "Untitled.ts",
+          // Task 15 (spec §5.12, EX-35): the tab's saved mute preference, applied the instant a web run starts.
+          muted: tab?.layout.muted ?? false,
         });
       },
       "run.expand": (input: unknown): Promise<EncodedValue | null> => {
@@ -94,6 +96,9 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         void deps.session
           .patchTab(tabId, patch)
           .catch((error) => deps.log("Handler for tab.patch failed", String(error)));
+        // Task 15 (spec §5.12, EX-35): a mute toggle takes effect on whatever is running right now too, not just
+        // the tab's next run -- `coordinator.mute` is a harmless no-op when nothing is running.
+        if (patch.layout?.muted !== undefined) deps.coordinator.mute(tabId, patch.layout.muted);
       }),
       "ui.heartbeat": () => deps.onUiHeartbeat(),
       "e2e.response": message(e2eResponseSchema, "e2e.response", (response) => deps.onE2EResponse?.(response)),

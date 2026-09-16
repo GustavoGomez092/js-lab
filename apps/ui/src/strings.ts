@@ -50,6 +50,13 @@ export const strings = {
     renameHelp: "Leave empty to use the first line of code as the title.",
     cancel: "Cancel",
     save: "Rename",
+    // Task 15 (spec §5.12, EX-35): the per-tab audio indicator's accessible name, carrying the tab title so a
+    // screen reader user with several tabs open can tell which one it's about (the motivating scenario for this
+    // whole task) -- and its current state (playing vs. muted), announced honestly, not just drawn.
+    audio: {
+      mute: (title: string) => `Mute ${title} (currently playing audio)`,
+      unmute: (title: string) => `Unmute ${title} (currently muted)`,
+    },
   },
   files: {
     saved: (name: string) => `Saved ${name}`,

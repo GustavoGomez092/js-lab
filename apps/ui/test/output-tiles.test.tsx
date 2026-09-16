@@ -30,6 +30,7 @@ function tabWith(id: string, overrides: { runtime?: Runtime; tiles?: Partial<Tab
         consoleSize: 55,
         ...overrides.tiles,
       },
+      muted: false,
     },
   });
 }

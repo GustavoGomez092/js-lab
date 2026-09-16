@@ -33,11 +33,22 @@ export interface TabRuntime {
   diagnostics: DiagnosticPayload[];
   /** Restored tabs never auto-run until edited or run manually (spec §5.14). */
   autoRunArmed: boolean;
+  /**
+   * Task 15 (spec §5.12, EX-35): true while this tab's runner reports an AudioContext running or a media element
+   * playing -- pushed by `run.audio` (event-driven, never polled), independent of `output.runState`/activeHandles
+   * so the per-tab speaker icon (TabBar.tsx) tracks audio specifically, not every kind of handle.
+   */
+  audioActive: boolean;
 }
 
 const freshOutput = (): TabRuntime["output"] => ({ ...initialOutput, workingDirectoryMissing: false });
 
-export const newRuntime = (): TabRuntime => ({ output: freshOutput(), diagnostics: [], autoRunArmed: false });
+export const newRuntime = (): TabRuntime => ({
+  output: freshOutput(),
+  diagnostics: [],
+  autoRunArmed: false,
+  audioActive: false,
+});
 
 /**
  * Fix round 1 (I-1): true exactly when the most recent events carried a `WorkingDirectoryError`, reset to false the
@@ -199,9 +210,16 @@ export interface AppState {
   setConsoleSize(size: number): void;
   resetConsoleSize(): void;
   toggleWebviewVisible(): void;
+  /** Task 15 (spec §5.12, EX-35): flips a specific tab's saved mute preference -- unlike `updateLayout`'s other
+   * callers, this must be able to target a background tab (TabBar.tsx renders every tab's indicator, not just
+   * the active one's). */
+  toggleMuted(tabId: string): void;
   receiveEvents(runId: string, events: RunEvent[], tabId?: string): void;
   receiveState(runId: string, state: RunState, activeHandles?: number, tabId?: string): void;
   receiveDiagnostics(runId: string, diagnostics: DiagnosticPayload[], tabId?: string): void;
+  /** Task 15 (spec §5.12, EX-35): applies a `run.audio` push. Always carries an explicit `tabId` (unlike the
+   * other `receive*` methods, there is no M1-era "no active tab yet" caller to default for). */
+  receiveAudio(active: boolean, tabId: string): void;
   clearOutput(tabId?: string): void;
   setHoveredLine(line: number | null): void;
   reveal(line: number): void;
@@ -442,6 +460,10 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
         updateLayout((layout) => ({ tiles: { ...layout.tiles, webviewVisible: !layout.tiles.webviewVisible } }));
       },
 
+      toggleMuted(tabId) {
+        updateTab(tabId, (tab) => ({ ...tab, layout: { ...tab.layout, muted: !tab.layout.muted } }));
+      },
+
       toggleOutputVisible() {
         updateLayout((layout) => ({ outputVisible: !layout.outputVisible }));
       },
@@ -489,6 +511,11 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
         }
         const runtime = get().runtimes[id];
         if (runtime && runId === runtime.output.runId) updateRuntime(id, (current) => ({ ...current, diagnostics }));
+      },
+
+      receiveAudio(active, tabId) {
+        if (!get().tabs[tabId]) return;
+        updateRuntime(tabId, (runtime) => ({ ...runtime, audioActive: active }));
       },
 
       clearOutput(tabId) {

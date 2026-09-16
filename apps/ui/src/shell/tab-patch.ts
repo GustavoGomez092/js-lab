@@ -20,7 +20,8 @@ export function computeTabPatch(before: TabState, next: TabState): Parameters<Ma
     next.layout.tiles.arrangement !== before.layout.tiles.arrangement ||
     next.layout.tiles.webviewVisible !== before.layout.tiles.webviewVisible ||
     next.layout.tiles.consoleSize !== before.layout.tiles.consoleSize ||
-    next.layout.tiles.order.join(",") !== before.layout.tiles.order.join(",");
+    next.layout.tiles.order.join(",") !== before.layout.tiles.order.join(",") ||
+    next.layout.muted !== before.layout.muted;
   if (
     next.language === before.language &&
     next.runtime === before.runtime &&

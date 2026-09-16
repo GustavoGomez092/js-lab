@@ -332,6 +332,14 @@ class WebRunSession implements RunHandle {
     this.#killWebview();
   }
 
+  /** Task 15 (spec §5.12, EX-35): forwarded straight to the page, page-lifetime not run-scoped (`bootstrap.ts`
+   * applies it immediately, whether or not anything is currently playing). A stray call after the handle is
+   * retired is a harmless no-op -- the webview is gone either way. */
+  mute(muted: boolean): void {
+    if (this.#terminal) return;
+    this.host.send({ type: "mute", muted });
+  }
+
   expand(handleId: string): Promise<EncodedValue | null> {
     const reqId = this.#nextReqId++;
     return new Promise((resolve) => {
@@ -419,6 +427,9 @@ class WebRunSession implements RunHandle {
       case "expanded":
         this.#pendingExpands.get(message.reqId)?.(message.value);
         this.#pendingExpands.delete(message.reqId);
+        return;
+      case "audio":
+        this.sink.audio?.(message.active);
         return;
     }
   }
@@ -578,7 +589,13 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
         deps.runLock.remove(run.runId);
         return session;
       }
-      host.send({ type: "run", runId: run.runId, code, settings: { maxEntries: run.maxEntries } });
+      host.send({
+        type: "run",
+        runId: run.runId,
+        code,
+        settings: { maxEntries: run.maxEntries },
+        muted: run.muted ?? false,
+      });
       return session;
     },
   };

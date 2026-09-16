@@ -119,6 +119,8 @@ interface Harness {
   handle: RunHandle;
   events: RunEvent[];
   states: { state: RunState; activeHandles?: number }[];
+  /** Task 15 (spec §5.12, EX-35): every `sink.audio()` call the session made, in order. */
+  audioEvents: boolean[];
   exitedCalls: () => number;
   locks: Set<string>;
   vendorSets: { key: string; chunk: { code: string; map: string } }[];
@@ -171,6 +173,7 @@ async function createHarness(
   });
   const events: RunEvent[] = [];
   const states: Harness["states"] = [];
+  const audioEvents: boolean[] = [];
   let exitedCalls = 0;
   const sink: RunEventSink = {
     attached: () => {},
@@ -180,6 +183,7 @@ async function createHarness(
     exited: () => {
       exitedCalls++;
     },
+    audio: (active) => audioEvents.push(active),
   };
   const run: PreparedRun = {
     runId: "run-1",
@@ -194,7 +198,7 @@ async function createHarness(
   const handle = await adapter.start(run, sink);
   const raw = webviews.raws.get("t1");
   if (!raw) throw new Error("expected a webview to have been created for t1");
-  return { webviews, raw, handle, events, states, exitedCalls: () => exitedCalls, locks, vendorSets, dir };
+  return { webviews, raw, handle, events, states, audioEvents, exitedCalls: () => exitedCalls, locks, vendorSets, dir };
 }
 
 describe("WebAdapter", () => {
@@ -213,6 +217,7 @@ describe("WebAdapter", () => {
           runId: "run-1",
           code: joinVendorAndApp("VENDOR", "BUNDLED"),
           settings: { maxEntries: 10_000 },
+          muted: false,
         },
       });
 
@@ -417,6 +422,7 @@ describe("WebAdapter", () => {
           runId: "run-2",
           code: joinVendorAndApp("VENDOR", "BUNDLED-2"),
           settings: { maxEntries: 10_000 },
+          muted: false,
         },
       });
     } finally {
@@ -496,6 +502,26 @@ describe("WebAdapter", () => {
       expect(h.exitedCalls()).toBe(1);
       expect(h.states.at(-1)).toEqual({ state: "failed", activeHandles: undefined });
       expect(h.events.at(-1)?.kind).toBe("error");
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Task 15 (spec §5.12, EX-35): mute() forwards straight to the page (page-lifetime, not run-scoped -- Main
+  // never needs to know whether anything is currently playing), and an inbound "audio" message relays to
+  // sink.audio() exactly like "state" relays to sink.state().
+  test("mute() sends a mute message to the page, and an audio message from the page relays to sink.audio()", async () => {
+    const h = await createHarness();
+    try {
+      h.handle.mute?.(true);
+      expect(parseHostMessageCall(h.raw.executed.at(-1) as string)).toEqual({
+        seq: 2,
+        message: { type: "mute", muted: true },
+      });
+
+      h.raw.emit(3, { type: "audio", active: true });
+      h.raw.emit(4, { type: "audio", active: false });
+      expect(h.audioEvents).toEqual([true, false]);
     } finally {
       await rm(h.dir, { recursive: true, force: true });
     }
@@ -661,6 +687,7 @@ describe("WebAdapter", () => {
           runId: "run-2",
           code: joinVendorAndApp("VENDOR", "AFTER-STOP"),
           settings: { maxEntries: 10_000 },
+          muted: false,
         },
       });
     } finally {
@@ -719,6 +746,7 @@ describe("WebAdapter", () => {
           runId: "run-2",
           code: joinVendorAndApp("VENDOR", "AFTER-KILL"),
           settings: { maxEntries: 10_000 },
+          muted: false,
         },
       });
     } finally {
@@ -759,6 +787,7 @@ describe("WebAdapter vendor cache read path (Task 8a)", () => {
         runId: "run-1",
         code: joinVendorAndApp("CACHED-VENDOR", "APP-1"),
         settings: { maxEntries: 10_000 },
+        muted: false,
       });
     } finally {
       await rm(h.dir, { recursive: true, force: true });
@@ -826,6 +855,7 @@ describe("WebAdapter vendor cache read path (Task 8a)", () => {
         runId: "run-2",
         code: joinVendorAndApp("VENDOR-1", "APP-2"),
         settings: { maxEntries: 10_000 },
+        muted: false,
       });
       // Belt and braces: the previous run's app code must appear nowhere in what the page was asked to run.
       expect((second.message as { code: string }).code).not.toContain("APP-1");

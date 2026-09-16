@@ -312,6 +312,9 @@ export function App({
         coalescer.flush(tabId);
         store.getState().receiveDiagnostics(runId, diagnostics, tabId);
       }),
+      // Task 15 (spec §5.12, EX-35): no coalescer flush needed -- audio activity is its own independent signal,
+      // not ordered against a tab's console/result events the way state/diagnostics are.
+      api.on("run.audio", ({ tabId, active }) => store.getState().receiveAudio(active, tabId)),
       api.on("menu.command", ({ command, args }) => {
         registry.execute(command, args);
       }),

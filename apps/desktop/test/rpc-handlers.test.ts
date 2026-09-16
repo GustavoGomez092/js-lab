@@ -11,6 +11,7 @@ function setup(safeMode: RpcHandlerDeps["safeMode"] = { active: false, reason: n
       kill: mock(() => {}),
       wait: mock(() => {}),
       expand: mock(async () => ({ t: "number", v: "1" }) as const),
+      mute: mock(() => {}),
     },
     settings: { current: defaultSettings() },
     session: {
@@ -54,7 +55,20 @@ describe("requests", () => {
       runtime: "browser-node",
       workingDirectory: null,
       scriptName: "1 + 1.ts",
+      // Task 15: the default tab has no saved mute preference, so this is its schema default.
+      muted: false,
     });
+  });
+
+  // Task 15 (spec §5.12, EX-35): a muted tab's next run starts muted, not just its saved layout -- every web run
+  // gets a fresh realm, so this is what keeps a muted tab muted across Auto Run.
+  test("run.start carries the tab's saved mute preference", () => {
+    const { handlers, deps } = setup();
+    const tab = deps.session.session.tabs.t1;
+    if (!tab) throw new Error("expected tab t1");
+    deps.session.session.tabs.t1 = { ...tab, layout: { ...tab.layout, muted: true } };
+    handlers.requests["run.start"](validStart);
+    expect(deps.coordinator.start).toHaveBeenCalledWith(expect.objectContaining({ muted: true }));
   });
 
   test("run.start rejects invalid payloads without starting a run", () => {
@@ -172,6 +186,17 @@ describe("messages", () => {
     handlers.messages["tab.patch"]({ tabId: "t1", patch: { language: "tsx" } });
     expect(deps.session.setBuffer).toHaveBeenCalledWith("t1", "const a = 1");
     expect(deps.session.patchTab).toHaveBeenCalledWith("t1", { language: "tsx" });
+  });
+
+  // Task 15 (spec §5.12, EX-35): a mute toggle takes effect on whatever is running right now too, not just the
+  // tab's saved layout -- a patch that doesn't touch `muted` at all must not call coordinator.mute unnecessarily.
+  test("tab.patch's layout.muted also live-mutes whatever is currently running for that tab", () => {
+    const { handlers, deps } = setup();
+    handlers.messages["tab.patch"]({ tabId: "t1", patch: { layout: { muted: true } } });
+    expect(deps.coordinator.mute).toHaveBeenCalledWith("t1", true);
+
+    handlers.messages["tab.patch"]({ tabId: "t1", patch: { title: "x" } });
+    expect(deps.coordinator.mute).toHaveBeenCalledTimes(1);
   });
 
   test("ui.heartbeat notifies the watchdog", () => {

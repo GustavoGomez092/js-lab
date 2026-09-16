@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { HandleTracker, handleCountAction, installHandleTracking } from "../src/handles";
+import { AudioController, HandleTracker, handleCountAction, installHandleTracking } from "../src/handles";
 
 // The test environment (bun:test) has no DOM: every host API the web runner touches is a small fake built here,
 // per the task brief ("build the fakes you need... rather than adding a DOM library").
@@ -14,8 +14,17 @@ function bucket<K, V>(map: Map<K, Set<V>>, key: K): Set<V> {
   return set;
 }
 
+/** What `createGain()` returns: enough of a real `GainNode` for the mute wiring -- a `.gain` AudioParam-alike
+ * with a settable `.value`, and a no-op `connect` (the fake never actually routes samples anywhere). */
+class FakeGainNode {
+  gain = { value: 1 };
+  connect(_destination: unknown): void {}
+}
+
 class FakeAudioContext {
   state: "running" | "closed" = "running";
+  /** The real destination `handles.ts` reads *before* it shadows `this.destination` with the inserted gain node. */
+  destination = { kind: "real-destination" as const };
   #listeners = new Map<string, Set<() => void>>();
   addEventListener(type: string, cb: () => void): void {
     bucket(this.#listeners, type).add(cb);
@@ -25,6 +34,9 @@ class FakeAudioContext {
   }
   #emit(type: string): void {
     for (const cb of this.#listeners.get(type) ?? []) cb();
+  }
+  createGain(): FakeGainNode {
+    return new FakeGainNode();
   }
   async close(): Promise<void> {
     if (this.state === "closed") return;
@@ -80,10 +92,19 @@ function fakeRaf() {
   };
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: sandboxed global object
-function sandbox(): { tracker: HandleTracker; g: any; raf: ReturnType<typeof fakeRaf> } {
+function sandbox(): {
+  tracker: HandleTracker;
+  // biome-ignore lint/suspicious/noExplicitAny: sandboxed global object
+  g: any;
+  raf: ReturnType<typeof fakeRaf>;
+  audio: AudioController;
+  /** Every `active` transition AudioController reported, in order -- proves it's event-driven, not polled. */
+  audioEvents: boolean[];
+} {
   const tracker = new HandleTracker(() => {});
   const raf = fakeRaf();
+  const audioEvents: boolean[] = [];
+  const audio = new AudioController((active) => audioEvents.push(active));
   const g = {
     setTimeout,
     clearTimeout,
@@ -96,8 +117,8 @@ function sandbox(): { tracker: HandleTracker; g: any; raf: ReturnType<typeof fak
     AudioContext: FakeAudioContext,
     HTMLMediaElement: FakeMediaElement,
   };
-  installHandleTracking(tracker, g);
-  return { tracker, g, raf };
+  installHandleTracking(tracker, g, audio);
+  return { tracker, g, raf, audio, audioEvents };
 }
 
 test("a timeout is tracked until it fires", async () => {
@@ -217,6 +238,61 @@ test("a media element is tracked while playing and untracked when it pauses or e
   expect(tracker.count).toBe(1);
   el.end();
   expect(tracker.count).toBe(0);
+});
+
+// Task 15 (spec §5.12, EX-35): AudioController tracks audio activity separately from HandleTracker's generic
+// idle/settled bookkeeping above, and reports only true/false transitions -- never polled.
+
+test("an open AudioContext counts as audio-active, and closing it clears that (spec section 5.12)", async () => {
+  const { g, audio, audioEvents } = sandbox();
+  expect(audio.active).toBe(false);
+  const ctx = new g.AudioContext();
+  expect(audio.active).toBe(true);
+  expect(audioEvents).toEqual([true]);
+  await ctx.close();
+  expect(audio.active).toBe(false);
+  expect(audioEvents).toEqual([true, false]);
+});
+
+test("a playing media element counts as audio-active, and stops counting once it pauses", () => {
+  const { g, audio, audioEvents } = sandbox();
+  const el = new g.HTMLMediaElement();
+  el.play();
+  expect(audio.active).toBe(true);
+  expect(audioEvents).toEqual([true]);
+  el.pause();
+  expect(audio.active).toBe(false);
+  expect(audioEvents).toEqual([true, false]);
+});
+
+test("muting zeroes a tracked AudioContext's destination gain without closing or suspending it", async () => {
+  const { g, audio } = sandbox();
+  const ctx = new g.AudioContext();
+  // `destination` is shadowed with the inserted gain node the moment the context is constructed (this is what
+  // makes muting possible without suspending: there is no public way to zero AudioDestinationNode itself).
+  expect(ctx.destination.gain.value).toBe(1);
+  audio.setMuted(true);
+  expect(ctx.destination.gain.value).toBe(0);
+  // Never suspended or closed: a suspended AudioContext stops its own clock, which would desync anything a run
+  // times off it (a rAF-driven visualisation, a scheduler) -- this is the distinction the task turns on.
+  expect(ctx.state).toBe("running");
+  audio.setMuted(false);
+  expect(ctx.destination.gain.value).toBe(1);
+  expect(ctx.state).toBe("running");
+});
+
+test("muting pauses playing media immediately, and media started while already muted is paused right away too", () => {
+  const { g, audio } = sandbox();
+  const el = new g.HTMLMediaElement();
+  el.play();
+  expect(el.paused).toBe(false);
+  audio.setMuted(true);
+  expect(el.paused).toBe(true);
+
+  // A second element that starts playing after mute was already toggled on must not audibly play either.
+  const el2 = new g.HTMLMediaElement();
+  el2.play();
+  expect(el2.paused).toBe(true);
 });
 
 test("handleCountAction disposes new handles after a stop, and tracks idle/settled otherwise", () => {

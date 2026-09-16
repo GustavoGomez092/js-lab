@@ -30,6 +30,14 @@ export interface PreparedRun {
   workingDirectory: string | null;
   mapEvent(event: RawRunEvent): RunEvent;
   isCancelled(): boolean;
+  /**
+   * Task 15 (spec §5.12, EX-35): the tab's saved mute preference, applied to a fresh web run the moment it starts
+   * -- every run gets a new realm (Decision 1, `web-adapter.ts`), so without this a muted tab would come back
+   * unmuted the instant Auto Run (or any Run) started a new one. Ignored by `BunAdapter` (Bun has no audio).
+   * Optional (default false): every `PreparedRun` built before this task, across every existing test fixture,
+   * stays valid unchanged.
+   */
+  muted?: boolean;
 }
 
 /** Where an adapter reports what a run is doing, in `RunCoordinator`'s own generic vocabulary (spec §4.2/§5.1). */
@@ -46,6 +54,12 @@ export interface RunEventSink {
   state(state: RunState, activeHandles?: number): void;
   /** A liveness signal arrived; `RunCoordinator` owns unresponsive-detection and recovery from it (spec §5.11). */
   heartbeat(): void;
+  /**
+   * Task 15 (spec §5.12, EX-35): the tab's audio-active state changed -- true while any AudioContext the runner
+   * tracks is running or any media element is playing. Optional: only `WebAdapter`'s sessions ever call it (Bun
+   * has no audio concept, spec §5.6 vs §5.12), so `BunRunSession` needs no stub implementation.
+   */
+  audio?(active: boolean): void;
   /**
    * The runtime behind this run's handle is gone for good (its process exited, its webview was torn down, ...),
    * whether or not that was expected. `RunCoordinator` uses this to treat the handle as gone too -- for example, a
@@ -88,4 +102,11 @@ export interface RunHandle {
   /** Immediate. */
   kill(): void;
   expand(handleId: string): Promise<EncodedValue | null>;
+  /**
+   * Task 15 (spec §5.12, EX-35): sets or clears mute for this run's runtime. Optional: only `WebAdapter`'s
+   * `WebRunSession` implements it (Bun has no audio concept), so `RunCoordinator.mute()` calls it with `?.` and a
+   * Bun-runtime tab's mute toggle is a harmless no-op at the runtime level -- it still persists in the tab's
+   * saved layout either way.
+   */
+  mute?(muted: boolean): void;
 }

@@ -9,7 +9,7 @@ import {
   parseStack,
 } from "@jslab/serializer";
 import { installConsole } from "./console-hook";
-import { HandleTracker, handleCountAction, installHandleTracking } from "./handles";
+import { AudioController, HandleTracker, handleCountAction, installHandleTracking } from "./handles";
 import { createHostBridge, type HostBridgeGlobal } from "./host-bridge";
 
 // Same limits as packages/runner-bun/src/bootstrap.ts (spec §5.9, R-M1-17(a)): an error event's text sits beside
@@ -79,7 +79,12 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
     if (action === "dispose") tracker.disposeAll();
     else if (action) setState(action);
   });
-  installHandleTracking(tracker, g);
+  // Task 15 (spec §5.12, EX-35): reports the tab's audio-active state to the host the moment it changes -- never
+  // polled. Outlives any one run, exactly like the wrapped globals `installHandleTracking` installs: an
+  // AudioContext or media element created by one run can still be open/playing when the next run's page reloads
+  // it away, at which point this whole realm (and this AudioController with it) is discarded anyway.
+  const audio = new AudioController((active) => bridge.send({ type: "audio", active }));
+  installHandleTracking(tracker, g, audio);
 
   function setState(state: RunnerState): void {
     if (!run) return;
@@ -196,6 +201,10 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
     // from a previous run must never resolve against a later one. `registry` is otherwise process/page-lifetime
     // state shared only because `Encoder` needs a fresh instance wrapped around it every run.
     registry.clear();
+    // Task 15: re-asserts the tab's saved mute preference before any user code can create an AudioContext or
+    // media element -- a no-op when it already matches (AudioController.setMuted), so an explicit `mute` message
+    // arriving separately (spec §5.12, a live toggle mid-run) is never fought over by this.
+    audio.setMuted(message.muted ?? false);
     // A Blob URL is the only portable way to run an ES module from a string in both a browser and Bun's own
     // module loader (no `//# sourceURL`-style relabeling applies to modules): the blob URL itself becomes the
     // "entry" file console-hook.ts matches call sites against, so every top-level frame of the user's code matches
@@ -229,6 +238,12 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
     switch (message.type) {
       case "run":
         void startRun(message);
+        return;
+      case "mute":
+        // Task 15: page-lifetime, not run-scoped -- toggling mute while nothing is running still takes effect the
+        // moment a new AudioContext or media element is created (AudioController.addContext/addPlaying apply the
+        // current mute state immediately).
+        audio.setMuted(message.muted);
         return;
       case "stop":
         if (run) run.state = "stopped";

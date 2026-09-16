@@ -26,6 +26,8 @@ export interface RunStartRequest {
   workingDirectory?: string | null;
   /** `__filename`'s base name (scriptFileName). */
   scriptName?: string;
+  /** Task 15 (spec §5.12, EX-35): the tab's saved mute preference (`session.tabs[tabId].layout.muted`). */
+  muted?: boolean;
 }
 
 export interface RunnerSettings {
@@ -51,6 +53,9 @@ export interface RunCoordinatorDeps {
   onEvents(tabId: string, runId: string, events: RunEvent[]): void;
   onState(tabId: string, runId: string, state: RunState, activeHandles?: number): void;
   onDiagnostics(tabId: string, runId: string, diagnostics: Diagnostic[]): void;
+  /** Task 15 (spec §5.12, EX-35): a running web tab's audio-active state changed. Optional: `main.ts`'s own test
+   * harness and any caller that doesn't care about the indicator can omit it. */
+  onAudio?(tabId: string, active: boolean): void;
   runLock: { add(runId: string): void; remove(runId: string): void };
   watchdogIntervalMs?: number;
   stopGraceMs?: number;
@@ -186,6 +191,15 @@ export class RunCoordinator {
     return run.handle.expand(handleId);
   }
 
+  /**
+   * Task 15 (spec §5.12, EX-35): live-toggles mute for whatever is currently running on this tab. A harmless no-op
+   * when nothing is running, or when the running adapter has no concept of mute (`RunHandle.mute` is optional) --
+   * the tab's saved preference still applies at the *start* of its next run either way (`#execute`'s `muted`).
+   */
+  mute(tabId: string, muted: boolean): void {
+    this.#runs.get(tabId)?.handle?.mute?.(muted);
+  }
+
   disposeTab(tabId: string): void {
     this.#supersede(tabId);
     this.#runs.delete(tabId);
@@ -261,6 +275,7 @@ export class RunCoordinator {
         workingDirectory,
         mapEvent: (event) => mapper(event),
         isCancelled: () => !this.#isCurrent(run),
+        muted: request.muted ?? false,
       };
       const sink: RunEventSink = {
         attached: (handle) => {
@@ -289,6 +304,10 @@ export class RunCoordinator {
         exited: () => {
           // The runner is gone: Kill, expand and quit must not act on it again (or signal its possibly reused pid).
           run.handle = null;
+        },
+        audio: (active) => {
+          if (!this.#isCurrent(run)) return;
+          this.deps.onAudio?.(run.tabId, active);
         },
       };
 

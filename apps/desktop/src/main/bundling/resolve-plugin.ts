@@ -8,6 +8,51 @@ import { isNodeBuiltin } from "./node-builtins";
 /** Bare (npm-style) specifiers only: not relative (`./`, `../`), not absolute (`/`). */
 const BARE_SPECIFIER = /^[^./]/;
 
+/**
+ * Task 8a (the vendor/app split): the page-global the vendor chunk publishes each package into, and that every
+ * app-chunk stub reads back out of. One global for the whole page, filled before the app chunk's first line runs
+ * (see `joinVendorAndApp` in `bundler.ts`).
+ */
+export const VENDOR_REGISTRY_GLOBAL = "__jslabVendor";
+
+/** The build namespace the app build's package stubs live in; nothing outside this file needs to name it. */
+const VENDOR_STUB_NAMESPACE = "jslab-vendor";
+
+export interface VendorStubOptions {
+  /**
+   * Collects every import that resolved out of the tab's own working directory rather than the shared packages
+   * folder. `bun.lock` describes only the packages folder, so a vendor chunk built from anything else cannot be
+   * keyed safely -- see `bundleAppForWeb`'s `vendorCacheable`.
+   */
+  workingDirectoryImports: Set<string>;
+}
+
+/**
+ * One package's stub in the app chunk. Deliberately CommonJS: a stub's named exports are only known at runtime
+ * (they are whatever the real package turns out to export), and CommonJS is the one module shape whose named
+ * imports Bun compiles to a property read instead of a link-time check. An ES-module stub would have to list every
+ * export name at build time, which is exactly what a pre-built vendor chunk cannot tell us -- measured: Bun emits
+ * a CommonJS package's split chunk with `export default` and nothing else, so `import { useState } from "react"`
+ * across a real chunk boundary fails to link.
+ */
+function vendorStubSource(specifier: string): string {
+  return `module.exports = globalThis.${VENDOR_REGISTRY_GLOBAL}[${JSON.stringify(specifier)}];\n`;
+}
+
+/**
+ * Whether `resolved` came out of `workingDirectory`'s own `node_modules`. Both sides go through `realpathSync` for
+ * the same reason `resolveBareSpecifier` does it (macOS `$TMPDIR` runs through `/var` -> `/private/var`, and Bun's
+ * own canonicalization of a resolved path is not consistent call to call).
+ */
+export function resolvedFromWorkingDirectory(resolved: string, workingDirectory: string | null): boolean {
+  if (!workingDirectory) return false;
+  try {
+    return realpathSync(resolved).startsWith(join(realpathSync(workingDirectory), "node_modules") + sep);
+  } catch {
+    return false;
+  }
+}
+
 export interface ResolveContext {
   /** The tab's working directory, or null when none is set (spec §5.3). */
   workingDirectory: string | null;
@@ -85,15 +130,31 @@ export function jslabResolve(
   ctx: ResolveContext,
   resolvedImports: Set<string>,
   onError: (error: BundleError) => void,
+  vendorStubs?: VendorStubOptions,
 ): BunPlugin {
   return {
     name: "jslab-resolve",
     setup(build) {
+      if (vendorStubs) {
+        build.onLoad({ filter: /.*/, namespace: VENDOR_STUB_NAMESPACE }, (args) => ({
+          contents: vendorStubSource(args.path),
+          loader: "js",
+        }));
+      }
       build.onResolve({ filter: BARE_SPECIFIER }, (args) => {
+        // A stub module imports nothing, so nothing should ever ask to resolve from inside one; ignore it if it does.
+        if (args.namespace === VENDOR_STUB_NAMESPACE) return undefined;
         const resolved = resolveBareSpecifier(args.path, ctx);
         if (resolved) {
           resolvedImports.add(args.path);
-          return { path: resolved };
+          if (!vendorStubs) return { path: resolved };
+          if (resolvedFromWorkingDirectory(resolved, ctx.workingDirectory)) {
+            vendorStubs.workingDirectoryImports.add(args.path);
+          }
+          // The app build never reads a line of package code: the specifier becomes a stub that reads whatever the
+          // vendor chunk published for it (Task 8a). The specifier itself is the stub's identity, so two imports of
+          // the same package share one stub, exactly as they shared one module before the split.
+          return { path: args.path, namespace: VENDOR_STUB_NAMESPACE };
         }
         if (isNodeBuiltin(args.path)) return undefined; // nodePolyfills handles this one specifically
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { bundleForWeb } from "../../src/main/bundling/bundler";
+import { bundleAppForWeb, bundleVendorForWeb, joinVendorAndApp } from "../../src/main/bundling/bundler";
 
 let root = "";
 let workingDirectory = "";
@@ -20,10 +20,10 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function writePackage(nodeModulesDir: string, name: string, contents: string) {
+async function writePackage(nodeModulesDir: string, name: string, contents: string, pkgJson: object = {}) {
   const pkgDir = join(nodeModulesDir, name);
   await mkdir(pkgDir, { recursive: true });
-  await writeFile(join(pkgDir, "package.json"), JSON.stringify({ name, main: "index.js" }));
+  await writeFile(join(pkgDir, "package.json"), JSON.stringify({ name, main: "index.js", ...pkgJson }));
   await writeFile(join(pkgDir, "index.js"), contents);
 }
 
@@ -38,7 +38,39 @@ function runBundle(code: string) {
   return { appended, document };
 }
 
-describe("bundleForWeb", () => {
+let joinedRunCounter = 0;
+
+/**
+ * Evaluates a joined bundle the way the page does -- as one real ES module -- and returns whatever it left on
+ * `globalThis.__jlProbe`. A joined bundle has a top-level `await` in it (the vendor prelude), so `new Function`
+ * can't run one: it has to be a genuine module, which means a file and a dynamic `import()`. Each call gets its
+ * own file name so the module cache never serves a previous call's copy.
+ */
+async function runJoinedModule(joined: string): Promise<unknown> {
+  const file = join(root, `joined-${joinedRunCounter++}.mjs`);
+  await writeFile(file, joined);
+  const g = globalThis as unknown as Record<string, unknown>;
+  g.__jlProbe = undefined;
+  await import(file);
+  return g.__jlProbe;
+}
+
+/** The whole production path for one run: build the app chunk, build the vendor chunk it named, join them. */
+async function bundleAndJoin(entry: string): Promise<string> {
+  const app = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules });
+  if ("error" in app) throw new Error(`app build failed: ${app.error.message}`);
+  if (app.imports.length === 0) return joinVendorAndApp(null, app.code);
+  const vendor = await bundleVendorForWeb({
+    imports: app.imports,
+    runtime: "browser",
+    workingDirectory,
+    packagesNodeModules,
+  });
+  if ("error" in vendor) throw new Error(`vendor build failed: ${vendor.error.message}`);
+  return joinVendorAndApp(vendor.code, app.code);
+}
+
+describe("bundleAppForWeb", () => {
   test("bundles a two-module fixture from a temp dir into code that runs under new Function", async () => {
     await writeFile(join(workingDirectory, "helper.js"), "export function greet(name) { return 'hello ' + name; }\n");
     await writeFile(
@@ -46,7 +78,7 @@ describe("bundleForWeb", () => {
       "import { greet } from './helper.js';\nglobalThis.__jlProbe = greet('world');\n",
     );
 
-    const result = await bundleForWeb({
+    const result = await bundleAppForWeb({
       entry: join(workingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory,
@@ -69,7 +101,7 @@ describe("bundleForWeb", () => {
     await writePackage(packagesNodeModules, "left-pad", "export default 'from-pkgs';");
     await writeFile(join(workingDirectory, "entry.js"), "import lp from 'left-pad';\nglobalThis.__jlProbe = lp;\n");
 
-    const result = await bundleForWeb({
+    const result = await bundleAppForWeb({
       entry: join(workingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory,
@@ -80,15 +112,13 @@ describe("bundleForWeb", () => {
     if ("error" in result) return;
     expect(result.imports).toEqual(["left-pad"]);
 
-    const g: Record<string, unknown> = {};
-    new Function("globalThis", result.code)(g);
-    expect(g.__jlProbe).toBe("from-wd");
+    expect(await runJoinedModule(await bundleAndJoin(join(workingDirectory, "entry.js")))).toBe("from-wd");
   });
 
   test("reports a missing bare import as a BundleError carrying the specifier, line and column", async () => {
     await writeFile(join(workingDirectory, "entry.js"), "import x from 'totally-missing-pkg';\nglobalThis.x = x;\n");
 
-    const result = await bundleForWeb({
+    const result = await bundleAppForWeb({
       entry: join(workingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory,
@@ -107,7 +137,7 @@ describe("bundleForWeb", () => {
     await writeFile(join(workingDirectory, "styles.css"), "body { color: teal; }");
     await writeFile(join(workingDirectory, "entry.js"), "import './styles.css';\n");
 
-    const result = await bundleForWeb({
+    const result = await bundleAppForWeb({
       entry: join(workingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory,
@@ -124,7 +154,7 @@ describe("bundleForWeb", () => {
   test("blocks a Node builtin import under the browser runtime with an install-assist-shaped error", async () => {
     await writeFile(join(workingDirectory, "entry.js"), "import fs from 'fs';\nglobalThis.fs = fs;\n");
 
-    const result = await bundleForWeb({
+    const result = await bundleAppForWeb({
       entry: join(workingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory,
@@ -145,7 +175,7 @@ describe("bundleForWeb", () => {
       '// see "fs" module docs for details\nimport fs from "fs";\nglobalThis.fs = fs;\n',
     );
 
-    const result = await bundleForWeb({
+    const result = await bundleAppForWeb({
       entry: join(workingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory,
@@ -165,7 +195,7 @@ describe("bundleForWeb", () => {
       'const label = "fs";\nimport fs from "fs";\nglobalThis.fs = fs;\n',
     );
 
-    const result = await bundleForWeb({
+    const result = await bundleAppForWeb({
       entry: join(workingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory,
@@ -187,7 +217,7 @@ describe("bundleForWeb", () => {
  * *above* a nested working directory (an ordinary monorepo-style layout) to make that ancestor path actually
  * reachable, which the flat `root/wd` + `root/pkgs/node_modules` layout above structurally cannot exercise.
  */
-describe("bundleForWeb resolve leak (fix round 1, C1)", () => {
+describe("bundleAppForWeb resolve leak (fix round 1, C1)", () => {
   let ancestorRoot = "";
   let ancestorNodeModules = "";
   let nestedWorkingDirectory = "";
@@ -211,7 +241,7 @@ describe("bundleForWeb resolve leak (fix round 1, C1)", () => {
     await writePackage(ancestorNodeModules, "evil-pkg", "globalThis.__p = 'evil';\nexport default 'evil';");
     await writeFile(join(nestedWorkingDirectory, "entry.js"), "import x from 'evil-pkg';\nglobalThis.__jlProbe = x;\n");
 
-    const result = await bundleForWeb({
+    const result = await bundleAppForWeb({
       entry: join(nestedWorkingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory: nestedWorkingDirectory,
@@ -232,19 +262,29 @@ describe("bundleForWeb resolve leak (fix round 1, C1)", () => {
       "import lp from 'left-pad';\nglobalThis.__jlProbe = lp;\n",
     );
 
-    const result = await bundleForWeb({
+    const app = await bundleAppForWeb({
       entry: join(nestedWorkingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory: nestedWorkingDirectory,
       packagesNodeModules: nestedPackagesNodeModules,
     });
+    expect("error" in app).toBe(false);
+    if ("error" in app) return;
+    const vendor = await bundleVendorForWeb({
+      imports: app.imports,
+      runtime: "browser",
+      workingDirectory: nestedWorkingDirectory,
+      packagesNodeModules: nestedPackagesNodeModules,
+    });
+    expect("error" in vendor).toBe(false);
+    if ("error" in vendor) return;
+    expect(vendor.code).not.toContain("from-ancestor");
 
-    expect("error" in result).toBe(false);
-    if ("error" in result) return;
-    expect(result.code).not.toContain("from-ancestor");
-
-    const g: Record<string, unknown> = {};
-    new Function("globalThis", result.code)(g);
+    const file = join(ancestorRoot, "joined-leak.mjs");
+    await writeFile(file, joinVendorAndApp(vendor.code, app.code));
+    const g = globalThis as unknown as Record<string, unknown>;
+    g.__jlProbe = undefined;
+    await import(file);
     expect(g.__jlProbe).toBe("from-wd");
   });
 
@@ -257,7 +297,7 @@ describe("bundleForWeb resolve leak (fix round 1, C1)", () => {
       "import a from 'wd-only-pkg';\nimport b from 'packages-only-pkg';\nglobalThis.__jlProbe = [a, b];\n",
     );
 
-    const result = await bundleForWeb({
+    const result = await bundleAppForWeb({
       entry: join(nestedWorkingDirectory, "entry.js"),
       runtime: "browser",
       workingDirectory: nestedWorkingDirectory,
@@ -267,5 +307,199 @@ describe("bundleForWeb resolve leak (fix round 1, C1)", () => {
     expect("error" in result).toBe(false);
     if ("error" in result) return;
     expect([...result.imports].sort()).toEqual(["packages-only-pkg", "wd-only-pkg"]);
+  });
+});
+
+/**
+ * Task 8a: the vendor/app split. The app chunk carries only the tab's own code and a stub per package; the vendor
+ * chunk carries the third-party code and publishes each package into one page-global registry. Joining the two
+ * reproduces what a single unsplit build used to produce -- these tests pin that equivalence for every import form
+ * (default, named, namespace) against both a CommonJS and an ES-module package, because the interop between them
+ * is the one thing a split can silently get wrong.
+ */
+describe("the vendor/app split", () => {
+  async function writeFixturePackages() {
+    await writePackage(
+      packagesNodeModules,
+      "cjs-pkg",
+      'module.exports = { tag: "cjs-default", named: "cjs-named" };\n',
+    );
+    await writePackage(
+      packagesNodeModules,
+      "esm-pkg",
+      'export default { tag: "esm-default" };\nexport const named = "esm-named";\n',
+      { type: "module" },
+    );
+  }
+
+  test("the app chunk contains no package code and names the packages the vendor chunk must supply", async () => {
+    await writeFixturePackages();
+    await writeFile(join(workingDirectory, "entry.js"), "import c from 'cjs-pkg';\nglobalThis.__jlProbe = c.tag;\n");
+
+    const app = await bundleAppForWeb({
+      entry: join(workingDirectory, "entry.js"),
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+
+    expect("error" in app).toBe(false);
+    if ("error" in app) return;
+    expect(app.imports).toEqual(["cjs-pkg"]);
+    // The package's own source text is the thing that must NOT be there -- that is what the vendor chunk carries.
+    expect(app.code).not.toContain("cjs-default");
+  });
+
+  test("a joined bundle reproduces default, named and namespace imports for both a CommonJS and an ES-module package", async () => {
+    await writeFixturePackages();
+    await writeFile(
+      join(workingDirectory, "entry.js"),
+      [
+        "import c from 'cjs-pkg';",
+        "import { named as cNamed } from 'cjs-pkg';",
+        "import * as cNs from 'cjs-pkg';",
+        "import e from 'esm-pkg';",
+        "import { named as eNamed } from 'esm-pkg';",
+        "import * as eNs from 'esm-pkg';",
+        "globalThis.__jlProbe = {",
+        "  cTag: c.tag, cNamed, cNsDefaultTag: cNs.default.tag, cNsNamed: cNs.named,",
+        "  eTag: e.tag, eNamed, eNsDefaultTag: eNs.default.tag, eNsNamed: eNs.named,",
+        "};",
+      ].join("\n"),
+    );
+
+    const probe = (await runJoinedModule(await bundleAndJoin(join(workingDirectory, "entry.js")))) as Record<
+      string,
+      unknown
+    >;
+
+    expect(probe).toMatchObject({
+      cTag: "cjs-default",
+      cNamed: "cjs-named",
+      cNsDefaultTag: "cjs-default",
+      cNsNamed: "cjs-named",
+      eTag: "esm-default",
+      eNamed: "esm-named",
+      eNsDefaultTag: "esm-default",
+      eNsNamed: "esm-named",
+    });
+  });
+
+  // The whole point of the split: this is the vendor chunk a cache hit would serve. Reusing a *previous* run's
+  // vendor chunk with a *newly built* app chunk must run the new app code -- if the app chunk were ever reused
+  // along with it, this would still report the old value and the cache would be serving stale code.
+  test("a vendor chunk built for an earlier run joins with a freshly built app chunk and runs the new code", async () => {
+    await writeFixturePackages();
+    const entry = join(workingDirectory, "entry.js");
+    await writeFile(entry, "import c from 'cjs-pkg';\nglobalThis.__jlProbe = c.tag + ':first';\n");
+    const first = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules });
+    expect("error" in first).toBe(false);
+    if ("error" in first) return;
+    const vendor = await bundleVendorForWeb({
+      imports: first.imports,
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+    expect("error" in vendor).toBe(false);
+    if ("error" in vendor) return;
+
+    // The user edits their code; the imports are unchanged, so the same vendor chunk is still the right one.
+    await writeFile(entry, "import c from 'cjs-pkg';\nglobalThis.__jlProbe = c.tag + ':second';\n");
+    const second = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules });
+    expect("error" in second).toBe(false);
+    if ("error" in second) return;
+    expect(second.imports).toEqual(first.imports);
+
+    expect(await runJoinedModule(joinVendorAndApp(vendor.code, second.code))).toBe("cjs-default:second");
+  });
+
+  test("an entry with no packages needs no vendor chunk at all", async () => {
+    await writeFile(join(workingDirectory, "entry.js"), "globalThis.__jlProbe = 'no-packages';\n");
+
+    const app = await bundleAppForWeb({
+      entry: join(workingDirectory, "entry.js"),
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+
+    expect("error" in app).toBe(false);
+    if ("error" in app) return;
+    expect(app.imports).toEqual([]);
+    expect(await runJoinedModule(joinVendorAndApp(null, app.code))).toBe("no-packages");
+  });
+
+  // The cache key is the `bun.lock` hash plus the import set, and `bun.lock` describes the shared packages folder
+  // only. A package resolved out of the tab's own working directory is outside everything that key can see, so a
+  // vendor chunk containing one must never be cached (nor served): the user could change it with no key change.
+  test("a vendor chunk built only from the shared packages folder is cacheable; one touching the working directory is not", async () => {
+    await writeFixturePackages();
+    await writePackage(join(workingDirectory, "node_modules"), "wd-pkg", "export default 'from-wd';");
+
+    await writeFile(join(workingDirectory, "shared-only.js"), "import c from 'cjs-pkg';\nglobalThis.__jlProbe = c;\n");
+    const sharedOnly = await bundleAppForWeb({
+      entry: join(workingDirectory, "shared-only.js"),
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+    expect("error" in sharedOnly).toBe(false);
+    if ("error" in sharedOnly) return;
+    expect(sharedOnly.vendorCacheable).toBe(true);
+
+    await writeFile(
+      join(workingDirectory, "with-wd.js"),
+      "import c from 'cjs-pkg';\nimport w from 'wd-pkg';\nglobalThis.__jlProbe = [c, w];\n",
+    );
+    const withWd = await bundleAppForWeb({
+      entry: join(workingDirectory, "with-wd.js"),
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+    expect("error" in withWd).toBe(false);
+    if ("error" in withWd) return;
+    expect(withWd.vendorCacheable).toBe(false);
+  });
+
+  test("a package a run imports but that has since disappeared fails the vendor build with the specifier", async () => {
+    const vendor = await bundleVendorForWeb({
+      imports: ["totally-missing-pkg"],
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+
+    expect("error" in vendor).toBe(true);
+    if (!("error" in vendor)) return;
+    expect(vendor.error.specifier).toBe("totally-missing-pkg");
+  });
+
+  test("a stylesheet imported by a package is injected from the vendor chunk", async () => {
+    const pkgDir = join(packagesNodeModules, "styled-pkg");
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(join(pkgDir, "package.json"), JSON.stringify({ name: "styled-pkg", main: "index.js" }));
+    await writeFile(join(pkgDir, "styles.css"), "body { color: teal; }");
+    await writeFile(join(pkgDir, "index.js"), "import './styles.css';\nexport default 'styled';\n");
+    await writeFile(join(workingDirectory, "entry.js"), "import s from 'styled-pkg';\nglobalThis.__jlProbe = s;\n");
+
+    const app = await bundleAppForWeb({
+      entry: join(workingDirectory, "entry.js"),
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+    expect("error" in app).toBe(false);
+    if ("error" in app) return;
+    const vendor = await bundleVendorForWeb({
+      imports: app.imports,
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+    expect("error" in vendor).toBe(false);
+    if ("error" in vendor) return;
+    expect(vendor.code).toContain("body { color: teal; }");
   });
 });

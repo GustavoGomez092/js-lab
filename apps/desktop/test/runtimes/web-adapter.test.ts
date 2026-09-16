@@ -3,7 +3,12 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EncodedValue, HostToWebMessage, RunEvent, RunState, WebToHostMessage } from "@jslab/rpc-schema";
-import type { BundleOptions, BundleResult } from "../../src/main/bundling/bundler";
+import {
+  type AppBundleResult,
+  type BundleOptions,
+  joinVendorAndApp,
+  type VendorBundleResult,
+} from "../../src/main/bundling/bundler";
 import { hashBunLock, vendorCacheKey } from "../../src/main/bundling/vendor-cache";
 import type { PreparedRun, RunEventSink, RunHandle, TabRunContext } from "../../src/main/runtimes/adapter";
 import { WorkingDirectoryMismatchError } from "../../src/main/runtimes/adapter";
@@ -133,7 +138,14 @@ async function createHarness(
   const vendorSets: Harness["vendorSets"] = [];
   const bundle =
     overrides.bundle ??
-    (async (_options: BundleOptions): Promise<BundleResult> => ({ code: "BUNDLED", map: "MAP", imports: ["react"] }));
+    (async (_options: BundleOptions): Promise<AppBundleResult> => ({
+      code: "BUNDLED",
+      map: "MAP",
+      imports: ["react"],
+      vendorCacheable: true,
+    }));
+  const bundleVendor =
+    overrides.bundleVendor ?? (async (): Promise<VendorBundleResult> => ({ code: "VENDOR", map: "VMAP" }));
   const adapter = createWebAdapter({
     webviews,
     runtime: "browser",
@@ -141,6 +153,7 @@ async function createHarness(
     packagesNodeModules: join(dir, "node_modules"),
     bunLockPath: join(dir, "bun.lock"),
     vendorCache: {
+      get: async () => null,
       set: async (key, chunk) => {
         vendorSets.push({ key, chunk });
       },
@@ -153,6 +166,7 @@ async function createHarness(
     readBunLock: async () => LOCK_TEXT,
     ...overrides,
     bundle,
+    bundleVendor,
   });
   const events: RunEvent[] = [];
   const states: Harness["states"] = [];
@@ -193,14 +207,20 @@ describe("WebAdapter", () => {
       const runCall = parseHostMessageCall(h.raw.executed.at(-1) as string);
       expect(runCall).toEqual({
         seq: 1,
-        message: { type: "run", runId: "run-1", code: "BUNDLED", settings: { maxEntries: 10_000 } },
+        message: {
+          type: "run",
+          runId: "run-1",
+          code: joinVendorAndApp("VENDOR", "BUNDLED"),
+          settings: { maxEntries: 10_000 },
+        },
       });
 
       expect(await readFile(join(h.dir, "t1", "entry-run-1.mjs"), "utf8")).toBe("1 + 1");
       expect(h.locks.has("run-1")).toBe(true);
 
       const expectedKey = vendorCacheKey(hashBunLock(LOCK_TEXT), ["react"]);
-      expect(h.vendorSets).toEqual([{ key: expectedKey, chunk: { code: "BUNDLED", map: "MAP" } }]);
+      // The cache stores the VENDOR chunk -- never the app chunk, which is what would make a later run stale.
+      expect(h.vendorSets).toEqual([{ key: expectedKey, chunk: { code: "VENDOR", map: "VMAP" } }]);
     } finally {
       await rm(h.dir, { recursive: true, force: true });
     }
@@ -215,11 +235,12 @@ describe("WebAdapter", () => {
         runsDir: h.dir,
         packagesNodeModules: join(h.dir, "node_modules"),
         bunLockPath: join(h.dir, "bun.lock"),
-        vendorCache: { set: async () => {} },
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => true,
         readBunLock: async () => LOCK_TEXT,
-        bundle: async () => ({ code: "BUNDLED-2", map: "MAP", imports: ["react"] }),
+        bundle: async () => ({ code: "BUNDLED-2", map: "MAP", imports: ["react"], vendorCacheable: true }),
       });
       const run2: PreparedRun = {
         runId: "run-2",
@@ -256,12 +277,13 @@ describe("WebAdapter", () => {
         runsDir: dir,
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
-        vendorCache: { set: async () => {} },
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => false,
         bundle: async () => {
           bundleCalls++;
-          return { code: "x", map: "", imports: [] };
+          return { code: "x", map: "", imports: [], vendorCacheable: true };
         },
       });
       const sink: RunEventSink = {
@@ -307,12 +329,13 @@ describe("WebAdapter", () => {
         runsDir: dir,
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
-        vendorCache: { set: async () => {} },
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => !dirGone,
         bundle: async () => {
           bundleCalls++;
-          return { code: "x", map: "", imports: [] };
+          return { code: "x", map: "", imports: [], vendorCacheable: true };
         },
       });
       const sink: RunEventSink = {
@@ -360,11 +383,12 @@ describe("WebAdapter", () => {
         runsDir: h.dir,
         packagesNodeModules: join(h.dir, "node_modules"),
         bunLockPath: join(h.dir, "bun.lock"),
-        vendorCache: { set: async () => {} },
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => true,
         readBunLock: async () => LOCK_TEXT,
-        bundle: async () => ({ code: "BUNDLED-2", map: "MAP", imports: ["react"] }),
+        bundle: async () => ({ code: "BUNDLED-2", map: "MAP", imports: ["react"], vendorCacheable: true }),
       });
       const run2: PreparedRun = {
         runId: "run-2",
@@ -387,7 +411,12 @@ describe("WebAdapter", () => {
       const second = parseHostMessageCall(h.raw.executed.at(-1) as string);
       expect(second).toEqual({
         seq: 1,
-        message: { type: "run", runId: "run-2", code: "BUNDLED-2", settings: { maxEntries: 10_000 } },
+        message: {
+          type: "run",
+          runId: "run-2",
+          code: joinVendorAndApp("VENDOR", "BUNDLED-2"),
+          settings: { maxEntries: 10_000 },
+        },
       });
     } finally {
       await rm(h.dir, { recursive: true, force: true });
@@ -481,7 +510,8 @@ describe("WebAdapter", () => {
         runsDir: dir,
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
-        vendorCache: { set: async () => {} },
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
         runLock: { add: () => {}, remove: () => {} },
       });
       await adapter.prepare({ tabId: "t1", workingDirectory: null });
@@ -505,10 +535,11 @@ describe("WebAdapter", () => {
         runsDir: dir,
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
-        vendorCache: { set: async () => {} },
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
         runLock: { add: () => {}, remove: () => {} },
         expandTimeoutMs: 30,
-        bundle: async () => ({ code: "x", map: "", imports: [] }),
+        bundle: async () => ({ code: "x", map: "", imports: [], vendorCacheable: true }),
       });
       const sink: RunEventSink = {
         attached: () => {},
@@ -548,9 +579,10 @@ describe("WebAdapter", () => {
         runsDir: dir,
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
-        vendorCache: { set: async () => {} },
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
         runLock: { add: () => {}, remove: () => {} },
-        bundle: async () => ({ code: "x", map: "", imports: [] }),
+        bundle: async () => ({ code: "x", map: "", imports: [], vendorCacheable: true }),
       });
       const sink: RunEventSink = {
         attached: () => {},
@@ -595,11 +627,12 @@ describe("WebAdapter", () => {
         runsDir: h.dir,
         packagesNodeModules: join(h.dir, "node_modules"),
         bunLockPath: join(h.dir, "bun.lock"),
-        vendorCache: { set: async () => {} },
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => true,
         readBunLock: async () => LOCK_TEXT,
-        bundle: async () => ({ code: "AFTER-STOP", map: "MAP", imports: ["react"] }),
+        bundle: async () => ({ code: "AFTER-STOP", map: "MAP", imports: ["react"], vendorCacheable: true }),
       });
       const run2: PreparedRun = {
         runId: "run-2",
@@ -622,7 +655,12 @@ describe("WebAdapter", () => {
       expect(h.raw.reloadCount).toBe(2);
       expect(parseHostMessageCall(h.raw.executed.at(-1) as string)).toEqual({
         seq: 1,
-        message: { type: "run", runId: "run-2", code: "AFTER-STOP", settings: { maxEntries: 10_000 } },
+        message: {
+          type: "run",
+          runId: "run-2",
+          code: joinVendorAndApp("VENDOR", "AFTER-STOP"),
+          settings: { maxEntries: 10_000 },
+        },
       });
     } finally {
       await rm(h.dir, { recursive: true, force: true });
@@ -647,11 +685,12 @@ describe("WebAdapter", () => {
         runsDir: h.dir,
         packagesNodeModules: join(h.dir, "node_modules"),
         bunLockPath: join(h.dir, "bun.lock"),
-        vendorCache: { set: async () => {} },
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => true,
         readBunLock: async () => LOCK_TEXT,
-        bundle: async () => ({ code: "AFTER-KILL", map: "MAP", imports: ["react"] }),
+        bundle: async () => ({ code: "AFTER-KILL", map: "MAP", imports: ["react"], vendorCacheable: true }),
       });
       const run2: PreparedRun = {
         runId: "run-2",
@@ -674,10 +713,237 @@ describe("WebAdapter", () => {
       expect(recreatedRaw?.reloadCount).toBe(1); // this run's own reset(), on the already-fresh webview
       expect(parseHostMessageCall(recreatedRaw?.executed.at(-1) as string)).toEqual({
         seq: 1,
-        message: { type: "run", runId: "run-2", code: "AFTER-KILL", settings: { maxEntries: 10_000 } },
+        message: {
+          type: "run",
+          runId: "run-2",
+          code: joinVendorAndApp("VENDOR", "AFTER-KILL"),
+          settings: { maxEntries: 10_000 },
+        },
       });
     } finally {
       await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Task 8a: the vendor cache's read path. The cache key (the `bun.lock` hash plus the import set) describes the
+ * vendor chunk and nothing else -- it cannot tell whether the tab's own code changed, and under Auto Run that code
+ * changes constantly without the import set moving. So a hit may skip the vendor build and only the vendor build;
+ * the app chunk is rebuilt every single run. These tests exist to keep it that way.
+ */
+describe("WebAdapter vendor cache read path (Task 8a)", () => {
+  test("a cache hit reuses the stored vendor chunk and skips the vendor build, but still rebuilds the app chunk", async () => {
+    let vendorBuilds = 0;
+    let appBuilds = 0;
+    const h = await createHarness({
+      vendorCache: {
+        get: async () => ({ code: "CACHED-VENDOR", map: "CACHED-MAP" }),
+        set: async () => {},
+      },
+      bundle: async () => {
+        appBuilds++;
+        return { code: `APP-${appBuilds}`, map: "MAP", imports: ["react"], vendorCacheable: true };
+      },
+      bundleVendor: async () => {
+        vendorBuilds++;
+        return { code: "FRESH-VENDOR", map: "VMAP" };
+      },
+    });
+    try {
+      expect(appBuilds).toBe(1);
+      expect(vendorBuilds).toBe(0);
+      expect(parseHostMessageCall(h.raw.executed.at(-1) as string).message).toEqual({
+        type: "run",
+        runId: "run-1",
+        code: joinVendorAndApp("CACHED-VENDOR", "APP-1"),
+        settings: { maxEntries: 10_000 },
+      });
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
+  // The regression this whole task is guarding against: edit the code, keep the imports, and the run must execute
+  // the code as just edited. If the cache ever served a whole previous bundle (or the app chunk with it), the
+  // second run below would still be running "APP-1".
+  test("app code edited with the imports unchanged runs the NEW app code beside the cached vendor chunk", async () => {
+    const stored = new Map<string, { code: string; map: string }>();
+    let vendorBuilds = 0;
+    const vendorCache = {
+      get: async (key: string) => stored.get(key) ?? null,
+      set: async (key: string, chunk: { code: string; map: string }) => {
+        stored.set(key, chunk);
+      },
+    };
+    const bundleVendor = async () => {
+      vendorBuilds++;
+      return { code: `VENDOR-${vendorBuilds}`, map: "VMAP" };
+    };
+    const h = await createHarness({
+      vendorCache,
+      bundleVendor,
+      bundle: async () => ({ code: "APP-1", map: "MAP", imports: ["react"], vendorCacheable: true }),
+    });
+    try {
+      expect(vendorBuilds).toBe(1); // first run: a miss, so the vendor chunk is built and stored
+      expect(stored.size).toBe(1);
+
+      const adapter = createWebAdapter({
+        webviews: h.webviews,
+        runtime: "browser",
+        runsDir: h.dir,
+        packagesNodeModules: join(h.dir, "node_modules"),
+        bunLockPath: join(h.dir, "bun.lock"),
+        vendorCache,
+        runLock: { add: () => {}, remove: () => {} },
+        directoryExists: async () => true,
+        readBunLock: async () => LOCK_TEXT,
+        bundle: async () => ({ code: "APP-2", map: "MAP", imports: ["react"], vendorCacheable: true }),
+        bundleVendor,
+      });
+      await adapter.start(
+        {
+          runId: "run-2",
+          tabId: "t1",
+          code: "edited code",
+          maxEntries: 10_000,
+          workingDirectory: null,
+          mapEvent: identityMap,
+          isCancelled: () => false,
+        },
+        { attached: () => {}, events: () => {}, state: () => {}, heartbeat: () => {}, exited: () => {} },
+      );
+
+      expect(vendorBuilds).toBe(1); // second run: a hit, so no second vendor build
+      const second = parseHostMessageCall(h.raw.executed.at(-1) as string);
+      expect(second.message).toEqual({
+        type: "run",
+        runId: "run-2",
+        code: joinVendorAndApp("VENDOR-1", "APP-2"),
+        settings: { maxEntries: 10_000 },
+      });
+      // Belt and braces: the previous run's app code must appear nowhere in what the page was asked to run.
+      expect((second.message as { code: string }).code).not.toContain("APP-1");
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
+  // `bun.lock` describes the shared packages folder only. A package resolved out of the tab's own working
+  // directory can change with no key change at all, so such a chunk is neither read nor written.
+  test("a package resolved from the working directory is never read from, or written to, the cache", async () => {
+    let gets = 0;
+    let vendorBuilds = 0;
+    const h = await createHarness({
+      vendorCache: {
+        get: async () => {
+          gets++;
+          return { code: "CACHED-VENDOR", map: "CACHED-MAP" };
+        },
+        set: async () => {},
+      },
+      bundle: async () => ({ code: "APP", map: "MAP", imports: ["wd-pkg"], vendorCacheable: false }),
+      bundleVendor: async () => {
+        vendorBuilds++;
+        return { code: "FRESH-VENDOR", map: "VMAP" };
+      },
+    });
+    try {
+      expect(gets).toBe(0);
+      expect(vendorBuilds).toBe(1);
+      expect(h.vendorSets).toEqual([]);
+      expect(parseHostMessageCall(h.raw.executed.at(-1) as string).message).toMatchObject({
+        code: joinVendorAndApp("FRESH-VENDOR", "APP"),
+      });
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failing vendor build is reported as a bundle error, like any other failure to produce the run's code", async () => {
+    const h = await createHarness({
+      bundleVendor: async () => ({ error: { message: "vendor build blew up" } }),
+    });
+    try {
+      expect(h.states.at(-1)).toEqual({ state: "failed", activeHandles: undefined });
+      expect(h.events.at(-1)).toMatchObject({ kind: "error", name: "BundleError", message: "vendor build blew up" });
+      // Nothing was ever handed to the page to run.
+      expect(h.raw.executed.some((js) => js.includes("__jslabHostMessage"))).toBe(false);
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
+  // R-M4-T7-GAP-1: between the page reporting ready and the session wiring its listeners, the webview used to be
+  // unobserved -- and bundling happens right in the middle of that window. A crash there reported nothing at all,
+  // so the run hung with no handle for Stop or Kill to act on (both are no-ops while `run.handle` is null).
+  test("GAP-1: a webview crash while the bundle is being built reports a terminal state instead of hanging", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
+    try {
+      const webviews = new FakeWebviewSource();
+      const raw = new FakeRawWebview();
+      webviews.raws.set("t1", raw);
+      webviews.hosts.set("t1", createSequencedWebviewHost(raw, BOOTSTRAP_SOURCE));
+
+      let bundleReached: () => void = () => {};
+      const reachedBundle = new Promise<void>((resolve) => {
+        bundleReached = resolve;
+      });
+      let releaseBundle: () => void = () => {};
+      const bundleGate = new Promise<void>((resolve) => {
+        releaseBundle = resolve;
+      });
+
+      const events: RunEvent[] = [];
+      const states: { state: RunState; activeHandles?: number }[] = [];
+      const adapter = createWebAdapter({
+        webviews,
+        runtime: "browser",
+        runsDir: dir,
+        packagesNodeModules: join(dir, "node_modules"),
+        bunLockPath: join(dir, "bun.lock"),
+        vendorCache: { get: async () => null, set: async () => {} },
+        runLock: { add: () => {}, remove: () => {} },
+        directoryExists: async () => true,
+        readBunLock: async () => LOCK_TEXT,
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundle: async () => {
+          bundleReached();
+          await bundleGate;
+          return { code: "APP", map: "MAP", imports: [], vendorCacheable: true };
+        },
+      });
+      const startPromise = adapter.start(
+        {
+          runId: "run-1",
+          tabId: "t1",
+          code: "1 + 1",
+          maxEntries: 10_000,
+          workingDirectory: null,
+          mapEvent: identityMap,
+          isCancelled: () => false,
+        },
+        {
+          attached: () => {},
+          events: (batch) => events.push(...batch),
+          state: (state, activeHandles) => states.push({ state, activeHandles }),
+          heartbeat: () => {},
+          exited: () => {},
+        },
+      );
+
+      await reachedBundle;
+      raw.crash(); // the page dies mid-bundle, with nothing wired to it yet
+      releaseBundle();
+      await startPromise; // must resolve, not hang
+
+      expect(states.at(-1)).toEqual({ state: "failed", activeHandles: undefined });
+      expect(events.at(-1)).toMatchObject({ kind: "error", phase: "runner" });
+      // The dead page is never asked to run anything.
+      expect(raw.executed.some((js) => js.includes("__jslabHostMessage"))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

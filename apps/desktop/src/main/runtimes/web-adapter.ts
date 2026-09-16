@@ -2,7 +2,15 @@ import { mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { EncodedValue, HostToWebMessage, RunEvent, WebToHostMessage } from "@jslab/rpc-schema";
 import type { Runtime } from "@jslab/shared";
-import { type BundleOptions, bundleForWeb } from "../bundling/bundler";
+import {
+  type AppBundleResult,
+  type BundleOptions,
+  bundleAppForWeb,
+  bundleVendorForWeb,
+  joinVendorAndApp,
+  type VendorBundleOptions,
+  type VendorBundleResult,
+} from "../bundling/bundler";
 import { hashBunLock, type VendorCache, vendorCacheKey } from "../bundling/vendor-cache";
 import {
   type PreparedRun,
@@ -147,20 +155,22 @@ export interface WebAdapterDeps {
   /** `<appdata>/packages/bun.lock` -- read once per run to key the vendor cache (Task 6). */
   bunLockPath: string;
   /**
-   * Only `set()` is used (write-only): see the task report for why a cache hit is never trusted to skip a build.
-   * `bundleForWeb`'s single-entrypoint, unsplit output has no way to separate reusable third-party code from this
-   * run's own (constantly-changing, under Auto Run) application code, so keying a full-bundle cache on
-   * `bun.lock` hash + import set alone -- with no way to also verify the app code is unchanged -- cannot safely
-   * stand in for a fresh build without risking stale output for a correctness-critical surface.
+   * Read and written, since Task 8a split the build in two (it was write-only before: a single unsplit output has
+   * no way to separate reusable third-party code from this run's own). What a hit may skip is now exactly what the
+   * key describes -- the vendor chunk. The app chunk is rebuilt on every run without exception, because the key
+   * (the `bun.lock` hash plus the import set) cannot tell whether the tab's own code changed, and under Auto Run
+   * it changes constantly while the import set stands still.
    */
-  vendorCache: Pick<VendorCache, "set">;
+  vendorCache: Pick<VendorCache, "get" | "set">;
   runLock: { add(runId: string): void; remove(runId: string): void };
   /** Stop's graceful-then-kill escalation window (spec §5.8). Defaults to 500 ms. */
   stopGraceMs?: number;
   /** How long `expand()` waits for a reply before resolving null. Defaults to 5 s. */
   expandTimeoutMs?: number;
-  /** Test seam; production always calls the real `bundleForWeb`. */
-  bundle?(options: BundleOptions): ReturnType<typeof bundleForWeb>;
+  /** Test seam; production always calls the real `bundleAppForWeb`. */
+  bundle?(options: BundleOptions): Promise<AppBundleResult>;
+  /** Test seam; production always calls the real `bundleVendorForWeb`. */
+  bundleVendor?(options: VendorBundleOptions): Promise<VendorBundleResult>;
   /** Test seam for the working-directory fail-closed check. */
   directoryExists?(path: string): Promise<boolean>;
   /** Test seam for reading `bunLockPath`. */
@@ -419,17 +429,7 @@ class WebRunSession implements RunHandle {
     }
     this.#terminal = "killed";
     this.#retireHandle();
-    this.sink.events([
-      {
-        kind: "error",
-        phase: "runner",
-        name: "RuntimeError",
-        message: "Web runner exited unexpectedly.",
-        stack: [],
-        seq: Number.MAX_SAFE_INTEGER,
-        t: Date.now(),
-      },
-    ]);
+    this.sink.events([webviewCrashEvent()]);
     this.sink.state("failed");
   }
 }
@@ -465,53 +465,94 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
       await waitForReady(host, deps.webviews, run.tabId, deps.expandTimeoutMs ?? 5000);
       if (run.isCancelled()) return deadHandle(run.runId);
 
-      const dir = join(deps.runsDir, run.tabId);
-      await mkdir(dir, { recursive: true });
-      if (run.isCancelled()) return deadHandle(run.runId);
-      const entryPath = join(dir, `entry-${run.runId}.mjs`);
-      await Bun.write(entryPath, run.code);
-      if (run.isCancelled()) return deadHandle(run.runId);
-      // Fix round 1 (M1): mirrors `BunAdapter.start()`'s `cleanupEntries` call -- fire-and-forget, never blocks
-      // this run on deleting a previous one's stale entry file.
-      void cleanupEntries(dir, basename(entryPath));
-
-      // Fix round 1 (I1): moved here, immediately before `bundle()` is invoked -- the previous placement (the very
-      // first statement of `start()`) ran before `ensure()`, before the whole (now-bounded, but still real)
-      // reset/ready round trip, and before the entry write, leaving a much wider TOCTOU gap than the comment
-      // claimed. This re-verifies the scope directly against the filesystem with nothing else awaited before
-      // `bundle()` reads `<workingDirectory>/node_modules` -- as tight a gap as an inherently-async check (Web has
-      // no synchronous `runner.cwd`-like property to compare, unlike `BunAdapter`) can get.
-      if (run.workingDirectory && !(await (deps.directoryExists ?? directoryExists)(run.workingDirectory))) {
-        throw new WorkingDirectoryMismatchError(run.workingDirectory);
-      }
-      if (run.isCancelled()) return deadHandle(run.runId);
-
-      const bundle = deps.bundle ?? bundleForWeb;
-      const result = await bundle({
-        entry: entryPath,
-        runtime: deps.runtime,
-        workingDirectory: run.workingDirectory,
-        packagesNodeModules: deps.packagesNodeModules,
-      });
-      if (run.isCancelled()) return deadHandle(run.runId);
-
-      if ("error" in result) {
-        sink.events([
-          bundleErrorEvent(result.error.message, result.error.line, result.error.column, result.error.codeFrame),
-        ]);
+      // Ledger ruling R-M4-T7-GAP-1 (from Task 7's re-review). From here until the session below wires its own
+      // listeners, the webview is otherwise unobserved -- and everything in between (the entry write, the app
+      // build, the cache read, the vendor build) takes real time. A crash inside that window used to report
+      // nothing at all: no handle exists yet (`sink.attached()` is further down), so `RunCoordinator.stop()` and
+      // `kill()` are both no-ops, and `#checkHeartbeats` skips a run with no handle too -- the tab span forever
+      // with no way out. `BunAdapter` has no equivalent window: it wires immediately after taking its runner, with
+      // no bundling in between. The listener reports the same terminal pair `WebRunSession#onCrash` reports once a
+      // session exists, and is removed again the moment the session's own listener takes over, so a crash is never
+      // reported twice.
+      let crashed = false;
+      const unsubCrash = host.onExit(() => {
+        if (crashed) return;
+        crashed = true;
+        sink.events([webviewCrashEvent()]);
         sink.state("failed");
-        return deadHandle(run.runId);
-      }
+      });
 
-      // Vendor cache (Task 6): write-only population under the spec's key (bun.lock hash + resolved import set) --
-      // see `WebAdapterDeps.vendorCache`'s doc comment for why this never reads back to skip a build.
+      let code: string | null = null;
       try {
-        const lockText = await (deps.readBunLock ?? readBunLockFile)(deps.bunLockPath);
-        const key = vendorCacheKey(hashBunLock(lockText), result.imports);
-        void deps.vendorCache.set(key, { code: result.code, map: result.map }).catch(() => {});
-      } catch {
-        // No bun.lock yet (no packages installed for this profile) -- nothing to key on; behave like a cache miss.
+        const dir = join(deps.runsDir, run.tabId);
+        await mkdir(dir, { recursive: true });
+        if (run.isCancelled() || crashed) return deadHandle(run.runId);
+        const entryPath = join(dir, `entry-${run.runId}.mjs`);
+        await Bun.write(entryPath, run.code);
+        if (run.isCancelled() || crashed) return deadHandle(run.runId);
+        // Fix round 1 (M1): mirrors `BunAdapter.start()`'s `cleanupEntries` call -- fire-and-forget, never blocks
+        // this run on deleting a previous one's stale entry file.
+        void cleanupEntries(dir, basename(entryPath));
+
+        // Fix round 1 (I1): moved here, immediately before the app build is invoked -- the previous placement (the
+        // very first statement of `start()`) ran before `ensure()`, before the whole (now-bounded, but still real)
+        // reset/ready round trip, and before the entry write, leaving a much wider TOCTOU gap than the comment
+        // claimed. This re-verifies the scope directly against the filesystem with nothing else awaited before the
+        // build reads `<workingDirectory>/node_modules` -- as tight a gap as an inherently-async check (Web has no
+        // synchronous `runner.cwd`-like property to compare, unlike `BunAdapter`) can get.
+        if (run.workingDirectory && !(await (deps.directoryExists ?? directoryExists)(run.workingDirectory))) {
+          throw new WorkingDirectoryMismatchError(run.workingDirectory);
+        }
+        if (run.isCancelled() || crashed) return deadHandle(run.runId);
+
+        // The app chunk: the tab's own code, rebuilt every run, never cached under any circumstances (Task 8a).
+        const app = await (deps.bundle ?? bundleAppForWeb)({
+          entry: entryPath,
+          runtime: deps.runtime,
+          workingDirectory: run.workingDirectory,
+          packagesNodeModules: deps.packagesNodeModules,
+        });
+        if (run.isCancelled() || crashed) return deadHandle(run.runId);
+        if ("error" in app) {
+          sink.events([bundleErrorEvent(app.error.message, app.error.line, app.error.column, app.error.codeFrame)]);
+          sink.state("failed");
+          return deadHandle(run.runId);
+        }
+
+        // The vendor chunk: the only half a cache hit may stand in for, and only on an exact key match.
+        let vendorCode: string | null = null;
+        if (app.imports.length > 0) {
+          const key = app.vendorCacheable ? await vendorKeyFor(deps, app.imports) : null;
+          const cached = key ? await deps.vendorCache.get(key).catch(() => null) : null;
+          if (run.isCancelled() || crashed) return deadHandle(run.runId);
+          if (cached) {
+            vendorCode = cached.code;
+          } else {
+            const vendor = await (deps.bundleVendor ?? bundleVendorForWeb)({
+              imports: app.imports,
+              runtime: deps.runtime,
+              workingDirectory: run.workingDirectory,
+              packagesNodeModules: deps.packagesNodeModules,
+            });
+            if (run.isCancelled() || crashed) return deadHandle(run.runId);
+            if ("error" in vendor) {
+              sink.events([
+                bundleErrorEvent(vendor.error.message, vendor.error.line, vendor.error.column, vendor.error.codeFrame),
+              ]);
+              sink.state("failed");
+              return deadHandle(run.runId);
+            }
+            vendorCode = vendor.code;
+            // Fire-and-forget, exactly as the write-only population was: a run never waits on the cache, and a
+            // failed write only costs the next run a rebuild.
+            if (key) void deps.vendorCache.set(key, { code: vendor.code, map: vendor.map }).catch(() => {});
+          }
+        }
+        code = joinVendorAndApp(vendorCode, app.code);
+      } finally {
+        unsubCrash();
       }
+      if (crashed || code === null) return deadHandle(run.runId);
 
       const session = new WebRunSession(host, run, sink, deps);
       session.wire();
@@ -525,7 +566,7 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
         deps.runLock.remove(run.runId);
         return session;
       }
-      host.send({ type: "run", runId: run.runId, code: result.code, settings: { maxEntries: run.maxEntries } });
+      host.send({ type: "run", runId: run.runId, code, settings: { maxEntries: run.maxEntries } });
       return session;
     },
   };
@@ -533,4 +574,31 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
 
 async function readBunLockFile(path: string): Promise<string> {
   return Bun.file(path).text();
+}
+
+/**
+ * The vendor chunk's cache key (spec §5.12): the `bun.lock` hash plus the import set. Null means "don't touch the
+ * cache at all for this run" -- there is no `bun.lock` yet (no packages installed for this profile), so there is
+ * nothing to pin versions with.
+ */
+async function vendorKeyFor(deps: WebAdapterDeps, imports: readonly string[]): Promise<string | null> {
+  try {
+    const lockText = await (deps.readBunLock ?? readBunLockFile)(deps.bunLockPath);
+    return vendorCacheKey(hashBunLock(lockText), imports);
+  } catch {
+    return null;
+  }
+}
+
+/** The one terminal error event a dead webview produces, wherever it is noticed from. */
+function webviewCrashEvent(): RunEvent {
+  return {
+    kind: "error",
+    phase: "runner",
+    name: "RuntimeError",
+    message: "Web runner exited unexpectedly.",
+    stack: [],
+    seq: Number.MAX_SAFE_INTEGER,
+    t: Date.now(),
+  };
 }

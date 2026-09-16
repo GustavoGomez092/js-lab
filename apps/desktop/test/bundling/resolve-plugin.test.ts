@@ -61,7 +61,7 @@ describe("jslabResolve", () => {
     await writePackage(join(workingDirectory, "node_modules"), "left-pad", "export default 'from-wd';");
     const imports = new Set<string>();
     const { builder, resolve } = driveResolve();
-    jslabResolve({ workingDirectory, packagesNodeModules }, imports).setup(builder as never);
+    jslabResolve({ workingDirectory, packagesNodeModules }, imports, () => {}).setup(builder as never);
 
     const result = (await resolve("left-pad")) as { path: string } | undefined;
 
@@ -73,7 +73,7 @@ describe("jslabResolve", () => {
     await writePackage(join(workingDirectory, "node_modules"), "left-pad", "export default 'from-wd';");
     await writePackage(packagesNodeModules, "left-pad", "export default 'from-pkgs';");
     const { builder, resolve } = driveResolve();
-    jslabResolve({ workingDirectory, packagesNodeModules }, new Set()).setup(builder as never);
+    jslabResolve({ workingDirectory, packagesNodeModules }, new Set(), () => {}).setup(builder as never);
 
     const result = (await resolve("left-pad")) as { path: string } | undefined;
 
@@ -84,19 +84,25 @@ describe("jslabResolve", () => {
   test("falls back to the packages node_modules when the package isn't in the working directory", async () => {
     await writePackage(packagesNodeModules, "right-pad", "export default 'from-pkgs';");
     const { builder, resolve } = driveResolve();
-    jslabResolve({ workingDirectory, packagesNodeModules }, new Set()).setup(builder as never);
+    jslabResolve({ workingDirectory, packagesNodeModules }, new Set(), () => {}).setup(builder as never);
 
     const result = (await resolve("right-pad")) as { path: string } | undefined;
 
     expect(result?.path).toContain(join(packagesNodeModules, "right-pad"));
   });
 
-  test("leaves a bare specifier unresolved when it exists in neither location", async () => {
+  // Fix round 1, C1: a miss must not defer to Bun's own (ancestor-walking) resolver by returning `undefined` --
+  // it must force a failure and report it through `onError`, exactly like a genuinely missing package always did.
+  test("fails a bare specifier that exists in neither location, reporting it through onError", async () => {
+    const errors: Array<{ specifier?: string }> = [];
     const { builder, resolve } = driveResolve();
-    jslabResolve({ workingDirectory, packagesNodeModules }, new Set()).setup(builder as never);
+    jslabResolve({ workingDirectory, packagesNodeModules }, new Set(), (error) => errors.push(error)).setup(
+      builder as never,
+    );
 
-    const result = await resolve("totally-missing-pkg");
+    await expect(resolve("totally-missing-pkg")).rejects.toThrow();
 
-    expect(result).toBeUndefined();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.specifier).toBe("totally-missing-pkg");
   });
 });

@@ -1,5 +1,6 @@
 import type { Runtime } from "@jslab/shared";
 import { cssInject } from "./css-plugin";
+import { buildCodeFrame } from "./locate-import";
 import { nodePolyfills } from "./polyfill-plugin";
 import { jslabResolve } from "./resolve-plugin";
 
@@ -41,10 +42,6 @@ interface BunResolveOrBuildMessage {
   position?: { line: number; column: number; lineText: string } | null;
 }
 
-function buildCodeFrame(lineText: string, column: number): string {
-  return `${lineText}\n${" ".repeat(Math.max(column - 1, 0))}^`;
-}
-
 /**
  * Bun.build's own resolve failure (a `ResolveMessage`) already carries the specifier and an accurate source
  * position (`position.line`/`position.column`, 0-indexed, plus `position.lineText`) -- there's no need to
@@ -84,6 +81,9 @@ export async function bundleForWeb(options: BundleOptions): Promise<BundleResult
         jslabResolve(
           { workingDirectory: options.workingDirectory, packagesNodeModules: options.packagesNodeModules },
           resolvedImports,
+          (error) => {
+            capturedError ??= error;
+          },
         ),
         nodePolyfills(options.runtime, (error) => {
           capturedError ??= error;
@@ -100,8 +100,10 @@ export async function bundleForWeb(options: BundleOptions): Promise<BundleResult
       imports: [...resolvedImports],
     };
   } catch (error) {
-    // A plugin (`nodePolyfills`, for a blocked Node builtin) may have already captured a richer error than
-    // whatever `Bun.build`'s own thrown `AggregateError` carries here -- that one wins (spec §5.11: one entry).
+    // A plugin (`jslabResolve` for an unresolved bare specifier, `nodePolyfills` for a blocked Node builtin) may
+    // have already captured a richer error than whatever `Bun.build`'s own thrown `AggregateError` carries here --
+    // that one wins (spec §5.11: one entry). The fallback below still matters for a failure neither plugin caused
+    // (e.g. a genuine syntax error in a locally-resolved file).
     return { error: capturedError ?? fromBuildFailure(error) };
   }
 }

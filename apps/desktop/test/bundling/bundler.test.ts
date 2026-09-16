@@ -136,4 +136,136 @@ describe("bundleForWeb", () => {
     expect(result.error.specifier).toBe("fs");
     expect(result.error.codeFrame).toContain("fs");
   });
+
+  // Fix round 1, M1: `locateImport`'s blocked-builtin position must find the real import, not an earlier
+  // coincidental match of the same quoted text in a comment or an unrelated string literal.
+  test("the blocked-builtin code frame points at the real import, not an earlier comment mentioning the same quoted text", async () => {
+    await writeFile(
+      join(workingDirectory, "entry.js"),
+      '// see "fs" module docs for details\nimport fs from "fs";\nglobalThis.fs = fs;\n',
+    );
+
+    const result = await bundleForWeb({
+      entry: join(workingDirectory, "entry.js"),
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+
+    expect("error" in result).toBe(true);
+    if (!("error" in result)) return;
+    expect(result.error.specifier).toBe("fs");
+    expect(result.error.line).toBe(2);
+    expect(result.error.codeFrame).toContain('import fs from "fs";');
+  });
+
+  test("the blocked-builtin code frame points at the real import, not an earlier unrelated string literal with the same quoted text", async () => {
+    await writeFile(
+      join(workingDirectory, "entry.js"),
+      'const label = "fs";\nimport fs from "fs";\nglobalThis.fs = fs;\n',
+    );
+
+    const result = await bundleForWeb({
+      entry: join(workingDirectory, "entry.js"),
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+
+    expect("error" in result).toBe(true);
+    if (!("error" in result)) return;
+    expect(result.error.specifier).toBe("fs");
+    expect(result.error.line).toBe(2);
+    expect(result.error.codeFrame).toContain('import fs from "fs";');
+  });
+});
+
+/**
+ * Fix round 1, C1: a bare specifier `jslabResolve` can't resolve in either intended directory must never reach
+ * Bun's own default resolver, which does a Node-style upward `node_modules` walk -- exactly what
+ * `resolveBareSpecifier`'s containment check exists to defeat. These fixtures put a real, populated `node_modules`
+ * *above* a nested working directory (an ordinary monorepo-style layout) to make that ancestor path actually
+ * reachable, which the flat `root/wd` + `root/pkgs/node_modules` layout above structurally cannot exercise.
+ */
+describe("bundleForWeb resolve leak (fix round 1, C1)", () => {
+  let ancestorRoot = "";
+  let ancestorNodeModules = "";
+  let nestedWorkingDirectory = "";
+  let nestedPackagesNodeModules = "";
+
+  beforeEach(async () => {
+    ancestorRoot = await mkdtemp(join(tmpdir(), "jslab-bundler-leak-"));
+    ancestorNodeModules = join(ancestorRoot, "node_modules");
+    nestedWorkingDirectory = join(ancestorRoot, "nested", "wd");
+    nestedPackagesNodeModules = join(ancestorRoot, "pkgs", "node_modules");
+    await mkdir(ancestorNodeModules, { recursive: true });
+    await mkdir(nestedWorkingDirectory, { recursive: true });
+    await mkdir(nestedPackagesNodeModules, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(ancestorRoot, { recursive: true, force: true });
+  });
+
+  test("a package reachable only through an unrelated ancestor node_modules is rejected, not silently bundled", async () => {
+    await writePackage(ancestorNodeModules, "evil-pkg", "globalThis.__p = 'evil';\nexport default 'evil';");
+    await writeFile(join(nestedWorkingDirectory, "entry.js"), "import x from 'evil-pkg';\nglobalThis.__jlProbe = x;\n");
+
+    const result = await bundleForWeb({
+      entry: join(nestedWorkingDirectory, "entry.js"),
+      runtime: "browser",
+      workingDirectory: nestedWorkingDirectory,
+      packagesNodeModules: nestedPackagesNodeModules,
+    });
+
+    expect("error" in result).toBe(true);
+    if (!("error" in result)) return;
+    expect(result.error.specifier).toBe("evil-pkg");
+    expect("imports" in result).toBe(false);
+  });
+
+  test("a package in the working directory's own node_modules still resolves when a different version is reachable through an ancestor", async () => {
+    await writePackage(ancestorNodeModules, "left-pad", "export default 'from-ancestor';");
+    await writePackage(join(nestedWorkingDirectory, "node_modules"), "left-pad", "export default 'from-wd';");
+    await writeFile(
+      join(nestedWorkingDirectory, "entry.js"),
+      "import lp from 'left-pad';\nglobalThis.__jlProbe = lp;\n",
+    );
+
+    const result = await bundleForWeb({
+      entry: join(nestedWorkingDirectory, "entry.js"),
+      runtime: "browser",
+      workingDirectory: nestedWorkingDirectory,
+      packagesNodeModules: nestedPackagesNodeModules,
+    });
+
+    expect("error" in result).toBe(false);
+    if ("error" in result) return;
+    expect(result.code).not.toContain("from-ancestor");
+
+    const g: Record<string, unknown> = {};
+    new Function("globalThis", result.code)(g);
+    expect(g.__jlProbe).toBe("from-wd");
+  });
+
+  test("imports lists exactly the packages actually bundled, one from the working directory and one from the packages folder", async () => {
+    await writePackage(ancestorNodeModules, "unused-ancestor-pkg", "export default 'unused';");
+    await writePackage(join(nestedWorkingDirectory, "node_modules"), "wd-only-pkg", "export default 'from-wd';");
+    await writePackage(nestedPackagesNodeModules, "packages-only-pkg", "export default 'from-pkgs';");
+    await writeFile(
+      join(nestedWorkingDirectory, "entry.js"),
+      "import a from 'wd-only-pkg';\nimport b from 'packages-only-pkg';\nglobalThis.__jlProbe = [a, b];\n",
+    );
+
+    const result = await bundleForWeb({
+      entry: join(nestedWorkingDirectory, "entry.js"),
+      runtime: "browser",
+      workingDirectory: nestedWorkingDirectory,
+      packagesNodeModules: nestedPackagesNodeModules,
+    });
+
+    expect("error" in result).toBe(false);
+    if ("error" in result) return;
+    expect([...result.imports].sort()).toEqual(["packages-only-pkg", "wd-only-pkg"]);
+  });
 });

@@ -7,13 +7,18 @@ import { bundleAppForWeb, bundleVendorForWeb, joinVendorAndApp } from "../../src
 let root = "";
 let workingDirectory = "";
 let packagesNodeModules = "";
+/** The app's data directory (Task 9f item 5). Unread by these `browser`-runtime builds, which have no `process`
+ * snapshot at all, but `BundleOptions` requires it deliberately -- see that field's own note. */
+let dataDir = "";
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "jslab-bundler-"));
   workingDirectory = join(root, "wd");
   packagesNodeModules = join(root, "pkgs", "node_modules");
+  dataDir = join(root, "data");
   await mkdir(workingDirectory, { recursive: true });
   await mkdir(packagesNodeModules, { recursive: true });
+  await mkdir(dataDir, { recursive: true });
 });
 
 afterEach(async () => {
@@ -67,7 +72,7 @@ async function runJoinedModule(joined: string): Promise<unknown> {
 
 /** The whole production path for one run: build the app chunk, build the vendor chunk it named, join them. */
 async function bundleAndJoin(entry: string): Promise<string> {
-  const app = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules });
+  const app = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules, dataDir });
   if ("error" in app) throw new Error(`app build failed: ${app.error.message}`);
   if (app.imports.length === 0) return joinVendorAndApp(null, app.code);
   const vendor = await bundleVendorForWeb({
@@ -75,6 +80,7 @@ async function bundleAndJoin(entry: string): Promise<string> {
     runtime: "browser",
     workingDirectory,
     packagesNodeModules,
+    dataDir,
   });
   if ("error" in vendor) throw new Error(`vendor build failed: ${vendor.error.message}`);
   return joinVendorAndApp(vendor.code, app.code);
@@ -93,6 +99,7 @@ describe("bundleAppForWeb", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in result).toBe(false);
@@ -116,6 +123,7 @@ describe("bundleAppForWeb", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in result).toBe(false);
@@ -133,6 +141,7 @@ describe("bundleAppForWeb", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in result).toBe(true);
@@ -152,6 +161,7 @@ describe("bundleAppForWeb", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in result).toBe(false);
@@ -169,6 +179,7 @@ describe("bundleAppForWeb", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in result).toBe(true);
@@ -190,6 +201,7 @@ describe("bundleAppForWeb", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in result).toBe(true);
@@ -210,6 +222,7 @@ describe("bundleAppForWeb", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in result).toBe(true);
@@ -256,6 +269,7 @@ describe("bundleAppForWeb resolve leak (fix round 1, C1)", () => {
       runtime: "browser",
       workingDirectory: nestedWorkingDirectory,
       packagesNodeModules: nestedPackagesNodeModules,
+      dataDir,
     });
 
     expect("error" in result).toBe(true);
@@ -277,6 +291,7 @@ describe("bundleAppForWeb resolve leak (fix round 1, C1)", () => {
       runtime: "browser",
       workingDirectory: nestedWorkingDirectory,
       packagesNodeModules: nestedPackagesNodeModules,
+      dataDir,
     });
     expect("error" in app).toBe(false);
     if ("error" in app) return;
@@ -285,6 +300,7 @@ describe("bundleAppForWeb resolve leak (fix round 1, C1)", () => {
       runtime: "browser",
       workingDirectory: nestedWorkingDirectory,
       packagesNodeModules: nestedPackagesNodeModules,
+      dataDir,
     });
     expect("error" in vendor).toBe(false);
     if ("error" in vendor) return;
@@ -312,6 +328,7 @@ describe("bundleAppForWeb resolve leak (fix round 1, C1)", () => {
       runtime: "browser",
       workingDirectory: nestedWorkingDirectory,
       packagesNodeModules: nestedPackagesNodeModules,
+      dataDir,
     });
 
     expect("error" in result).toBe(false);
@@ -351,6 +368,7 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in app).toBe(false);
@@ -425,6 +443,7 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
     expect("error" in app).toBe(false);
     if ("error" in app) return;
@@ -437,6 +456,7 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
     expect("error" in vendor).toBe(false);
     if ("error" in vendor) return;
@@ -479,7 +499,7 @@ describe("the vendor/app split", () => {
     await writeFixturePackages();
     const entry = join(workingDirectory, "entry.js");
     await writeFile(entry, "import c from 'cjs-pkg';\nglobalThis.__jlProbe = c.tag + ':first';\n");
-    const first = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules });
+    const first = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules, dataDir });
     expect("error" in first).toBe(false);
     if ("error" in first) return;
     const vendor = await bundleVendorForWeb({
@@ -487,13 +507,14 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
     expect("error" in vendor).toBe(false);
     if ("error" in vendor) return;
 
     // The user edits their code; the imports are unchanged, so the same vendor chunk is still the right one.
     await writeFile(entry, "import c from 'cjs-pkg';\nglobalThis.__jlProbe = c.tag + ':second';\n");
-    const second = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules });
+    const second = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules, dataDir });
     expect("error" in second).toBe(false);
     if ("error" in second) return;
     expect(second.imports).toEqual(first.imports);
@@ -509,6 +530,7 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in app).toBe(false);
@@ -530,6 +552,7 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
     expect("error" in sharedOnly).toBe(false);
     if ("error" in sharedOnly) return;
@@ -544,6 +567,7 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
     expect("error" in withWd).toBe(false);
     if ("error" in withWd) return;
@@ -556,6 +580,7 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
 
     expect("error" in vendor).toBe(true);
@@ -576,6 +601,7 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
     expect("error" in app).toBe(false);
     if ("error" in app) return;
@@ -584,6 +610,7 @@ describe("the vendor/app split", () => {
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
     expect("error" in vendor).toBe(false);
     if ("error" in vendor) return;

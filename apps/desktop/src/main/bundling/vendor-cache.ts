@@ -49,8 +49,17 @@ type VendorCacheIndex = Record<string, VendorCacheIndexEntry>;
  * anything narrower or wider than it would risk serving a stale chunk after a changed dependency). Sorting first
  * means import order in the source file never changes the key.
  */
-export function vendorCacheKey(lockHash: string, imports: readonly string[], runtime: Runtime): string {
-  return String(Bun.hash(`${VENDOR_CACHE_FORMAT}\n${runtime}\n${lockHash}\n${[...imports].sort().join("\n")}`));
+export function vendorCacheKey(
+  lockHash: string,
+  imports: readonly string[],
+  runtime: Runtime,
+  workingDirectory: string | null,
+): string {
+  return String(
+    Bun.hash(
+      `${VENDOR_CACHE_FORMAT}\n${runtime}\n${workingDirectory ?? ""}\n${lockHash}\n${[...imports].sort().join("\n")}`,
+    ),
+  );
 }
 
 /**
@@ -75,7 +84,7 @@ export function vendorCacheKey(lockHash: string, imports: readonly string[], run
  * recorded" branch as defence in depth against an index rebuilt from filenames rather than an ordinary path that a
  * whole stale generation of entries would otherwise keep exercising.
  */
-const VENDOR_CACHE_FORMAT = "vendor-chunk-v3";
+const VENDOR_CACHE_FORMAT = "vendor-chunk-v4";
 
 /**
  * Spec §5.12: the lockfile-pinning half of the key. Hashed rather than used raw so the key stays a fixed-length,

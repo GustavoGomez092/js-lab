@@ -87,6 +87,21 @@ export interface WebNodeRunnerDeps {
    * silently: the same relative path reaches the same file under `bun` and under `browser-node`.
    */
   baseDirectory: string;
+  /**
+   * The environment a bridged command gets when the caller supplies none (Task 9f item 6).
+   *
+   * **A parity value, exactly like `baseDirectory` above.** The Bun runner composes its environment through
+   * `runnerEnvironment` (`../app-paths.ts`): the login shell, then env.json, then the working directory's `.env`,
+   * with every `JSLAB_*` key and `BUN_OPTIONS` stripped and `JSLAB=1`/`NODE_PATH` set. This runner used to default
+   * to Main's own raw `process.env` instead, so the same `child_process` call saw a different environment under
+   * `browser-node` than under `bun` -- a user's `.env` simply never applied, and Main's own `JSLAB_*` variables
+   * leaked into the child. Both runtimes now build this through the one shared `runnerContextFor`
+   * (`../runs/runner-config.ts`), so they cannot drift apart silently.
+   *
+   * Optional for the same reason `baseDirectory`'s caller-side fallback is: this module's large existing fixture
+   * set predates it. `../runtimes/web-adapter.ts` always supplies it in production.
+   */
+  baseEnvironment?: Record<string, string>;
   /** Test seam; production uses the real `node:fs/promises`. */
   fs?: WebNodeFs;
   /** Test seam; production uses the real `node:child_process.spawn`. */
@@ -231,9 +246,13 @@ export function createWebNodeRunner(deps: WebNodeRunnerDeps): WebNodeRunner {
     const options = (args[args.length - 1] ?? {}) as WebNodeCommandOptions;
 
     const cwd = options.cwd ? resolve(deps.baseDirectory, options.cwd) : deps.baseDirectory;
-    // A page-supplied `env` replaces Main's, as it does in Node; otherwise the process inherits Main's, which is
-    // the login-shell environment (spec §4.6). Either way PWD is corrected to the real cwd.
-    const env = { ...(options.env ?? (process.env as Record<string, string | undefined>)), PWD: cwd };
+    // A page-supplied `env` replaces the default outright, as it does in Node. The default is the runner's own
+    // layered environment (see `baseEnvironment`) -- the same one a `bun` tab's command would get -- rather than
+    // Main's raw `process.env`. Either way PWD is corrected to the real cwd.
+    const env = {
+      ...(options.env ?? deps.baseEnvironment ?? (process.env as Record<string, string | undefined>)),
+      PWD: cwd,
+    };
     // Node's own defaults: `exec` always runs through a shell, `execFile`/`spawn` do not unless asked.
     const shell = options.shell ?? method === "exec";
 

@@ -6,7 +6,7 @@ import { VendorCache } from "./bundling/vendor-cache";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
 import { EXIT_KILL_GRACE_MS, RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
-import { createRunnerConfig } from "./runs/runner-config";
+import { createRunnerConfig, runnerContextFor } from "./runs/runner-config";
 import { SparePool } from "./runs/spare-pool";
 import { createBunAdapter } from "./runtimes/bun-adapter";
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtimes/registry";
@@ -160,6 +160,12 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     // Task 11: what a `browser-node` Node call resolves a relative path against when the tab has no working
     // directory -- the same `workingDirectory ?? dataDir` the Bun runner uses (`./runs/runner-config.ts`).
     dataDir: paths.dataDir,
+    // Task 9f item 6: what a bridged `child_process` command's environment defaults to. Built through the *same*
+    // `runnerContextFor` the Bun runner's own `configFor` uses, so env.json, the working directory's `.env` and the
+    // JSLAB_*/BUN_OPTIONS stripping all apply identically whichever runtime the tab happens to be set to -- rather
+    // than the bridge handing the child Main's raw `process.env`, under which a user's `.env` never applied at all.
+    nodeEnvironment: (workingDirectory) =>
+      runnerContextFor({ paths, baseEnv: () => options.env, envVars: () => env.variables }, workingDirectory).env,
     packagesNodeModules: paths.packagesNodeModules,
     bunLockPath: join(paths.packagesDir, "bun.lock"),
     vendorCache,

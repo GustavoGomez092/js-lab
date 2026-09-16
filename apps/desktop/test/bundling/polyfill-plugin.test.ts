@@ -15,13 +15,17 @@ import { bundleAppForWeb, bundleVendorForWeb, joinVendorAndApp } from "../../src
 let root = "";
 let workingDirectory = "";
 let packagesNodeModules = "";
+/** The app's data directory: what a tab with no working directory resolves against (Task 9f item 5). */
+let dataDir = "";
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "jslab-polyfill-plugin-"));
   workingDirectory = join(root, "wd");
   packagesNodeModules = join(root, "pkgs", "node_modules");
+  dataDir = join(root, "data");
   await mkdir(workingDirectory, { recursive: true });
   await mkdir(packagesNodeModules, { recursive: true });
+  await mkdir(dataDir, { recursive: true });
 });
 
 afterEach(async () => {
@@ -59,19 +63,35 @@ async function runJoinedModule(joined: string): Promise<unknown> {
   return g.__jlProbe;
 }
 
-/** Builds and runs one `browser-node` entry, returning whatever it left on `globalThis.__jlProbe`. */
-async function runBrowserNodeEntry(source: string): Promise<unknown> {
+/**
+ * Builds and runs one `browser-node` entry, returning whatever it left on `globalThis.__jlProbe`.
+ *
+ * `overrides.workingDirectory` may be `null` -- the tab-with-no-working-directory case (Task 9f item 5), which
+ * nothing exercised before and which is exactly where the three answers to "what is the cwd?" diverged.
+ */
+async function runBrowserNodeEntry(
+  source: string,
+  overrides: { workingDirectory?: string | null } = {},
+): Promise<unknown> {
+  const wd = overrides.workingDirectory === undefined ? workingDirectory : overrides.workingDirectory;
   const entry = join(workingDirectory, "entry.js");
   await writeFile(entry, source);
-  const app = await bundleAppForWeb({ entry, runtime: "browser-node", workingDirectory, packagesNodeModules });
+  const app = await bundleAppForWeb({
+    entry,
+    runtime: "browser-node",
+    workingDirectory: wd,
+    packagesNodeModules,
+    dataDir,
+  });
   if ("error" in app) throw new Error(`app build failed: ${app.error.message}\n${app.error.codeFrame ?? ""}`);
   let joined = joinVendorAndApp(null, app.code);
   if (app.imports.length > 0) {
     const vendor = await bundleVendorForWeb({
       imports: app.imports,
       runtime: "browser-node",
-      workingDirectory,
+      workingDirectory: wd,
       packagesNodeModules,
+      dataDir,
     });
     if ("error" in vendor) throw new Error(`vendor build failed: ${vendor.error.message}`);
     joined = joinVendorAndApp(vendor.code, app.code);
@@ -115,13 +135,14 @@ describe("browser-node bundles packages that use an internal namespace import (T
     await writeNamespacePackage("ns-pkg2");
     const entry = join(workingDirectory, "entry-browser.js");
     await writeFile(entry, 'import { greet } from "ns-pkg2";\nglobalThis.__jlProbe = greet();\n');
-    const app = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules });
+    const app = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules, dataDir });
     if ("error" in app) throw new Error(`app build failed: ${app.error.message}`);
     const vendor = await bundleVendorForWeb({
       imports: app.imports,
       runtime: "browser",
       workingDirectory,
       packagesNodeModules,
+      dataDir,
     });
     if ("error" in vendor) throw new Error(`vendor build failed: ${vendor.error.message}`);
     expect(await runJoinedModule(joinVendorAndApp(vendor.code, app.code))).toBe("hi there");
@@ -708,5 +729,119 @@ describe("browser-node module table -- the async Node bridge (Task 11, spec §5.
     } finally {
       delete g.__jslabNodeBridge;
     }
+  });
+});
+
+/**
+ * Task 9f item 1: `querystring.unescape` must be tolerant of malformed percent input, as Node's is.
+ *
+ * The generated module exported `globalThis.decodeURIComponent` directly as `unescape`, so a lone `%` threw
+ * `URIError` where Node returns the input unchanged. Node's own `querystring.unescape` wraps `decodeURIComponent`
+ * and falls back on failure -- a runtime whose entire purpose is Node compatibility must not diverge here.
+ */
+describe("browser-node module table -- querystring.unescape tolerates malformed input (Task 9f item 1)", () => {
+  test("a lone percent comes back unchanged instead of throwing URIError", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import { unescape } from 'querystring';",
+        "const out = [];",
+        "for (const input of ['%', 'abc%', '%zz', '%E0%A4%A']) {",
+        "  try { out.push(unescape(input)); } catch (e) { out.push(e.name); }",
+        "}",
+        "globalThis.__jlProbe = out;",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toEqual(["%", "abc%", "%zz", "%E0%A4%A"]);
+  });
+
+  test("well-formed input still decodes exactly as before", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import qs from 'querystring';",
+        "globalThis.__jlProbe = [qs.unescape('a%20b'), qs.unescape('%C3%BC'), qs.escape('a b')].join('|');",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toBe("a b|ü|a%20b");
+  });
+});
+
+/*
+ * Task 9f item 2 (shared built-in constructor identity across `stream`, `events` and `buffer`) is REAL but is NOT
+ * fixed here, so no test for it is left behind failing. Measured at HEAD: `new Readable() instanceof EventEmitter`
+ * is `false`, and a chunk a stream emits is not `instanceof` the `Buffer` that `buffer` exports, because each
+ * vendor file flattens its own private copy of the built-ins it depends on.
+ *
+ * The prescribed fix -- `--external` in `packages/runner-web/scripts-src/generate-vendor.sh` -- provably does not
+ * work: Bun ignores `--external` for Node built-in names under `--target=browser`, and the plugin equivalent drops
+ * CommonJS `require()` dependencies instead of emitting imports, producing a bundle that is broken at runtime. The
+ * full measurements, and what a real fix would take (one shared module graph for the built-ins, which is a redesign
+ * of the vendor layer rather than a flag), are recorded in that script's own header.
+ */
+
+/**
+ * Task 9f item 3: the virtual `process` must be bound inside vendored sources.
+ *
+ * `onLoad` returned each vendor file's text raw, with nothing prepended, while `assert.js` references
+ * `process.env` and `path-browserify.js` references `process.cwd`. In a real page there is no `process` global at
+ * all, so those are unbound references. Under Bun the test realm *does* have a `process` global, which is why this
+ * never threw in a test -- it silently read the wrong one. Asserting against the snapshot's cwd (the tab's working
+ * directory) rather than the test process's own cwd is what distinguishes the two.
+ */
+describe("browser-node module table -- vendored sources see the table's process (Task 9f item 3)", () => {
+  test("path.resolve uses the tab's snapshot cwd, not the host process's cwd", async () => {
+    const result = await runBrowserNodeEntry(
+      ["import path from 'path';", "globalThis.__jlProbe = path.resolve('x');", ""].join("\n"),
+    );
+    expect(result).toBe(join(workingDirectory, "x"));
+    expect(result).not.toBe(join(process.cwd(), "x"));
+  });
+});
+
+/**
+ * Task 9f item 5: `process.cwd()`, where `fs` actually resolves a relative path, and what `bun` would use must all
+ * name the same directory -- including for a tab with **no working directory**, the case no test covered at all.
+ *
+ * Task 11 made the `fs`/`child_process` bridge resolve against `workingDirectory ?? dataDir`, matching the Bun
+ * runner (`apps/desktop/src/main/runs/runner-config.ts`, which also sets `env.PWD = cwd`). The `process` snapshot
+ * was left reporting **Main's own process cwd**, so a tab with no working directory saw three different answers.
+ */
+describe("browser-node module table -- process.cwd with no working directory (Task 9f item 5)", () => {
+  test("process.cwd(), PWD and path.resolve all agree on the data directory", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import process from 'process';",
+        "import path from 'path';",
+        "globalThis.__jlProbe = {",
+        "  cwd: process.cwd(),",
+        "  pwd: process.env.PWD,",
+        "  resolved: path.resolve('notes.txt'),",
+        "};",
+        "",
+      ].join("\n"),
+      { workingDirectory: null },
+    );
+    expect(result).toEqual({
+      cwd: dataDir,
+      pwd: dataDir,
+      resolved: join(dataDir, "notes.txt"),
+    });
+  });
+
+  test("a tab that does have a working directory still reports that, not the data directory", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import process from 'process';",
+        "import path from 'path';",
+        "globalThis.__jlProbe = { cwd: process.cwd(), pwd: process.env.PWD, resolved: path.resolve('notes.txt') };",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toEqual({
+      cwd: workingDirectory,
+      pwd: workingDirectory,
+      resolved: join(workingDirectory, "notes.txt"),
+    });
   });
 });

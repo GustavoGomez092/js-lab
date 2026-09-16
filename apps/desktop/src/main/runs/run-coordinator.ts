@@ -3,8 +3,14 @@ import { join } from "node:path";
 import type { EncodedValue, RunEvent, RunState } from "@jslab/rpc-schema";
 import type { Runtime } from "@jslab/shared";
 import type { BuildOptions, Diagnostic, Language, TransformOptions, TransformResult } from "@jslab/transform";
-import type { PreparedRun, RunEventSink, RunHandle, RuntimeAdapter } from "../runtimes/adapter";
-import { createBunAdapter, type SpareSource, WorkingDirectoryMismatchError } from "../runtimes/bun-adapter";
+import {
+  type PreparedRun,
+  type RunEventSink,
+  type RunHandle,
+  type RuntimeAdapter,
+  WorkingDirectoryMismatchError,
+} from "../runtimes/adapter";
+import { createBunAdapter, type SpareSource } from "../runtimes/bun-adapter";
 import { createRuntimeRegistry, type RuntimeRegistry } from "../runtimes/registry";
 import { strings } from "../strings";
 import { createEventMapper } from "./event-mapper";
@@ -104,6 +110,9 @@ export class RunCoordinator {
   readonly #watchdog: ReturnType<typeof setInterval>;
 
   constructor(private readonly deps: RunCoordinatorDeps) {
+    // This fallback exists so a caller that hands RunCoordinator a SparePool directly (this file's own test
+    // harness, most notably) keeps working with no `runtimes` field at all; production (main-services.ts) always
+    // builds and passes its own registry explicitly instead, forwarding these same tuning knobs itself.
     this.#registry =
       deps.runtimes ??
       createRuntimeRegistry({
@@ -254,6 +263,13 @@ export class RunCoordinator {
         isCancelled: () => !this.#isCurrent(run),
       };
       const sink: RunEventSink = {
+        attached: (handle) => {
+          if (!this.#isCurrent(run)) {
+            handle.kill();
+            return;
+          }
+          run.handle = handle;
+        },
         events: (events) => {
           if (!this.#isCurrent(run)) return;
           // Re-batch for the UI (spec §4.2): at most 200 events per run.events message, whatever the adapter sent.
@@ -293,7 +309,9 @@ export class RunCoordinator {
         handle.kill();
         return;
       }
-      run.handle = handle;
+      // No `run.handle = handle` here: `sink.attached()` already set it, as soon as a controllable runner existed
+      // (F1, fix round 1) -- this is only the final safety net for a run that never got that far (for example one
+      // cancelled before ever taking a spare, whose `start()` resolves with a no-op handle and never calls attached).
     } catch (error) {
       // A rejecting transform, or a failing adapter start, must not leave the run stuck in "transpiling" forever
       // with an unhandled rejection (I3).

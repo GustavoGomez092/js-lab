@@ -32,6 +32,14 @@ export interface MainServicesOptions {
   /** Test seams. Production spawns real Bun runners and runs Babel in the bundled transform worker. */
   startRunner?: (config: RunnerSpawnConfig) => Promise<BunRunnerProcess>;
   transformHost?: TransformHost;
+  /**
+   * Bun adapter timing knobs (spec §5.1). Undefined in production, which leaves every one at its documented
+   * default; a caller that does set one gets it applied identically whether or not `RunCoordinator` ends up using
+   * its own fallback registry or the `runtimes` one built below (fix round 1, Finding 3).
+   */
+  stopGraceMs?: RunCoordinatorDeps["stopGraceMs"];
+  idleRunnerTtlMs?: RunCoordinatorDeps["idleRunnerTtlMs"];
+  expandTimeoutMs?: RunCoordinatorDeps["expandTimeoutMs"];
   /** Main's log (index.ts passes the rotating log). Defaults to console.error. */
   log?: (message: string, detail?: unknown) => void;
   /** The user's real home folder (for the Bun cache location, spec §11.3). */
@@ -97,7 +105,15 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   );
   // The runtime registry (spec §5.1): only "bun" is real until Task 7 registers a "web" adapter here too.
   const runtimes = createRuntimeRegistry({
-    bun: createBunAdapter({ spares, runsDir: paths.runsDir, runLock, exitGraceMs: EXIT_KILL_GRACE_MS }),
+    bun: createBunAdapter({
+      spares,
+      runsDir: paths.runsDir,
+      runLock,
+      exitGraceMs: EXIT_KILL_GRACE_MS,
+      stopGraceMs: options.stopGraceMs,
+      idleRunnerTtlMs: options.idleRunnerTtlMs,
+      expandTimeoutMs: options.expandTimeoutMs,
+    }),
   });
   const coordinator = new RunCoordinator({
     transform: (source, transformOptions) => transform.transform(source, transformOptions),
@@ -108,6 +124,9 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     onState: options.onState,
     onDiagnostics: options.onDiagnostics,
     runLock,
+    stopGraceMs: options.stopGraceMs,
+    idleRunnerTtlMs: options.idleRunnerTtlMs,
+    expandTimeoutMs: options.expandTimeoutMs,
     runtimes,
   });
   // Spec §12.1: saving env.json recycles every tab's spare, so the next run gets the new values.

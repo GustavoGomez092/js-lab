@@ -34,6 +34,14 @@ export interface PreparedRun {
 
 /** Where an adapter reports what a run is doing, in `RunCoordinator`'s own generic vocabulary (spec §4.2/§5.1). */
 export interface RunEventSink {
+  /**
+   * A controllable handle now exists for this run. An adapter MUST call this the moment it has one -- before any
+   * lock bookkeeping or start message -- not merely once its own `start()` resolves: `RunCoordinator` records the
+   * handle here so a `stop()`/`kill()` arriving reentrantly at that pinch point (for example from inside a
+   * `runLock.add` callback) still finds a handle to act on and takes the graceful branch (M4 T2 fix 1, review
+   * Finding 1). Task 7's `WebAdapter` must follow the same ordering.
+   */
+  attached(handle: RunHandle): void;
   events(events: RunEvent[]): void;
   state(state: RunState, activeHandles?: number): void;
   /** A liveness signal arrived; `RunCoordinator` owns unresponsive-detection and recovery from it (spec §5.11). */
@@ -44,6 +52,19 @@ export interface RunEventSink {
    * Kill requested after the runtime already exited on its own must not relabel an already-settled run.
    */
   exited(): void;
+}
+
+/**
+ * A tab's working directory was deleted (or changed) between `RunCoordinator`'s pre-transform check and the runtime
+ * actually starting in it (M-3, fail closed): the run must not execute against, or write relative files into, the
+ * wrong folder. Adapter-agnostic (spec's Global Constraints anticipate `browser-node` needing the same fail-closed
+ * check) so `RunCoordinator` can catch it generically by class, and any adapter -- not just Bun's -- can throw it.
+ */
+export class WorkingDirectoryMismatchError extends Error {
+  constructor(readonly workingDirectory: string) {
+    super(`Runner did not start in working directory: ${workingDirectory}`);
+    this.name = "WorkingDirectoryMismatchError";
+  }
 }
 
 /** spec §5.1, verbatim. */

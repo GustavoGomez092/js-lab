@@ -2,19 +2,14 @@ import { mkdir, readdir, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { EncodedValue, RunnerToMain, RunState } from "@jslab/rpc-schema";
 import type { BunRunnerProcess } from "../runs/bun-runner-process";
-import type { PreparedRun, RunEventSink, RunHandle, RuntimeAdapter, TabRunContext } from "./adapter";
-
-/**
- * A tab's working directory was deleted (or changed) between `RunCoordinator`'s pre-transform check and the runner
- * actually spawning in it (M-3, fail closed): the run must not execute against, or write relative files into, the
- * wrong folder. `RunCoordinator` reports this the same way as the earlier pre-transform check (spec §12.2).
- */
-export class WorkingDirectoryMismatchError extends Error {
-  constructor(readonly workingDirectory: string) {
-    super(`Runner did not start in working directory: ${workingDirectory}`);
-    this.name = "WorkingDirectoryMismatchError";
-  }
-}
+import {
+  type PreparedRun,
+  type RunEventSink,
+  type RunHandle,
+  type RuntimeAdapter,
+  type TabRunContext,
+  WorkingDirectoryMismatchError,
+} from "./adapter";
 
 export interface SpareSource {
   take(tabId: string): Promise<BunRunnerProcess>;
@@ -71,6 +66,11 @@ class BunRunSession implements RunHandle {
   wire(): void {
     this.#unsubscribe = this.runner.onMessage((message) => this.#onMessage(message));
     void this.runner.exited.then((code) => this.#onExit(code, this.runner.signalCode));
+  }
+
+  /** Whether `stop()` has already been called -- checked by `start()` before it would otherwise send "run". */
+  get stopRequested(): boolean {
+    return this.#stopRequested;
   }
 
   async stop(): Promise<void> {
@@ -275,13 +275,20 @@ export function createBunAdapter(deps: BunAdapterDeps): RuntimeAdapter {
 
       const session = new BunRunSession(runner, run, sink, deps);
       session.wire();
+      // Hand the handle back the moment it's controllable, before any lock or start-message work (M4 T2 fix 1,
+      // review Finding 1): a stop() arriving reentrantly from runLock.add below must find a handle to act on and
+      // take the graceful branch, exactly as the pre-refactor code did by assigning `run.runner` at this same point.
+      sink.attached(session);
       deps.runLock.add(run.runId);
       runner.lastHeartbeat = Date.now();
-      // A stop() may have run synchronously inside runLock.add above (I1): it already marked the run cancelled, so
-      // sending "run" now would start user code the caller just asked to stop.
+      // stop() may have run synchronously inside runLock.add above (I1), via the handle attached() just provided:
+      // it already sent "stop" and armed its own escalation, so sending "run" now would race a run the caller just
+      // asked to stop.
+      if (session.stopRequested) return session;
+      // A supersede/dispose raced ahead instead (no handle existed for it to use before attached() ran): it will
+      // already have called `session.kill()` through the handle it now has, so there's nothing left to kill here.
       if (run.isCancelled()) {
         deps.runLock.remove(run.runId);
-        session.killExpected();
         return session;
       }
       runner.send({ type: "run", runId: run.runId, entry: entryPath, settings: { maxEntries: run.maxEntries } });

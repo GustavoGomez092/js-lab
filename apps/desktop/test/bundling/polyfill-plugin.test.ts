@@ -74,6 +74,27 @@ describe("browser-node module table -- the ten sync builtins (spec §5.13)", () 
     expect(result).toBe("a/b/c");
   });
 
+  /**
+   * Fix round 2 (B0): `path` was the sole failure of the ten sync builtins in the *named* import form, in both
+   * the bare and `node:`-prefixed spellings -- `path-browserify/index.js` ends with `module.exports = posix`, a
+   * single object assignment Bun's CJS->ESM named-export synthesis can't destructure (the same class of gap I1
+   * fixed for `process`/`os`/`crypto`), and unlike the other nine vendored builtins it had no synthetic
+   * re-export entry to route around it. Untested until now: every existing `path` test used the default form.
+   */
+  test("path: named join works too (fix round 2, B0)", async () => {
+    const result = await runBrowserNodeEntry(
+      "import { join } from 'path';\nglobalThis.__jlProbe = join('a', 'b', 'c');\n",
+    );
+    expect(result).toBe("a/b/c");
+  });
+
+  test("path: named join works with the node: prefix too", async () => {
+    const result = await runBrowserNodeEntry(
+      "import { join } from 'node:path';\nglobalThis.__jlProbe = join('a', 'b', 'c');\n",
+    );
+    expect(result).toBe("a/b/c");
+  });
+
   test("events: EventEmitter dispatches synchronously", async () => {
     const result = await runBrowserNodeEntry(
       [
@@ -419,18 +440,32 @@ describe("browser-node module table -- named imports (fix round 1, I1)", () => {
  * ships), and `node:process` hard-errored. One vendored builtin, one snapshot-backed module, both spellings.
  */
 describe("browser-node module table -- node: prefix (fix round 1, I2)", () => {
-  test("node:buffer resolves to the vendored polyfill, not Bun's own shim", async () => {
+  /**
+   * Fix round 2: the previous version of this test only checked `Buffer.from('hi').toString('utf8') === 'hi'`
+   * -- an assertion Bun's own internal `node:buffer` shim satisfies too, which is exactly what `node:buffer`
+   * silently fell through to *before* I2 was fixed (round 1's own measurement: "node:buffer -> works"). A test
+   * whose assertion the pre-fix behavior already passes cannot detect a regression back to it. This version
+   * asserts *module identity* against the unprefixed spelling instead -- the same probe shape the fix round 1
+   * re-review used to verify I2 independently -- which only holds if both specifiers resolve to the exact same
+   * vendored module instance, not two separately-shimmed ones that merely behave alike.
+   */
+  test("node:buffer is the same Buffer class as buffer, not a separately-shimmed one", async () => {
     const result = await runBrowserNodeEntry(
-      "import { Buffer } from 'node:buffer';\nglobalThis.__jlProbe = Buffer.from('hi').toString('utf8');\n",
+      [
+        "import { Buffer as A } from 'buffer';",
+        "import { Buffer as B } from 'node:buffer';",
+        "globalThis.__jlProbe = A === B;",
+        "",
+      ].join("\n"),
     );
-    expect(result).toBe("hi");
+    expect(result).toBe(true);
   });
 
-  test("node:path resolves to the vendored polyfill, not Bun's own shim", async () => {
+  test("node:path is the same module as path, not a separately-shimmed one", async () => {
     const result = await runBrowserNodeEntry(
-      "import path from 'node:path';\nglobalThis.__jlProbe = path.join('a', 'b');\n",
+      ["import a from 'path';", "import b from 'node:path';", "globalThis.__jlProbe = a === b;", ""].join("\n"),
     );
-    expect(result).toBe("a/b");
+    expect(result).toBe(true);
   });
 
   test("node:process builds and runs (previously a hard build error)", async () => {

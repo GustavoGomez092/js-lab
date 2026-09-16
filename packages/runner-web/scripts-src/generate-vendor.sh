@@ -38,13 +38,17 @@ prepend_header() {
   mv "$tmp" "$file"
 }
 
-# The ten §5.13 sync builtins. Three (events, url, punycode) are recognized Node builtin names, so
-# `Bun.resolveSync` prefers Bun's own internal shim over the real npm package even when installed (measured;
-# see the Task 10 report) -- their synthetic entries import the real file by relative path specifically to route
-# around that. `assert` and `util` are also builtin names; their entries do the same for the same reason, and
-# additionally re-export named members explicitly (see each entry's own comment).
+# The ten §5.13 sync builtins. Nine of the ten (every one but `buffer`) are built from a synthetic entry file in
+# this directory rather than the package's own entry point directly -- most because they are themselves
+# recognized Node builtin names, so `Bun.resolveSync` prefers Bun's own internal shim over the real npm package
+# even when installed (measured; see the Task 10 report), so the entry imports the real file by relative path to
+# route around that; several (`path`, `util`, `assert`, `events`, `stream`, `punycode`) additionally re-export
+# named members explicitly, because Bun's CJS->ESM named-export synthesis only picks up a literal `exports.foo =`
+# assignment, not a single `module.exports = someObject` (`path`: fix round 2, B0 -- `import { join } from
+# 'path'` built fine as a *default* import but failed in the *named* form in both the bare and `node:`-prefixed
+# spellings, the sole failure of the ten, until this same fix was applied to it too).
 build packages/runner-web/node_modules/buffer/index.js "$OUT_DIR/buffer.js"
-build packages/runner-web/node_modules/path-browserify/index.js "$OUT_DIR/path-browserify.js"
+build "$SCRIPT_DIR/path-entry.js" "$OUT_DIR/path-browserify.js"
 build "$SCRIPT_DIR/events-entry.js" "$OUT_DIR/events.js"
 build "$SCRIPT_DIR/util-entry.js" "$OUT_DIR/util.js"
 build "$SCRIPT_DIR/url-entry.js" "$OUT_DIR/url.js"
@@ -73,6 +77,8 @@ prepend_header "$OUT_DIR/buffer.js" "// Generated (Task 10, spec §5.13): feross
 
 prepend_header "$OUT_DIR/path-browserify.js" "// Generated (Task 10, spec §5.13): path-browserify@1.0.1, flattened for the browser-node module table.
 // Regenerate: bash packages/runner-web/scripts-src/generate-vendor.sh (see this file for the full recipe).
+// (entry re-exports resolve/normalize/isAbsolute/join/relative/dirname/basename/extname/format/parse/sep/
+// delimiter/win32/posix by name; fix round 2, B0.)
 // License: MIT. Do not hand-edit."
 
 prepend_header "$OUT_DIR/events.js" "// Generated (Task 10, spec §5.13): events@3.3.0, flattened for the browser-node module table.
@@ -83,7 +89,11 @@ prepend_header "$OUT_DIR/events.js" "// Generated (Task 10, spec §5.13): events
 prepend_header "$OUT_DIR/util.js" "// Generated (Task 10, spec §5.13): util@0.12.5, flattened for the browser-node module table.
 // Regenerate: bash packages/runner-web/scripts-src/generate-vendor.sh (see this file for the full recipe).
 // (entry re-exports promisify/inherits/inspect/format/deprecate/callbackify/types/isArray/isBuffer/debuglog by name.)
-// License: MIT. Do not hand-edit."
+// License: MIT AND ISC -- util is MIT; the inlined inherits is ISC.
+// Fix round 2 (B2): the original \"License: MIT\" here was wrong -- inherits was inlined but its license wasn't
+// named (found by the fix round 1 review's own full sweep, which fix round 1 only partially applied).
+// Full license text and copyright lines for every inlined package: THIRD-PARTY-NOTICES.md.
+// Do not hand-edit."
 
 prepend_header "$OUT_DIR/url.js" "// Generated (Task 10, spec §5.13): url@0.11.4 (deps: punycode, qs), flattened for the browser-node module table.
 // Regenerate: bash packages/runner-web/scripts-src/generate-vendor.sh (see this file for the full recipe).
@@ -102,17 +112,35 @@ prepend_header "$OUT_DIR/querystring-es3.js" "// Generated (Task 10, spec §5.13
 
 prepend_header "$OUT_DIR/string_decoder.js" "// Generated (Task 10, spec §5.13): string_decoder@1.3.0, flattened for the browser-node module table.
 // Regenerate: bash packages/runner-web/scripts-src/generate-vendor.sh (see this file for the full recipe).
-// License: MIT. Do not hand-edit."
+// License: MIT AND BSD-3-Clause -- string_decoder and safe-buffer are MIT; \`safe-buffer\`'s own \`require('buffer')\`
+// pulls in Bun's internal node:buffer browser shim (target=browser default substitution, not this package's own
+// dependency graph -- see M1 in the Task 10 report on fragmented Buffer identity), which inlines ieee754
+// (BSD-3-Clause) and base64-js (MIT).
+// Fix round 2 (B2): the original \"License: MIT\" here was wrong -- ieee754 was present but not named.
+// Full license text and copyright lines for every inlined package: THIRD-PARTY-NOTICES.md.
+// Do not hand-edit."
 
 prepend_header "$OUT_DIR/assert.js" "// Generated (Task 10, spec §5.13): assert@2.1.0, flattened for the browser-node module table.
 // Regenerate: bash packages/runner-web/scripts-src/generate-vendor.sh (see this file for the full recipe).
 // (entry re-exports ok/fail/equal/.../strictEqual/deepStrictEqual/throws/rejects/ifError/AssertionError/strict.)
-// License: MIT. Do not hand-edit."
+// License: MIT AND ISC -- assert and its deps (object.assign, object-is, is-nan, call-bind, util, get-intrinsic)
+// are MIT; util's own inlined inherits is ISC.
+// Fix round 2 (B2): the original \"License: MIT\" here was wrong -- inherits was inlined but its license wasn't
+// named (found by the fix round 1 review's own full sweep, which fix round 1 only partially applied).
+// Full license text and copyright lines for every inlined package: THIRD-PARTY-NOTICES.md.
+// Do not hand-edit."
 
 prepend_header "$OUT_DIR/stream-browserify.js" "// Generated (Task 10, spec §5.13): stream-browserify@3.0.0 (dep: readable-stream), flattened for the browser-node module table.
 // Regenerate: bash packages/runner-web/scripts-src/generate-vendor.sh (see this file for the full recipe).
 // (entry re-exports Readable/Writable/Duplex/Transform/PassThrough/finished/pipeline by name.)
-// License: MIT. Do not hand-edit."
+// License: MIT AND ISC AND BSD-3-Clause -- stream-browserify, readable-stream, safe-buffer, core-util-is,
+// process-nextick-args, isarray and util-deprecate are MIT; inherits is ISC; safe-buffer's own require('buffer')
+// pulls in Bun's internal node:buffer browser shim (see M1 in the Task 10 report), which inlines ieee754
+// (BSD-3-Clause) and base64-js (MIT).
+// Fix round 2 (B2): the original \"License: MIT\" here was wrong on two counts -- inherits (ISC) and ieee754
+// (BSD-3-Clause) were both inlined but neither was named.
+// Full license text and copyright lines for every inlined package: THIRD-PARTY-NOTICES.md.
+// Do not hand-edit."
 
 prepend_header "$OUT_DIR/punycode.js" "// Generated (Task 10, spec §5.13): punycode@2.3.1, flattened for the browser-node module table.
 // Regenerate: bash packages/runner-web/scripts-src/generate-vendor.sh (see this file for the full recipe).

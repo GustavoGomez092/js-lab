@@ -357,7 +357,9 @@ export interface RunHandle {
 - **Types follow the runtime** (spec §5.2): `bun` gets `bun-types` + `@types/node` and no `dom`; `browser` gets `dom` only; `browser-node` gets `dom` + `@types/node`. Switching a tab's runtime re-feeds Monaco.
 - Switching runtime triggers a run when Auto Run is on.
 
-- [ ] Steps: failing tests for availability and for the per-runtime lib set, implementation, and a check that `strings.shell.laterMilestone` no longer appears for these three. **Counts: shared +2, ui +6; root 992 → 1000.**
+**Carried from Task 1 (R-M4-T1-MINOR-1).** Task 1's precedence test could not distinguish tab-wins from request-wins, because every runtime collapsed to `bun`. This task is the first where they diverge, so add the assertion here: a tab whose `runtime` is `"browser"`, driven by a `run.start` request carrying `"bun"`, must start on **`"browser"`** — the tab is the source of truth. Put it beside the existing precedence test in `apps/desktop/test/rpc-handlers.test.ts` and count it in this task's delta.
+
+- [ ] Steps: failing tests for availability, for the per-runtime lib set, and for the carried precedence assertion; implementation; and a check that `strings.shell.laterMilestone` no longer appears for these three. **Counts: shared +2, ui +6, desktop +1; root 992 → 1001.**
 
 ---
 

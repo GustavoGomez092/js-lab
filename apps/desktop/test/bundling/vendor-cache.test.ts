@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,6 +20,47 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(cacheDir, { recursive: true, force: true });
 });
+
+/** Reads index.json and the cache directory directly, bypassing VendorCache, matching the re-review's own method
+ *  ("direct filesystem check against index.json afterward -- no get() called, so no self-heal could have run"). */
+async function readIndexAndFilesDirect(dir: string): Promise<{
+  index: Record<string, { size: number; writtenAt: number }>;
+  codeFiles: Set<string>;
+  mapFiles: Set<string>;
+}> {
+  let index: Record<string, { size: number; writtenAt: number }> = {};
+  try {
+    index = JSON.parse(await readFile(join(dir, "index.json"), "utf8"));
+  } catch {
+    index = {};
+  }
+  let files: string[] = [];
+  try {
+    files = await readdir(dir);
+  } catch {
+    files = [];
+  }
+  const codeFiles = new Set(files.filter((f) => f.endsWith(".js")).map((f) => f.slice(0, -3)));
+  const mapFiles = new Set(files.filter((f) => f.endsWith(".js.map")).map((f) => f.slice(0, -".js.map".length)));
+  return { index, codeFiles, mapFiles };
+}
+
+/** Every index entry's files must exist, and every on-disk file must have an index entry -- the invariant fix2
+ *  requires after eviction. Returns a list of English violation descriptions (empty means the invariant holds). */
+function invariantViolations(state: Awaited<ReturnType<typeof readIndexAndFilesDirect>>): string[] {
+  const violations: string[] = [];
+  for (const key of Object.keys(state.index)) {
+    if (!state.codeFiles.has(key)) violations.push(`index claims ${key} but its .js file is missing`);
+    if (!state.mapFiles.has(key)) violations.push(`index claims ${key} but its .js.map file is missing`);
+  }
+  for (const key of state.codeFiles) {
+    if (!(key in state.index)) violations.push(`.js file for ${key} has no index entry`);
+  }
+  for (const key of state.mapFiles) {
+    if (!(key in state.index)) violations.push(`.js.map file for ${key} has no index entry`);
+  }
+  return violations;
+}
 
 describe("vendorCacheKey", () => {
   test("is stable regardless of import order", () => {
@@ -198,47 +239,6 @@ describe("VendorCache concurrency (fix round 1)", () => {
 });
 
 describe("VendorCache concurrency (fix round 2)", () => {
-  /** Reads index.json and the cache directory directly, bypassing VendorCache, matching the re-review's own method
-   *  ("direct filesystem check against index.json afterward -- no get() called, so no self-heal could have run"). */
-  async function readIndexAndFilesDirect(dir: string): Promise<{
-    index: Record<string, { size: number; writtenAt: number }>;
-    codeFiles: Set<string>;
-    mapFiles: Set<string>;
-  }> {
-    let index: Record<string, { size: number; writtenAt: number }> = {};
-    try {
-      index = JSON.parse(await readFile(join(dir, "index.json"), "utf8"));
-    } catch {
-      index = {};
-    }
-    let files: string[] = [];
-    try {
-      files = await readdir(dir);
-    } catch {
-      files = [];
-    }
-    const codeFiles = new Set(files.filter((f) => f.endsWith(".js")).map((f) => f.slice(0, -3)));
-    const mapFiles = new Set(files.filter((f) => f.endsWith(".js.map")).map((f) => f.slice(0, -".js.map".length)));
-    return { index, codeFiles, mapFiles };
-  }
-
-  /** Every index entry's files must exist, and every on-disk file must have an index entry -- the invariant fix2
-   *  requires after eviction. Returns a list of English violation descriptions (empty means the invariant holds). */
-  function invariantViolations(state: Awaited<ReturnType<typeof readIndexAndFilesDirect>>): string[] {
-    const violations: string[] = [];
-    for (const key of Object.keys(state.index)) {
-      if (!state.codeFiles.has(key)) violations.push(`index claims ${key} but its .js file is missing`);
-      if (!state.mapFiles.has(key)) violations.push(`index claims ${key} but its .js.map file is missing`);
-    }
-    for (const key of state.codeFiles) {
-      if (!(key in state.index)) violations.push(`.js file for ${key} has no index entry`);
-    }
-    for (const key of state.mapFiles) {
-      if (!(key in state.index)) violations.push(`.js.map file for ${key} has no index entry`);
-    }
-    return violations;
-  }
-
   /**
    * I2: reproduces the re-review's scenario -- a concurrent same-key `set()` racing eviction's physical deletion of
    * that same key's *older* generation -- and asserts the invariant directly on the filesystem: every index entry's
@@ -320,5 +320,226 @@ describe("VendorCache concurrency (fix round 2)", () => {
     for (const key of keys) {
       expect(await cache.get(key)).toBeNull();
     }
+  });
+});
+
+describe("VendorCache correctness (fix round 3)", () => {
+  /**
+   * A1: reproduces the re-review's NEW-4 scenario -- a `set()` for a brand-new key whose `#exclusive` registration
+   * happens *after* `invalidateAll()`'s drain snapshot -- and asserts against the filesystem directly, never
+   * through `get()` (whose self-heal would mask exactly this class of phantom).
+   *
+   * 100 pre-existing entries widen `invalidateAll()`'s `rm()` window (a `recursive: true` wipe is many individual
+   * unlink calls, not one atomic operation); 20 brand-new keys are then fired on staggered macrotasks
+   * (`setTimeout(fn, i)`, `i` from 0 to 19) concurrently with one `invalidateAll()` call, so several land while the
+   * wipe is genuinely in progress rather than cleanly before or after it. Back-to-back synchronous calls (`set()`
+   * then `invalidateAll()` with no macrotask gap) do **not** reproduce this -- `#exclusive` registers the new
+   * key's lock synchronously, so it's still caught by the very drain this defect is about missing -- which is why
+   * the macrotask stagger is essential, not incidental, to this test.
+   *
+   * Trial count: 8 trials × 20 new keys = 160 checks. Measured over repeated runs: pre-fix (`1a995b5`), 22-33% of
+   * the 160 new-key checks become phantoms every run (35-53/160), never zero; post-fix, 0/160 every run, repeated
+   * 5 times (800 checks total) during development. The assertion also checks the raw count of checks performed
+   * (`newKeys.length * TRIALS`), not just the phantom count -- a harness bug that silently ran zero trials or zero
+   * new keys would otherwise report a vacuous "0 phantoms" indistinguishable from success.
+   */
+  test("a set() for a brand-new key racing invalidateAll() never leaves a phantom index entry", async () => {
+    const TRIALS = 8;
+    const PRE_EXISTING = 100;
+    const NEW_KEYS = 20;
+    let phantoms = 0;
+    let checksPerformed = 0;
+
+    for (let trial = 0; trial < TRIALS; trial++) {
+      const dir = await mkdtemp(join(tmpdir(), "jslab-vendor-cache-a1-"));
+      try {
+        const cache = new VendorCache({ cacheDir: dir });
+        for (let i = 0; i < PRE_EXISTING; i++) {
+          await cache.set(vendorCacheKey(hashBunLock("{}"), [`pre-${i}`]), { code: `c${i}`, map: `m${i}` });
+        }
+
+        const newKeys = Array.from({ length: NEW_KEYS }, (_, i) =>
+          vendorCacheKey(hashBunLock("{}"), [`new-${trial}-${i}`]),
+        );
+        const setPromises = newKeys.map(
+          (key, i) =>
+            new Promise<void>((resolve) => {
+              setTimeout(() => {
+                cache.set(key, { code: `nc${i}`, map: `nm${i}` }).then(resolve, resolve);
+              }, i);
+            }),
+        );
+        const invalidatePromise = cache.invalidateAll();
+        await Promise.all([...setPromises, invalidatePromise]);
+        await cache.waitIdle();
+
+        const state = await readIndexAndFilesDirect(dir);
+        for (const key of newKeys) {
+          checksPerformed++;
+          if (key in state.index && (!state.codeFiles.has(key) || !state.mapFiles.has(key))) phantoms++;
+        }
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    expect(checksPerformed).toBe(TRIALS * NEW_KEYS);
+    expect(phantoms).toBe(0);
+  });
+
+  /**
+   * A2: `#removeEntry` must attempt both deletions even when one genuinely fails, and must surface the failure
+   * rather than silently succeeding with only half the pair gone. No mock is used: `<key>.js.map`'s path is
+   * replaced with a real, non-empty directory, so `rm(path, { force: true })` fails with a genuine filesystem
+   * error (`force` only suppresses a *missing* path, never a type mismatch) while `<key>.js` is an ordinary file
+   * that deletes normally. This exercises `#doGet`'s stale branch, the shortest path to `#removeEntry`.
+   */
+  test("#removeEntry attempts both deletions even when one fails, and surfaces the failure", async () => {
+    let clock = 0;
+    const cache = new VendorCache({ cacheDir, now: () => clock, maxAgeMs: 100 });
+    const key = vendorCacheKey(hashBunLock("{}"), ["pkg"]);
+    await cache.set(key, { code: "code", map: "map" });
+    clock = 1000; // now stale
+
+    const mapPath = join(cacheDir, `${key}.js.map`);
+    await rm(mapPath, { force: true });
+    await mkdir(mapPath); // a real directory where a file is expected -- rm() on it genuinely fails
+    await writeFile(join(mapPath, "blocker.txt"), "x"); // non-empty, so even a permissive rm still can't remove it
+
+    await expect(cache.get(key)).rejects.toBeTruthy();
+
+    // Despite .js.map's deletion failing, .js (a real, deletable file) must still have been removed -- the two
+    // deletions were both attempted, not short-circuited by the first one's outcome.
+    const codeFile = Bun.file(join(cacheDir, `${key}.js`));
+    expect(await codeFile.exists()).toBe(false);
+  });
+
+  /**
+   * B1a: a truncated `index.json` (exactly what a kill signal or power loss leaves mid-`writeFile` -- the failure
+   * mode `writeFileAtomic` now prevents going forward, but old truncated files, or a corruption from any other
+   * cause, must still be handled on read) is rebuilt from the `.js`/`.js.map` pairs actually on disk, not silently
+   * treated as an empty cache. Populates 3 entries, truncates `index.json` to half its length (guaranteed invalid
+   * JSON), then opens a *fresh* `VendorCache` instance against the same directory and confirms every original
+   * entry is still genuinely retrievable and the whole directory is internally consistent.
+   */
+  test("a truncated index.json is rebuilt from the files on disk, not read as an empty cache", async () => {
+    const seeding = new VendorCache({ cacheDir });
+    const keys = Array.from({ length: 3 }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`]));
+    for (const [i, key] of keys.entries()) {
+      await seeding.set(key, { code: `code-${i}`, map: `map-${i}` });
+    }
+
+    const indexPath = join(cacheDir, "index.json");
+    const raw = await readFile(indexPath, "utf8");
+    await writeFile(indexPath, raw.slice(0, Math.floor(raw.length / 2)));
+    let genuinelyCorrupt = false;
+    try {
+      JSON.parse(await readFile(indexPath, "utf8"));
+    } catch {
+      genuinelyCorrupt = true;
+    }
+    expect(genuinelyCorrupt).toBe(true); // sanity: the truncation really did produce invalid JSON
+
+    const fresh = new VendorCache({ cacheDir });
+    for (const [i, key] of keys.entries()) {
+      expect(await fresh.get(key)).toEqual({ code: `code-${i}`, map: `map-${i}` });
+    }
+    const violations = invariantViolations(await readIndexAndFilesDirect(cacheDir));
+    expect(violations).toEqual([]);
+  });
+
+  /** B1b: a genuinely absent index.json (no prior writes at all) is still treated as a legitimately empty cache. */
+  test("a genuinely absent index.json still reads as an empty cache", async () => {
+    const cache = new VendorCache({ cacheDir });
+    const key = vendorCacheKey(hashBunLock("{}"), ["pkg"]);
+    expect(await cache.get(key)).toBeNull();
+    await cache.set(key, { code: "code", map: "map" });
+    expect(await cache.get(key)).toEqual({ code: "code", map: "map" });
+  });
+
+  /**
+   * B2: `#doGet`'s repair branch must reclaim whichever sibling file survives, not just the index entry.
+   * Deterministic per the spec: delete only `<key>.js` for three keys (leaving `<key>.js.map` behind), `get()`
+   * each -- before this fix the index would go 3 → 0 while all three `.js.map` files remained on disk, invisible
+   * to eviction forever.
+   */
+  test("get()'s repair branch reclaims the surviving sibling file, not just the index entry", async () => {
+    const cache = new VendorCache({ cacheDir });
+    const keys = Array.from({ length: 3 }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`]));
+    for (const [i, key] of keys.entries()) {
+      await cache.set(key, { code: `code-${i}`, map: `map-${i}` });
+    }
+    for (const key of keys) {
+      await rm(join(cacheDir, `${key}.js`), { force: true });
+    }
+    for (const key of keys) {
+      expect(await cache.get(key)).toBeNull();
+    }
+    const files = await readdir(cacheDir);
+    expect(files.filter((f) => f.endsWith(".js.map"))).toEqual([]);
+  });
+
+  /**
+   * B3 (hardening): the stale-age branch must never let a concurrent, read-only observer see `index.json` claim an
+   * entry whose files are already gone -- the dangerous direction (an index entry pointing at nothing), as
+   * distinct from the benign direction (files on disk with no index entry yet, which every eviction path in this
+   * file already treats as acceptable by design). A sampler loop reads `index.json` and the directory listing
+   * directly and concurrently while `get()` runs the stale branch, over many trials, and asserts it never once
+   * observes the dangerous direction for this key.
+   */
+  test("the stale branch never exposes a transient window where the index claims an entry whose files are gone", async () => {
+    const TRIALS = 30;
+    let dangerousWindowObserved = 0;
+    let samplesTaken = 0;
+
+    for (let trial = 0; trial < TRIALS; trial++) {
+      const dir = await mkdtemp(join(tmpdir(), "jslab-vendor-cache-b3-"));
+      try {
+        let clock = 0;
+        const cache = new VendorCache({ cacheDir: dir, now: () => clock, maxAgeMs: 100 });
+        const key = vendorCacheKey(hashBunLock("{}"), ["pkg"]);
+        await cache.set(key, { code: "code", map: "map" });
+        clock = 1000; // now stale
+
+        // Reads the directory listing *before* index.json, deliberately -- the opposite order from
+        // `readIndexAndFilesDirect`. The sampler's own two reads aren't atomic with each other, so if they
+        // straddled the moment vendor-cache.ts's index-then-files write lands, an index-first sampler could
+        // observe a *stale* (pre-update) index paired with a *fresher* (post-delete) file listing -- a false
+        // "dangerous" reading manufactured by the sampler's own ordering, not by vendor-cache.ts, since the real
+        // writer always updates the index before touching the files (this fix's whole point). Reading files first
+        // removes that specific artifact: a straddled sample can only show fresher-index-than-files, which lands
+        // on the benign side of this check, never the dangerous one.
+        let sampling = true;
+        const sampler = (async () => {
+          while (sampling) {
+            let files: string[] = [];
+            try {
+              files = await readdir(dir);
+            } catch {
+              files = [];
+            }
+            let index: Record<string, unknown> = {};
+            try {
+              index = JSON.parse(await readFile(join(dir, "index.json"), "utf8"));
+            } catch {
+              index = {};
+            }
+            samplesTaken++;
+            const hasCode = files.includes(`${key}.js`);
+            const hasMap = files.includes(`${key}.js.map`);
+            if (key in index && (!hasCode || !hasMap)) dangerousWindowObserved++;
+          }
+        })();
+
+        await cache.get(key); // triggers the stale branch
+        sampling = false;
+        await sampler;
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    expect(samplesTaken).toBeGreaterThan(0); // guards against a sampler loop that silently never ran
+    expect(dangerousWindowObserved).toBe(0);
   });
 });

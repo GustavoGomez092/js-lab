@@ -278,6 +278,17 @@ describe("text rendering", () => {
     };
     expect(valueToText(value)).toBe('{ a: 1, list: ["x", 2] }');
     expect(valueToText({ t: "string", v: "top" })).toBe("top");
+    // Copy All used to produce an empty line for a logged DOM node, because nothing summarised it (spec §5.9).
+    expect(
+      valueToText({
+        t: "dom",
+        nodeType: 1,
+        tag: "DIV",
+        attrs: [["id", "app"]],
+        childCount: 2,
+        outerHTML: '<div id="app"></div>',
+      }),
+    ).toBe('<div id="app"> (2 children)');
   });
 
   test("renders console arguments, streams and errors", () => {

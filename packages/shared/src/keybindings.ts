@@ -237,6 +237,7 @@ export const DEFAULT_KEYBINDINGS: readonly KeybindingRule[] = [
   { key: "cmd+-", command: "view.zoomOut" },
   { key: "cmd+0", command: "view.zoomReset" },
   { key: "alt+cmd+\\", command: "view.toggleLayout" },
+  { key: "alt+cmd+w", command: "view.toggleWebView" },
   { key: "ctrl+cmd+f", command: "view.toggleFullScreen" },
   { key: "cmd+shift+p", command: "view.commandPalette" },
 ];

@@ -7,12 +7,11 @@ import { activeTab, type LaunchedApp, launchApp, waitFor } from "../src";
  * The Web View tile (spec §7.1, parity WV-01, TF-19): it exists only for a runtime that can host a webview, it is
  * per tab, and it survives a relaunch.
  *
- * **Why these scenarios drive the toggle the way they do.** As built, the Web View toggle is a status-bar button
- * only -- there is no command id, menu item or keybinding for it (verified against `packages/shared/src/commands.ts`
- * at this commit), and the E2E agent can drive commands and keys but not arbitrary button clicks. So the tab's own
- * `layout.tiles.webviewVisible` is set the way a returning user's session sets it (through `session.json`), and the
- * tile is then made to appear and disappear through the runtime switcher, which is a real command and is exactly
- * the rule under test: a `bun` tab never gets a tile, whatever its stored toggle says.
+ * **Why these scenarios drive the toggle the way they do.** Task 9g gave the toggle a command id
+ * (`view.toggleWebView`, with a View menu item and ⌥⌘W), so it can be driven directly now. These scenarios still
+ * set the tab's own `layout.tiles.webviewVisible` the way a returning user's session sets it (through
+ * `session.json`) and then make the tile appear and disappear through the runtime switcher, because that -- not
+ * the toggle itself -- is the rule under test: a `bun` tab never gets a tile, whatever its stored toggle says.
  */
 
 let apps: LaunchedApp[] = [];

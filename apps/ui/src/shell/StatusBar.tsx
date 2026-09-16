@@ -7,12 +7,15 @@ import { LANGUAGE_LABELS, RUNTIME_LABELS, runStateKind, runStateLabel } from "./
 export function StatusBar({
   store,
   onToggleLayout,
+  onToggleWebView,
   runKeys,
   onPickWorkingDirectory,
   onClearWorkingDirectory,
 }: {
   store: AppStore;
   onToggleLayout(): void;
+  /** Dispatches `view.toggleWebView`, the one path the palette, the menu and the chord also take. */
+  onToggleWebView(): void;
   /** The formatted Run chord from the effective bindings, or null when that binding was removed. */
   runKeys: string | null;
   onPickWorkingDirectory?(): void;
@@ -88,7 +91,7 @@ export function StatusBar({
           className="status-item"
           disabled={!webviewSupported}
           title={webviewSupported ? undefined : strings.shell.webView.unavailable}
-          onClick={() => store.getState().toggleWebviewVisible()}
+          onClick={onToggleWebView}
         >
           {/* Fix round 1 (F6): a bun tab has nothing to hide, even if `webviewVisible` is still true from before
               its runtime was switched away from a web one -- the label must say so, not "Hide". */}

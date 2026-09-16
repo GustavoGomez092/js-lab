@@ -32,4 +32,13 @@ describe("command catalogue", () => {
       { key: "cmd+i", command: "tools.npmPackages" },
     ]);
   });
+
+  // The Web View toggle shipped as a status-bar button only, so it was unreachable from the palette, the menu
+  // and E2E automation (parity WV-01, TF-19).
+  test("M4 adds a Web View toggle command with a default chord", () => {
+    expect(commandMeta("view.toggleWebView")).toMatchObject({ title: "Toggle Web View", category: "view" });
+    expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.command === "view.toggleWebView")).toEqual([
+      { key: "alt+cmd+w", command: "view.toggleWebView" },
+    ]);
+  });
 });

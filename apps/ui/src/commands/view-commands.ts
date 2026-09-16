@@ -28,6 +28,17 @@ export function createViewCommands(store: AppStore, api: Pick<MainApi, "updateSe
       run: () => s().toggleOutputVisible(),
       description: () => strings.commands.onOff(Boolean(s().tab?.layout.outputVisible)),
     },
+    {
+      id: "view.toggleWebView",
+      // spec §7.1: only a runtime that can host a webview gets a Web View tile, so a `bun` tab has nothing to
+      // toggle. The status-bar button dispatches this same command, so both honour this one rule.
+      isEnabled: () => {
+        const runtime = s().tab?.runtime;
+        return runtime !== undefined && runtime !== "bun";
+      },
+      run: () => s().toggleWebviewVisible(),
+      description: () => strings.commands.onOff(Boolean(s().tab?.layout.tiles.webviewVisible)),
+    },
     toggleView("view.toggleSideBar", "sideBar"),
     toggleView("view.toggleActivityBar", "activityBar"),
     toggleView("view.toggleStatusBar", "statusBar"),

@@ -73,6 +73,25 @@ function isHostToWebMessage(value: unknown): value is HostToWebMessage {
       return isInt(value.id);
     case "fetchError":
       return isInt(value.id) && isString(value.message);
+    // Task 11's bridged Node replies. Their absence here was a hang, not an error: Main really ran the call and
+    // really sent the reply, but `default` below rejected it as unrecognised -- and since a rejected message must
+    // not advance `lastInboundSeq`, the page's promise never settled *and* every later host message was left out
+    // of sequence, wedging the connection. `fetch` survived only because its four variants were listed above.
+    case "nodeResult":
+      // `value` is deliberately unchecked: it is whatever the call returned, including `null` and `undefined`.
+      return isInt(value.id);
+    case "nodeError":
+      return (
+        isInt(value.id) &&
+        isString(value.name) &&
+        isString(value.message) &&
+        (value.code === undefined || isString(value.code))
+      );
+    case "nodeStdout":
+    case "nodeStderr":
+      return isInt(value.id) && isString(value.data);
+    case "nodeExit":
+      return isInt(value.id) && (value.code === null || isInt(value.code)) && (value.signal === null || isString(value.signal));
     default:
       return false;
   }

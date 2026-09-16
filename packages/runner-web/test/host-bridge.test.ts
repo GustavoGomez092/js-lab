@@ -156,6 +156,10 @@ test("each variant is validated field by field, not just by its type tag", () =>
     { type: "fetchHead", id: 1, status: 200, statusText: "OK", headers: "nope", url: "u" }, // headers not pairs
     { type: "fetchHead", id: 1, status: 200, statusText: "OK", headers: [["a"]], url: "u" }, // not a pair
     { type: "fetchError", id: 1 }, // message missing
+    { type: "nodeResult" }, // id missing
+    { type: "nodeError", id: 1, name: "Error" }, // message missing
+    { type: "nodeStdout", id: 1 }, // data missing
+    { type: "nodeExit", id: 1, code: "0", signal: null }, // code neither a number nor null
   ];
   for (const message of rejected) g.__jslabHostMessage({ seq: 1, message });
   expect(received).toEqual([]);
@@ -181,6 +185,18 @@ test("every well-formed variant is still accepted and delivered unchanged", () =
     { type: "fetchChunk", id: 1, data: "abc" },
     { type: "fetchEnd", id: 1 },
     { type: "fetchError", id: 1, message: "boom" },
+    // Task 11's bridged Node replies. Leaving these out of the validator did not surface as an error: Main ran the
+    // call and sent the reply, the page rejected it as unrecognised, and because a rejected message must not
+    // advance the sequence counter the promise never settled and every later host message was wedged out of
+    // sequence. Measured end to end in a built app before the fix.
+    { type: "nodeResult", id: 1, value: { ok: true } },
+    { type: "nodeResult", id: 2, value: null },
+    { type: "nodeError", id: 3, name: "Error", message: "boom" },
+    { type: "nodeError", id: 4, name: "Error", message: "boom", code: "ENOENT" },
+    { type: "nodeStdout", id: 5, data: "out" },
+    { type: "nodeStderr", id: 6, data: "err" },
+    { type: "nodeExit", id: 7, code: 0, signal: null },
+    { type: "nodeExit", id: 8, code: null, signal: "SIGKILL" },
   ];
   for (const [i, message] of accepted.entries()) g.__jslabHostMessage({ seq: i + 1, message });
   expect(received).toEqual(accepted);

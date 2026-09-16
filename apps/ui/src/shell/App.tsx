@@ -379,6 +379,10 @@ export function App({
         outputPlain: document.querySelector(".output-plain") !== null,
         lineAnchors: document.querySelector(".entry-line") !== null,
         staleLabel: document.querySelector(".output-stale-label") !== null,
+        // M4 Task 16: the Web View tile's docking placeholder, which `OutputTiles` renders only for a runtime that
+        // can host a webview and only while that tab's own Web View toggle is on -- so this is what an E2E
+        // scenario reads to tell "the tile is on screen" from "a bun tab never gets one" (spec §7.1, parity WV-01).
+        webViewTile: document.querySelector(".webview-tile-dock") !== null,
       }),
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {

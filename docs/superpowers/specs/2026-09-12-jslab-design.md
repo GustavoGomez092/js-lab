@@ -91,6 +91,7 @@ JSLab is free and MIT licensed. Every feature RunJS keeps behind a paid license 
 | D10 | License | MIT | Adoption-friendly, and matches the ecosystem. |
 | D11 | Secrets | macOS Keychain via a `security` CLI adapter | Better than RunJS's plaintext storage. |
 | D12 | Extras in v1 | Custom themes + keybindings, CLI, Gist | Most-requested features RunJS lacks. |
+| D13 | Default runtime for a new tab (M4, risk R8) | `bun`, not `browser-node` | Decided in M4. RunJS defaults to its Browser & Node.js environment, and §5.2 originally followed it. When the browser runtimes were really registered, a default tab routed to a webview that loads, receives the code and begins evaluating, but never reports a result — so the run never finishes. Defaulting to a runtime that cannot complete what it starts is worse than the silent Bun fallback it replaced. Revisit once web runs settle reliably; `run.defaultRuntime` already lets a user choose otherwise. |
 
 ---
 
@@ -286,11 +287,13 @@ interface RunHandle {
 
 | Runtime id | UI label | Globals | Node APIs | Web view tile | Types fed to Monaco |
 |---|---|---|---|---|---|
-| `browser-node` (**default**) | Browser & Node APIs | DOM + web APIs | Pure modules polyfilled; `fs`, `child_process`, `os` through an async bridge (§5.13) | Available | `dom` lib + `@types/node` |
-| `bun` | Bun (Node-compatible) | Bun/Node globals, no DOM | Full (Bun) | Hidden | `bun-types` + `@types/node`, no `dom` |
+| `browser-node` | Browser & Node APIs | DOM + web APIs | Pure modules polyfilled; `fs`, `child_process`, `os` through an async bridge (§5.13) | Available | `dom` lib + `@types/node` |
+| `bun` (**default**) | Bun (Node-compatible) | Bun/Node globals, no DOM | Full (Bun) | Hidden | `bun-types` + `@types/node`, no `dom` |
 | `browser` | Browser | DOM + web APIs | None | Available | `dom` lib only |
 
 The default is set by `run.defaultRuntime`. Tabs change runtime from the status bar or the Actions → Runtime menu, and a change triggers a run when Auto Run is on.
+
+**The default is `bun` (decision D13, M4).** This spec originally made `browser-node` the default, following RunJS. M4 changed it: with the browser runtimes really registered, a default tab routed to a webview that began evaluating and never reported a result, so the run never finished. Revisit when web runs settle reliably.
 
 ### 5.3 Bun runner: module semantics
 
@@ -666,7 +669,7 @@ Special cases:
   - Horizontal (side by side, default) or vertical (stacked).
   - The divider is draggable; the default is 55/45, stored per tab. Double-clicking the divider resets the split to 50/50.
   - Status bar "Split" toggles the orientation, and View → Output toggles the output area.
-- **Output area tiles:** Console and Web View. Tiles are arranged by dragging their headers (stacked or side by side, stored per tab). The Web View tile is unavailable in the `bun` runtime.
+- **Output area tiles:** Console and Web View. The arrangement (stacked or side by side) is stored per tab. The Web View tile is unavailable in the `bun` runtime. **Not built in M4 (parity WV-06):** there is no header-drag affordance, so the stored arrangement is honoured but can only be changed by editing `session.json`. The tile toggle itself is a real command (`view.toggleWebView`, ⌥⌘W, View → Web View).
 - **Status bar** (toggle `view.statusBar`, 28 px):
   - Left: run state (dot and label), Safe Mode badge, status message.
   - Right: runtime selector, language selector, Web View toggle (M4), Split orientation toggle, WD chip (M3; click → change/clear; tooltip shows the full path), Vim mode, cursor position.

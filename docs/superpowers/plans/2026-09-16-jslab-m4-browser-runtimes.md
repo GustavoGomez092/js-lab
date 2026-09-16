@@ -107,7 +107,7 @@ Tasks are ordered so each one lands green on its own. Tasks 1–2 open the seam 
 | 14 | DOM serialization | Tag, attributes, child count, `outerHTML` preview. | merged |
 | 15 | Audio indicator and mute | Tracking, the tab icon, and per-tab persistence. | merged |
 | 16 | E2E scenarios | Twelve scenarios against the real app: a browser tab writing and reading its own page, the tile's rules and persistence, Stop/Kill, the runtime `fetch` difference, and the four WV-04 guides. **Found and fixed the bridge regression** that made every Node call hang — the page's validator never listed Task 11's `node*` replies, so each was discarded and the connection wedged. | **merged `8290252`** |
-| 9g | Two shipped gaps found by running the app | `console.log(element)` renders as an empty entry — Task 14's `dom` encoding is emitted but nothing in the UI renders it; and the Web View toggle has no command id, menu item or keybinding, which parity WV-01 and TF-19 both expect. | queued |
+| 9g | Two shipped gaps found by running the app | `console.log(element)` renders as an empty entry — Task 14's `dom` encoding is emitted but nothing in the UI renders it; and the Web View toggle has no command id, menu item or keybinding, which parity WV-01 and TF-19 both expect. | **merged `ed6c93a`** — a logged element now reads `▸ <div id="app"> (2 children)` and expands to attributes, child count and `outerHTML`; `view.toggleWebView` has a View menu item and ⌥⌘W, and the status-bar button dispatches it rather than touching the store |
 | 17 | Docs, parity and QA | The M4 checklist, parity and roadmap rows, README, and the full-suite run. | last |
 
 **Milestone exit conditions — ONE SATISFIED, ONE REOPENED.**
@@ -118,7 +118,9 @@ Tasks are ordered so each one lands green on its own. Tasks 1–2 open the seam 
    - **Why my earlier "satisfied" verdict was wrong:** Task 11's live proof covered a plain run, a package import and the `fetch` pair — it **never demonstrated an `fs/promises` read end to end**. The fourth unrouted handler this milestone to present as a hang rather than an error, and the only one that reached a "satisfied" line in this plan.
    - **The durable lesson:** Task 13 added a `const _never: never` exhaustiveness guard on the *handler* side so a new variant cannot be forgotten. **The validator has no such guard** — it is hand-written boolean logic, invisible to typecheck. That asymmetry is what let this through, and it is worth closing.
 
-**What remains is no longer a blocker but a finish:** Tasks 16 (E2E scenarios), 17 (docs, parity, the M4 checklist), 9e (the webview generation token) and 9f (the vendored polyfill defects), then the milestone review. **A release note may now describe both capabilities** — but see Task 17's two accepted limitations, which must be recorded rather than claimed away.
+**Every implementation task in M4 is merged. Only Task 17 remains** — docs, parity rows and the M4 checklist — followed by the milestone review. Merged since this line was first written: **16** (E2E scenarios, which found and fixed the bridge regression), **9e** (the webview generation token), **9f** (five of six polyfill defects), **9g** (DOM value rendering and the Web View command). Tip: **1334 pass / 0 fail** on both real Bun versions.
+
+**A release note may describe both capabilities** — but Task 17 owns six recorded limitations and open defects that must be stated rather than claimed away, including one fault deliberately left unfixed with measurements showing the obvious remedy does nothing.
 
 ---
 

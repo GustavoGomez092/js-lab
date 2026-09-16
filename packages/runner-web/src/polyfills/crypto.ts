@@ -36,4 +36,14 @@ export function createCryptoPolyfill(webcrypto: Crypto = globalThis.crypto): Cry
   };
 }
 
-export default createCryptoPolyfill();
+const cryptoPolyfill = createCryptoPolyfill();
+export default cryptoPolyfill;
+
+// Fix round 1 (I1): Node's real `crypto` module supports both `import crypto from 'crypto'` and
+// `import { createHash } from 'crypto'` -- the latter is the more common spelling in real code, and it built to
+// a hard "no matching export" failure without these. One named export per default-export property, so the two
+// import forms can never drift apart again.
+export const webcrypto = cryptoPolyfill.webcrypto;
+export const randomUUID = cryptoPolyfill.randomUUID;
+export const getRandomValues = cryptoPolyfill.getRandomValues;
+export { createHash, createHmac };

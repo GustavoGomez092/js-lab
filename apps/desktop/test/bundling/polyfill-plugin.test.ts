@@ -348,3 +348,108 @@ describe("browser-node module table -- crypto (spec §5.13)", () => {
     );
   });
 });
+
+/**
+ * Fix round 1 (I1): `process`, `os` and `crypto` exposed only a default export -- so `import { createHash } from
+ * 'crypto'` (an ordinary spelling, not an exotic one) failed the build outright with "no matching export", and
+ * every existing test used the default form only, so the gap was invisible. These tests use the *named* form
+ * specifically, so the gap cannot reopen silently the way it did the first time.
+ */
+describe("browser-node module table -- named imports (fix round 1, I1)", () => {
+  test("process: named env/platform/cwd/nextTick all work", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import { env, platform, cwd, nextTick } from 'process';",
+        "const order = [];",
+        "nextTick(() => order.push('nextTick'));",
+        "order.push('sync');",
+        "globalThis.__jlProbe = {",
+        "  hasEnv: typeof env === 'object',",
+        "  platform,",
+        "  cwd: cwd(),",
+        "  order,",
+        "};",
+        "",
+      ].join("\n"),
+    );
+    // By the time `import()` itself resolves, `nextTick`'s microtask has already had a chance to run (module
+    // evaluation completing is itself several microtask hops) -- this only asserts named `env`/`platform`/`cwd`
+    // actually work, not nextTick's exact timing (the dedicated `nextTick` describe block below covers that).
+    expect(result).toEqual({
+      hasEnv: true,
+      platform: process.platform,
+      cwd: workingDirectory,
+      order: ["sync", "nextTick"],
+    });
+  });
+
+  test("os: named platform/arch/cpus all work", async () => {
+    const os = await import("node:os");
+    const result = await runBrowserNodeEntry(
+      [
+        "import { platform, arch, cpus } from 'os';",
+        "globalThis.__jlProbe = [platform(), arch(), cpus().length];",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toEqual([os.platform(), os.arch(), os.cpus().length]);
+  });
+
+  test("crypto: named createHash/createHmac/randomUUID all work", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import { createHash, createHmac, randomUUID } from 'crypto';",
+        "const sha256 = createHash('sha256').update('abc').digest('hex');",
+        "const hmac = createHmac('sha256', 'key').update('abc').digest('hex');",
+        "globalThis.__jlProbe = { sha256, hmac, uuidLooksRight: /^[0-9a-f-]{36}$/i.test(randomUUID()) };",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toEqual({
+      sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+      hmac: "9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab",
+      uuidLooksRight: true,
+    });
+  });
+});
+
+/**
+ * Fix round 1 (I2): a `node:`-prefixed specifier used to bypass the module table entirely -- `node:path`/
+ * `node:buffer` silently fell through to Bun's own internal browser shims (not the vendored polyfills this task
+ * ships), and `node:process` hard-errored. One vendored builtin, one snapshot-backed module, both spellings.
+ */
+describe("browser-node module table -- node: prefix (fix round 1, I2)", () => {
+  test("node:buffer resolves to the vendored polyfill, not Bun's own shim", async () => {
+    const result = await runBrowserNodeEntry(
+      "import { Buffer } from 'node:buffer';\nglobalThis.__jlProbe = Buffer.from('hi').toString('utf8');\n",
+    );
+    expect(result).toBe("hi");
+  });
+
+  test("node:path resolves to the vendored polyfill, not Bun's own shim", async () => {
+    const result = await runBrowserNodeEntry(
+      "import path from 'node:path';\nglobalThis.__jlProbe = path.join('a', 'b');\n",
+    );
+    expect(result).toBe("a/b");
+  });
+
+  test("node:process builds and runs (previously a hard build error)", async () => {
+    const result = await runBrowserNodeEntry(
+      "import process from 'node:process';\nglobalThis.__jlProbe = process.platform;\n",
+    );
+    expect(result).toBe(process.platform);
+  });
+
+  test("node:os builds and runs, matching the unprefixed spelling", async () => {
+    const os = await import("node:os");
+    const result = await runBrowserNodeEntry("import osMod from 'node:os';\nglobalThis.__jlProbe = osMod.arch();\n");
+    expect(result).toBe(os.arch());
+  });
+
+  test("node:crypto builds and runs, matching the unprefixed spelling", async () => {
+    const result = await runBrowserNodeEntry(
+      "import crypto from 'node:crypto';\nglobalThis.__jlProbe = crypto.createHash('md5').update('abc').digest('hex');\n",
+    );
+    expect(result).toBe("900150983cd24fb0d6963f7d28e17f72");
+  });
+});

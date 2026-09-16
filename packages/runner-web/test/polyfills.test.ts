@@ -36,18 +36,24 @@ describe("createProcessPolyfill (spec §5.13)", () => {
     expect(b.env.FOO).toBe("bar");
   });
 
-  test("nextTick runs on the microtask queue, after the current synchronous turn", async () => {
+  /**
+   * Fix round 1 (M4): the previous version of this test waited on a macrotask (`setTimeout(resolve, 0)`) to
+   * observe `nextTick`, and a macrotask-based `nextTick` (`setTimeout(cb, 0)` instead of `queueMicrotask`) would
+   * have fired before that same-delay `setTimeout` too (equal-delay timers run in scheduling order) -- so the
+   * test passed either way, proven by mutation. This version instead awaits a single microtask hop
+   * (`Promise.resolve()`), which a macrotask callback cannot have run by: `nextTick`'s callback and the `.then()`
+   * callback are both queued (in that order) *before* the `await`'s own continuation microtask, so one hop is
+   * enough to observe both, and it is exactly the same technique the neighbouring "forwards extra arguments"
+   * test below already uses successfully (per the fix-round-1 review, that one already discriminates).
+   */
+  test("nextTick runs on the microtask queue, strictly before a macrotask", async () => {
     const process = createProcessPolyfill(snapshot);
     const order: string[] = [];
     process.nextTick(() => order.push("nextTick"));
     Promise.resolve().then(() => order.push("promise-then"));
     order.push("sync");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    // nextTick and a plain .then() both land on the microtask queue; both must run strictly after the
-    // synchronous code that scheduled them, and before the macrotask (setTimeout) used to observe them here.
-    expect(order[0]).toBe("sync");
-    expect(order).toContain("nextTick");
-    expect(order).toContain("promise-then");
+    await Promise.resolve();
+    expect(order).toEqual(["sync", "nextTick", "promise-then"]);
   });
 
   test("nextTick forwards extra arguments to the callback, like Node's", async () => {

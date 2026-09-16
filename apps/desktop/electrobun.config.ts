@@ -11,6 +11,7 @@ export default {
     bun: { entrypoint: "src/main/index.ts" },
     copy: {
       "dist/mainview": "views/mainview",
+      "dist/mainview/runner-web": "views/runner-web",
       "dist/runner": "runner",
       "dist/workers": "workers",
     },

@@ -184,10 +184,11 @@ async function start(): Promise<void> {
     // here, so every instruction crosses as one of these four messages. `rpc` is declared further down; like the
     // run and npm callbacks above, none of these ever runs before it exists.
     webviewBridge: {
-      ensure: (tabId) => rpc.send["webRunner.ensure"]({ tabId }),
+      // T9e: `generation` travels with ensure/destroy so the UI can stamp every `ready`/`exit` it forwards with it.
+      ensure: (tabId, generation) => rpc.send["webRunner.ensure"]({ tabId, generation }),
       execute: (tabId, js) => rpc.send["webRunner.execute"]({ tabId, js }),
       reload: (tabId) => rpc.send["webRunner.reload"]({ tabId }),
-      destroy: (tabId) => rpc.send["webRunner.destroy"]({ tabId }),
+      destroy: (tabId, generation) => rpc.send["webRunner.destroy"]({ tabId, generation }),
     },
     onNpmOperation: (operation) => rpc.send["npm.op"](operation),
     // R-M3-T18-LOGCAP-1: a pass-through; the log drawer (Task 26) keeps the newest MAX_NPM_LOG_CHARS per operation.

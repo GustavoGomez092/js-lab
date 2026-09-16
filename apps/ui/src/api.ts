@@ -75,10 +75,14 @@ export interface MainApi {
 
   // M4 §5.12: what this tab's `<electrobun-webview>` did, reported back to the runtime driving it in Main
   // (`apps/ui/src/output/webview-host.ts` is the only caller).
-  /** The page reached `dom-ready`: Main may inject script into it now. */
-  webRunnerReady(tabId: string): void;
-  /** The webview died, or was torn down by something other than Main's own `webRunner.destroy`. */
-  webRunnerExit(tabId: string): void;
+  /**
+   * The page reached `dom-ready`: Main may inject script into it now. T9e: `generation` is the one Main told this
+   * tab's `webRunner.ensure` about (or the last `webRunner.reload` reaffirmed), so a late report from an entry
+   * Main has already replaced doesn't wake the replacement.
+   */
+  webRunnerReady(tabId: string, generation: number): void;
+  /** The webview died, or was torn down by something other than Main's own `webRunner.destroy`. Same `generation`. */
+  webRunnerExit(tabId: string, generation: number): void;
   /** One page → host envelope, relayed verbatim from the element's `host-message` event. */
   webRunnerMessage(tabId: string, raw: unknown): void;
   on<K extends keyof ViewMessages>(name: K, listener: (payload: ViewMessages[K]) => void): () => void;

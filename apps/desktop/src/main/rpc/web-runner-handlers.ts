@@ -1,11 +1,14 @@
 import { createValidators, type Log, type SafeParser } from "./validate";
 
 /**
- * Where a relayed page->host message for one tab's webview ends up. A future `WebviewSource` implementation (Task
- * 8, once a real `<electrobun-webview>` DOM node exists to correlate against) satisfies this by routing `raw` into
- * that tab's `RawWebview.onHostMessage` listeners (`../runtimes/web-adapter.ts`) -- this file only validates the
- * RPC boundary and dispatches by `tabId`; it never interprets `raw` itself (the bridge's own strict-successor `seq`
- * check on `HostToWeb`, not relevant here, and `WebToHost`'s own shape check happen inside `createSequencedWebviewHost`).
+ * Where a relayed page->host message for one tab's webview ends up. Task 8 landed the `<electrobun-webview>` DOM
+ * node a real `WebviewSource` implementation would correlate against, but that implementation still doesn't
+ * exist -- it needs a UI-side host module (owning a `tabId -> element` map, forwarding `host-message` events here)
+ * that no task has built yet, so `receive()` currently has no production caller. Once it does, satisfying this
+ * interface is a matter of routing `raw` into that tab's `RawWebview.onHostMessage` listeners
+ * (`../runtimes/web-adapter.ts`) -- this file only validates the RPC boundary and dispatches by `tabId`; it never
+ * interprets `raw` itself (the bridge's own strict-successor `seq` check on `HostToWeb`, not relevant here, and
+ * `WebToHost`'s own shape check happen inside `createSequencedWebviewHost`).
  */
 export interface WebRunnerMessageSink {
   receive(tabId: string, raw: unknown): void;

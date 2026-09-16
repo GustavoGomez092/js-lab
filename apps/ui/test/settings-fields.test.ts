@@ -27,6 +27,16 @@ describe("settings fields", () => {
     expect(SETTINGS_FIELDS.find((field) => field.key === "app.uiLanguage")?.restart).toBe(true);
   });
 
+  test("the Default Runtime help text doesn't claim browser runtimes are unavailable or that new tabs use Bun (M4 T9 fix round 1, I1)", () => {
+    // AVAILABLE_RUNTIMES holds all three since M4 Task 9, and DEFAULT_RUNTIME is "browser-node" -- both clauses
+    // of the old copy ("Browser runtimes arrive in a later version; until then new tabs use Bun.") are false.
+    // Pinned exactly, plus a defensive check that neither false claim can silently creep back in another form.
+    const help = strings.settings.fields["run.defaultRuntime"]?.help ?? "";
+    expect(help).toBe("Runtime for new tabs.");
+    expect(help).not.toContain("later version");
+    expect(help).not.toContain("use Bun");
+  });
+
   test("values are coerced to the key's type and range; invalid input is rejected", () => {
     const field = (key: string) =>
       SETTINGS_FIELDS.find((candidate) => candidate.key === key) as (typeof SETTINGS_FIELDS)[number];

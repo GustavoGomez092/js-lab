@@ -112,18 +112,27 @@ export async function createMainServices(options: MainServicesOptions): Promise<
       workingDirectory: (tabId) => session.session.tabs[tabId]?.workingDirectory ?? null,
     }),
   );
-  // The runtime registry (spec §5.1): only "bun" is real until Task 7 registers a "web" adapter here too.
-  const runtimes = createRuntimeRegistry({
-    bun: createBunAdapter({
-      spares,
-      runsDir: paths.runsDir,
-      runLock,
-      exitGraceMs: EXIT_KILL_GRACE_MS,
-      stopGraceMs: options.stopGraceMs,
-      idleRunnerTtlMs: options.idleRunnerTtlMs,
-      expandTimeoutMs: options.expandTimeoutMs,
-    }),
-  });
+  // The runtime registry (spec §5.1): only "bun" is registered. `createWebAdapter` (./runtimes/web-adapter.ts)
+  // exists and is unit-tested against a fake `WebviewSource`, but no production `WebviewSource` has been built to
+  // construct one from -- Task 7 deferred it pending a live `<electrobun-webview>` DOM node, Task 8 landed that
+  // node but didn't wire the bridge, and M4 Task 9 (AVAILABLE_RUNTIMES) made `browser`/`browser-node` selectable
+  // without it existing. Until a follow-up task registers real "browser"/"browser-node" adapters here, a run on
+  // either falls back to this "bun" adapter (registry.ts's `get()`), silently executing browser-mode code under
+  // Bun -- logged there when that happens.
+  const runtimes = createRuntimeRegistry(
+    {
+      bun: createBunAdapter({
+        spares,
+        runsDir: paths.runsDir,
+        runLock,
+        exitGraceMs: EXIT_KILL_GRACE_MS,
+        stopGraceMs: options.stopGraceMs,
+        idleRunnerTtlMs: options.idleRunnerTtlMs,
+        expandTimeoutMs: options.expandTimeoutMs,
+      }),
+    },
+    log,
+  );
   const coordinator = new RunCoordinator({
     transform: (source, transformOptions) => transform.transform(source, transformOptions),
     spares,

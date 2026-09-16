@@ -113,31 +113,35 @@ describe("OutputTiles / WebViewHosts", () => {
     expect(screen.queryByTestId("webview-tile-t1")).toBeNull();
   });
 
-  test("a browser-mode tab whose Web View toggle was never switched on gets no live webview at all (N4: lazy creation)", () => {
+  test("a browser-mode tab whose Web View toggle was never switched on gets no live webview element (N4: lazy creation)", () => {
     const store = hydrated({ runtime: "browser" });
     const { api } = createFakeApi();
     renderTiles(store, api);
     // Default webviewVisible is false: no split at all, same shape as a bun tab's console-only render, so there
     // is no separator advertising a pane that isn't there (F4 -- output-tiles.test.tsx:58 formerly enshrined one).
     expect(screen.queryByRole("separator")).toBeNull();
-    // Task 8 keyed a host purely on the tab's runtime, so a browser tab got a live webview whether or not its own
-    // toggle was ever switched on. N4 (carried into Task 9): create lazily, on first enable -- until then, nothing
-    // exists at all, not merely hidden.
-    expect(screen.queryByTestId("webview-tile-t1")).toBeNull();
+    // Task 8 keyed the *live webview element* purely on the tab's runtime, so a browser tab got one whether or
+    // not its own toggle was ever switched on. N4 (carried into Task 9): create it lazily, on first enable. The
+    // lightweight tile wrapper itself still mounts immediately (M4 T9 fix round 1, M2 -- see WebViewTile.tsx's
+    // doc comment for why: it establishes stable DOM order among tiles, which deferring the whole tile's mount
+    // cannot reliably do once more than one is a portal into a shared container), but nothing expensive exists
+    // inside it yet.
+    const tile = screen.getByTestId("webview-tile-t1");
+    expect(tile.querySelector("electrobun-webview")).toBeNull();
     expect(document.querySelector("electrobun-webview")).toBeNull();
   });
 
-  test("switching the toggle on creates the host for the first time, parked and mounted (N4: lazy creation)", () => {
+  test("switching the toggle on creates the webview element for the first time, parked and mounted (N4: lazy creation)", () => {
     const store = hydrated({ runtime: "browser" });
     const { api } = createFakeApi();
     renderTiles(store, api);
-    expect(screen.queryByTestId("webview-tile-t1")).toBeNull();
+    expect(screen.getByTestId("webview-tile-t1").querySelector("electrobun-webview")).toBeNull();
 
     act(() => store.getState().toggleWebviewVisible());
 
-    // Now docked (Output visible, toggle on): a real host exists, lives inside .webview-parking (WebViewTile never
-    // moves in the DOM -- see WebViewTile.tsx), and is genuinely exposed -- aria-hidden is what distinguishes
-    // docked from parked, but this tab is docked.
+    // Now docked (Output visible, toggle on): a real webview element exists inside the tile, which lives inside
+    // .webview-parking (WebViewTile never moves in the DOM -- see WebViewTile.tsx), and is genuinely exposed --
+    // aria-hidden is what distinguishes docked from parked, but this tab is docked.
     const tile = screen.getByTestId("webview-tile-t1");
     expect(tile.closest(".webview-parking")).toBeTruthy();
     expect(tile.querySelector("electrobun-webview")).toBeTruthy();
@@ -224,7 +228,8 @@ describe("OutputTiles / WebViewHosts", () => {
     const store = hydrated({ runtime: "browser" }); // default webviewVisible: false
     const { api } = createFakeApi();
     renderTiles(store, api);
-    expect(screen.queryByTestId("webview-tile-t1")).toBeNull(); // N4: nothing created before the first enable
+    // N4: the tile wrapper mounts immediately (M2), but no webview element exists before the first enable.
+    expect(screen.getByTestId("webview-tile-t1").querySelector("electrobun-webview")).toBeNull();
 
     act(() => store.getState().toggleWebviewVisible());
     const docked = screen.getByTestId("webview-tile-t1");
@@ -299,6 +304,63 @@ describe("OutputTiles / WebViewHosts", () => {
     } finally {
       globals.ResizeObserver = original;
     }
+  });
+
+  test("tile DOM order tracks tab order, not first-enable order (M4 T9 fix round 1, M2)", () => {
+    const store = hydrated({ runtime: "browser" }); // t1
+    store.getState().openTab(tabWith("t2", { runtime: "browser" }), "");
+    store.getState().activateTab("t1");
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+
+    // Both tiles are already mounted at this point, in tab order (t1 opened before t2) -- mounting is driven by
+    // tab order alone (`webTabs`, WebViewHosts.tsx), never by enable order. Enabling t2 before t1, as two separate
+    // commits, must not reorder them: DOM order decides stacking among equal-z-index fixed elements, exactly the
+    // question the follow-up task's compositor check must settle in a real run.
+    act(() => {
+      store.getState().activateTab("t2");
+      store.getState().toggleWebviewVisible();
+    });
+    act(() => {
+      store.getState().activateTab("t1");
+      store.getState().toggleWebviewVisible();
+    });
+
+    const tiles = [...document.querySelectorAll('[data-testid^="webview-tile-"]')].map((el) =>
+      el.getAttribute("data-testid"),
+    );
+    expect(tiles).toEqual(["webview-tile-t1", "webview-tile-t2"]);
+  });
+
+  test("switching a tab's runtime away from and back to a web-capable one tears the old host down and creates a fresh one (M4 T9 fix round 1, N1)", () => {
+    // Newly reachable with lazy creation: before Task 9 a user could not switch a tab's runtime back to a
+    // browser one (runtime was fixed at tab creation), so browser -> bun -> browser was unreachable. It is not a
+    // violation of the never-unmount invariant -- the tab genuinely stops being web-capable when it becomes
+    // `bun` (Task 8's own filter already excluded `bun` tabs), so losing the host and its page state here is
+    // accepted behaviour, not a bug. This pins that it actually tears down and rebuilds, rather than silently
+    // keeping a stale, invisible host around.
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+
+    const before = screen.getByTestId("webview-tile-t1");
+    const webviewBefore = before.querySelector("electrobun-webview");
+    expect(webviewBefore).toBeTruthy();
+
+    act(() => store.getState().setRuntime("bun"));
+    // bun has no Web View at all (spec §7.1): the host is gone, not merely parked.
+    expect(screen.queryByTestId("webview-tile-t1")).toBeNull();
+    expect(document.querySelector("electrobun-webview")).toBeNull();
+
+    act(() => store.getState().setRuntime("browser"));
+    // Switched back, but webviewVisible was never re-armed by a runtime switch (only the toggle sets it) -- the
+    // tab's tiles.webviewVisible was already true from hydration and untouched by setRuntime, so the tile exists
+    // again immediately, parked (not docked), with a brand new host.
+    const after = screen.getByTestId("webview-tile-t1");
+    const webviewAfter = after.querySelector("electrobun-webview");
+    expect(webviewAfter).toBeTruthy();
+    expect(after).not.toBe(before); // a fresh host, not the torn-down one
+    expect(webviewAfter).not.toBe(webviewBefore);
   });
 
   test("an order swap while docked re-targets the host onto the new, connected dock node (fix round 2, N1)", () => {

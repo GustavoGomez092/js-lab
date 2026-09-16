@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EncodedValue, HostToWebMessage, RunEvent, RunState, WebToHostMessage } from "@jslab/rpc-schema";
@@ -206,10 +206,50 @@ describe("WebAdapter", () => {
     }
   });
 
+  test("M1: start() prunes stale entry files from previous runs, keeping only the latest", async () => {
+    const h = await createHarness();
+    try {
+      const adapter = createWebAdapter({
+        webviews: h.webviews,
+        runtime: "browser",
+        runsDir: h.dir,
+        packagesNodeModules: join(h.dir, "node_modules"),
+        bunLockPath: join(h.dir, "bun.lock"),
+        vendorCache: { set: async () => {} },
+        runLock: { add: () => {}, remove: () => {} },
+        directoryExists: async () => true,
+        readBunLock: async () => LOCK_TEXT,
+        bundle: async () => ({ code: "BUNDLED-2", map: "MAP", imports: ["react"] }),
+      });
+      const run2: PreparedRun = {
+        runId: "run-2",
+        tabId: "t1",
+        code: "2 + 2",
+        maxEntries: 10_000,
+        workingDirectory: null,
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+      await adapter.start(run2, {
+        attached: () => {},
+        events: () => {},
+        state: () => {},
+        heartbeat: () => {},
+        exited: () => {},
+      });
+      await Bun.sleep(10); // cleanupEntries is fire-and-forget
+      const entries = (await readdir(join(h.dir, "t1"))).filter((name) => name.startsWith("entry-"));
+      expect(entries).toEqual(["entry-run-2.mjs"]);
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
   test("start() fails closed when the working directory no longer exists", async () => {
     const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
     try {
       const webviews = new FakeWebviewSource();
+      let bundleCalls = 0;
       const adapter = createWebAdapter({
         webviews,
         runtime: "browser",
@@ -219,7 +259,10 @@ describe("WebAdapter", () => {
         vendorCache: { set: async () => {} },
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => false,
-        bundle: async () => ({ code: "x", map: "", imports: [] }),
+        bundle: async () => {
+          bundleCalls++;
+          return { code: "x", map: "", imports: [] };
+        },
       });
       const sink: RunEventSink = {
         attached: () => {},
@@ -238,7 +281,67 @@ describe("WebAdapter", () => {
         isCancelled: () => false,
       };
       await expect(adapter.start(run, sink)).rejects.toThrow(WorkingDirectoryMismatchError);
-      expect(webviews.ensuredTabIds).toEqual([]);
+      // Fix round 1 (I1): the check now runs immediately before bundle() -- after ensure()/reset()/the ready round
+      // trip and the entry write, not before them -- so the webview *was* ensured and reset, but bundle() was
+      // never reached.
+      expect(webviews.ensuredTabIds).toEqual(["t1"]);
+      expect(webviews.raws.get("t1")?.reloadCount).toBe(1);
+      expect(bundleCalls).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("I1: a working directory deleted during the reset/ready round trip is caught, not missed", async () => {
+    // The directory "exists" only until the page's bootstrap injection happens (simulating deletion during the
+    // reset/ready window) -- the OLD placement (checked as the very first statement of start()) would have seen it
+    // as present and proceeded; the fixed placement (immediately before bundle()) must not.
+    const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
+    try {
+      const webviews = new FakeWebviewSource();
+      let dirGone = false;
+      let bundleCalls = 0;
+      const adapter = createWebAdapter({
+        webviews,
+        runtime: "browser",
+        runsDir: dir,
+        packagesNodeModules: join(dir, "node_modules"),
+        bunLockPath: join(dir, "bun.lock"),
+        vendorCache: { set: async () => {} },
+        runLock: { add: () => {}, remove: () => {} },
+        directoryExists: async () => !dirGone,
+        bundle: async () => {
+          bundleCalls++;
+          return { code: "x", map: "", imports: [] };
+        },
+      });
+      const sink: RunEventSink = {
+        attached: () => {},
+        events: () => {},
+        state: () => {},
+        heartbeat: () => {},
+        exited: () => {},
+      };
+      const run: PreparedRun = {
+        runId: "run-1",
+        tabId: "t1",
+        code: "1 + 1",
+        maxEntries: 10_000,
+        workingDirectory: "/work",
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+      const raw = new FakeRawWebview();
+      raw.autoReady = false;
+      webviews.raws.set("t1", raw);
+      webviews.hosts.set("t1", createSequencedWebviewHost(raw, BOOTSTRAP_SOURCE));
+      const startPromise = adapter.start(run, sink);
+      await Bun.sleep(0);
+      expect(raw.reloadCount).toBe(1); // reset() already happened; the directory still "existed" at that point
+      dirGone = true; // simulate the deletion happening during the reset/ready window
+      raw.emit(1, { type: "ready" });
+      await expect(startPromise).rejects.toThrow(WorkingDirectoryMismatchError);
+      expect(bundleCalls).toBe(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -303,6 +406,10 @@ describe("WebAdapter", () => {
       expect(h.webviews.destroyedTabIds).toEqual(["t1"]);
       expect(h.locks.has("run-1")).toBe(false);
       expect(h.exitedCalls()).toBe(1);
+      // Fix round 1 (C1): the run must be reported "killed", not left stuck at "stopping" -- RunCoordinator.stop()
+      // sets "stopping" and then relies entirely on the adapter to report a terminal state; #checkHeartbeats only
+      // watches "evaluating"/"settled", so a state never reported here is never corrected either.
+      expect(h.states.at(-1)).toEqual({ state: "killed", activeHandles: undefined });
     } finally {
       await rm(h.dir, { recursive: true, force: true });
     }
@@ -331,6 +438,9 @@ describe("WebAdapter", () => {
       expect(h.raw.destroyed).toBe(true);
       expect(h.webviews.destroyedTabIds).toEqual(["t1"]);
       expect(h.exitedCalls()).toBe(1);
+      // Fix round 1 (C1): explicit Kill also reports "killed" from the adapter itself now, not only as a side
+      // effect of RunCoordinator.kill() setting it independently.
+      expect(h.states.at(-1)).toEqual({ state: "killed", activeHandles: undefined });
       await Bun.sleep(10); // the fire-and-forget recreate is a microtask away
       expect(h.webviews.ensuredTabIds.length).toBeGreaterThan(1);
     } finally {
@@ -382,6 +492,192 @@ describe("WebAdapter", () => {
       expect(raw?.destroyed).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("C2: start() fails the run, rather than hanging forever, when the page never reports ready", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
+    try {
+      const webviews = new FakeWebviewSource();
+      const adapter = createWebAdapter({
+        webviews,
+        runtime: "browser",
+        runsDir: dir,
+        packagesNodeModules: join(dir, "node_modules"),
+        bunLockPath: join(dir, "bun.lock"),
+        vendorCache: { set: async () => {} },
+        runLock: { add: () => {}, remove: () => {} },
+        expandTimeoutMs: 30,
+        bundle: async () => ({ code: "x", map: "", imports: [] }),
+      });
+      const sink: RunEventSink = {
+        attached: () => {},
+        events: () => {},
+        state: () => {},
+        heartbeat: () => {},
+        exited: () => {},
+      };
+      const run: PreparedRun = {
+        runId: "run-1",
+        tabId: "t1",
+        code: "1 + 1",
+        maxEntries: 10_000,
+        workingDirectory: null,
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+      const raw = new FakeRawWebview();
+      raw.autoReady = false; // the page never sends "ready"
+      webviews.raws.set("t1", raw);
+      webviews.hosts.set("t1", createSequencedWebviewHost(raw, BOOTSTRAP_SOURCE));
+      await expect(adapter.start(run, sink)).rejects.toThrow(/never reported ready/);
+      // The stuck webview is discarded so the tab's next run gets a genuinely fresh one.
+      expect(webviews.destroyedTabIds).toEqual(["t1"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("C2: start() fails the run when the webview crashes during the reset/ready window", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
+    try {
+      const webviews = new FakeWebviewSource();
+      const adapter = createWebAdapter({
+        webviews,
+        runtime: "browser",
+        runsDir: dir,
+        packagesNodeModules: join(dir, "node_modules"),
+        bunLockPath: join(dir, "bun.lock"),
+        vendorCache: { set: async () => {} },
+        runLock: { add: () => {}, remove: () => {} },
+        bundle: async () => ({ code: "x", map: "", imports: [] }),
+      });
+      const sink: RunEventSink = {
+        attached: () => {},
+        events: () => {},
+        state: () => {},
+        heartbeat: () => {},
+        exited: () => {},
+      };
+      const run: PreparedRun = {
+        runId: "run-1",
+        tabId: "t1",
+        code: "1 + 1",
+        maxEntries: 10_000,
+        workingDirectory: null,
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+      const raw = new FakeRawWebview();
+      raw.autoReady = false;
+      webviews.raws.set("t1", raw);
+      webviews.hosts.set("t1", createSequencedWebviewHost(raw, BOOTSTRAP_SOURCE));
+      const startPromise = adapter.start(run, sink);
+      await Bun.sleep(0);
+      expect(raw.reloadCount).toBe(1); // reset() already in flight, awaiting ready
+      raw.crash();
+      await expect(startPromise).rejects.toThrow(/exited before it reported ready/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("M2: a run started immediately after a graceful Stop resets the sequence to 1, on the same webview", async () => {
+    const h = await createHarness({ stopGraceMs: 500 });
+    try {
+      void h.handle.stop();
+      h.raw.emit(2, { type: "state", runId: "run-1", state: "stopped", activeHandles: 0 });
+      expect(h.raw.destroyed).toBe(false); // graceful stop never destroys the webview (decision 1)
+
+      const adapter = createWebAdapter({
+        webviews: h.webviews,
+        runtime: "browser",
+        runsDir: h.dir,
+        packagesNodeModules: join(h.dir, "node_modules"),
+        bunLockPath: join(h.dir, "bun.lock"),
+        vendorCache: { set: async () => {} },
+        runLock: { add: () => {}, remove: () => {} },
+        directoryExists: async () => true,
+        readBunLock: async () => LOCK_TEXT,
+        bundle: async () => ({ code: "AFTER-STOP", map: "MAP", imports: ["react"] }),
+      });
+      const run2: PreparedRun = {
+        runId: "run-2",
+        tabId: "t1",
+        code: "3 + 3",
+        maxEntries: 10_000,
+        workingDirectory: null,
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+      await adapter.start(run2, {
+        attached: () => {},
+        events: () => {},
+        state: () => {},
+        heartbeat: () => {},
+        exited: () => {},
+      });
+
+      expect(h.webviews.raws.get("t1")).toBe(h.raw); // same webview, not recreated
+      expect(h.raw.reloadCount).toBe(2);
+      expect(parseHostMessageCall(h.raw.executed.at(-1) as string)).toEqual({
+        seq: 1,
+        message: { type: "run", runId: "run-2", code: "AFTER-STOP", settings: { maxEntries: 10_000 } },
+      });
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("M2: a run started immediately after Kill resets the sequence to 1, on the recreated webview", async () => {
+    const h = await createHarness();
+    try {
+      const originalRaw = h.raw;
+      h.handle.kill();
+      expect(originalRaw.destroyed).toBe(true);
+      // kill()'s fire-and-forget recreate runs synchronously to completion inside FakeWebviewSource.ensure() (no
+      // awaits in its body), so the tab already has a fresh webview by the time kill() returns.
+      const recreatedRaw = h.webviews.raws.get("t1");
+      expect(recreatedRaw).toBeDefined();
+      expect(recreatedRaw).not.toBe(originalRaw);
+
+      const adapter = createWebAdapter({
+        webviews: h.webviews,
+        runtime: "browser",
+        runsDir: h.dir,
+        packagesNodeModules: join(h.dir, "node_modules"),
+        bunLockPath: join(h.dir, "bun.lock"),
+        vendorCache: { set: async () => {} },
+        runLock: { add: () => {}, remove: () => {} },
+        directoryExists: async () => true,
+        readBunLock: async () => LOCK_TEXT,
+        bundle: async () => ({ code: "AFTER-KILL", map: "MAP", imports: ["react"] }),
+      });
+      const run2: PreparedRun = {
+        runId: "run-2",
+        tabId: "t1",
+        code: "4 + 4",
+        maxEntries: 10_000,
+        workingDirectory: null,
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+      await adapter.start(run2, {
+        attached: () => {},
+        events: () => {},
+        state: () => {},
+        heartbeat: () => {},
+        exited: () => {},
+      });
+
+      expect(h.webviews.raws.get("t1")).toBe(recreatedRaw); // reused the recreated webview, not a third one
+      expect(recreatedRaw?.reloadCount).toBe(1); // this run's own reset(), on the already-fresh webview
+      expect(parseHostMessageCall(recreatedRaw?.executed.at(-1) as string)).toEqual({
+        seq: 1,
+        message: { type: "run", runId: "run-2", code: "AFTER-KILL", settings: { maxEntries: 10_000 } },
+      });
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
     }
   });
 });

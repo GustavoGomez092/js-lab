@@ -1,5 +1,5 @@
-import { mkdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, stat, unlink } from "node:fs/promises";
+import { basename, join } from "node:path";
 import type { EncodedValue, HostToWebMessage, RunEvent, WebToHostMessage } from "@jslab/rpc-schema";
 import type { Runtime } from "@jslab/shared";
 import { type BundleOptions, bundleForWeb } from "../bundling/bundler";
@@ -179,6 +179,73 @@ async function directoryExists(path: string): Promise<boolean> {
   }
 }
 
+/** Mirrors `bun-adapter.ts`'s `cleanupEntries` exactly: deletes every stale `entry-*.mjs` in `dir` but `keep`. */
+async function cleanupEntries(dir: string, keep: string): Promise<void> {
+  try {
+    for (const name of await readdir(dir)) {
+      if (name !== keep && name.startsWith("entry-")) await unlink(join(dir, name)).catch(() => {});
+    }
+  } catch {}
+}
+
+/**
+ * Waits for the page's `ready` message after `host.reset()`'s reload, bounded so a page that never loads (the
+ * bootstrap's own `ASSERT_HOST_HOOK_SNIPPET` throwing before it can send `ready`, or a real webview crash/load
+ * failure) cannot hang `start()` forever (fix round 1, C2). Unbounded, this left the run permanently unkillable:
+ * `RunCoordinator.kill()`/`stop()` are both no-ops while `run.handle` is `null` (never set, since `sink.attached()`
+ * is only called once `start()` returns), and the watchdog's own `#checkHeartbeats` also requires a truthy handle
+ * to act. `host.onExit` is wired here -- before `host.reset()` is even called -- specifically so a crash during
+ * this window is reported the same way `WebRunSession#onCrash` reports one later, instead of being invisible until
+ * the timeout fires.
+ *
+ * `timeoutMs` reuses `expandTimeoutMs` (default 5 s) rather than inventing a new tunable: both represent "how long
+ * do we wait for the page to respond to something", and 5 s is comfortably longer than a real, local `views://`
+ * page load (no network involved). On timeout, the stuck webview is discarded (`webviews.destroy`) so the tab's
+ * *next* run gets a genuinely fresh one instead of reusing a realm that may still finish loading later and deliver
+ * a very late, orphaned `ready`.
+ */
+async function waitForReady(
+  host: WebviewHost,
+  webviews: WebviewSource,
+  tabId: string,
+  timeoutMs: number,
+): Promise<void> {
+  let settled = false;
+  await new Promise<void>((resolve, reject) => {
+    const unsubMessage = host.onMessage((message) => {
+      if (message.type !== "ready" || settled) return;
+      settled = true;
+      unsubMessage();
+      unsubExit();
+      clearTimeout(timer);
+      resolve();
+    });
+    const unsubExit = host.onExit(() => {
+      if (settled) return;
+      settled = true;
+      unsubMessage();
+      clearTimeout(timer);
+      reject(new Error(`Web runner's webview exited before it reported ready (tab ${tabId}).`));
+    });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      unsubMessage();
+      unsubExit();
+      webviews.destroy(tabId);
+      reject(new Error(`Web runner's webview never reported ready within ${timeoutMs}ms (tab ${tabId}).`));
+    }, timeoutMs);
+    host.reset().catch((error: unknown) => {
+      if (settled) return;
+      settled = true;
+      unsubMessage();
+      unsubExit();
+      clearTimeout(timer);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    });
+  });
+}
+
 function bundleErrorEvent(message: string, line?: number, column?: number, codeFrame?: string): RunEvent {
   return {
     kind: "error",
@@ -276,12 +343,21 @@ class WebRunSession implements RunHandle {
    * no need to pay for a full destroy+recreate on every ordinary completion the way Bun must pay for a fresh
    * process. Destroy+recreate is reserved for Kill, matching the spec calling it out as Kill's own distinct
    * behaviour rather than something every run already does.
+   *
+   * Fix round 1 (C1): reports `sink.state("killed")` -- mirroring `BunRunSession`'s `#reportTerminal("killed")`
+   * (`bun-adapter.ts`) -- before retiring the handle. Without this, `RunCoordinator.stop()` (which only sets
+   * `"stopping"` and relies entirely on the adapter to report a terminal state) never learned that an escalated
+   * Stop had actually ended the run: `#checkHeartbeats` only watches `"evaluating"`/`"settled"`, so the stale
+   * `"stopping"` was never corrected and the tab spun forever with no "Run killed" entry. Explicit Kill happened to
+   * work only because `RunCoordinator.kill()` sets `"killed"` itself unconditionally -- an accident of that one
+   * call site, not a guarantee this class could rely on.
    */
   #killWebview(): void {
     this.deps.webviews.destroy(this.run.tabId);
     void this.deps.webviews
       .ensure({ tabId: this.run.tabId, workingDirectory: this.run.workingDirectory })
       .catch(() => {});
+    this.sink.state("killed");
     this.#retireHandle();
   }
 
@@ -380,30 +456,13 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
     },
 
     async start(run: PreparedRun, sink: RunEventSink): Promise<RunHandle> {
-      // Fail closed on the working directory (adapted from `RunCoordinator.#execute`'s `runner.cwd` comparison): a
-      // webview has no OS cwd to compare a live property against, so this re-verifies the scope Main is about to
-      // hand the bundler directly against the filesystem, right before using it -- closing the same TOCTOU window
-      // (the directory vanishing between an earlier check and actual use) Bun's own check closes differently.
-      if (run.workingDirectory && !(await (deps.directoryExists ?? directoryExists)(run.workingDirectory))) {
-        throw new WorkingDirectoryMismatchError(run.workingDirectory);
-      }
-      if (run.isCancelled()) return deadHandle(run.runId);
-
       const host = await deps.webviews.ensure({ tabId: run.tabId, workingDirectory: run.workingDirectory });
       if (run.isCancelled()) return deadHandle(run.runId);
 
       // Spec §5.12 steps 1-2 ("Main sends runner.reset... the page reloads"), decision 1: every run gets a fresh
       // realm/DOM via reload, not just Stop/Kill -- see the report for why this is safe without an uninstall path.
-      const ready = new Promise<void>((resolve) => {
-        const unsubscribe = host.onMessage((message) => {
-          if (message.type === "ready") {
-            unsubscribe();
-            resolve();
-          }
-        });
-      });
-      await host.reset();
-      await ready;
+      // Fix round 1 (C2): bounded and crash-aware -- see `waitForReady`'s own doc comment.
+      await waitForReady(host, deps.webviews, run.tabId, deps.expandTimeoutMs ?? 5000);
       if (run.isCancelled()) return deadHandle(run.runId);
 
       const dir = join(deps.runsDir, run.tabId);
@@ -411,6 +470,20 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
       if (run.isCancelled()) return deadHandle(run.runId);
       const entryPath = join(dir, `entry-${run.runId}.mjs`);
       await Bun.write(entryPath, run.code);
+      if (run.isCancelled()) return deadHandle(run.runId);
+      // Fix round 1 (M1): mirrors `BunAdapter.start()`'s `cleanupEntries` call -- fire-and-forget, never blocks
+      // this run on deleting a previous one's stale entry file.
+      void cleanupEntries(dir, basename(entryPath));
+
+      // Fix round 1 (I1): moved here, immediately before `bundle()` is invoked -- the previous placement (the very
+      // first statement of `start()`) ran before `ensure()`, before the whole (now-bounded, but still real)
+      // reset/ready round trip, and before the entry write, leaving a much wider TOCTOU gap than the comment
+      // claimed. This re-verifies the scope directly against the filesystem with nothing else awaited before
+      // `bundle()` reads `<workingDirectory>/node_modules` -- as tight a gap as an inherently-async check (Web has
+      // no synchronous `runner.cwd`-like property to compare, unlike `BunAdapter`) can get.
+      if (run.workingDirectory && !(await (deps.directoryExists ?? directoryExists)(run.workingDirectory))) {
+        throw new WorkingDirectoryMismatchError(run.workingDirectory);
+      }
       if (run.isCancelled()) return deadHandle(run.runId);
 
       const bundle = deps.bundle ?? bundleForWeb;

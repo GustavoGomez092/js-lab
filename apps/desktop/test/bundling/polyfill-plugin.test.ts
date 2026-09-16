@@ -30,8 +30,28 @@ afterEach(async () => {
 
 let joinedRunCounter = 0;
 
+/**
+ * Joined modules go in a subdirectory of their own, and that is load-bearing under Bun 1.4.0.
+ *
+ * **Bun 1.4.0 caches the directory listing of any directory `Bun.build` walked while resolving.** A file created
+ * in that directory *afterwards* is then invisible to the module resolver: `import()` reports
+ * `Cannot find module '<path>' from ''` for a file that `existsSync` confirms is there. Measured: importing from
+ * the directory *before* a build works; after a build that walked it, the same write fails; a fresh directory the
+ * build never touched works; and a **sibling subdirectory of the walked directory works** -- the cache is
+ * per-directory, not per-tree. The module's contents are irrelevant (a five-word module fails just as a 3.6 KB
+ * bundle does).
+ *
+ * Why only some tests hit it: resolving a package out of `packagesNodeModules` walks **up** through `root` looking
+ * for `node_modules`, which lists `root` and poisons it. Builtin-only bundles are served by the polyfill plugin and
+ * never list `root`, so their joined modules import fine -- which is why ~27 tests here passed while the two that
+ * bundle a real package failed.
+ *
+ * Bun 1.3.13 does not do this. That divergence is exactly why this passed locally and failed on CI, which runs 1.4.0.
+ */
 async function runJoinedModule(joined: string): Promise<unknown> {
-  const file = join(root, `joined-${joinedRunCounter++}.mjs`);
+  const dir = join(root, "joined");
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `joined-${joinedRunCounter++}.mjs`);
   await writeFile(file, joined);
   const g = globalThis as unknown as Record<string, unknown>;
   g.__jlProbe = undefined;

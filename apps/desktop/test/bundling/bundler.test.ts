@@ -45,9 +45,19 @@ let joinedRunCounter = 0;
  * `globalThis.__jlProbe`. A joined bundle has a top-level `await` in it (the vendor prelude), so `new Function`
  * can't run one: it has to be a genuine module, which means a file and a dynamic `import()`. Each call gets its
  * own file name so the module cache never serves a previous call's copy.
+ *
+ * **The subdirectory is load-bearing under Bun 1.4.0**, which caches the directory listing of any directory
+ * `Bun.build` walked while resolving: a file created there afterwards becomes invisible to the module resolver,
+ * and `import()` reports `Cannot find module '<path>' from ''` for a file that `existsSync` confirms exists.
+ * Resolving a package out of `packagesNodeModules` walks **up** through `root`, so `root` is exactly the poisoned
+ * directory here. Measured: a sibling subdirectory of a walked directory is unaffected (the cache is per-directory,
+ * not per-tree), and the module's contents are irrelevant. Bun 1.3.13 does not do this -- which is how the sibling
+ * `polyfill-plugin.test.ts` passed locally and failed on CI, where the runner is 1.4.0.
  */
 async function runJoinedModule(joined: string): Promise<unknown> {
-  const file = join(root, `joined-${joinedRunCounter++}.mjs`);
+  const dir = join(root, "joined");
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `joined-${joinedRunCounter++}.mjs`);
   await writeFile(file, joined);
   const g = globalThis as unknown as Record<string, unknown>;
   g.__jlProbe = undefined;

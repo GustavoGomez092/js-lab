@@ -46,6 +46,13 @@ function fakeTransport() {
 
 const b64 = (text: string) => btoa(text);
 
+/** base64 of raw bytes, for building the partial UTF-8 sequences a real stream boundary produces. */
+function bytesToB64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 describe("the sync refusals (spec §5.13)", () => {
   // The exact sentence the spec table quotes, character for character. This is the assertion that would have
   // caught Task 11 never shipping: before it, `fs.readFileSync` was simply absent.
@@ -265,6 +272,68 @@ describe("child_process over the bridge (spec §5.13)", () => {
     expect(out).toEqual(["on branch main"]);
     expect(err).toEqual(["a warning"]);
     expect(exits).toEqual([0]);
+  });
+
+  /**
+   * Final review, finding G. Main forwards raw byte chunks at whatever boundary Node's stream produced them, and
+   * the page decoded each one with a fresh, non-streaming `TextDecoder` -- so a UTF-8 code point straddling a
+   * chunk boundary (in practice the stream's 64 KiB high-water mark) decoded as two U+FFFD replacement characters,
+   * silently corrupting the consumer's text. Node's own `setEncoding("utf8")` uses a `StringDecoder` precisely to
+   * carry the partial sequence across the boundary.
+   */
+  test("a UTF-8 code point split across two stdout chunks decodes intact", () => {
+    const host = fakeTransport();
+    const bridge = createNodeBridge({ transport: host.transport });
+    const spawn = bridge.childProcess.spawn as (file: string, args: string[]) => unknown;
+    const child = spawn("cat", ["notes-ja.txt"]) as {
+      stdout: { on(e: string, cb: (chunk: unknown) => void): void };
+    };
+    const out: string[] = [];
+    child.stdout.on("data", (chunk) => out.push(String(chunk)));
+
+    // 3 characters x 3 bytes each; the split at 4 lands in the middle of the second character.
+    const bytes = new TextEncoder().encode("日本語");
+    const id = host.lastId();
+    host.deliver({ type: "stdout", id, data: bytesToB64(bytes.slice(0, 4)) });
+    host.deliver({ type: "stdout", id, data: bytesToB64(bytes.slice(4)) });
+
+    expect(out.join("")).toBe("日本語");
+    expect(out.join("")).not.toContain("�");
+  });
+
+  test("a UTF-8 code point split across two stderr chunks decodes intact", () => {
+    const host = fakeTransport();
+    const bridge = createNodeBridge({ transport: host.transport });
+    const spawn = bridge.childProcess.spawn as (file: string, args: string[]) => unknown;
+    const child = spawn("cat", ["notes-ja.txt"]) as {
+      stderr: { on(e: string, cb: (chunk: unknown) => void): void };
+    };
+    const err: string[] = [];
+    child.stderr.on("data", (chunk) => err.push(String(chunk)));
+
+    const bytes = new TextEncoder().encode("café ☕");
+    const id = host.lastId();
+    host.deliver({ type: "stderr", id, data: bytesToB64(bytes.slice(0, 4)) });
+    host.deliver({ type: "stderr", id, data: bytesToB64(bytes.slice(4)) });
+
+    expect(err.join("")).toBe("café ☕");
+  });
+
+  // `exec`'s accumulated string inherits the same decoding, so the callback receives the same intact text.
+  test("exec's accumulated stdout is intact across a split code point", () => {
+    const host = fakeTransport();
+    const bridge = createNodeBridge({ transport: host.transport });
+    const exec = bridge.childProcess.exec as (cmd: string, cb: (e: Error | null, o: string, s: string) => void) => void;
+
+    const results: [Error | null, string, string][] = [];
+    exec("cat notes-ja.txt", (error, stdout, stderr) => results.push([error, stdout, stderr]));
+    const id = host.lastId();
+    const bytes = new TextEncoder().encode("日本語");
+    host.deliver({ type: "stdout", id, data: bytesToB64(bytes.slice(0, 4)) });
+    host.deliver({ type: "stdout", id, data: bytesToB64(bytes.slice(4)) });
+    host.deliver({ type: "exit", id, code: 0, signal: null });
+
+    expect(results).toEqual([[null, "日本語", ""]]);
   });
 
   // The other half of the redaction rule: a process's own output is the program's data, so it arrives exactly as

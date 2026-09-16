@@ -266,9 +266,35 @@ class ChildProcessHandle extends Emitter implements BridgedChildProcess {
   readonly stdout: ChildStream = new Emitter();
   readonly stderr: ChildStream = new Emitter();
   #killed = false;
+  /**
+   * One **streaming** decoder per stream, for the whole life of the child.
+   *
+   * Main forwards raw byte chunks at whatever boundary Node's stream produced them (in practice the 64 KiB
+   * high-water mark), so a UTF-8 code point routinely straddles two chunks. Decoding each chunk with a fresh,
+   * non-streaming `TextDecoder` turned such a character into two U+FFFD replacement characters -- silently, and
+   * invisibly from inside the tab. A streaming decoder carries the partial sequence across the boundary instead,
+   * which is exactly what Node's own `setEncoding("utf8")` uses a `StringDecoder` for.
+   *
+   * `decodeBody` is left alone: it also serves one-shot callers (`fs.readFile`) that decode one complete body,
+   * where a fresh decoder is correct.
+   */
+  readonly #decoders: Record<"stdout" | "stderr", TextDecoder> = {
+    stdout: new TextDecoder(),
+    stderr: new TextDecoder(),
+  };
 
   constructor(private readonly onKill: () => void) {
     super();
+  }
+
+  /** Decodes one base64 chunk, holding back a partial trailing sequence for the next chunk to complete. */
+  decodeChunk(stream: "stdout" | "stderr", base64: string): string {
+    return this.#decoders[stream].decode(decodeBase64(base64), { stream: true });
+  }
+
+  /** Flushes whatever bytes are still held back when the child exits; a truly truncated sequence becomes U+FFFD. */
+  flushStream(stream: "stdout" | "stderr"): string {
+    return this.#decoders[stream].decode();
   }
 
   kill(): void {
@@ -450,14 +476,19 @@ export function createNodeBridge(options: { transport: NodeTransport }): NodeBri
         return;
       }
       case "stdout":
-        child?.stdout.emit("data", decodeBody(event.data, "utf8"));
+        if (child) child.stdout.emit("data", child.decodeChunk("stdout", event.data));
         return;
       case "stderr":
-        child?.stderr.emit("data", decodeBody(event.data, "utf8"));
+        if (child) child.stderr.emit("data", child.decodeChunk("stderr", event.data));
         return;
       case "exit": {
         if (!child) return;
         children.delete(event.id);
+        // Anything the streaming decoders were still holding back belongs to the consumer before the stream ends.
+        const tailOut = child.flushStream("stdout");
+        if (tailOut) child.stdout.emit("data", tailOut);
+        const tailErr = child.flushStream("stderr");
+        if (tailErr) child.stderr.emit("data", tailErr);
         child.stdout.emit("end");
         child.stderr.emit("end");
         child.emit("exit", event.code, event.signal);

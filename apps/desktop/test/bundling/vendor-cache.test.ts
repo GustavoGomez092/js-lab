@@ -105,6 +105,24 @@ describe("vendorCacheKey", () => {
 });
 
 describe("VendorCache", () => {
+  /**
+   * Fix round 2: an entry carries the vendor build's resolved closure, so a later read can re-check that none of
+   * those packages would resolve out of the *reading* tab's working directory. An entry written without one is
+   * reported as `null` rather than as an empty closure -- "provenance unknown" and "nothing to check" must never
+   * look the same to a caller, since the first has to be refused and the second is safe to use.
+   */
+  test("the resolved closure recorded with an entry round-trips, and an entry written without one reads back as unknown", async () => {
+    const cache = new VendorCache({ cacheDir });
+    const recorded = vendorCacheKey(hashBunLock("{}"), ["react"]);
+    const unrecorded = vendorCacheKey(hashBunLock("{}"), ["lodash"]);
+
+    await cache.set(recorded, { code: "c", map: "m" }, ["react", "scheduler"]);
+    await cache.set(unrecorded, { code: "c2", map: "m2" });
+
+    expect(await cache.get(recorded)).toEqual({ code: "c", map: "m", closure: ["react", "scheduler"] });
+    expect(await cache.get(unrecorded)).toEqual({ code: "c2", map: "m2", closure: null });
+  });
+
   test("set then get round-trips the code and source map for a key", async () => {
     const cache = new VendorCache({ cacheDir });
     const key = vendorCacheKey(hashBunLock("{}"), ["react"]);
@@ -113,7 +131,9 @@ describe("VendorCache", () => {
     await cache.set(key, { code: "console.log('react vendor chunk')", map: '{"version":3}' });
 
     const hit = await cache.get(key);
-    expect(hit).toEqual({ code: "console.log('react vendor chunk')", map: '{"version":3}' });
+    // `closure: null` is what an entry written without provenance reads back as (fix round 2) -- distinguishable
+    // from an empty closure, so a provenance-sensitive reader can refuse it rather than assume it innocent.
+    expect(hit).toEqual({ code: "console.log('react vendor chunk')", map: '{"version":3}', closure: null });
   });
 
   test("get treats an entry older than VENDOR_CACHE_MAX_AGE_MS as a miss and removes it from disk", async () => {
@@ -121,7 +141,8 @@ describe("VendorCache", () => {
     const cache = new VendorCache({ cacheDir, now: () => now });
     const key = vendorCacheKey(hashBunLock("{}"), ["react"]);
     await cache.set(key, { code: "code", map: "map" });
-    expect(await cache.get(key)).toEqual({ code: "code", map: "map" }); // still fresh, before advancing the clock
+    // still fresh, before advancing the clock
+    expect(await cache.get(key)).toEqual({ code: "code", map: "map", closure: null });
 
     now += VENDOR_CACHE_MAX_AGE_MS + 1;
     expect(await cache.get(key)).toBeNull();
@@ -142,7 +163,7 @@ describe("VendorCache", () => {
     await cache.set(newKey, { code: "0123456789", map: "0123456789" }); // pushes the total to 30 bytes
 
     expect(await cache.get(oldKey)).toBeNull(); // evicted: it was written first
-    expect(await cache.get(newKey)).toEqual({ code: "0123456789", map: "0123456789" });
+    expect(await cache.get(newKey)).toEqual({ code: "0123456789", map: "0123456789", closure: null });
   });
 
   test("invalidateAll clears every cached entry, joining the npm-change invalidation path", async () => {
@@ -151,8 +172,8 @@ describe("VendorCache", () => {
     const keyB = vendorCacheKey(hashBunLock("{}"), ["lodash"]);
     await cache.set(keyA, { code: "a", map: "a-map" });
     await cache.set(keyB, { code: "b", map: "b-map" });
-    expect(await cache.get(keyA)).toEqual({ code: "a", map: "a-map" }); // both present before invalidation
-    expect(await cache.get(keyB)).toEqual({ code: "b", map: "b-map" });
+    expect(await cache.get(keyA)).toEqual({ code: "a", map: "a-map", closure: null }); // both present before invalidation
+    expect(await cache.get(keyB)).toEqual({ code: "b", map: "b-map", closure: null });
 
     await cache.invalidateAll();
 
@@ -257,7 +278,7 @@ describe("VendorCache concurrency (fix round 1)", () => {
     const lost = results.filter((hit) => hit === null).length;
     expect(lost).toBe(0);
     results.forEach((hit, i) => {
-      expect(hit).toEqual({ code: `code-${i}`, map: `map-${i}` });
+      expect(hit).toEqual({ code: `code-${i}`, map: `map-${i}`, closure: null });
     });
   });
 });
@@ -466,7 +487,7 @@ describe("VendorCache correctness (fix round 3)", () => {
 
     const fresh = new VendorCache({ cacheDir });
     for (const [i, key] of keys.entries()) {
-      expect(await fresh.get(key)).toEqual({ code: `code-${i}`, map: `map-${i}` });
+      expect(await fresh.get(key)).toEqual({ code: `code-${i}`, map: `map-${i}`, closure: null });
     }
     const violations = invariantViolations(await readIndexAndFilesDirect(cacheDir));
     expect(violations).toEqual([]);
@@ -478,7 +499,7 @@ describe("VendorCache correctness (fix round 3)", () => {
     const key = vendorCacheKey(hashBunLock("{}"), ["pkg"]);
     expect(await cache.get(key)).toBeNull();
     await cache.set(key, { code: "code", map: "map" });
-    expect(await cache.get(key)).toEqual({ code: "code", map: "map" });
+    expect(await cache.get(key)).toEqual({ code: "code", map: "map", closure: null });
   });
 
   /**

@@ -11,7 +11,8 @@ import {
   type VendorBundleOptions,
   type VendorBundleResult,
 } from "../bundling/bundler";
-import { hashBunLock, type VendorCache, vendorCacheKey } from "../bundling/vendor-cache";
+import { resolveBareSpecifier, resolvedFromWorkingDirectory } from "../bundling/resolve-plugin";
+import { type CachedVendorChunk, hashBunLock, type VendorCache, vendorCacheKey } from "../bundling/vendor-cache";
 import {
   type PreparedRun,
   type RunEventSink,
@@ -530,7 +531,7 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
           const key = app.vendorCacheable ? await vendorKeyFor(deps, app.imports) : null;
           const cached = key ? await deps.vendorCache.get(key).catch(() => null) : null;
           if (run.isCancelled() || crashed) return deadHandle(run.runId);
-          if (cached) {
+          if (cached && vendorChunkFitsTab(cached, run.workingDirectory, deps.packagesNodeModules)) {
             vendorCode = cached.code;
           } else {
             const vendor = await (deps.bundleVendor ?? bundleVendorForWeb)({
@@ -555,7 +556,7 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
             // Fire-and-forget otherwise, exactly as the write-only population was: a run never waits on the cache,
             // and a failed write only costs the next run a rebuild.
             if (key && vendor.vendorCacheable) {
-              void deps.vendorCache.set(key, { code: vendor.code, map: vendor.map }).catch(() => {});
+              void deps.vendorCache.set(key, { code: vendor.code, map: vendor.map }, vendor.closure).catch(() => {});
             }
           }
         }
@@ -599,6 +600,38 @@ async function vendorKeyFor(deps: WebAdapterDeps, imports: readonly string[]): P
   } catch {
     return null;
   }
+}
+
+/**
+ * Fix round 2: the read-side half of the verdict the write side already had.
+ *
+ * The cache key is the `bun.lock` hash plus the direct import set -- measured to be **identical** for a tab with a
+ * working directory and one without. So a chunk stored by any other tab (or any other project) with the same
+ * lockfile and the same direct imports is offered to this tab on its **very first run**; nothing has to have
+ * changed over time, and a fresh profile is not safe by construction. If one of the packages that chunk was built
+ * from would resolve out of *this* tab's working directory, serving it runs the shared-folder copy in place of
+ * the user's own -- the exact mirror of the cross-tab hazard the write path refuses to create.
+ *
+ * So the stored closure is re-resolved here, in this tab's context, through the same two functions the builds use.
+ * Complete, because a working-directory copy can only shadow a specifier some package actually asks for, and the
+ * closure is exactly that set. Cheap, because it resolves rather than bundles. Fail-closed on `null`: an entry
+ * whose provenance was never recorded (an index rebuilt from filenames) is unusable for a tab that has a working
+ * directory at all, rather than assumed innocent.
+ *
+ * A tab with no working directory needs no check: there is no second `node_modules` for anything to resolve out of.
+ */
+function vendorChunkFitsTab(
+  cached: CachedVendorChunk,
+  workingDirectory: string | null,
+  packagesNodeModules: string,
+): boolean {
+  if (workingDirectory === null) return true;
+  if (!cached.closure) return false;
+  return !cached.closure.some((specifier) => {
+    const resolved = resolveBareSpecifier(specifier, { workingDirectory, packagesNodeModules });
+    // Unresolvable now means the rebuild below will fail and report it properly; it is not a shadowing case.
+    return resolved !== undefined && resolvedFromWorkingDirectory(resolved, workingDirectory);
+  });
 }
 
 /** The one terminal error event a dead webview produces, wherever it is noticed from. */

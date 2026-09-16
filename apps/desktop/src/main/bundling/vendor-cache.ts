@@ -20,9 +20,23 @@ export interface VendorChunk {
   map: string;
 }
 
+/**
+ * What a read returns: the chunk, plus the provenance recorded when it was written (fix round 2).
+ *
+ * `closure` is every bare specifier the vendor build resolved while producing this chunk. It is `null` only for an
+ * entry that carries none -- today just one an index rebuild reconstructed from the files on disk, since filenames
+ * cannot carry it. A caller that cares about provenance must treat `null` as "unknown" and decline to use the
+ * chunk, never as "nothing to check".
+ */
+export interface CachedVendorChunk extends VendorChunk {
+  closure: string[] | null;
+}
+
 interface VendorCacheIndexEntry {
   size: number;
   writtenAt: number;
+  /** See `CachedVendorChunk.closure`; absent on an entry reconstructed by `#rebuildIndexFromDisk`. */
+  closure?: string[];
 }
 
 type VendorCacheIndex = Record<string, VendorCacheIndexEntry>;
@@ -54,8 +68,13 @@ export function vendorCacheKey(lockHash: string, imports: readonly string[]): st
  * the existing `index.json`, where the age and total-size sweeps already reclaim them -- a versioned subdirectory
  * would have stranded them outside every eviction path forever. Bump this whenever the meaning of a stored chunk
  * changes.
+ *
+ * Bumped to `v3` in fix round 2, when an entry gained the resolved closure a read re-checks (see
+ * `CachedVendorChunk.closure`). Every live entry therefore carries provenance, which keeps the "no closure
+ * recorded" branch as defence in depth against an index rebuilt from filenames rather than an ordinary path that a
+ * whole stale generation of entries would otherwise keep exercising.
  */
-const VENDOR_CACHE_FORMAT = "vendor-chunk-v2";
+const VENDOR_CACHE_FORMAT = "vendor-chunk-v3";
 
 /**
  * Spec §5.12: the lockfile-pinning half of the key. Hashed rather than used raw so the key stays a fixed-length,
@@ -160,13 +179,19 @@ export class VendorCache {
   }
 
   /** A cache hit reads both files; a miss (absent, or past `VENDOR_CACHE_MAX_AGE_MS`) returns null and evicts it. */
-  get(key: string): Promise<VendorChunk | null> {
+  get(key: string): Promise<CachedVendorChunk | null> {
     return this.#exclusive(key, () => this.#doGet(key));
   }
 
-  /** Writes both files, then evicts anything past the age limit or, after that, past the total size limit. */
-  set(key: string, chunk: VendorChunk): Promise<void> {
-    return this.#exclusive(key, () => this.#doSet(key, chunk));
+  /**
+   * Writes both files, then evicts anything past the age limit or, after that, past the total size limit.
+   *
+   * `closure` is the provenance recorded with the entry (fix round 2) -- every bare specifier the vendor build
+   * resolved. Omitting it stores an entry whose provenance is unknown, which a provenance-sensitive reader will
+   * decline to use; production always passes it.
+   */
+  set(key: string, chunk: VendorChunk, closure?: readonly string[]): Promise<void> {
+    return this.#exclusive(key, () => this.#doSet(key, chunk, closure));
   }
 
   /**
@@ -213,7 +238,7 @@ export class VendorCache {
     }
   }
 
-  async #doGet(key: string): Promise<VendorChunk | null> {
+  async #doGet(key: string): Promise<CachedVendorChunk | null> {
     const generation = this.#generation;
     const entry = await this.#withIndex((index) => index[key], { persist: false });
     if (!entry) return null;
@@ -240,7 +265,7 @@ export class VendorCache {
         readFile(this.#codePath(key), "utf8"),
         readFile(this.#mapPath(key), "utf8"),
       ]);
-      return { code, map };
+      return { code, map, closure: entry.closure ?? null };
     } catch {
       // Fix round 3 (B2): the index and the files on disk disagree (e.g. a hand-cleared cache dir, or one half of
       // the pair lost to a genuine I/O error) -- treat it as a miss and repair *both* the index and the surviving
@@ -275,7 +300,7 @@ export class VendorCache {
    * whatever this call wrote is discarded instead (`#removeEntry`), so a `set()` that loses the race to a *later*
    * wipe leaves nothing behind, not a phantom index entry.
    */
-  async #doSet(key: string, chunk: VendorChunk): Promise<void> {
+  async #doSet(key: string, chunk: VendorChunk, closure?: readonly string[]): Promise<void> {
     while (this.#activeWipe) await this.#activeWipe;
     const generation = this.#generation;
     await Promise.all([
@@ -286,7 +311,7 @@ export class VendorCache {
     const writtenAt = this.#now();
     const published = await this.#withIndex((index) => {
       if (this.#generation !== generation) return false;
-      index[key] = { size, writtenAt };
+      index[key] = { size, writtenAt, ...(closure ? { closure: [...closure] } : {}) };
       return true;
     });
     if (!published) {

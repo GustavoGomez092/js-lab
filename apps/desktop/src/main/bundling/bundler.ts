@@ -75,6 +75,16 @@ export interface VendorBundle {
   code: string;
   map: string;
   vendorCacheable: boolean;
+  /**
+   * Every bare specifier this build resolved -- the whole transitive closure, not just the tab's direct imports.
+   *
+   * Fix round 2: persisted with the cached chunk so a later *read* can re-check it. The cache key carries no
+   * working-directory component, so a chunk stored by one tab is offered to every other tab with the same
+   * lockfile and direct imports; re-resolving this set in the reading tab's own context is what detects that one
+   * of those packages would resolve out of *its* working directory instead. This set is exactly the right one to
+   * check: a working-directory copy can only shadow something a package actually asks for.
+   */
+  closure: string[];
 }
 
 export type VendorBundleResult = VendorBundle | { error: BundleError };
@@ -250,7 +260,7 @@ function vendorEntryPlugin(source: string, resolveDir: string): BunPlugin {
  * package is injected from the vendor chunk, not the app chunk.
  */
 export async function bundleVendorForWeb(options: VendorBundleOptions): Promise<VendorBundleResult> {
-  if (options.imports.length === 0) return { code: "", map: "", vendorCacheable: true };
+  if (options.imports.length === 0) return { code: "", map: "", vendorCacheable: true, closure: [] };
   const resolvedImports = new Set<string>();
   const workingDirectoryImports = new Set<string>();
   let capturedError: BundleError | null = null;
@@ -286,6 +296,7 @@ export async function bundleVendorForWeb(options: VendorBundleOptions): Promise<
       code: codeOutput ? await codeOutput.text() : "",
       map: mapOutput ? await mapOutput.text() : "",
       vendorCacheable: workingDirectoryImports.size === 0,
+      closure: [...resolvedImports],
     };
   } catch (error) {
     return { error: capturedError ?? fromBuildFailure(error) };
@@ -308,10 +319,14 @@ export async function bundleVendorForWeb(options: VendorBundleOptions): Promise<
  * statements** -- its entry has no exports and every package is inlined into it. A future change that made the
  * vendor build emit one would turn every run into a SyntaxError.
  *
- * **Source-map offset (M2).** The join pushes the app half down by the vendor half's line count plus one. Nothing
- * consumes `AppBundle.map` today (the page maps user frames through the transform's own map), so no map is
- * rewritten here; any future consumer of `AppBundle.map` must add that offset, or map against the app chunk before
- * it was joined.
+ * **Source-map offset (M2).** The join pushes the app half down by the vendor half's line count **plus two** --
+ * the wrapper contributes a line of its own at each end (`await (async () => {` before, `})();` after). Measured
+ * three ways rather than reasoned: a vendor half of 3 lines with no trailing newline puts app line 1 at line 6; the
+ * same with a trailing newline (Bun's actual output shape, where splitting on newlines counts 4) puts it at line 7;
+ * and a real pair of bundles with a 72-line vendor half puts app line 40 at line 114. Offset = vendor lines + 2 in
+ * all three. Nothing consumes `AppBundle.map` today (the page maps user frames through the transform's own map), so
+ * no map is rewritten here; any future consumer of `AppBundle.map` must add that offset, or map against the app
+ * chunk before it was joined.
  */
 export function joinVendorAndApp(vendorCode: string | null, appCode: string): string {
   if (!vendorCode) return appCode;

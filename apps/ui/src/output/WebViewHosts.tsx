@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
+import type { MainApi } from "../api";
 import type { AppStore } from "../state/store";
-import { WebViewTile } from "./WebViewTile";
+import { RUNNER_WEB_URL, type TileWebview, WebViewTile } from "./WebViewTile";
+import { createWebviewHostRegistry } from "./webview-host";
 
 /** Which DOM node -- and which tab -- `OutputTiles`'s real docking placeholder currently is, or `null` when no
  * tab has one right now (Output hidden, the active tab is `bun`, or its own Web View toggle is off). */
@@ -22,25 +24,35 @@ export interface WebviewDock {
  * Every tab whose runtime isn't `bun` gets a `WebViewTile`, mounted as soon as it opens (or as soon as its runtime
  * becomes web-capable) -- in tab order, matching Task 8's original approach -- and keyed by `tabId` so React never
  * remounts it across a tab switch. **What Task 9's N4 makes lazy is the expensive native webview inside each tile,
- * not the lightweight tile wrapper itself** (see `WebViewTile.tsx`'s own doc comment for why mounting the wrapper
- * eagerly, while still deferring the real `<electrobun-webview>`, is the correct split -- deferring the wrapper's
- * own mount instead, an earlier version of this fix, broke DOM sibling order because these wrappers are portals).
- * `everEnabled` below tracks which tabIds have had their own Web View toggle switched on at least once, and is
- * passed down as each tile's `enabled` prop; it is otherwise unrelated to which tiles exist. Each tile **always**
- * portals into this component's own permanent `parkingNode` (see `WebViewTile.tsx`'s doc comment for why: portaling
- * into `OutputTiles`'s own placeholder instead was fix round 1's first attempt, and it failed -- that placeholder
- * is a DOM child of a component that is allowed to unmount, and removing a DOM node destroys everything physically
- * nested inside it, portaled content included). The tab named by `dock.tabId` gets `dockNode={dock.node}` and
- * `docked` so it visually tracks that placeholder's box; every other tab gets `dockNode={null}`, `docked={false}`
- * and collapses instead of unmounting.
+ * not the lightweight tile wrapper itself.** Each tile **always** portals into this component's own permanent
+ * `parkingNode`. The tab named by `dock.tabId` gets `dockNode={dock.node}` and `docked` so it visually tracks that
+ * placeholder's box; every other tab gets `dockNode={null}`, `docked={false}` and collapses instead of unmounting.
+ *
+ * **M4 Task 9a: this component is also where the browser runtime reaches the DOM.** It owns the host registry
+ * (`./webview-host.ts`), which answers Main's `webRunner.*` messages against whichever element each tab currently
+ * has. Two things follow. First, an element is created not only when the *user* switches the Web View on, but
+ * whenever *Main* asks for one -- which is what lets a run work on a `browser` tab whose Web View pane was never
+ * opened (Task 9's lazy creation left such a tab with no webview at all, and `prepare`/`start` assume `ensure()`
+ * always produces one). Second, a destroyed webview is replaceable: `generation` below is bumped only when the
+ * registry reports it has no element for a tab Main is asking about, which is exactly the Kill / timed-out-reset
+ * case and never anything the user did.
  */
-export function WebViewHosts({ store, dock }: { store: AppStore; dock: WebviewDock | null }) {
+export function WebViewHosts({
+  store,
+  dock,
+  api,
+  createWebview,
+}: {
+  store: AppStore;
+  dock: WebviewDock | null;
+  api: MainApi;
+  /** Test seam: production always builds a real `<electrobun-webview>`. */
+  createWebview?: () => TileWebview;
+}) {
   // Every currently open, web-capable tab, paired with whether its own Web View toggle is on right now -- a
   // primitive string, `Object.is`-stable across a change that doesn't touch a web-capable tab's identity, runtime
   // or toggle (same discipline the old `webTabsKey` kept; see isolated/app.test.tsx's "a view-state commit
   // doesn't re-render the shell"). Tab ids are `crypto.randomUUID()` (store.ts), so they never contain "=".
-  // Also this component's `webTabs` render list directly: every web-capable tab mounts a tile, in this order --
-  // tab order -- regardless of whether it has ever been enabled (see the doc comment above for why).
   const liveKey = useStore(store, (s) =>
     s.tabOrder
       .map((id) => {
@@ -59,8 +71,7 @@ export function WebViewHosts({ store, dock }: { store: AppStore; dock: WebviewDo
   // while its tab stays open -- even if the toggle goes back off -- which is what makes creation a one-way,
   // "first enable" event rather than something a later disable could undo (the Task 8 never-unmount invariant
   // this must not weaken). A tabId is only ever dropped when the tab itself closes (or its runtime becomes `bun`,
-  // which removes Web View capability entirely and unmounts its tile -- the same case Task 8's own filter already
-  // excluded -- so a tab switched back to a web-capable runtime later gets a genuinely fresh tile and host).
+  // which removes Web View capability entirely and unmounts its tile).
   const [everEnabled, setEverEnabled] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
     const entries = liveKey ? liveKey.split(",") : [];
@@ -83,6 +94,41 @@ export function WebViewHosts({ store, dock }: { store: AppStore; dock: WebviewDo
     });
   }, [liveKey]);
 
+  const registry = useMemo(() => createWebviewHostRegistry(api), [api]);
+  useEffect(() => () => registry.dispose(), [registry]);
+
+  // Tabs Main has asked for a webview on, and which replacement each is currently on. Both are driven only by the
+  // registry reporting that it has no element for a tab Main is addressing -- see the doc comment above.
+  const [demanded, setDemanded] = useState<ReadonlyMap<string, number>>(() => new Map());
+  useEffect(
+    () =>
+      registry.onNeedsElement((tabId) => {
+        setDemanded((previous) => new Map(previous).set(tabId, (previous.get(tabId) ?? 0) + 1));
+      }),
+    [registry],
+  );
+
+  const onElement = useCallback(
+    (tabId: string, element: TileWebview | null) => {
+      if (element) registry.register(tabId, element);
+      else registry.unregister(tabId);
+    },
+    [registry],
+  );
+
+  // Kept in a ref so the tile's creation effect never re-runs (and so never replaces a live webview) just because
+  // a caller passed a fresh arrow function on a re-render.
+  const factory = useRef(createWebview);
+  factory.current = createWebview;
+  const makeWebview = useCallback((): TileWebview => {
+    const custom = factory.current;
+    if (custom) return custom();
+    const webview = document.createElement("electrobun-webview") as TileWebview;
+    webview.setAttribute("src", RUNNER_WEB_URL);
+    webview.className = "webview-tile-surface";
+    return webview;
+  }, []);
+
   return (
     <>
       {/* Always mounted; every tab's element lives here, positioned via its own `position: fixed` (see
@@ -103,7 +149,10 @@ export function WebViewHosts({ store, dock }: { store: AppStore; dock: WebviewDo
               dockNode={docked ? (dock?.node ?? null) : null}
               docked={docked}
               parkingNode={parkingNode}
-              enabled={everEnabled.has(tabId)}
+              enabled={everEnabled.has(tabId) || demanded.has(tabId)}
+              generation={demanded.get(tabId) ?? 0}
+              createWebview={makeWebview}
+              onElement={onElement}
             />
           );
         })}

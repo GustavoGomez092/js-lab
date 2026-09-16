@@ -27,6 +27,11 @@ export interface AppPaths {
   socketPath: string;
   screenshotsDir: string;
   runnerBootstrap: string;
+  /**
+   * M4 §5.12: the bundled runner-web bootstrap Main injects into a browser-mode tab's page. The page itself is
+   * bare (no `<script>`), so this string is the only thing that turns it into a runner.
+   */
+  webRunnerBootstrap: string;
   transformWorker: string;
   bunBinary: string;
 }
@@ -55,6 +60,7 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     socketPath: join(dataDir, "jslab.sock"),
     screenshotsDir: join(dataDir, "e2e-screenshots"),
     runnerBootstrap: input.env.JSLAB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "bootstrap.js"),
+    webRunnerBootstrap: input.env.JSLAB_WEB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "web-bootstrap.js"),
     transformWorker: input.env.JSLAB_TRANSFORM_WORKER ?? join(appDir, "workers", "transform-worker.js"),
     bunBinary: input.env.JSLAB_BUN_PATH ?? input.execPath,
   };

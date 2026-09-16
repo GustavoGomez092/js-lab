@@ -25,6 +25,8 @@ describe("resolveAppPaths", () => {
       socketPath: "/Users/me/Library/Application Support/dev.jslab.app/stable/jslab.sock",
       screenshotsDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/e2e-screenshots",
       runnerBootstrap: "/Applications/JSLab.app/Contents/Resources/app/runner/bootstrap.js",
+      // M4 §5.12: shipped beside the Bun runner's bootstrap, by the same `dist/runner` → `runner` copy rule.
+      webRunnerBootstrap: "/Applications/JSLab.app/Contents/Resources/app/runner/web-bootstrap.js",
       transformWorker: "/Applications/JSLab.app/Contents/Resources/app/workers/transform-worker.js",
       bunBinary: "/Applications/JSLab.app/Contents/MacOS/bun",
     });

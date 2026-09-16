@@ -7,6 +7,7 @@ import { useStore } from "zustand";
 import type { MainApi } from "../src/api";
 import { OutputTiles } from "../src/output/OutputTiles";
 import { WebViewHosts, type WebviewDock } from "../src/output/WebViewHosts";
+import type { WebviewElement } from "../src/output/webview-host";
 import { SplitPane } from "../src/shell/SplitPane";
 import { StatusBar } from "../src/shell/StatusBar";
 import { computeTabPatch } from "../src/shell/tab-patch";
@@ -45,6 +46,28 @@ function exposed(element: Element): boolean {
   return element.closest('[aria-hidden="true"]') === null;
 }
 
+/**
+ * M4 Task 9a: `WebViewHosts` now hands every element it creates to the host registry, which drives the real
+ * `<electrobun-webview>` API. Electrobun registers that custom element inside a webview's own page and its `on()`
+ * keeps a private listener map (devkit `api/preload/webviewTag.ts`), so in this test DOM the tag is inert -- an
+ * `addEventListener` stand-in would receive nothing in production either. These tests are about layout, parking
+ * and DOM order, so they hand the component a real node that carries the contract without pretending to be a
+ * webview; the contract itself is covered by `webview-host.test.ts` and `webview-hosts-wiring.test.tsx`.
+ */
+function fakeWebview(): HTMLElement & WebviewElement {
+  const element = document.createElement("electrobun-webview") as HTMLElement & WebviewElement;
+  const listeners = new Map<string, Set<(event: CustomEvent) => void>>();
+  element.executeJavascript = () => {};
+  element.reload = () => {};
+  element.on = (event: string, listener: (event: CustomEvent) => void) => {
+    const set = listeners.get(event) ?? new Set();
+    listeners.set(event, set);
+    set.add(listener);
+  };
+  element.off = (event: string, listener: (event: CustomEvent) => void) => void listeners.get(event)?.delete(listener);
+  return element;
+}
+
 function hydrated(overrides: Parameters<typeof tabWith>[1] = {}) {
   const store = createAppStore();
   store.getState().hydrate({
@@ -65,7 +88,7 @@ function renderTiles(store: AppStore, api: MainApi) {
     return (
       <>
         <OutputTiles store={store} api={api} onWebviewDock={setDock} />
-        <WebViewHosts store={store} dock={dock} />
+        <WebViewHosts store={store} dock={dock} api={api} createWebview={fakeWebview} />
       </>
     );
   }
@@ -96,7 +119,7 @@ function renderArea(store: AppStore, api: MainApi) {
           first={<div />}
           second={<OutputTiles store={store} api={api} onWebviewDock={setDock} />}
         />
-        <WebViewHosts store={store} dock={dock} />
+        <WebViewHosts store={store} dock={dock} api={api} createWebview={fakeWebview} />
       </>
     );
   }
@@ -307,7 +330,12 @@ describe("OutputTiles / WebViewHosts", () => {
     }
   });
 
-  test("tile DOM order tracks tab order, not first-enable order (M4 T9 fix round 1, M2)", () => {
+  // Named for exactly what it proves. DOM order among tiles is *mount* order, which coincides with tab order only
+  // while tabs become web-capable in tab order -- Task 9's re-review demonstrated three divergences against the
+  // real components (a tab switched `bun`→`browser` later, a new tab opened while an earlier one is active, and
+  // `reorderTabs`). A name claiming tiles track tab order would assert a property the codebase is known not to
+  // have, and would be cited as if it did.
+  test("enable order does not determine tile DOM order (M4 T9 fix round 1, M2)", () => {
     const store = hydrated({ runtime: "browser" }); // t1
     store.getState().openTab(tabWith("t2", { runtime: "browser" }), "");
     store.getState().activateTab("t1");

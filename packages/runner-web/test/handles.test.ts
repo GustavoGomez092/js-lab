@@ -196,6 +196,33 @@ test("fetch is tracked until it settles", async () => {
   }
 });
 
+// Final review, finding H. The wrapper always supplies `init.signal`, and per the Fetch spec an init signal
+// overrides a `Request`'s own -- so a signal carried by the Request object was dropped and `abort()` did nothing.
+test("a signal carried by a Request aborts the fetch, not just one passed in init", async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch: async () => {
+      await Bun.sleep(5000);
+      return new Response("too late");
+    },
+  });
+  try {
+    const { tracker, g } = sandbox();
+    const controller = new AbortController();
+    const request = new Request(`http://localhost:${server.port}/`, { signal: controller.signal });
+
+    const pending = g.fetch(request);
+    expect(tracker.count).toBe(1);
+
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    // The handle retires with the request, exactly as it does for an init-carried signal.
+    expect(tracker.count).toBe(0);
+  } finally {
+    server.stop(true);
+  }
+});
+
 test("a WebSocket is tracked from construction until it closes", async () => {
   const server = Bun.serve({
     port: 0,
@@ -383,6 +410,117 @@ test("a play attempt while already muted emits no audio message at all (fix roun
   expect(el.paused).toBe(true);
   expect(audio.active).toBe(false);
   expect(audioEvents).toEqual([]);
+});
+
+/**
+ * A timer pair whose ids are small integers from their own counter, exactly as a browser's are.
+ *
+ * `sandbox()` above hands the wrappers Bun's real `setTimeout`, which returns a `Timer` **object**. An object key
+ * and `fakeRaf`'s numeric key can never collide, so the id-space collision below is unreachable through that
+ * fixture by construction -- which is why it went unnoticed. Per the HTML spec `setTimeout`/`setInterval` share one
+ * id space and `requestAnimationFrame` has its own, and both start at 1, so a timer and a frame genuinely do
+ * collide on a raw-id key.
+ */
+function fakeTimers() {
+  let nextId = 1;
+  const callbacks = new Map<number, () => void>();
+  return {
+    setTimeout: (cb: () => void, _ms?: number) => {
+      const id = nextId++;
+      callbacks.set(id, cb);
+      return id;
+    },
+    clearTimeout: (id: number) => void callbacks.delete(id),
+    setInterval: (cb: () => void, _ms?: number) => {
+      const id = nextId++;
+      callbacks.set(id, cb);
+      return id;
+    },
+    clearInterval: (id: number) => void callbacks.delete(id),
+    fire: () => {
+      const due = [...callbacks];
+      callbacks.clear();
+      for (const [, cb] of due) cb();
+    },
+    pending: () => callbacks.size,
+  };
+}
+
+/** `sandbox()`, but with browser-shaped **numeric** timer ids, so timer and rAF id spaces can actually collide. */
+function numericSandbox() {
+  const tracker = new HandleTracker(() => {});
+  const raf = fakeRaf();
+  const timers = fakeTimers();
+  const audio = new AudioController(() => {});
+  const g = {
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    setInterval: timers.setInterval,
+    clearInterval: timers.clearInterval,
+    requestAnimationFrame: raf.requestAnimationFrame,
+    cancelAnimationFrame: raf.cancelAnimationFrame,
+    // biome-ignore lint/suspicious/noExplicitAny: sandboxed global object
+  } as any;
+  installHandleTracking(tracker, g, audio);
+  return { tracker, g, raf, timers };
+}
+
+// Final review, finding A. `HandleTracker` keys one Map by the raw platform id, but timer ids and rAF ids come from
+// two different id spaces that both start at 1. The second `add()` for the colliding key was silently dropped, so
+// the rAF loop was never tracked: the run reported `idle` while still animating, and Stop called `clearTimeout` on
+// what was really a frame id, leaving the animation running against a page the host believed was finished.
+test("a timer and a requestAnimationFrame loop with the same raw id are tracked as two separate handles", () => {
+  const { tracker, g } = numericSandbox();
+
+  const timerId = g.setTimeout(() => {}, 10_000);
+  const frameId = g.requestAnimationFrame(() => {});
+
+  // The collision this test exists for: both id spaces start at 1, so these really are equal.
+  expect(timerId).toBe(1);
+  expect(frameId).toBe(1);
+  expect(tracker.count).toBe(2);
+});
+
+test("Stop cancels a rAF loop that shares its raw id with a live timer", () => {
+  const { tracker, g, raf } = numericSandbox();
+
+  g.setTimeout(() => {}, 10_000); // timer id 1
+  let frames = 0;
+  const loop = () => {
+    frames++;
+    g.requestAnimationFrame(loop); // frame id 1 -- collides with the timeout above
+  };
+  g.requestAnimationFrame(loop);
+  expect(tracker.count).toBe(2);
+
+  raf.fire();
+  expect(frames).toBe(1); // the loop is running and has rescheduled itself
+
+  tracker.disposeAll(); // Stop
+  expect(tracker.count).toBe(0);
+  raf.fire();
+  // The frame must have been cancelled by `cancelAnimationFrame`, not left running because Stop disposed the
+  // timer that shared its id.
+  expect(frames).toBe(1);
+});
+
+test("clearing a timer leaves a rAF loop with the same raw id tracked and still running", () => {
+  const { tracker, g, raf } = numericSandbox();
+
+  const timerId = g.setTimeout(() => {}, 10_000);
+  let frames = 0;
+  const loop = () => {
+    frames++;
+    g.requestAnimationFrame(loop);
+  };
+  g.requestAnimationFrame(loop);
+
+  g.clearTimeout(timerId);
+  // Only the timer retires: the frame loop is still active, so the run is NOT idle.
+  expect(tracker.count).toBe(1);
+
+  raf.fire();
+  expect(frames).toBe(1);
 });
 
 test("handleCountAction disposes new handles after a stop, and tracks idle/settled otherwise", () => {

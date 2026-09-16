@@ -115,6 +115,7 @@ describe("App shell", () => {
       language: "typescript",
       logpoints: [],
       reason: "manual",
+      runtime: "browser-node",
     });
   });
 

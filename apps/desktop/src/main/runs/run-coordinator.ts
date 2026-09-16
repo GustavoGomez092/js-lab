@@ -1,6 +1,7 @@
 import { mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { EncodedValue, RunEvent, RunnerToMain, RunState } from "@jslab/rpc-schema";
+import type { Runtime } from "@jslab/shared";
 import type { BuildOptions, Diagnostic, Language, TransformOptions, TransformResult } from "@jslab/transform";
 import { strings } from "../strings";
 import type { BunRunnerProcess } from "./bun-runner-process";
@@ -11,6 +12,8 @@ export interface RunStartRequest {
   code: string;
   language: Language;
   logpoints: number[];
+  /** The runtime this run executes on (spec §5.2). */
+  runtime?: Runtime;
   /** The tab's working directory, or null (spec §5.3). */
   workingDirectory?: string | null;
   /** `__filename`'s base name (scriptFileName). */

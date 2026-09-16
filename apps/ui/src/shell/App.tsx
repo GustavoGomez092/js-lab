@@ -149,7 +149,14 @@ export function App({
           return;
         }
         bufferSync.flush(tabId);
-        void api.startRun({ tabId, code, language: freshTab.language, logpoints: [], reason });
+        void api.startRun({
+          tabId,
+          code,
+          language: freshTab.language,
+          logpoints: [],
+          reason,
+          runtime: freshTab.runtime,
+        });
       };
       const wantsFormat =
         format !== null &&

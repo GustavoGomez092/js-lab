@@ -42,6 +42,9 @@ export const runStartParamsSchema = z.object({
   language: z.enum(["typescript", "javascript", "tsx", "jsx"]),
   logpoints: z.array(z.number().int().positive()).max(10_000),
   reason: z.enum(["auto", "manual"]),
+  // M4: the run's runtime. `.catch` keeps an older or malformed UI from failing the whole request, matching how
+  // every other self-repairing field in this package behaves.
+  runtime: z.enum(RUNTIMES).catch("bun"),
 });
 
 export const tabParamsSchema = z.object({ tabId });

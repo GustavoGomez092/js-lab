@@ -26,6 +26,7 @@ const validStart = {
   language: "typescript" as const,
   logpoints: [2],
   reason: "auto" as const,
+  runtime: "bun" as const,
 };
 
 describe("inbound validators", () => {
@@ -38,6 +39,30 @@ describe("inbound validators", () => {
     expect(runStartParamsSchema.safeParse({ ...validStart, language: "python" }).success).toBe(false);
     expect(runStartParamsSchema.safeParse({ ...validStart, logpoints: [0] }).success).toBe(false);
     expect(runStartParamsSchema.safeParse({ ...validStart, code: "x".repeat(MAX_TEXT_CHARS + 1) }).success).toBe(false);
+  });
+
+  test("run.start carries the tab's runtime", () => {
+    const parsed = runStartParamsSchema.parse({
+      tabId: "t1",
+      code: "1",
+      language: "typescript",
+      logpoints: [],
+      reason: "manual",
+      runtime: "browser",
+    });
+    expect(parsed.runtime).toBe("browser");
+  });
+
+  test("run.start defaults an unknown runtime to bun rather than throwing", () => {
+    const parsed = runStartParamsSchema.parse({
+      tabId: "t1",
+      code: "1",
+      language: "typescript",
+      logpoints: [],
+      reason: "manual",
+      runtime: "nope",
+    });
+    expect(parsed.runtime).toBe("bun");
   });
 
   test("tab ids must use the safe id format tabs are created with", () => {

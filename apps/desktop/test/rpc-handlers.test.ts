@@ -49,6 +49,7 @@ describe("requests", () => {
       code: "1 + 1",
       language: "typescript",
       logpoints: [],
+      runtime: "bun",
       workingDirectory: null,
       scriptName: "1 + 1.ts",
     });
@@ -68,6 +69,18 @@ describe("requests", () => {
     expect(deps.log).toHaveBeenCalled();
     expect(handlers.requests["run.start"]({ ...validStart, reason: "manual" })).toEqual({ runId: "run-1" });
     expect(deps.coordinator.start).toHaveBeenCalledTimes(1);
+  });
+
+  test("run.start reads the tab's runtime and forwards the effective runtime (M4 T1)", () => {
+    const { handlers, deps } = setup();
+    deps.session.session.tabs.t1 = {
+      ...(deps.session.session.tabs.t1 as NonNullable<(typeof deps.session.session.tabs)["t1"]>),
+      runtime: "browser",
+    };
+    handlers.requests["run.start"](validStart);
+    // effectiveRuntime still collapses everything to "bun" until a later task widens AVAILABLE_RUNTIMES; this
+    // proves the field is plumbed through without changing behaviour yet.
+    expect(deps.coordinator.start).toHaveBeenCalledWith(expect.objectContaining({ runtime: "bun" }));
   });
 
   test("run.expand forwards validated handles", async () => {

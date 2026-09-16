@@ -10,7 +10,7 @@ import {
   tabParamsSchema,
   tabPatchSchema,
 } from "@jslab/rpc-schema";
-import { type KeybindingRule, scriptFileName } from "@jslab/shared";
+import { effectiveRuntime, type KeybindingRule, scriptFileName } from "@jslab/shared";
 import { createValidators, InvalidPayloadError } from "./rpc/validate";
 import type { RunCoordinator } from "./runs/run-coordinator";
 import type { SafeModeState } from "./services/safe-mode";
@@ -54,7 +54,7 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         ...(deps.notices && deps.notices.length > 0 ? { notices: deps.notices } : {}),
       }),
       "run.start": (input: unknown): { runId: string } => {
-        const { tabId, code, language, logpoints, reason } = parse(runStartParamsSchema, "run.start", input);
+        const { tabId, code, language, logpoints, reason, runtime } = parse(runStartParamsSchema, "run.start", input);
         // Defence in depth (spec §5.14): Main never starts an automatic run in Safe Mode, whatever the UI sends.
         // Manual runs stay allowed.
         if (reason === "auto" && deps.safeMode.active) {
@@ -67,6 +67,9 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
           code,
           language,
           logpoints,
+          // The tab is the source of truth; the UI's copy can lag (M4 T1). `effectiveRuntime` still collapses
+          // everything to "bun" until a later task widens AVAILABLE_RUNTIMES, so behaviour is unchanged.
+          runtime: effectiveRuntime(tab?.runtime ?? runtime),
           workingDirectory: tab?.workingDirectory ?? null,
           // The run compiles as the request's language, so __filename's extension follows it (N-4).
           scriptName: tab ? scriptFileName({ ...tab, language }, code) : "Untitled.ts",

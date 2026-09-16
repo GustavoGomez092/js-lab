@@ -87,6 +87,31 @@ function signalOf(input: unknown, init?: RequestInit): AbortSignal | null {
   return null;
 }
 
+/** The only schemes Main routes. Everything else is either served by the page itself or refused outright. */
+const PROXIED_SCHEMES = new Set(["http:", "https:"]);
+
+/**
+ * Served by the page's own `fetch`, never proxied (fix round 1, Q1): neither needs a network or a host, and a
+ * `data:` payload is already in the page's memory, so routing them through Main would leave `browser-node` less
+ * capable than both runtimes it sits between while withholding nothing.
+ */
+const NATIVE_SCHEMES = new Set(["data:", "blob:"]);
+
+/**
+ * The scheme of what `fetch` was called with, or null when there isn't one that can be determined here.
+ *
+ * Deliberately a bare `URL` parse rather than `new Request(...)`: constructing a `Request` for a `file:` or `data:`
+ * url makes the runtime touch the resource itself, so the scheme has to be decided *before* any normalization or
+ * body access happens.
+ */
+function schemeOf(raw: string): string | null {
+  try {
+    return new URL(raw).protocol;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Normalizes whatever `fetch` was called with into the JSON-safe shape the relay carries. A real `Request` does the
  * normalizing (absolute url, upper-cased method, lower-cased header names, the `content-type` a `FormData` or
@@ -130,6 +155,12 @@ export function installFetchProxy(options: FetchProxyOptions): boolean {
 
   const g = options.global ?? (globalThis as unknown as FetchProxyGlobal);
   const { transport } = options;
+  // Captured before the global is replaced: `data:`/`blob:` are handed straight back to it.
+  const native = g.fetch;
+  const nativeFetch = (input: unknown, init?: RequestInit): Promise<Response> =>
+    native
+      ? native.call(g, input, init)
+      : Promise.reject(new TypeError("This page has no fetch of its own to serve a data: or blob: URL with."));
   const pending = new Map<number, PendingFetch>();
   let nextId = 1;
 
@@ -160,8 +191,11 @@ export function installFetchProxy(options: FetchProxyOptions): boolean {
               start(controller) {
                 entry.stream = controller;
               },
-              // The page dropped the body: stop the host-side request rather than draining it into nothing.
+              // The page dropped the body: stop the host-side request rather than draining it into nothing. A
+              // body cancelled after the request already finished has nothing left to stop, so it puts no
+              // avoidable traffic on the relay (fix round 1, nit).
               cancel() {
+                if (!pending.has(event.id)) return;
                 transport.abort(event.id);
                 finish(event.id);
               },
@@ -199,6 +233,22 @@ export function installFetchProxy(options: FetchProxyOptions): boolean {
   g.fetch = async (input: unknown, init?: RequestInit): Promise<Response> => {
     const signal = signalOf(input, init);
     if (signal?.aborted) throw abortError();
+
+    // Fix round 1, F1. The scheme is settled here, before anything is sent, because this is the only layer that
+    // can *guarantee* a failure: a payload Main cannot route leaves Main nothing to reply to, and the request
+    // would simply never settle. The runner page is served from `views://runner-web/index.html`, so an ordinary
+    // `fetch("/api/data")` resolves to `views://runner-web/api/data` and lands here -- it must fail loudly rather
+    // than hang. A url with no determinable scheme (a relative one with no base to resolve against) is refused the
+    // same way, for the same reason.
+    const raw = typeof Request === "function" && input instanceof Request ? input.url : String(input);
+    const scheme = schemeOf(raw);
+    if (scheme !== null && NATIVE_SCHEMES.has(scheme)) return nativeFetch(input, init);
+    if (scheme === null || !PROXIED_SCHEMES.has(scheme)) {
+      throw new TypeError(
+        `Cannot fetch ${raw}: the "browser-node" runtime routes http and https through JSLab and serves data and blob URLs in the page; no other scheme is supported.`,
+      );
+    }
+
     const request = await toProxiedRequest(input, init);
     if (signal?.aborted) throw abortError();
 

@@ -1,3 +1,4 @@
+import type { Runtime } from "@jslab/shared";
 import type { Redactor } from "../logging/redact";
 import { createValidators, type Log, type SafeParser } from "./validate";
 
@@ -54,6 +55,13 @@ export interface WebFetchSend {
 
 export interface WebFetchHandlerDeps {
   send: WebFetchSend;
+  /**
+   * The runtime of the tab a request claims to come from (fix round 1, F2). This is an authorization check, not
+   * wiring: the page-side refusal lives in the same JS realm as user code, over a transport `host-bridge.ts`
+   * documents as forgeable, so `browser` has to be refused at the trust boundary as well. Undefined means Main
+   * cannot identify the tab, which is refused exactly like a `browser` tab.
+   */
+  runtimeOf(tabId: string): Runtime | undefined;
   /** Spec section 18: anything recorded about a request is masked here, before it is written or sent anywhere. */
   redact: Redactor;
   log: Log;
@@ -73,16 +81,10 @@ function isHeaderList(value: unknown): value is [string, string][] {
 function isProxiedRequest(value: unknown): value is ProxiedRequestPayload {
   if (typeof value !== "object" || value === null) return false;
   const { url, method, headers, body } = value as Record<string, unknown>;
-  if (typeof url !== "string" || typeof method !== "string" || method.length === 0) return false;
-  // Only http(s) is proxied. A `file:` url would turn this bridge into an unrestricted file reader for whatever
-  // runs in the page, which is a different capability from "fetch without CORS".
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  if (typeof url !== "string" || url.length === 0) return false;
+  if (typeof method !== "string" || method.length === 0) return false;
+  // The scheme is deliberately NOT checked here (fix round 1, F1): a payload this well-formed is routable, and a
+  // routable request must be answered with an error rather than dropped by `message()` to hang the page forever.
   if (!isHeaderList(headers)) return false;
   return body === null || typeof body === "string";
 }
@@ -127,6 +129,15 @@ const abortSchema: SafeParser<WebFetchAbortPayload> = {
   },
 };
 
+/** The url's scheme, or null when it does not parse at all. */
+function schemeOf(url: string): string | null {
+  try {
+    return new URL(url).protocol;
+  } catch {
+    return null;
+  }
+}
+
 /** One line describing a request, for the log. Passed through `redact` before it reaches the log or the page. */
 function summarize(request: ProxiedRequestPayload): string {
   return [`${request.method} ${request.url}`, ...request.headers.map(([name, value]) => `${name}: ${value}`)].join(
@@ -140,8 +151,44 @@ export function createWebFetchHandlers(deps: WebFetchHandlerDeps) {
   const keyOf = (tabId: string, id: number) => `${tabId}:${id}`;
   const doFetch: NonNullable<WebFetchHandlerDeps["fetch"]> = deps.fetch ?? ((url, init) => fetch(url, init));
 
+  /** Answers a routable request that will not be served, so it surfaces as a failure instead of a hang. */
+  function refuse(tabId: string, id: number, reason: string): void {
+    const text = deps.redact(reason);
+    deps.log("Web fetch refused", text);
+    deps.send.error({ tabId, id, message: text });
+  }
+
   async function run({ tabId, id, request }: WebFetchRequestPayload): Promise<void> {
     const key = keyOf(tabId, id);
+
+    // F2: the defining refusal, enforced at the trust boundary rather than only in the page's own realm. Fail
+    // closed -- a tab Main cannot identify is refused exactly like a `browser` tab.
+    const runtime = deps.runtimeOf(tabId);
+    if (runtime !== "browser-node") {
+      refuse(
+        tabId,
+        id,
+        `Fetch is only routed through JSLab for the "browser-node" runtime; tab ${tabId} is ${runtime ?? "unknown"}.`,
+      );
+      return;
+    }
+
+    // F1, defence in depth. The page refuses these before sending; if one arrives anyway it is answered, never
+    // dropped. A `file:` url stays refused: it would make this bridge an unrestricted file reader for page code,
+    // which is a different capability from "fetch without CORS".
+    const scheme = schemeOf(request.url);
+    if (scheme === null || (scheme !== "http:" && scheme !== "https:")) {
+      refuse(tabId, id, `Cannot fetch ${request.url}: only http and https are routed through JSLab.`);
+      return;
+    }
+
+    // M3: ids are proxy-generated and monotonic, so a repeat means a misbehaving page or relay. Refusing the
+    // newcomer keeps the request already in flight abortable, rather than silently orphaning it.
+    if (inflight.has(key)) {
+      refuse(tabId, id, `Ignored a repeated request id for tab ${tabId}; the request already in flight continues.`);
+      return;
+    }
+
     const controller = new AbortController();
     inflight.set(key, controller);
     deps.log("Web fetch request", deps.redact(summarize(request)));

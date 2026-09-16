@@ -201,6 +201,45 @@ test("aborting a proxied request releases the page's handle tracker", async () =
   expect(tracker.count).toBe(0);
 });
 
+// Fix round 1, F1. The runner page is loaded from `views://runner-web/index.html` (spec section 5.12) and the
+// request is normalized through a real `Request`, so an ordinary `fetch("/api/data")` resolves to exactly the url
+// below. It used to be sent to Main, fail Main's http(s) gate, be dropped by `message()`, and leave the promise
+// pending forever. The page is the only layer that can *guarantee* a failure, because a payload Main cannot route
+// leaves Main nothing to reply to -- so the scheme is checked here, before anything is sent.
+test("an unsupported scheme rejects with a TypeError before anything is sent", async () => {
+  const host = fakeTransport();
+  const g = pageGlobal();
+  installFetchProxy({ runtime: "browser-node", transport: host.transport, global: g });
+
+  // What `fetch("/api/data")` becomes once resolved against the runner page's own url.
+  await expect(g.fetch?.("views://runner-web/api/data")).rejects.toMatchObject({ name: "TypeError" });
+  await expect(g.fetch?.("file:///etc/passwd")).rejects.toMatchObject({ name: "TypeError" });
+  expect(host.requests).toEqual([]);
+});
+
+// Fix round 1, Q1. `data:` needs no network and no proxy, and its payload is already in the page's memory, so
+// routing it through Main would withhold a capability both neighbouring runtimes have for no gain.
+test("a data: or blob: url is served by the page's own fetch and never reaches the host", async () => {
+  const host = fakeTransport();
+  const served: string[] = [];
+  const g: FetchProxyGlobal = {
+    fetch: (input) => {
+      served.push(String(input));
+      return Promise.resolve(new Response("served natively"));
+    },
+  };
+  installFetchProxy({ runtime: "browser-node", transport: host.transport, global: g });
+
+  expect(await (await g.fetch?.("data:text/plain,hello"))?.text()).toBe("served natively");
+  // A literal blob: url rather than URL.createObjectURL: only the scheme is inspected, and a registered blob URL
+  // keeps Bun's event loop alive, which hangs the whole test process at exit rather than failing anything.
+  const blobUrl = "blob:https://example.test/6f1a2b3c";
+  expect(await (await g.fetch?.(blobUrl))?.text()).toBe("served natively");
+
+  expect(served).toEqual(["data:text/plain,hello", blobUrl]);
+  expect(host.requests).toEqual([]);
+});
+
 test("a host-reported failure rejects the request the way a network error does", async () => {
   const host = fakeTransport();
   const g = pageGlobal();

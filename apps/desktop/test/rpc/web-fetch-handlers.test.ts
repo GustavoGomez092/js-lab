@@ -41,6 +41,8 @@ function setup(overrides: Partial<WebFetchHandlerDeps> = {}) {
       end: record("end") as WebFetchHandlerDeps["send"]["end"],
       error: record("error") as WebFetchHandlerDeps["send"]["error"],
     },
+    // Every tab is a browser-node tab unless a test says otherwise; the gate itself is tested below.
+    runtimeOf: () => "browser-node" as const,
     redact: createRedactor(),
     log,
     ...overrides,
@@ -155,8 +157,6 @@ describe("webFetch.request", () => {
     });
     handlers.messages["webFetch.request"]({ tabId: "", id: 1, request: { url: "https://example.test/" } });
     handlers.messages["webFetch.request"]({ tabId: "t1", id: 0, request: null });
-    // Not a network capability: a file: url would make this bridge an unrestricted file reader for page code.
-    handlers.messages["webFetch.request"](request("file:///etc/passwd"));
     expect(fetched).toEqual([]);
     expect(events).toEqual([]);
     expect(log).toHaveBeenCalled();
@@ -230,10 +230,81 @@ describe("webFetch.abort", () => {
     }
   });
 
+  // Fix round 1, M1. `not.toThrow()` alone passed with the guard removed, because `message()` swallows the
+  // resulting TypeError and logs it -- so the handler failing internally is what this has to assert against.
   test("an abort for an unknown request is a safe no-op", () => {
-    const { handlers, events } = setup();
+    const { handlers, events, log } = setup();
     expect(() => handlers.messages["webFetch.abort"]({ tabId: "t1", id: 99 })).not.toThrow();
     expect(events).toEqual([]);
     expect(handlers.pending()).toBe(0);
+    const failures = log.mock.calls.filter((call) => String(call[0]).includes("Handler for webFetch.abort failed"));
+    expect(failures).toEqual([]);
+  });
+});
+
+describe("the browser-node gate", () => {
+  // Fix round 1, F2. The page-realm refusal cannot be the only one: host-bridge.ts documents that run code can call
+  // the real outbound transport and forge a message, so this calls the handler directly rather than going through
+  // the proxy -- the proxy is the path that already behaves.
+  test("a forged request from a tab that is not browser-node is refused", async () => {
+    const fetched: string[] = [];
+    const { handlers, events } = setup({
+      runtimeOf: (tabId) => (tabId === "browserTab" ? "browser" : undefined),
+      fetch: (url) => {
+        fetched.push(url);
+        return Promise.resolve(new Response("must not be fetched"));
+      },
+    });
+
+    handlers.messages["webFetch.request"]({ ...request("https://example.test/secret"), tabId: "browserTab" });
+    handlers.messages["webFetch.request"]({ ...request("https://example.test/secret"), tabId: "ghostTab" });
+    await waitUntil(() => events.length === 2, "both refusals to reach the page");
+
+    expect(fetched).toEqual([]);
+    expect(events.every((event) => event.type === "error")).toBe(true);
+    // Fail closed: a tab Main has never heard of is refused the same way a browser tab is.
+    expect(String(events[1]?.payload.message)).toContain("browser-node");
+    expect(handlers.pending()).toBe(0);
+  });
+
+  // Fix round 1, F1 (defence in depth). A payload that parses far enough to be routable is answered, never dropped.
+  test("a routable request with an unsupported scheme is answered with an error, never dropped", async () => {
+    const fetched: string[] = [];
+    const { handlers, events } = setup({
+      fetch: (url) => {
+        fetched.push(url);
+        return Promise.resolve(new Response("must not be fetched"));
+      },
+    });
+
+    handlers.messages["webFetch.request"](request("file:///etc/passwd"));
+    await waitUntil(() => events.some((event) => event.type === "error"), "the refusal to reach the page");
+
+    expect(fetched).toEqual([]);
+    expect(String(events[0]?.payload.message)).toContain("file:");
+    expect(handlers.pending()).toBe(0);
+  });
+
+  // Fix round 1, M3. Ids are proxy-generated and monotonic, so a repeat means a misbehaving page or relay; the
+  // request already in flight must not be silently orphaned by it.
+  test("a duplicate in-flight id is refused and leaves the first request running", async () => {
+    let started = 0;
+    let captured: AbortSignal | undefined;
+    const { handlers, events } = setup({
+      fetch: (_url, init) => {
+        started += 1;
+        captured = init?.signal ?? undefined;
+        return new Promise<Response>(() => {});
+      },
+    });
+
+    handlers.messages["webFetch.request"](request("https://example.test/first"));
+    await waitUntil(() => started === 1, "the first request to start");
+    handlers.messages["webFetch.request"](request("https://example.test/second"));
+    await waitUntil(() => events.some((event) => event.type === "error"), "the duplicate to be refused");
+
+    expect(started).toBe(1);
+    expect(captured?.aborted).toBe(false);
+    expect(handlers.pending()).toBe(1);
   });
 });

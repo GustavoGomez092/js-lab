@@ -1,5 +1,5 @@
 {
-  "name": "@jslab/runner-bun",
+  "name": "@jslab/runner-web",
   "version": "0.0.0",
   "private": true,
   "type": "module",

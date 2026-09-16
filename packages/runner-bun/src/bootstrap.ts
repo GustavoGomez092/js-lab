@@ -2,6 +2,7 @@ import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { types } from "node:util";
 import type { MainToRunner, RunnerState, RunnerToMain } from "@jslab/rpc-schema";
+import { EventBuffer } from "@jslab/runner-shared";
 import {
   clipToJsonBytes,
   DEFAULT_LIMITS,
@@ -11,7 +12,6 @@ import {
   parseStack,
 } from "@jslab/serializer";
 import { installConsole, installStdio } from "./console-hook";
-import { EventBuffer } from "./event-buffer";
 import { HandleTracker, handleCountAction, installHandleTracking } from "./handles";
 
 // Capture host timers before user-facing wrappers are installed; JSLab's own timers are never tracked.

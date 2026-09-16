@@ -5,7 +5,13 @@ export interface TimerFns {
   clearTimeout: typeof clearTimeout;
 }
 
-/** Batches run events and enforces the per-run output cap before anything crosses IPC. */
+// Reused directly by every runner (Bun, web): `Buffer` is a Node/Bun global a webview never has, so byte
+// accounting here goes through the standard `TextEncoder`, which both environments provide. One instance is
+// reused rather than constructed per call.
+const textEncoder = new TextEncoder();
+const utf8Length = (text: string): number => textEncoder.encode(text).length;
+
+/** Batches run events and enforces the per-run output cap before anything crosses IPC (or the host bridge). */
 export class EventBuffer {
   #queue: RawRunEvent[] = [];
   #seq = 0;
@@ -44,7 +50,7 @@ export class EventBuffer {
     const event = { ...body, seq, t: Date.now() } as RawRunEvent;
     this.#queue.push(event);
     // Exact UTF-8 bytes (R-M1-17(a)): escaped and non-ASCII text used to exceed the 256 KB flush size on the wire.
-    this.#pendingBytes += Buffer.byteLength(JSON.stringify(event));
+    this.#pendingBytes += utf8Length(JSON.stringify(event));
     if (this.#queue.length >= this.maxBatchEvents || this.#pendingBytes >= this.maxBatchBytes) this.flush();
     else this.#schedule();
     return seq;

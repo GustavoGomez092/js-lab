@@ -90,6 +90,23 @@
       "version": "0.0.0",
       "dependencies": {
         "@jslab/rpc-schema": "workspace:*",
+        "@jslab/runner-shared": "workspace:*",
+        "@jslab/serializer": "workspace:*",
+      },
+    },
+    "packages/runner-shared": {
+      "name": "@jslab/runner-shared",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jslab/rpc-schema": "workspace:*",
+      },
+    },
+    "packages/runner-web": {
+      "name": "@jslab/runner-web",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jslab/rpc-schema": "workspace:*",
+        "@jslab/runner-shared": "workspace:*",
         "@jslab/serializer": "workspace:*",
       },
     },
@@ -216,6 +233,10 @@
     "@jslab/rpc-schema": ["@jslab/rpc-schema@workspace:packages/rpc-schema"],
 
     "@jslab/runner-bun": ["@jslab/runner-bun@workspace:packages/runner-bun"],
+
+    "@jslab/runner-shared": ["@jslab/runner-shared@workspace:packages/runner-shared"],
+
+    "@jslab/runner-web": ["@jslab/runner-web@workspace:packages/runner-web"],
 
     "@jslab/serializer": ["@jslab/serializer@workspace:packages/serializer"],
 

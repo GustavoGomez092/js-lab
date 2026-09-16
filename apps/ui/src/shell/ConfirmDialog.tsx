@@ -3,12 +3,16 @@ import { useStore } from "zustand";
 import { getEditorHandle } from "../editor/editor-handle";
 import type { AppStore } from "../state/store";
 import { cancelButtonId, type Dialogs } from "./dialogs";
+import { useOverlayPresence } from "./overlay-presence";
 
 export function ConfirmDialog({ store, dialogs }: { store: AppStore; dialogs: Dialogs }) {
   const modal = useStore(store, (s) => s.modal);
   const primary = useRef<HTMLButtonElement>(null);
   const actions = useRef<HTMLDivElement>(null);
   const confirm = modal?.kind === "confirm" ? modal : null;
+  // M4 T9c: unlike RenameDialog/CommandPalette/the sheets, this component itself is always mounted (App.tsx never
+  // gates it) -- it renders null internally instead. So presence tracks `confirm` explicitly, not the mount.
+  useOverlayPresence(confirm !== null);
 
   useEffect(() => {
     if (!confirm) return;

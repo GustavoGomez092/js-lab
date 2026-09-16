@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { WebviewElement } from "./webview-host";
 
 /**
@@ -15,6 +14,29 @@ export type TileWebview = HTMLElement & WebviewElement;
 type Rect = { top: number; left: number; width: number; height: number };
 
 /**
+ * The collapsed (not-docked) style, deliberately 1x1 rather than 0x0 -- confirmed necessary by a live run, not a
+ * theoretical worry. `apps/desktop/.hutch/devkit/api/preload/overlaySync.ts`'s `OverlaySyncController.sync()`
+ * (the thing that tells the native layer this element's box changed) has its own early return: `if
+ * (newRect.width === 0 && newRect.height === 0) return;` -- an exact 0x0 box is silently never synced at all. A
+ * tile that had a real, non-zero docked rect and then collapses to exactly 0x0 (M4 T9c: an overlay opening, or the
+ * pre-existing park-on-hide/park-on-switch path from Task 8/9) never tells the native compositor surface to
+ * shrink, so it stays painted at its last docked rect indefinitely -- invisible to this component's own React
+ * state and to jsdom (which is why no unit test caught it; see the task report's live-run evidence) but fully
+ * visible on screen, including on top of whatever HTML the collapse was supposed to make room for. 1x1 sidesteps
+ * the guard (the rect is no longer `=== 0` on both axes) while being visually negligible; `overflow: hidden` and
+ * `pointerEvents: none` do the rest of the work zero-size was already relying on.
+ */
+const COLLAPSED_STYLE = {
+  position: "fixed",
+  top: 0,
+  left: 0,
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  pointerEvents: "none",
+} as const;
+
+/**
  * One tab's persistent `<electrobun-webview>` host (Task 8, spec §7.1 / Appendix C; fix round 1 F1/F2).
  *
  * Owned and kept alive by `WebViewHosts` for as long as the tab stays open -- `key={tabId}` there is what gives
@@ -27,12 +49,30 @@ type Rect = { top: number; left: number; width: number; height: number };
  * regardless of which React fiber "owns" it. A test asserting node identity across that action caught it directly
  * (see the report's red/green evidence).
  *
- * So this component's own element **always** portals into `parkingNode` -- `WebViewHosts`'s own permanent,
+ * So this component's own element **always** ends up inside `parkingNode` -- `WebViewHosts`'s own permanent,
  * never-unmounting node -- and is **never** re-parented. Instead, when `docked` and `dockNode` are provided (the
- * tab is active, Output is visible, and its own Web View toggle is on), a `ResizeObserver` on `dockNode` -- plus
- * one measurement whenever docking starts -- drives this element's own `position: fixed` coordinates to visually
- * track `dockNode`'s box. `dockNode` is read from, never rendered into. When not docked, this element collapses
- * to a zero-size, non-interactive box instead of being removed.
+ * tab is active, Output is visible, its own Web View toggle is on, and no overlay is occluding it -- see
+ * `WebViewHosts.tsx`), a `ResizeObserver` on `dockNode` -- plus one measurement whenever docking starts -- drives
+ * this element's own `position: fixed` coordinates to visually track `dockNode`'s box. `dockNode` is read from,
+ * never rendered into. When not docked, this element collapses to a 1x1, non-interactive box (`COLLAPSED_STYLE`
+ * below -- not literally 0x0; see that constant's own doc comment for why) instead of being removed.
+ *
+ * **M4 T9c: the portal itself moved up to `WebViewHosts`.** This component used to call `createPortal` on its own
+ * returned element; it now just returns that element directly, and `WebViewHosts` wraps the whole list of tiles in
+ * ONE `createPortal` call instead of one per tile. Deferred at Task 9 fix round 1 because it was unclear whether
+ * DOM order among tiles mattered; it now demonstrably does, since a native webview surface paints above HTML
+ * regardless of `z-index` (Task 9a's screenshot), which makes DOM order the only thing left to arbitrate stacking
+ * among tiles. A direct probe against React 19.3.0 (recorded in this task's report) found that several *separate*
+ * `createPortal` calls into the same container -- "sibling portals" -- do not reorder relative to each other when
+ * the source order changes after mount, even with distinct `key`s; a *single* `createPortal` whose children is a
+ * keyed array reorders correctly, using React's ordinary reconciliation inside that one portal. That is also what
+ * "restores full tile laziness" means in the task brief: DOM order is now a property of the array `WebViewHosts`
+ * passes to that one `createPortal` call, not of each tile's own historical mount sequence -- the structural
+ * reason the M2 workaround below (mount every web-capable tab's wrapper immediately, in tab order, whether or not
+ * it is enabled, purely to pin sibling-portal order at mount time) was ever needed no longer applies. This task
+ * deliberately does not go further and make the wrapper itself conditionally-mounted: the M2 test still pins
+ * "mounted eagerly, in tab order" as current, asserted behaviour, and turning that into a genuinely separate
+ * change is out of this task's own scope (occlusion + the hoist) -- see the task report.
  *
  * **`enabled` (M4 T9 fix round 1, M2/N4).** `WebViewHosts` mounts one of these for every web-capable tab as soon
  * as it exists -- in tab order, from the very first render -- so DOM sibling order among tiles is established
@@ -53,7 +93,6 @@ export function WebViewTile({
   tabId,
   dockNode,
   docked,
-  parkingNode,
   enabled,
   generation,
   createWebview,
@@ -63,8 +102,6 @@ export function WebViewTile({
   /** `OutputTiles`'s live docking placeholder to visually track, or `null` when there isn't one right now. */
   dockNode: HTMLElement | null;
   docked: boolean;
-  /** `WebViewHosts`'s own permanent node: this always portals here, and only ever here. */
-  parkingNode: HTMLElement;
   /** Whether the tab's own Web View toggle has ever been switched on, or Main has asked for a webview. */
   enabled: boolean;
   /** Bumped when Main needs a replacement element; each value creates exactly one webview. */
@@ -121,7 +158,7 @@ export function WebViewTile({
     };
   }, [docked, dockNode]);
 
-  return createPortal(
+  return (
     <div
       className="webview-tile"
       data-testid={`webview-tile-${tabId}`}
@@ -129,11 +166,9 @@ export function WebViewTile({
       style={
         docked && rect
           ? { position: "fixed", top: rect.top, left: rect.left, width: rect.width, height: rect.height }
-          : { position: "fixed", top: 0, left: 0, width: 0, height: 0, overflow: "hidden", pointerEvents: "none" }
+          : COLLAPSED_STYLE
       }
       ref={container}
-    />,
-    parkingNode,
-    tabId,
+    />
   );
 }

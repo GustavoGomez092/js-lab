@@ -2,6 +2,7 @@ import { deriveTitle } from "@jslab/shared";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { getEditorHandle } from "../editor/editor-handle";
+import { useOverlayPresence } from "../shell/overlay-presence";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 
@@ -12,6 +13,9 @@ export function RenameDialog({ store }: { store: AppStore }) {
 }
 
 function RenameForm({ store, tabId }: { store: AppStore; tabId: string }) {
+  // M4 T9c: this component only ever mounts while the rename dialog is open (`RenameDialog` above returns null
+  // otherwise), so its whole mount lifetime IS the open window -- see `overlay-presence.ts`.
+  useOverlayPresence(true);
   const tab = store.getState().tabs[tabId];
   const [value, setValue] = useState(() => (tab ? deriveTitle(tab, store.getState().buffers[tabId] ?? "") : ""));
   // m-1: whatever had focus when the dialog opened (a tab, a menu item, ...) gets it back on close, so

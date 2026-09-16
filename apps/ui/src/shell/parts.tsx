@@ -1,7 +1,11 @@
 import type { StartupNotice } from "@jslab/rpc-schema";
 import { strings } from "../strings";
+import { useOverlayPresence } from "./overlay-presence";
 
 export function UnresponsiveDialog(props: { onKill(): void; onWait(): void }) {
+  // M4 T9c: `App.tsx` only renders this component at all while `runState === "unresponsive"`, so its whole mount
+  // lifetime IS the open window -- see `overlay-presence.ts`.
+  useOverlayPresence(true);
   return (
     <div className="dialog-backdrop">
       <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="unresponsive-title">

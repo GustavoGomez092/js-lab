@@ -73,12 +73,48 @@ describe("the UI-side webview host registry", () => {
     expect(api.webRunnerMessage).toHaveBeenCalledWith("t1", { seq: 1, message: { type: "ready" } });
   });
 
-  test("relays dom-ready as webRunner.ready -- the point Main is allowed to inject script", () => {
-    const { api, registry } = harness();
+  test("relays dom-ready as webRunner.ready -- the point Main is allowed to inject script", async () => {
+    const { api, emit, registry } = harness();
+    // Main asked for this tab first (the ordinary case: `webRunner.ensure` -> element created -> registered) --
+    // see the "ready-NO-HOST" test below for the case where nobody did.
+    await emit("webRunner.ensure", { tabId: "t1" });
     const element = new FakeWebviewElement();
     registry.register("t1", element);
 
     element.emit("dom-ready");
+
+    expect(api.webRunnerReady).toHaveBeenCalledWith("t1");
+  });
+
+  /**
+   * M4 T9c (the `ready-NO-HOST` initial load): a tile creates its webview -- and the element starts loading --
+   * the moment the user merely opens the Web View pane, whether or not Main has ever shown interest in that tab.
+   * Before this fix, that load's own `dom-ready` was unconditionally relayed as `webRunner.ready` anyway, reaching
+   * Main's `webviews.ready()` with no host entry to notify (harmless, but a wasted round trip on every such open).
+   * Now the registry itself drops it: nothing in `wanted` for a tab nobody has asked about.
+   */
+  test("a dom-ready for a tab Main never asked about is not relayed at all (the ready-NO-HOST case)", () => {
+    const { api, registry } = harness();
+    const element = new FakeWebviewElement();
+    registry.register("t1", element); // created because the user opened the pane, not because Main asked
+
+    element.emit("dom-ready");
+
+    expect(api.webRunnerReady).not.toHaveBeenCalled();
+  });
+
+  test("once Main asks for a tab, even one already registered from the user's own toggle, its dom-ready starts reaching Main", async () => {
+    const { api, emit, registry } = harness();
+    const element = new FakeWebviewElement();
+    registry.register("t1", element); // the user's own toggle: Main hasn't asked yet
+
+    element.emit("dom-ready");
+    expect(api.webRunnerReady).not.toHaveBeenCalled(); // not yet -- nobody asked
+
+    // Main starts a run on this same tab. `ensure()` finds the element already registered (so no `needsElement`
+    // fires), but must still mark the tab wanted -- this is the only place that later interest is ever recorded.
+    await emit("webRunner.ensure", { tabId: "t1" });
+    element.emit("dom-ready"); // the real run's own reload firing its ready
 
     expect(api.webRunnerReady).toHaveBeenCalledWith("t1");
   });

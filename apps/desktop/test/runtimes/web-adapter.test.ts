@@ -44,7 +44,13 @@ class FakeRawWebview implements RawWebview {
 
   executeJavascript(js: string): void {
     this.executed.push(js);
-    if (this.autoReady && js.includes(ASSERT_HOST_HOOK_SNIPPET)) this.emit(1, { type: "ready" });
+    // A real timer, not a same-tick microtask: M4 T9c's re-review of `waitForReady` established that it must not
+    // subscribe to `ready` until `host.reset()` itself has resolved (closing a stale-ready race -- see
+    // `waitForReady`'s own doc comment), and `reset()` resolves synchronously right after this call returns. Firing
+    // "ready" in the same microtask turn as that resolution would race it, sometimes losing the message before
+    // `waitForReady`'s listener is even attached; a macrotask guarantees the genuine round trip this simulates
+    // (page -> host, across a real IPC boundary) is never mistaken for something narrower.
+    if (this.autoReady && js.includes(ASSERT_HOST_HOOK_SNIPPET)) setTimeout(() => this.emit(1, { type: "ready" }), 0);
   }
 
   onLoaded(listener: () => void): () => void {
@@ -565,7 +571,7 @@ describe("WebAdapter", () => {
         vendorCache: { get: async () => null, set: async () => {} },
         bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true, closure: [] }),
         runLock: { add: () => {}, remove: () => {} },
-        expandTimeoutMs: 30,
+        webviewReadyTimeoutMs: 30,
         bundle: async () => ({ code: "x", map: "", imports: [], vendorCacheable: true }),
       });
       const sink: RunEventSink = {
@@ -591,6 +597,88 @@ describe("WebAdapter", () => {
       await expect(adapter.start(run, sink)).rejects.toThrow(/never reported ready/);
       // The stuck webview is discarded so the tab's next run gets a genuinely fresh one.
       expect(webviews.destroyedTabIds).toEqual(["t1"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("M4 T9c: a stale 'ready' from the tab's previous page does not satisfy a later run's readiness wait", async () => {
+    // A verified finding from an automated PR review (CodeRabbit on PR #3), confirmed by reading `waitForReady`
+    // directly rather than taking the claim on faith: it used to subscribe to `host.onMessage` *before* calling
+    // `host.reset()`, so nothing stopped a "ready" still in flight from the tab's *previous* page from satisfying a
+    // wait it does not belong to. The SAME persistent webview is reset() again on every run on that tab (Task 8's
+    // invariant), and `WebToHostMessage` carries no generation/epoch of its own to tell "this reload's ready" apart
+    // from "the last one's, delayed in transit". This drives that race directly: a "ready" for run 2 arrives before
+    // run 2's own page has actually reloaded, and must not let the run proceed against the stale realm.
+    const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
+    try {
+      const webviews = new FakeWebviewSource();
+      const raw = new FakeRawWebview();
+      raw.autoLoad = false;
+      raw.autoReady = false;
+      webviews.raws.set("t1", raw);
+      webviews.hosts.set("t1", createSequencedWebviewHost(raw, BOOTSTRAP_SOURCE));
+      const adapter = createWebAdapter({
+        webviews,
+        runtime: "browser",
+        runsDir: dir,
+        packagesNodeModules: join(dir, "node_modules"),
+        bunLockPath: join(dir, "bun.lock"),
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true, closure: [] }),
+        runLock: { add: () => {}, remove: () => {} },
+        bundle: async () => ({ code: "x", map: "", imports: [], vendorCacheable: true }),
+      });
+      const sink: RunEventSink = {
+        attached: () => {},
+        events: () => {},
+        state: () => {},
+        heartbeat: () => {},
+        exited: () => {},
+      };
+      const run1: PreparedRun = {
+        runId: "run-1",
+        tabId: "t1",
+        code: "1 + 1",
+        maxEntries: 10_000,
+        workingDirectory: null,
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+
+      // Run 1 completes normally, driven by hand, leaving the persistent webview's realm loaded and alive.
+      const start1 = adapter.start(run1, sink);
+      await Bun.sleep(0);
+      raw.fireLoaded();
+      await Bun.sleep(0); // let the post-reset() subscription attach before the genuine "ready" arrives
+      raw.emit(1, { type: "ready" });
+      await start1;
+      raw.emit(2, { type: "state", runId: "run-1", state: "stopped", activeHandles: 0 });
+      expect(raw.destroyed).toBe(false); // a graceful stop never destroys the webview (decision 1)
+
+      // Run 2 begins on the SAME webview/host. Its own page has not reloaded yet (raw.fireLoaded() not called
+      // again below) when a "ready" -- indistinguishable on the wire from a genuine one -- arrives: a straggler
+      // from run 1's page, still in flight when this reset() superseded it.
+      const run2: PreparedRun = { ...run1, runId: "run-2" };
+      const start2 = adapter.start(run2, sink);
+      await Bun.sleep(0);
+      expect(raw.reloadCount).toBe(2); // run 2's own reset() has requested a reload...
+      raw.emit(3, { type: "ready" }); // ...but this "ready" arrives before that reload actually completed.
+
+      // Race start2 against a short real timer: if the stale message wrongly satisfied the wait, start2 resolves
+      // well within this window, without run 2's own page ever having reloaded.
+      const raced = await Promise.race([
+        start2.then(() => "resolved" as const),
+        new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 50)),
+      ]);
+      expect(raced).toBe("pending"); // must still be waiting for run 2's OWN ready, not the stale one
+
+      // Finish run 2 for real: its own reload, then its own ready.
+      raw.fireLoaded();
+      await Bun.sleep(0);
+      raw.emit(4, { type: "ready" });
+      await start2;
+      expect(raw.executed.some((js) => js.includes('"type":"run"'))).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

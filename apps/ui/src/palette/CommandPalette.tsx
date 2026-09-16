@@ -3,6 +3,7 @@ import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "
 import { useStore } from "zustand";
 import type { CommandRegistry } from "../commands/registry";
 import { getEditorHandle } from "../editor/editor-handle";
+import { useOverlayPresence } from "../shell/overlay-presence";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { paletteItems } from "./items";
@@ -37,6 +38,10 @@ function PaletteBody(props: {
   context: "editor" | "output";
 }) {
   const { store, registry, bindings, context } = props;
+  // M4 T9c: this component only ever mounts while the palette is open (`CommandPalette` above returns null
+  // otherwise), so its whole mount lifetime IS the open window -- see `overlay-presence.ts`. This is the
+  // deliverable Task 9a's screenshot caught occluded by a docked Web View: see WebViewHosts.tsx.
+  useOverlayPresence(true);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);

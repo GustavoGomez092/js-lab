@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
+import { useOverlayOpen } from "../shell/overlay-presence";
 import type { AppStore } from "../state/store";
 import { RUNNER_WEB_URL, type TileWebview, WebViewTile } from "./WebViewTile";
 import { createWebviewHostRegistry } from "./webview-host";
@@ -36,6 +38,28 @@ export interface WebviewDock {
  * always produces one). Second, a destroyed webview is replaceable: `generation` below is bumped only when the
  * registry reports it has no element for a tab Main is asking about, which is exactly the Kill / timed-out-reset
  * case and never anything the user did.
+ *
+ * **M4 T9c: occlusion.** A real run (Task 9a's screenshot) settled a question CSS alone could never answer: a
+ * native `<electrobun-webview>` surface paints above every HTML element regardless of `z-index` -- with a docked
+ * Web View and the command palette open, the webview visibly punched through the palette's scrim and panel.
+ * `styles.css`'s stacking-order comment on `.webview-parking` used to claim the opposite ("dialogs/menus/the
+ * palette correctly paint over a docked webview"); that was simply untested against a real compositor and is now
+ * known false, so it has been corrected there. The fix here: `useOverlayOpen()` (`../shell/overlay-presence.ts`)
+ * reports whether at least one occluding overlay -- the palette, a dialog, a sheet, or a tab's context menu -- is
+ * currently open anywhere in the shell, and every tile is computed as `docked` only when it is ALSO not. A
+ * collapsed tile is the same 1x1, `pointerEvents: none` box `WebViewTile` already uses while backgrounded (nothing
+ * new to build) -- see `WebViewTile.tsx`'s own doc comment for why 1x1 and not literally 0x0 -- so there is
+ * effectively no native surface left in the tile's rectangle for an overlay to lose to. Cost: a running tab's Web
+ * View visibly disappears for as long as any overlay is open, reappearing the instant the last one closes -- the
+ * run itself is untouched (the host is never unmounted or reset for this; see `useOverlayPresence`'s own doc
+ * comment for why moving the overlay outside the tile's rectangle, or some other mechanism, was not chosen instead).
+ *
+ * **M4 T9c: the portal hoist.** Every tile's `<div>` now reaches `parkingNode` through ONE `createPortal` call made
+ * here, wrapping the whole keyed array of `<WebViewTile>` elements below -- not, as before, one `createPortal` call
+ * made independently inside each `WebViewTile`. See `WebViewTile.tsx`'s own doc comment for why: a direct probe of
+ * React 19.3.0 found that several separate portals into the same container do not reorder relative to each other
+ * after mount even with distinct keys, while a single portal's keyed children reorder correctly through ordinary
+ * reconciliation -- and DOM order is what decides which surface wins now that `z-index` cannot arbitrate at all.
  */
 export function WebViewHosts({
   store,
@@ -65,6 +89,9 @@ export function WebViewHosts({
   );
   const [parkingNode, setParkingNode] = useState<HTMLDivElement | null>(null);
   const webTabs = liveKey ? liveKey.split(",").map((entry) => entry.split("=")[0] as string) : [];
+  // M4 T9c: whether at least one occluding overlay (the palette, a dialog, a sheet, a context menu) is open
+  // anywhere in the shell right now -- see this component's own doc comment and `overlay-presence.ts`.
+  const overlayOpen = useOverlayOpen();
 
   // N4: which tabIds have ever had their Web View toggle on -- passed to each tile as `enabled`, gating creation
   // of the real `<electrobun-webview>` inside it (`WebViewTile.tsx`). Once added here a tabId is never removed
@@ -140,22 +167,27 @@ export function WebViewHosts({
           works because nothing above it says otherwise. */}
       <div ref={setParkingNode} className="webview-parking" />
       {parkingNode &&
-        webTabs.map((tabId) => {
-          const docked = dock?.tabId === tabId;
-          return (
-            <WebViewTile
-              key={tabId}
-              tabId={tabId}
-              dockNode={docked ? (dock?.node ?? null) : null}
-              docked={docked}
-              parkingNode={parkingNode}
-              enabled={everEnabled.has(tabId) || demanded.has(tabId)}
-              generation={demanded.get(tabId) ?? 0}
-              createWebview={makeWebview}
-              onElement={onElement}
-            />
-          );
-        })}
+        createPortal(
+          webTabs.map((tabId) => {
+            // M4 T9c: docked also requires no overlay to be open right now -- see this component's own doc
+            // comment. Collapsing here (rather than in `WebViewTile`) keeps `docked` as the single source of truth
+            // both for the tile's own geometry/`aria-hidden` and for whether it visually competes with an overlay.
+            const docked = dock?.tabId === tabId && !overlayOpen;
+            return (
+              <WebViewTile
+                key={tabId}
+                tabId={tabId}
+                dockNode={docked ? (dock?.node ?? null) : null}
+                docked={docked}
+                enabled={everEnabled.has(tabId) || demanded.has(tabId)}
+                generation={demanded.get(tabId) ?? 0}
+                createWebview={makeWebview}
+                onElement={onElement}
+              />
+            );
+          }),
+          parkingNode,
+        )}
     </>
   );
 }

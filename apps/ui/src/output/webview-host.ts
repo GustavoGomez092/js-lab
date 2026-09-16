@@ -49,12 +49,25 @@ interface Entry {
 export function createWebviewHostRegistry(api: MainApi): WebviewHostRegistry {
   const entries = new Map<string, Entry>();
   const needsElement = new Set<(tabId: string) => void>();
+  // M4 T9c (the `ready-NO-HOST` initial load): a tab's tile creates its `<electrobun-webview>` -- and that element
+  // starts loading `views://` -- the moment the element is created (`WebViewHosts.tsx`'s `makeWebview`), whether
+  // that happens because the *user* merely opened the Web View pane or because *Main* actually asked for one. Only
+  // the second case has anyone listening: `wanted` tracks every tabId Main has EVER shown interest in (asked for
+  // via `webRunner.ensure`, or `webRunner.reload` -- see below), so the tile-creation-time `dom-ready` for a tab
+  // nobody asked about is never even forwarded, rather than reaching Main's own `webviews.ready()` and finding no
+  // host entry there (harmless, but a wasted round trip -- see the task report for why the load itself still
+  // happens: eliminating that too would need the element's own first navigation deferred past creation, which
+  // touches real native-webview load semantics this task chose not to take on). Once a tabId is in `wanted` it
+  // stays there for the session: a tab Main has ever run code in will be asked for again on every later run too.
+  const wanted = new Set<string>();
 
   function attach(tabId: string, element: WebviewElement): () => void {
     // `dom-ready` fires on the element's first load *and* after every reload -- which is precisely the contract
     // `RawWebview.onLoaded` documents on Main's side, and the point Electrobun guarantees its own
     // `__electrobunSendToHost` hook is already installed, so the injected bootstrap can always reach the host.
-    const onDomReady = () => api.webRunnerReady(tabId);
+    const onDomReady = () => {
+      if (wanted.has(tabId)) api.webRunnerReady(tabId);
+    };
     const onHostMessage = (event: CustomEvent) => api.webRunnerMessage(tabId, (event as { detail?: unknown }).detail);
     element.on("dom-ready", onDomReady);
     element.on("host-message", onHostMessage);
@@ -75,6 +88,11 @@ export function createWebviewHostRegistry(api: MainApi): WebviewHostRegistry {
 
   const unsubscribes = [
     api.on("webRunner.ensure", ({ tabId }) => {
+      // Marks `tabId` wanted regardless of whether it already has an element: a tab whose Web View pane the user
+      // opened before ever running anything already has one (registered, `wanted` still false) by the time Main's
+      // *own* first `ensure()` for that tab arrives here -- this is the only place that later run's interest is
+      // ever recorded, so it must not be gated behind `entries.has(tabId)` the way the `needsElement` signal below is.
+      wanted.add(tabId);
       if (entries.has(tabId)) return;
       for (const listener of [...needsElement]) listener(tabId);
     }),
@@ -86,6 +104,11 @@ export function createWebviewHostRegistry(api: MainApi): WebviewHostRegistry {
       entries.get(tabId)?.element.executeJavascript(js);
     }),
     api.on("webRunner.reload", ({ tabId }) => {
+      // Marked wanted here too, not only in `webRunner.ensure` above: normally `ensure` arrives first and this is
+      // redundant, but nothing guarantees that ordering from this module's own point of view, and a reload this
+      // registry didn't yet know was wanted must still unsuppress the `dom-ready` it is about to be satisfied by
+      // (see the comment below).
+      wanted.add(tabId);
       const entry = entries.get(tabId);
       // No element yet: Main sends this the instant `ensure()` resolves, while the UI is still creating the
       // element (a React state change, then an effect), so it routinely arrives first. Reloading later would load

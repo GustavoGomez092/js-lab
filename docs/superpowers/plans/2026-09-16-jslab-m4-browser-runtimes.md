@@ -432,6 +432,56 @@ Also measure and report **how long a bare local `views://` page takes to report 
 
 ---
 
+### Task 9b: Close the page-side run-completion gap
+
+**Added after Task 9a's live run (ledger ruling R-M4-9B-1). This is now THE milestone blocker — it supersedes the wiring gap that created Task 9a.** The Main↔UI wiring works and is proven live; what does not work is the run finishing. A `browser-node` tab reaches `evaluating` and **stays there forever**: no `events` message ever arrives, no terminal state is reached, and the user sees nothing.
+
+**Measured trace from a real run** (Task 9a, §7), so this task starts from evidence rather than suspicion:
+
+```
+reload            t0
+ready (dom-ready) t0 + 11 ms      → bootstrap injected
+ready (page)      seq 1           → the runner-web bootstrap is alive
+state evaluating  seq 2, +41 ms   → the run message arrived; the page began evaluating
+heartbeat × 32    every ~500 ms   → the page keeps reporting liveness
+(no events, ever)
+```
+
+**Already ruled out by direct measurement — do not re-derive these:** the transport is fine (`__electrobunSendToHost` present; a Main→page→Main round trip in ~17 ms); the 36 KB bootstrap injection is not dropped (`window.__jl` is an object, `window.__jslabHostMessage` a function, on `views://runner-web/index.html`); the `run` message is delivered (the page itself reported `evaluating` with a real `runId`); blob-URL module import is **not** blocked under `views://` (an injected blob module executed and resolved); and detached timers do **not** throw `Illegal invocation` (the emitted bundle is not strict-mode, and an in-page probe of the exact call shape returned `method-ok`).
+
+**The remaining suspect:** `startRun`'s `await import(blobURL)` of the **real joined vendor+app bundle** never settles, so `setState` never runs and buffered events are never flushed. That is `runner-web`/bundling territory — Tasks 3, 6, 8a — not the wiring.
+
+- **Start with the join.** Task 8a replaced externals-plus-import-map with a **page-global registry plus a per-package CommonJS stub**, because Bun emits a CJS chunk as `export default require_x()` and named imports cannot link across a cached chunk boundary. A module graph assembled that way is the most likely place for an import that never resolves.
+- **Task 10 found a related sharp edge worth testing against:** Bun's CJS→ESM named-export synthesis **misses properties assigned onto an aliased identifier** (only literal `exports.foo =` / `module.exports.foo =`), and `Bun.resolveSync` prefers its own builtin shim over a same-named real npm package even when installed.
+- **This task owns the proof, not just the fix:** a `browser-node` tab must run a real file end to end — including one importing a bundled package — and produce output, demonstrated in a built app, not only in unit tests.
+
+**Needs permission to build and run the app** (already granted for this area).
+
+**Files:** unknown until diagnosed. Expect `packages/runner-web/src/bootstrap.ts`, `apps/desktop/src/main/bundling/bundler.ts`, and whatever the join turns out to require.
+
+- [ ] Steps: reproduce in a built app; bisect the bundle (app-only, vendor-only, joined) to find which import stalls; fix; prove a real run completes with output and a terminal state; then re-run Task 9a's live checks. **Counts: stated by the controller at dispatch.**
+
+---
+
+### Task 9c: Web View occlusion, stacking and the portal hoist
+
+**Added after Task 9a's live run (ledger ruling R-M4-9C-1).** Task 9a settled the compositor question with a screenshot, and the answer is the bad one: **a native webview surface paints above HTML regardless of z-index.** With a docked Web View and the command palette open, the webview **punches through the palette**, occluding the panel and its scrim. `.palette` declares `z-index: 71`; the tile declares none. CSS stacking does not arbitrate native surfaces at all.
+
+**Three consequences, all of which land here:**
+
+1. **The palette, dialogs and context menus are currently hidden behind a docked Web View.** That is a real usability defect in the shipping UI, not a theoretical one. Decide the mechanism — hide or collapse the surface while an overlay is open, move the overlay out of the webview's rectangle, or something better — and test it.
+2. **`WebViewHosts.tsx`'s comment claiming "dialogs/menus/the palette correctly paint over a docked webview" is false in a real run.** Correct it regardless of which fix is chosen; a comment asserting a property the product does not have is worse than none.
+3. **Hoist `createPortal` from `WebViewTile` into `WebViewHosts`.** Task 9's re-review established that a **single** portal inserts *and* reorders correctly while sibling portals do not, and deferred the hoist because it was unclear whether DOM order mattered. **It now demonstrably does** — since z-index cannot arbitrate, DOM order decides which surface wins, so tile ordering is a correctness bug. The hoist also restores full tile laziness. Also narrow the M2 test's name to what it proves: that *enable* order does not determine DOM order.
+
+**Also in scope, both from Task 9a's measurements:**
+
+- **Give `waitForReady` its own timeout constant.** Measured `views://` ready time is **11–23 ms** against a 5000 ms bound — a 220–450× margin, so the value is not tight. The problem is that it is the **wrong kind of bound**: `expandTimeoutMs` gives up harmlessly, while this one tears down the webview and fails the run, and the two will drift the moment anyone tunes `expand`. A dedicated constant near 2 s keeps two orders of magnitude of headroom. (Closes ledger R-M4-T7-TIMEOUT-1.)
+- **A latent defect Task 9a found and did not fix:** the tile's element loads `views://` once at creation, firing `dom-ready` **before any host exists** (`ready-NO-HOST` in its traces). Harmless today because the run's own `reload()` supersedes it, but it is a wasted load and a `ready` delivered to nobody.
+
+- [ ] Steps: failing test for overlay-over-webview where one is expressible; the occlusion fix; the portal hoist with its ordering test; the dedicated timeout constant; the initial-load fix; then a live-run check that the palette and a dialog are visible over a docked Web View. **Counts: stated by the controller at dispatch.**
+
+---
+
 ### Task 10: Sync polyfills for `browser-node`
 
 **Files:**

@@ -9,6 +9,13 @@ const bundles = [
   // `dist/runner` is already shipped by electrobun.config.ts's `"dist/runner": "runner"` rule.
   "bun build ../../packages/runner-web/src/web-entry.ts --target browser --outfile dist/runner/web-bootstrap.js",
   "bun build src/main/transform/transform-worker.ts --target bun --outfile dist/workers/transform-worker.js",
+  // Task 10 fix round 2 (B1): `electrobun.config.ts`'s `build.copy` key must be a project (apps/desktop)
+  // -relative source path -- `.`/`..` components are rejected for every other path-ish field in that same
+  // config block, and the copy implementation isn't auditable in this environment to confirm an escaping key
+  // like "../../THIRD-PARTY-NOTICES.md" would even error rather than silently skip. Staging the file into
+  // `dist/` here, then copying it with an ordinary project-relative key, works regardless of how that
+  // ambiguity would have resolved -- the same shape every other `build.copy` entry already uses.
+  "mkdir -p dist && cp ../../THIRD-PARTY-NOTICES.md dist/THIRD-PARTY-NOTICES.md",
 ].join(" && ");
 
 export default {

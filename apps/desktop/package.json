@@ -7,6 +7,7 @@
     "@jslab/npm": "workspace:*",
     "@jslab/rpc-schema": "workspace:*",
     "@jslab/runner-bun": "workspace:*",
+    "@jslab/runner-web": "workspace:*",
     "@jslab/shared": "workspace:*",
     "@jslab/themes": "workspace:*",
     "@jslab/transform": "workspace:*",

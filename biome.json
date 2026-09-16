@@ -9,7 +9,8 @@
       "!**/artifacts",
       "!**/.hutch",
       "!**/.cottontail-tmp",
-      "!spikes"
+      "!spikes",
+      "!packages/runner-web/src/polyfills/vendor/*.js"
     ]
   },
   "formatter": {

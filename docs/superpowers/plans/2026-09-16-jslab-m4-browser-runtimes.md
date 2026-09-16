@@ -324,7 +324,12 @@ export interface RunHandle {
 - **Unresponsive** reuses the coordinator's existing watchdog against the web runner's 500 ms heartbeat: no new timer, no new threshold.
 - **Fail closed on the working directory** the way `RunCoordinator.#execute` does: compare the scope Main handed the bundler against the tab's current WD before running, since a webview has no OS `cwd`.
 
-- [ ] Steps: failing adapter test with a fake webview host (reset, run, stop escalation, kill-and-recreate, dispose), then the implementation, then registry wiring. **Counts: desktop +10; root 972 → 982.**
+**Carried from Task 3's review (M1, M2) — decide both explicitly, don't inherit them by accident:**
+
+- **Realm reuse.** Task 3's `dispose()` clears handles and the heartbeat but never un-patches the globals it wrapped (`setTimeout`, `fetch`, `WebSocket`, `requestAnimationFrame`, `AudioContext`, `HTMLMediaElement.prototype.play`), exactly as the Bun runner never restores its own — safe only because a process, or a webview, is discarded rather than reused. **This task decides:** either destroy and recreate the webview for every run, not just Stop and Kill, or add an uninstall path in `runner-web`. State which, and why, in the report. If a realm is ever reused without one of those, the wrappers stack silently.
+- **Bridge ordering.** `host-bridge.ts`'s `send()` uses `g.__electrobunSendToHost?.(envelope)`, so if the host hook is injected even one tick after the bootstrap runs, the first `ready` message is dropped with no queue and no retry. **This task must guarantee the hook exists before the bootstrap executes** and assert it, or add a queue. A silently lost `ready` looks exactly like a hung runner.
+
+- [ ] Steps: failing adapter test with a fake webview host (reset, run, stop escalation, kill-and-recreate, dispose), then the implementation, then registry wiring, then the two decisions above recorded in the report. **Counts: desktop +10; root 972 → 982.**
 
 ---
 

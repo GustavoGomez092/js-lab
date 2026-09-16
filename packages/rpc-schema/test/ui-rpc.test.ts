@@ -98,6 +98,21 @@ describe("inbound validators", () => {
     ).toBe(false);
   });
 
+  // Fix round 1 (F5): tiles used to require every field once present, so a partial tiles patch failed validation
+  // and took the whole tab.patch down with it -- language/runtime/title included.
+  test("tab.patch's layout.tiles accepts a partial patch without taking the rest of the patch down (fix round 1, F5)", () => {
+    const parsed = tabPatchSchema.parse({
+      tabId: "t1",
+      patch: { runtime: "browser", layout: { tiles: { webviewVisible: true } } },
+    });
+    expect(parsed.patch.runtime).toBe("browser");
+    expect(parsed.patch.layout?.tiles).toEqual({ webviewVisible: true });
+    // Still rejects a genuinely invalid tiles field, partial or not.
+    expect(tabPatchSchema.safeParse({ tabId: "t1", patch: { layout: { tiles: { consoleSize: 500 } } } }).success).toBe(
+      false,
+    );
+  });
+
   test("e2e.response requires a positive request id and caps error text", () => {
     expect(e2eResponseSchema.safeParse({ reqId: 1, ok: true, result: { any: "thing" } }).success).toBe(true);
     expect(e2eResponseSchema.safeParse({ reqId: 0, ok: true }).success).toBe(false);

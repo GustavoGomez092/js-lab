@@ -90,7 +90,9 @@ export function StatusBar({
           title={webviewSupported ? undefined : strings.shell.webView.unavailable}
           onClick={() => store.getState().toggleWebviewVisible()}
         >
-          {webviewVisible ? strings.shell.webView.hide : strings.shell.webView.show}
+          {/* Fix round 1 (F6): a bun tab has nothing to hide, even if `webviewVisible` is still true from before
+              its runtime was switched away from a web one -- the label must say so, not "Hide". */}
+          {webviewSupported && webviewVisible ? strings.shell.webView.hide : strings.shell.webView.show}
         </button>
         {workingDirectory ? (
           <span className="status-wd">

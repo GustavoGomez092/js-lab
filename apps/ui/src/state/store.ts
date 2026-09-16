@@ -424,7 +424,10 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       },
 
       resetConsoleSize() {
-        updateLayout((layout) => ({ tiles: { ...layout.tiles, consoleSize: EDITOR_SIZE_RESET } }));
+        // Fix round 1 (F8): 55, matching tiles.consoleSize's own schema default (packages/shared/src/session.ts)
+        // -- unlike EDITOR_SIZE_RESET (50), which resets editorSize to a value that disagrees with its own default
+        // too; that pre-existing mismatch is unchanged here, not propagated to a second control.
+        updateLayout((layout) => ({ tiles: { ...layout.tiles, consoleSize: 55 } }));
       },
 
       toggleWebviewVisible() {

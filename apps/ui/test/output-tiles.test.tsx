@@ -2,17 +2,22 @@ import { describe, expect, test } from "bun:test";
 import { tabPatchSchema } from "@jslab/rpc-schema";
 import { createTab, defaultSession, defaultSettings, type Runtime, type TabState } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
+import { useStore } from "zustand";
+import type { MainApi } from "../src/api";
 import { OutputTiles } from "../src/output/OutputTiles";
+import { WebViewHosts, type WebviewDock } from "../src/output/WebViewHosts";
+import { SplitPane } from "../src/shell/SplitPane";
 import { StatusBar } from "../src/shell/StatusBar";
 import { computeTabPatch } from "../src/shell/tab-patch";
-import { createAppStore } from "../src/state/store";
+import { type AppStore, createAppStore } from "../src/state/store";
 import { strings } from "../src/strings";
 import { createFakeApi } from "./fake-api";
 
 /** A fully-formed tab, so overriding `layout.tiles` never has to satisfy the schema's own defaults by hand twice. */
-function tabWith(overrides: { runtime?: Runtime; tiles?: Partial<TabState["layout"]["tiles"]> }): TabState {
+function tabWith(id: string, overrides: { runtime?: Runtime; tiles?: Partial<TabState["layout"]["tiles"]> }): TabState {
   return createTab({
-    id: "t1",
+    id,
     runtime: overrides.runtime ?? "browser",
     layout: {
       orientation: "horizontal",
@@ -29,11 +34,11 @@ function tabWith(overrides: { runtime?: Runtime; tiles?: Partial<TabState["layou
   });
 }
 
-function hydrated(overrides: Parameters<typeof tabWith>[0] = {}) {
+function hydrated(overrides: Parameters<typeof tabWith>[1] = {}) {
   const store = createAppStore();
   store.getState().hydrate({
     settings: defaultSettings(),
-    session: defaultSession(() => tabWith(overrides)),
+    session: defaultSession(() => tabWith("t1", overrides)),
     buffers: { t1: "" },
     safeMode: { active: false, reason: null },
     versions: { app: "0", bun: "1.4.0" },
@@ -41,73 +46,183 @@ function hydrated(overrides: Parameters<typeof tabWith>[0] = {}) {
   return store;
 }
 
-describe("OutputTiles", () => {
-  test("a bun tab renders only the Console tile -- no nested split, no <electrobun-webview> (spec §7.1)", () => {
+/** `OutputTiles` and `WebViewHosts`, wired the same trivial way `App.tsx` wires them, with no outer split -- for
+ * tests that don't care about the Output panel's own visibility. */
+function renderTiles(store: AppStore, api: MainApi) {
+  function Harness() {
+    const [dock, setDock] = useState<WebviewDock | null>(null);
+    return (
+      <>
+        <OutputTiles store={store} api={api} onWebviewDock={setDock} />
+        <WebViewHosts store={store} dock={dock} />
+      </>
+    );
+  }
+  return render(<Harness />);
+}
+
+/**
+ * Mirrors `App.tsx`'s real composition exactly (fix round 1): the outer Editor/Output `SplitPane`, its `second`
+ * slot holding `OutputTiles`, and `WebViewHosts` as a *sibling* of that `SplitPane` -- not inside it -- receiving
+ * the dock state `OutputTiles` reports. This is deliberately not a reimplementation of any logic under test: both
+ * `OutputTiles` and `WebViewHosts` are the real production components; this only wires them the same two-line way
+ * `App.tsx` does, so tests can exercise hiding Output (`SplitPane`'s own hide-on-`false` path) without rendering
+ * the rest of `App` (Editor/Monaco included). Used only where that outer split matters (F1a); everything else
+ * uses the simpler `renderTiles` above, since the outer split contributes its own separator otherwise.
+ */
+function renderArea(store: AppStore, api: MainApi) {
+  function Harness() {
+    const outputVisible = useStore(store, (s) => s.tab?.layout.outputVisible ?? true);
+    const [dock, setDock] = useState<WebviewDock | null>(null);
+    return (
+      <>
+        <SplitPane
+          orientation="horizontal"
+          size={50}
+          secondVisible={outputVisible}
+          onResize={() => {}}
+          onReset={() => {}}
+          first={<div />}
+          second={<OutputTiles store={store} api={api} onWebviewDock={setDock} />}
+        />
+        <WebViewHosts store={store} dock={dock} />
+      </>
+    );
+  }
+  return render(<Harness />);
+}
+
+describe("OutputTiles / WebViewHosts", () => {
+  test("a bun tab renders only the Console tile -- no split, no <electrobun-webview> anywhere (spec §7.1)", () => {
     const store = hydrated({ runtime: "bun" });
     const { api } = createFakeApi();
-    render(<OutputTiles store={store} api={api} />);
+    renderTiles(store, api);
     expect(screen.getByRole("region", { name: strings.output.region })).toBeTruthy();
     expect(screen.queryByRole("separator")).toBeNull();
     expect(document.querySelector("electrobun-webview")).toBeNull();
-    expect(screen.queryByTestId("webview-tile")).toBeNull();
+    expect(screen.queryByTestId("webview-tile-t1")).toBeNull();
   });
 
-  test("a browser-mode tab mounts the Web View tile collapsed to zero size when hidden by default", () => {
+  test("a browser-mode tab's Web View starts parked (hidden by default), with no dishonest divider (fix round 1, F4)", () => {
     const store = hydrated({ runtime: "browser" });
     const { api } = createFakeApi();
-    render(<OutputTiles store={store} api={api} />);
-    expect(screen.getByRole("separator")).toBeTruthy();
-    const tile = screen.getByTestId("webview-tile");
+    renderTiles(store, api);
+    // Default webviewVisible is false: no split at all, same shape as a bun tab's console-only render, so there
+    // is no separator advertising a pane that isn't there (F4 -- output-tiles.test.tsx:58 formerly enshrined one).
+    expect(screen.queryByRole("separator")).toBeNull();
+    // But the host itself exists and is mounted, not merely absent -- parked, not destroyed. It always lives
+    // inside .webview-parking (WebViewTile never moves in the DOM -- see WebViewTile.tsx); aria-hidden is what
+    // actually distinguishes docked from parked.
+    const tile = screen.getByTestId("webview-tile-t1");
     expect(tile.getAttribute("aria-hidden")).toBe("true");
-    expect(tile.style.width).toBe("0px");
-    expect(tile.style.height).toBe("0px");
-    // Mounted, not merely styled away: the actual <electrobun-webview> node exists underneath it.
+    expect(tile.closest(".webview-parking")).toBeTruthy();
     expect(tile.querySelector("electrobun-webview")).toBeTruthy();
   });
 
-  test("toggling Web View visible collapses/expands the tile without recreating its <electrobun-webview> (M0-S4)", () => {
-    const store = hydrated({ runtime: "browser" });
+  test("hiding the Output panel parks the webview instead of destroying it, and redocks the same node (fix round 1, F1a)", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
     const { api } = createFakeApi();
-    render(<OutputTiles store={store} api={api} />);
-    const before = document.querySelector("electrobun-webview");
-    expect(before).toBeTruthy();
+    renderArea(store, api);
+    const before = screen.getByTestId("webview-tile-t1");
+    const beforeWebview = before.querySelector("electrobun-webview");
+    expect(before.getAttribute("aria-hidden")).toBe("false");
 
-    act(() => store.getState().toggleWebviewVisible());
-    expect(document.querySelector("electrobun-webview")).toBe(before);
-    const tile = screen.getByTestId("webview-tile");
-    expect(tile.getAttribute("aria-hidden")).toBe("false");
-    expect(tile.style.width).toBe("");
+    act(() => store.getState().toggleOutputVisible());
+    // Reachable from the View menu's "Output" item and the view.toggleOutput command (menu.ts:208).
+    expect(screen.queryByRole("region", { name: strings.output.region })).toBeNull();
+    const parked = screen.getByTestId("webview-tile-t1");
+    expect(parked).toBe(before); // same node -- not destroyed and recreated
+    expect(parked.querySelector("electrobun-webview")).toBe(beforeWebview);
+    expect(parked.getAttribute("aria-hidden")).toBe("true");
 
-    act(() => store.getState().toggleWebviewVisible());
-    expect(document.querySelector("electrobun-webview")).toBe(before);
-    expect(screen.getByTestId("webview-tile").getAttribute("aria-hidden")).toBe("true");
+    act(() => store.getState().toggleOutputVisible());
+    const redocked = screen.getByTestId("webview-tile-t1");
+    expect(redocked).toBe(before);
+    expect(redocked.querySelector("electrobun-webview")).toBe(beforeWebview);
+    expect(redocked.getAttribute("aria-hidden")).toBe("false");
   });
 
-  test("arrangement maps to the nested split's orientation, and order controls which tile renders first", () => {
-    const stacked = hydrated({ runtime: "browser", tiles: { arrangement: "stacked" } });
+  test("switching to a bun tab parks the other tab's webview instead of destroying it; the bun tab never creates one (fix round 1, F1b)", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
+    store.getState().openTab(tabWith("t2", { runtime: "bun" }), "");
+    store.getState().activateTab("t1");
     const { api } = createFakeApi();
-    const { container, rerender } = render(<OutputTiles store={stacked} api={api} />);
+    renderTiles(store, api);
+    const before = screen.getByTestId("webview-tile-t1");
+    const beforeWebview = before.querySelector("electrobun-webview");
+    expect(before.getAttribute("aria-hidden")).toBe("false");
+
+    act(() => store.getState().activateTab("t2"));
+    expect(document.querySelectorAll("electrobun-webview")).toHaveLength(1); // still only t1's -- t2 never got one
+    const parked = screen.getByTestId("webview-tile-t1");
+    expect(parked).toBe(before);
+    expect(parked.querySelector("electrobun-webview")).toBe(beforeWebview);
+    expect(parked.getAttribute("aria-hidden")).toBe("true");
+    expect(parked.closest(".webview-parking")).toBeTruthy();
+
+    act(() => store.getState().activateTab("t1"));
+    const redocked = screen.getByTestId("webview-tile-t1");
+    expect(redocked).toBe(before);
+    expect(redocked.querySelector("electrobun-webview")).toBe(beforeWebview);
+    expect(redocked.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  test("two browser tabs each keep their own persistent host; only the active tab's is ever docked (fix round 1, F2)", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
+    store.getState().openTab(tabWith("t2", { runtime: "browser", tiles: { webviewVisible: true } }), "");
+    store.getState().activateTab("t1");
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+
+    const tile1Before = screen.getByTestId("webview-tile-t1");
+    const tile2Before = screen.getByTestId("webview-tile-t2");
+    const webview1 = tile1Before.querySelector("electrobun-webview");
+    const webview2 = tile2Before.querySelector("electrobun-webview");
+    expect(webview1).toBeTruthy();
+    expect(webview2).toBeTruthy();
+    expect(webview1).not.toBe(webview2); // distinct hosts, not one shared instance
+    expect(tile1Before.getAttribute("aria-hidden")).toBe("false"); // t1 active: docked
+    expect(tile2Before.getAttribute("aria-hidden")).toBe("true"); // t2 backgrounded: parked, not gone
+
+    act(() => store.getState().activateTab("t2"));
+    const tile1After = screen.getByTestId("webview-tile-t1");
+    const tile2After = screen.getByTestId("webview-tile-t2");
+    expect(tile1After).toBe(tile1Before);
+    expect(tile2After).toBe(tile2Before);
+    expect(tile1After.querySelector("electrobun-webview")).toBe(webview1);
+    expect(tile2After.querySelector("electrobun-webview")).toBe(webview2);
+    expect(tile1After.getAttribute("aria-hidden")).toBe("true"); // now backgrounded
+    expect(tile2After.getAttribute("aria-hidden")).toBe("false"); // now active
+  });
+
+  test("arrangement maps to the split's orientation, and order controls which tile's dock renders first", () => {
+    const stacked = hydrated({ runtime: "browser", tiles: { webviewVisible: true, arrangement: "stacked" } });
+    const { api } = createFakeApi();
+    const { container, rerender } = render(<OutputTiles store={stacked} api={api} onWebviewDock={() => {}} />);
     expect(container.querySelector(".split-vertical")).toBeTruthy();
 
-    const sideBySide = hydrated({ runtime: "browser", tiles: { arrangement: "side-by-side" } });
-    rerender(<OutputTiles store={sideBySide} api={api} />);
+    const sideBySide = hydrated({ runtime: "browser", tiles: { webviewVisible: true, arrangement: "side-by-side" } });
+    rerender(<OutputTiles store={sideBySide} api={api} onWebviewDock={() => {}} />);
     expect(container.querySelector(".split-horizontal")).toBeTruthy();
 
     // Default order (["console", "webview"]): the Console region is the first, sized pane.
     const panes = container.querySelectorAll(".split-pane");
     expect(panes[0]?.querySelector(`[aria-label="${strings.output.region}"]`)).toBeTruthy();
 
-    // Reversed order: Web View renders first instead.
-    const reversed = hydrated({ runtime: "browser", tiles: { order: ["webview", "console"] } });
-    rerender(<OutputTiles store={reversed} api={api} />);
+    // Reversed order: the webview's dock renders first instead.
+    const reversed = hydrated({
+      runtime: "browser",
+      tiles: { webviewVisible: true, order: ["webview", "console"] },
+    });
+    rerender(<OutputTiles store={reversed} api={api} onWebviewDock={() => {}} />);
     const reversedPanes = container.querySelectorAll(".split-pane");
-    expect(reversedPanes[0]?.querySelector('[data-testid="webview-tile"]')).toBeTruthy();
+    expect(reversedPanes[0]?.querySelector(".webview-tile-dock")).toBeTruthy();
   });
 
-  test("dragging the nested split updates consoleSize, converted for which side Console renders on", () => {
+  test("dragging the split updates consoleSize, converted for which side Console renders on", () => {
     const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true, order: ["console", "webview"] } });
     const { api } = createFakeApi();
-    const { rerender } = render(<OutputTiles store={store} api={api} />);
+    const { rerender } = render(<OutputTiles store={store} api={api} onWebviewDock={() => {}} />);
     fireEvent.pointerDown(screen.getByRole("separator"));
     fireEvent.pointerMove(window, { clientX: 999999, clientY: 999999 });
     fireEvent.pointerUp(window);
@@ -120,7 +235,7 @@ describe("OutputTiles", () => {
       runtime: "browser",
       tiles: { webviewVisible: true, order: ["webview", "console"], consoleSize: 55 },
     });
-    rerender(<OutputTiles store={reversed} api={api} />);
+    rerender(<OutputTiles store={reversed} api={api} onWebviewDock={() => {}} />);
     act(() => {
       fireEvent.keyDown(screen.getByRole("separator"), { key: "ArrowRight" });
     });
@@ -136,6 +251,15 @@ describe("OutputTiles", () => {
     expect(toggle.getAttribute("title")).toBe(strings.shell.webView.unavailable);
   });
 
+  test("a Bun tab's disabled toggle never offers to hide what it can't show, even if webviewVisible is stale (fix round 1, F6)", () => {
+    // A tab can carry webviewVisible: true from before its runtime was switched to bun -- the label must still
+    // say "Show", not "Hide", since there is nothing to hide.
+    const store = hydrated({ runtime: "bun", tiles: { webviewVisible: true } });
+    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
+    expect(screen.getByRole("button", { name: strings.shell.webView.show })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: strings.shell.webView.hide })).toBeNull();
+  });
+
   test("the status bar's Web View toggle flips webviewVisible for a runtime that supports it", () => {
     const store = hydrated({ runtime: "browser" });
     render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
@@ -147,7 +271,7 @@ describe("OutputTiles", () => {
   });
 
   test("a tiles change survives the trip from the UI's tab.patch through Main's tabPatchSchema (R-M4-T8-PATCH-1)", () => {
-    const before = tabWith({ runtime: "browser" });
+    const before = tabWith("t1", { runtime: "browser" });
     const next: TabState = {
       ...before,
       layout: { ...before.layout, tiles: { ...before.layout.tiles, webviewVisible: true, consoleSize: 40 } },

@@ -27,6 +27,7 @@ import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { NpmSheet } from "../npm/NpmSheet";
 import { operationStatusMessage } from "../npm/npm-panel";
 import { OutputTiles } from "../output/OutputTiles";
+import { WebViewHosts, type WebviewDock } from "../output/WebViewHosts";
 import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
@@ -99,6 +100,9 @@ export function App({
   const sideBarPanel = useStore(store, (s) => s.sideBarPanel);
   const tabCount = useStore(store, (s) => s.tabOrder.length);
   const npmOpen = useStore(store, (s) => s.modal?.kind === "npm");
+  // Fix round 1 (F1/F2): lifted here, not into OutputTiles, specifically so it survives OutputTiles unmounting
+  // (hiding the Output panel) -- see WebViewHosts.tsx's doc comment for the full mechanism.
+  const [webviewDock, setWebviewDock] = useState<WebviewDock | null>(null);
 
   const lastTypedAt = useRef(0);
   // T16-rr1: the React-owned slot the Editor puts the Vim status node into, always rendered before the status bar.
@@ -525,9 +529,20 @@ export function App({
               vimSlot={vimSlot}
             />
           }
-          second={<OutputTiles store={store} api={api} runKeys={keycaps.run} onInstall={install} />}
+          second={
+            <OutputTiles
+              store={store}
+              api={api}
+              runKeys={keycaps.run}
+              onInstall={install}
+              onWebviewDock={setWebviewDock}
+            />
+          }
         />
       </div>
+      {/* Fix round 1 (F1/F2): a sibling of the SplitPane above, not inside it -- so hiding the Output panel
+          (which unmounts that SplitPane's `second`, OutputTiles included) never touches this. */}
+      <WebViewHosts store={store} dock={webviewDock} />
       <div className="vim-slot" ref={vimSlot} />
       {settings.view.statusBar && (
         <StatusBar

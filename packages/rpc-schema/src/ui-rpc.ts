@@ -76,12 +76,17 @@ export const tabPatchSchema = z.object({
           // M4 Task 8 (ruling R-M4-T8-PATCH-1): added alongside the three fields above -- this whitelist is the
           // one place a new `tabLayoutSchema` (packages/shared) field must also be named, or it is silently
           // stripped in transit (the UI updates, nothing persists, no error anywhere).
-          tiles: z.object({
-            arrangement: z.enum(["stacked", "side-by-side"]),
-            order: z.array(z.enum(["console", "webview"])).length(2),
-            webviewVisible: z.boolean(),
-            consoleSize: z.number().min(10).max(90),
-          }),
+          // Fix round 1 (F5): `.partial()` here too, matching its parent `layout` -- otherwise a `tiles` patch
+          // that omits even one field (a future partial patch, e.g. Task 15's `muted` alone) fails validation and
+          // takes the *whole* tab.patch down with it, language/runtime/title included.
+          tiles: z
+            .object({
+              arrangement: z.enum(["stacked", "side-by-side"]),
+              order: z.array(z.enum(["console", "webview"])).length(2),
+              webviewVisible: z.boolean(),
+              consoleSize: z.number().min(10).max(90),
+            })
+            .partial(),
         })
         .partial(),
     })

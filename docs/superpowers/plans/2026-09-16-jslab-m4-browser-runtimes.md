@@ -335,6 +335,24 @@ export interface RunHandle {
 
 ---
 
+### Task 8a: Vendor/app split and the cache read path
+
+**Added after Task 7 (see the ledger's R-M4-T7-SPLIT-1).** Task 6 built the vendor cache; Task 7 discovered it can only be **written**, never read, because `bundleForWeb` emits a single unsplit output. A cache keyed on the `bun.lock` hash plus the import set cannot tell whether the user's own code changed — and Auto Run changes app code constantly without changing which packages are imported — so reading it back would silently run a **previous** run's code. Writing-but-never-reading was the right conservative call; this task makes the cache actually pay.
+
+**Runs after Task 8**, because only once a real webview exists can the §23 budget be measured end to end.
+
+**Files:**
+- Modify: `apps/desktop/src/main/bundling/bundler.ts` (split output), `apps/desktop/src/main/runtimes/web-adapter.ts` (read path)
+- Test: `apps/desktop/test/bundling/bundler.test.ts`, `apps/desktop/test/runtimes/web-adapter.test.ts`
+
+- Split the build into a **vendor chunk** (third-party code, keyed as today) and an **app chunk** (the tab's own code, never cached), joined at runtime — a second synthetic-entry build with the packages marked external, plus an import map, is the shape the spec's §5.12 wording assumes.
+- The read path skips rebuilding **only** the vendor chunk, and only on an exact key match. The app chunk is always rebuilt. A stale-code regression here is worse than any slow run, so the test must prove that editing app code without changing imports still runs the **new** code.
+- **Measure the §23 budget end to end** now that a webview exists: a re-run with a cached React vendor chunk, p50 ≤ 250 ms. Report the number as evidence; a slow machine must not fail the suite.
+
+- [ ] Steps: failing test for "app code changed, imports unchanged → new code runs", then the split, then the read path, then the measurement. **Counts: stated by the controller at dispatch.**
+
+---
+
 ### Task 8: Web View tile and arrangement
 
 **Files:**

@@ -21,6 +21,8 @@ export interface AppPaths {
   packagesNpmrc: string;
   /** The empty HOME of npm operations (spec §11.3, M0-S8). */
   npmHome: string;
+  /** The web runner's third-party chunk cache (spec §5.12): `apps/desktop/src/main/bundling/vendor-cache.ts`. */
+  vendorCacheDir: string;
   envFile: string;
   socketPath: string;
   screenshotsDir: string;
@@ -48,6 +50,7 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     packagesJson: join(dataDir, "packages", "package.json"),
     packagesNpmrc: join(dataDir, "packages", ".npmrc"),
     npmHome: join(dataDir, "npm-home"),
+    vendorCacheDir: join(dataDir, "cache", "vendor"),
     envFile: join(dataDir, "env.json"),
     socketPath: join(dataDir, "jslab.sock"),
     screenshotsDir: join(dataDir, "e2e-screenshots"),

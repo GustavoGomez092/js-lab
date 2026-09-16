@@ -20,7 +20,10 @@ import { isNodeBuiltin } from "./node-builtins";
  *   attached to the resulting `BuildMessage` (measured: both come back empty).
  * - `browser-node` is a clean seam for Task 10, which fills this table in with the real bundled polyfills and the
  *   async Node bridge (spec §5.13). Until then it registers nothing, so a builtin import there falls through to
- *   Bun's default (harmless placeholder) stub -- not implementing §5.13 here, per the brief.
+ *   Bun's own default: for `path`, `events` and `punycode` that's a real, functional Bun-provided polyfill, not a
+ *   placeholder -- only the modules with no Bun-provided equivalent (the async-bridge and unsupported ones) fall
+ *   through to a bare stub. Task 10 still replaces this whole seam with the §5.13 table and the async bridge; not
+ *   implementing §5.13 here is per the brief.
  *
  * `jslabResolve` (the plugin registered before this one) already defers a bare specifier it recognizes as a Node
  * builtin -- returning `undefined` instead of failing it -- specifically so this plugin still gets to produce its

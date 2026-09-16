@@ -74,8 +74,12 @@ export function resolveBareSpecifier(specifier: string, ctx: ResolveContext): st
  * The one exception is a specifier this plugin recognizes as a Node builtin: it's deliberately left as `undefined`
  * (deferred, not failed) so `nodePolyfills`, which runs next in the plugin list, still gets to produce its own more
  * specific "Node built-ins aren't available" error for it rather than this plugin's generic "cannot find module"
- * one. That's safe from the same ancestor-walk leak regardless, since `nodePolyfills` blocks a builtin by name, not
- * by attempting filesystem resolution at all.
+ * one. That's safe from the same ancestor-walk leak regardless -- not because of anything `nodePolyfills` does
+ * (it returns early unless the runtime is `browser`, `polyfill-plugin.ts:33`, so under `browser-node` it never
+ * even registers a resolve hook), but because Bun's own resolver prefers its internal builtin/browser-shim registry
+ * over the ancestor `node_modules` walk for a recognised builtin name. Confirmed by fixture: real npm packages
+ * named `fs`, `path`, `events` and `punycode`, planted in an ancestor `node_modules`, never won against Bun's
+ * builtin resolution, under either runtime.
  */
 export function jslabResolve(
   ctx: ResolveContext,

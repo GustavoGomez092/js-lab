@@ -142,7 +142,7 @@ describe("main services (composition root)", () => {
     expect(started.length).toBe(before + 1);
   });
 
-  test("an npm change through the injected spawn recycles spares, clears types, reports npm.changed and uses the cache override", async () => {
+  test("an npm change through the injected spawn recycles spares, clears types, drops the vendor cache, reports npm.changed and uses the cache override", async () => {
     const paths = resolveAppPaths({
       resourcesFolder: join(dir, "Resources"),
       userData: dir,
@@ -189,6 +189,8 @@ describe("main services (composition root)", () => {
     });
     expect(services.settings.current.npm.autoInstallTypes).toBe(false);
     const typesInvalidate = spyOn(services.types, "invalidate");
+    // M4/spec §11.3: the vendor cache's own wipe joins the same npm-change path as types and spares below.
+    const vendorCacheInvalidateAll = spyOn(services.vendorCache, "invalidateAll");
     services.spares.setActiveTab(services.session.session.activeTabId);
     const before = started.length;
     expect(before).toBe(1);
@@ -197,6 +199,7 @@ describe("main services (composition root)", () => {
     await services.npm.whenIdle();
     expect(started.length).toBe(before + 1);
     expect(typesInvalidate).toHaveBeenCalledTimes(1);
+    expect(vendorCacheInvalidateAll).toHaveBeenCalledTimes(1);
     expect(changed).toHaveLength(1);
     expect(spawned.map((entry) => entry.argv)).toEqual([["remove", "left-pad"]]);
     for (const { options } of spawned) expect(options.env.BUN_INSTALL_CACHE_DIR).toBe(join(dir, "bun-cache"));

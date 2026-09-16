@@ -32,6 +32,8 @@ export const strings = {
     npmNpmrcUnreadable: (path: string) => `npm's .npmrc at ${path} could not be read`,
     /** Fix round 1 (M-1): an onOperation subscriber threw; the queue's own bookkeeping must still proceed. */
     npmOperationEventFailed: "npm operation event could not be delivered",
+    /** M4: the vendor cache's post-npm-change wipe (spec §11.3) failed; the cache may now serve a stale chunk. */
+    vendorCacheInvalidateFailed: "Couldn't clear the web runner's vendor cache after a package change",
     loginShellFailed: (reason: string) =>
       `Couldn't read the login shell environment (${reason}); using the app's environment`,
   },

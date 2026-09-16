@@ -2,6 +2,7 @@ import { join } from "node:path";
 import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
 import { effectiveRuntime, runnerSettings } from "@jslab/shared";
 import type { AppPaths } from "./app-paths";
+import { VendorCache } from "./bundling/vendor-cache";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
 import { EXIT_KILL_GRACE_MS, RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
@@ -63,6 +64,8 @@ export interface MainServices {
   safeMode: SafeModeState;
   transform: TransformHost;
   spares: SparePool;
+  /** M4: the web runner's third-party chunk cache (spec §5.12); invalidated by `npm.afterChange` below (§11.3). */
+  vendorCache: VendorCache;
   coordinator: RunCoordinator;
   /** Disposes runners, the watchdog and the transform worker, and releases run.lock. */
   dispose(): void;
@@ -132,6 +135,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   // Spec §12.1: saving env.json recycles every tab's spare, so the next run gets the new values.
   env.onChange(() => spares.invalidateAll());
   const workingDirectoryFor = (tabId: string) => session.session.tabs[tabId]?.workingDirectory ?? null;
+  const vendorCache = new VendorCache({ cacheDir: paths.vendorCacheDir });
   const types = new TypesService({
     workingDirectoryFor,
     nodeModulesDirsFor: (tabId) => {
@@ -152,10 +156,13 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     onOperation: options.onNpmOperation,
     onLog: options.onNpmLog,
     onChanged: options.onNpmChanged,
-    // Spec §11.3: after any change, spares are recycled and the type cache is invalidated (web vendor caches: M4).
+    // Spec §11.3: after any change, spares are recycled, the type cache is invalidated, and (M4) every cached web
+    // runner vendor chunk is dropped -- not just the ones whose key happens to go stale, since a chunk not yet
+    // rebuilt under its new key would otherwise linger on disk.
     afterChange: () => {
       spares.invalidateAll();
       types.invalidate();
+      vendorCache.invalidateAll().catch((error) => log(strings.log.vendorCacheInvalidateFailed, String(error)));
     },
     log,
   });
@@ -169,6 +176,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     safeMode,
     transform,
     spares,
+    vendorCache,
     coordinator,
     dispose() {
       coordinator.dispose();

@@ -54,6 +54,15 @@ export type EncodedValue =
   | { t: "url"; href: string }
   | { t: "headers"; entries: [string, string][] }
   | { t: "response"; status: number; statusText: string; url: string; headers: [string, string][] }
+  | {
+      t: "dom";
+      nodeType: number;
+      tag: string;
+      attrs: [string, string][];
+      childCount: number;
+      outerHTML: string;
+      truncated?: { total: number; handle: string };
+    }
   | { t: "getter"; handle: string }
   | { t: "circular"; ref: number }
   | { t: "handle"; handle: string; preview: string };

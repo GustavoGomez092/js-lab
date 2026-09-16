@@ -97,7 +97,8 @@ Tasks are ordered so each one lands green on its own. Tasks 1–2 open the seam 
 | 9a | Wire the browser runtime to a real webview | Lazy host creation; proven against a built app. | merged |
 | 9b | Close the page-side run-completion gap | **Was the milestone blocker.** Cause: the serializer measured JSON with Node's `Buffer`, absent in a webview, so the first `console.log` threw and the error reporter threw the same error encoding that rejection — escaping before any terminal state. Also fixed: `browser-node` could not bundle any package (catch-all resolve hook), and the fetch transport was never installed. | **merged `25a5e25`** |
 | 9c | Web View occlusion, stacking and the portal hoist | Overlays now collapse a docked Web View while open. Also found and fixed a **pre-existing** bug: the devkit never syncs an exact 0×0 rect to the native layer, so Task 8/9's own park-on-hide and park-on-switch collapse left the surface painted at its last position — collapsing to 1×1 fixes all three paths. Plus the portal hoist, a dedicated ready timeout, the `ready-NO-HOST` suppression, and a structural fix for a stale `ready` satisfying the next run's wait. | **merged `09d271c`** |
-| 9d | Defects found by automated review | `stop()` settle-on-exit, console reset between runs, sync `play()` throw, host-bridge union validation. | queued, after 9b |
+| 9d | Defects found by automated review | Six verified defects: `stop()` settle-on-exit, console reset between runs, sync `play()` throw, host-bridge union validation, heartbeat stamped on attach, and the runtime missing from the vendor cache key. **Two of the six were reported "addressed" and are not.** | dispatched |
+| 9e | A webview generation on the lifecycle wire | `webRunner.ready`/`.exit` carry only `tabId`, so a late event from a destroyed webview reaches its replacement — firing load listeners, or removing it and firing crash listeners. Declined by 9c as outside its surface (correctly: it is a schema change). | queued |
 | 10 | Sync polyfills | The §5.13 bundled modules and the `process`/`os` snapshots. | merged |
 | 11 | The async Node bridge | `fs/promises`, callback `fs`, `child_process`; `*Sync` and the unsupported modules throw the exact messages. | **⚠️ NEVER IMPLEMENTED — re-instated, milestone exit condition (R-M4-T11-1)** |
 | 12 | The fetch proxy | `browser-node` fetch through Main with streaming `Response` semantics; `browser` keeps native fetch and CORS. | merged |
@@ -602,6 +603,25 @@ Per spec §5.12 and M0-S4: `alert` shows JSLab's own non-blocking dialog and ret
 
 ---
 
+### Task 9e: A webview generation on the lifecycle wire
+
+**Added after the fact.** Raised by CodeRabbit on PR #3, verified against HEAD, and explicitly declined by Task 9c as outside its file surface — correctly, since it changes the RPC schema. It is recorded here so it cannot fall between briefs; it has already been declined once by a task that was right to decline it.
+
+**Files:**
+- Modify: `packages/rpc-schema/src/ui-rpc.ts`, `apps/desktop/src/main/runtimes/webview-source.ts`, `apps/ui/src/output/webview-host.ts`
+- Test: `apps/desktop/test/runtimes/webview-source.test.ts`, `apps/ui/test/webview-host.test.ts`
+
+**The defect.** `createUiWebviewSource` stores one current entry per tab. After `destroy(tabId)` removes it, `ensure()` creates a replacement. Because `webRunner.ready` and `webRunner.exit` carry **only `tabId`**, a late event from the *old* element can reach the *new* one: `ready(tabId)` fires the replacement's load listeners, and `exit(tabId)` removes it and fires its crash listeners — a spurious crash on a webview that is alive.
+
+**What is already done, and what it does not cover.** Task 9c closed the *readiness-wait* half of this family inside the adapter, by deferring the `onMessage` subscription until `host.reset(runtime)` resolves — so a stale `ready` can no longer satisfy a later run's wait. That fix is real and stays. It does **not** cover this: the stale event still reaches the host registry and still fires listeners there. Verify that for yourself before changing anything; if you find it no longer reproduces, say so rather than inventing a change.
+
+- Carry a generation (a monotonic counter per tab, minted by whoever creates the element) in the `ensure`/`destroy` commands and in the `ready`/`exit` callbacks, and **ignore any event whose generation is not the current one**.
+- The test that matters reproduces the race directly: create, destroy, recreate, then deliver the *old* generation's `exit` and assert the replacement is untouched — and assert **node identity**, not mere presence, since this milestone has twice had presence checks quietly stand in for identity assertions.
+
+- [ ] Steps: a failing test per direction (stale `ready`, stale `exit`), the schema change, the two call sites, then the gates. **Counts: measure your own baseline and report `baseline N → after M`.** No absolute total is given here on purpose.
+
+---
+
 ### Task 14: DOM value serialization
 
 **Files:**
@@ -654,6 +674,13 @@ Scenarios that need packages belong in the opt-in suite (`e2e:npm`), not the def
 - **Replace it with a selector test, not an execution test:** *"the runtime selector switches the active tab between all three runtimes (EX-24)"*, asserting `activeTab(...).runtime` becomes `bun`, then `browser-node`, then `browser`.
 - **`docs/parity.md:48` must change in the same breath** — the "rejects runtimes that arrive later" clause was a **milestone gate, never parity behaviour**, and this task already owns that row.
 - The principle behind leaving it red: **never buy a green suite by editing another task's assertion.** Verify the replacement actually exercises the selector rather than merely passing.
+
+**Two accepted limitations you must write down, not fix.** Both were found during M4, both were deliberately not fixed, and both currently exist only in the execution ledger — which no brief can see. Record them where a user or a future implementer will actually meet them (the M4 checklist, and `docs/parity.md` where a row would otherwise overclaim):
+
+1. **Page code can forge an inbound command on the runner channel.** The bootstrap is delivered by `executeJavascript` into the same realm the user's code runs in, so `__jslabHostMessage` is reachable by that code: it can send a `stop` or `dispose` with the right sequence number, and consume the host's real one. Sequence numbers order messages; they cannot authenticate a sender. Task 3 narrowed this and Task 7 ruled it **accepted** — closing it needs an isolated transport, which is larger than this milestone. **Do not describe the runner channel as authenticated anywhere.**
+2. **`import * as ns` over a bundled package exposes more than the module namespace.** The vendor/app join uses a page-global registry plus a per-package CommonJS stub, because the bundler emits CJS chunks as `export default require_x()` and named imports cannot link across a cached chunk boundary. A consequence is that a namespace object can carry the default export's own keys, so code that enumerates or spreads a namespace sees different results than it would under Bun. Changing it means changing the join contract itself, which is why it is deferred rather than patched here. **Record it as a known divergence; do not claim namespace parity.**
+
+**A third carried finding is NOT yours — it is Task 9e.** `webRunner.ready`/`.exit` carry only `tabId`, so a late event from a destroyed webview can reach its replacement. That is a wire-format change, not documentation. Do not attempt it here; if Task 9e has not shipped by the time you write the checklist, record it as an open defect rather than omitting it.
 
 **Files:**
 - Create: `docs/qa/m4-checklist.md`

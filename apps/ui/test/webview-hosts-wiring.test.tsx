@@ -49,6 +49,9 @@ function tabWith(id: string, overrides: { runtime?: Runtime; webviewVisible?: bo
         webviewVisible: overrides.webviewVisible ?? false,
         consoleSize: 55,
       },
+      // Required since Task 15 added per-tab mute; this fixture predates it and audio plays no part in
+      // these wiring tests, so it takes the schema's own default.
+      muted: false,
     },
   });
 }

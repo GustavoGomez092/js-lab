@@ -284,6 +284,12 @@ export class RunCoordinator {
             return;
           }
           run.handle = handle;
+          // Task 9d: `lastHeartbeatAt` was stamped when the run was created, but transpiling and bundling happen
+          // before a runtime exists to send a heartbeat. `#checkHeartbeats` skips a run until its handle attaches,
+          // which defers the judgement without refreshing the stale stamp -- so the instant this fired, a
+          // creation-time stamp already older than `unresponsiveTimeoutMs` was judged and the user saw the
+          // unresponsive prompt for a run that had only just begun. The runtime is live as of right now.
+          run.lastHeartbeatAt = Date.now();
         },
         events: (events) => {
           if (!this.#isCurrent(run)) return;

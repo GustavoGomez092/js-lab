@@ -183,6 +183,29 @@ describe("BunAdapter", () => {
     }
   });
 
+  // Task 9d: `stop()`'s promise was settled only by the `state: "stopped"` message handler. A runner that answers
+  // Stop by exiting cleanly instead (exactly what test/runs/fixtures/exit-on-stop-runner.ts does) takes `#onExit`,
+  // which clears `#stopTimer` -- destroying the grace-period fallback that was the only other thing that could
+  // settle it -- and then reports the terminal state without ever settling the promise. Nothing hung in practice
+  // only because the sole caller was `void run.handle.stop()`; this test awaits the contract, which is precisely
+  // why a full passing suite never saw it.
+  test("stop() settles when the runner answers by exiting cleanly rather than acknowledging", async () => {
+    const h = await createHarness({ stopGraceMs: 30 });
+    try {
+      const settled = h.handle.stop().then(() => "settled" as const);
+      expect(h.runner.sent.at(-1)).toEqual({ type: "stop" });
+      h.runner.exit(0);
+      // Far longer than the 30 ms grace period: if only the (now cleared) escalation timer could settle this, the
+      // promise is never going to settle at all.
+      const outcome = await Promise.race([settled, Bun.sleep(300).then(() => "hung" as const)]);
+      expect(outcome).toBe("settled");
+      // The clean exit while stopping is still reported as the stop the user asked for (FA-m3), not as idle.
+      expect(h.states.at(-1)).toEqual({ state: "stopped", activeHandles: 0 });
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
   test("a stop() reentrant on runLock.add still takes the graceful branch, not a bare cancel (F1, fix round 1)", async () => {
     let handle: RunHandle | undefined;
     const h = await createHarness(

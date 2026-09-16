@@ -183,3 +183,26 @@ test("a rejected promise logged through __jl produces a promiseSettled event car
   const settled = events().find((e) => e.kind === "promiseSettled");
   expect(settled).toMatchObject({ value: { t: "error", name: "Error", message: "nope" } });
 });
+
+// Task 9d: `installConsole` returned nothing, so its `counts`, `timers` and group depth lived for the page's
+// lifetime. That matters here precisely because of an invariant this milestone deliberately built: a webview host
+// is never unmounted between runs (Task 8), so the page really does persist. An unmatched console.group() left
+// every later run indented, and count/time labels carried across runs.
+test("console group depth, counts and timers do not leak into the next run", async () => {
+  beginRun('console.group("g");\nconsole.count("c");\nconsole.time("t");\nexport {};\n', "run-9a");
+  await until((m) => m.type === "state" && m.state === "idle");
+
+  beginRun('console.log("after");\nconsole.count("c");\nconsole.timeEnd("t");\nexport {};\n', "run-9b");
+  await until((m) => m.type === "state" && m.state === "idle");
+  const evs = events();
+  // Not still indented by the previous run's unmatched group().
+  expect(evs.find((e) => e.kind === "console" && e.level === "log")).toMatchObject({ groupDepth: 0 });
+  // Counting restarts rather than continuing the previous run's tally.
+  expect(evs.find((e) => e.kind === "console" && e.level === "count")).toMatchObject({
+    args: [{ t: "string", v: "c: 1" }],
+  });
+  // The previous run's timer is gone, so ending it here reports the "does not exist" warning instead of a duration.
+  expect(evs.find((e) => e.kind === "console" && e.level === "warn")).toMatchObject({
+    args: [{ t: "string", v: "Timer 't' does not exist" }],
+  });
+});

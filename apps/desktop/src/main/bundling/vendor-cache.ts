@@ -1,5 +1,6 @@
 import { readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import type { Runtime } from "@jslab/shared";
 import { writeFileAtomic } from "../persistence/atomic-write";
 
 /**
@@ -48,8 +49,8 @@ type VendorCacheIndex = Record<string, VendorCacheIndexEntry>;
  * anything narrower or wider than it would risk serving a stale chunk after a changed dependency). Sorting first
  * means import order in the source file never changes the key.
  */
-export function vendorCacheKey(lockHash: string, imports: readonly string[]): string {
-  return String(Bun.hash(`${VENDOR_CACHE_FORMAT}\n${lockHash}\n${[...imports].sort().join("\n")}`));
+export function vendorCacheKey(lockHash: string, imports: readonly string[], runtime: Runtime): string {
+  return String(Bun.hash(`${VENDOR_CACHE_FORMAT}\n${runtime}\n${lockHash}\n${[...imports].sort().join("\n")}`));
 }
 
 /**

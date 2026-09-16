@@ -122,6 +122,70 @@ test("a gap in the sequence (skipping a number) is rejected", () => {
   expect(received).toEqual([{ type: "stop" }]); // only the first
 });
 
+// Task 9d: `isHostToWeb` checked only that `message` was a non-null object -- its own comment called it "a cheap
+// shape check only". So `{type: "run"}` with none of a run's fields was accepted, advanced `lastInboundSeq`, and
+// then threw in the bootstrap the moment it read `message.settings.maxEntries`. Task 13's `const _never: never`
+// guard cannot cover this: that is compile-time exhaustiveness over an already-typed union, while this payload
+// crosses a JSON boundary untyped. The two defences are complementary.
+test("a message whose fields are missing is rejected, and does not advance the sequence", () => {
+  const { g } = sandbox();
+  const received: HostToWebMessage[] = [];
+  createHostBridge((message) => received.push(message), g);
+  g.__jslabHostMessage({ seq: 1, message: { type: "run" } }); // the exact payload from the finding
+  // Had the malformed one been accepted it would have taken seq 1, and this genuine message would be dropped as a
+  // duplicate -- so this asserts both halves at once: it was rejected, and the counter never moved.
+  g.__jslabHostMessage({ seq: 1, message: { type: "stop" } });
+  expect(received).toEqual([{ type: "stop" }]);
+});
+
+test("each variant is validated field by field, not just by its type tag", () => {
+  const { g } = sandbox();
+  const received: HostToWebMessage[] = [];
+  createHostBridge((message) => received.push(message), g);
+  const rejected: unknown[] = [
+    { type: "nonsense" },
+    {},
+    { type: "run", runId: 1, code: "x", settings: { maxEntries: 10 } }, // runId not a string
+    { type: "run", runId: "r", code: "x", settings: {} }, // maxEntries missing
+    { type: "run", runId: "r", code: "x" }, // settings missing
+    { type: "run", runId: "r", code: "x", settings: { maxEntries: 10 }, muted: "yes" }, // muted not a boolean
+    { type: "mute" }, // muted missing
+    { type: "expand", reqId: "1", handleId: "h" }, // reqId not a number
+    { type: "expand", reqId: 1 }, // handleId missing
+    { type: "fetchChunk", id: 1 }, // data missing
+    { type: "fetchHead", id: 1, status: 200, statusText: "OK", headers: "nope", url: "u" }, // headers not pairs
+    { type: "fetchHead", id: 1, status: 200, statusText: "OK", headers: [["a"]], url: "u" }, // not a pair
+    { type: "fetchError", id: 1 }, // message missing
+  ];
+  for (const message of rejected) g.__jslabHostMessage({ seq: 1, message });
+  expect(received).toEqual([]);
+  // Not one of them moved the counter, so the genuine first message still arrives.
+  g.__jslabHostMessage({ seq: 1, message: { type: "stop" } });
+  expect(received).toEqual([{ type: "stop" }]);
+});
+
+// The other half of the contract: validation that rejects something legitimate would silently wedge a real run,
+// so every variant the host actually sends must still get through untouched.
+test("every well-formed variant is still accepted and delivered unchanged", () => {
+  const { g } = sandbox();
+  const received: HostToWebMessage[] = [];
+  createHostBridge((message) => received.push(message), g);
+  const accepted: HostToWebMessage[] = [
+    { type: "run", runId: "r1", code: "1", settings: { maxEntries: 10 } },
+    { type: "run", runId: "r2", code: "1", settings: { maxEntries: 10 }, muted: true },
+    { type: "stop" },
+    { type: "expand", reqId: 3, handleId: "h1" },
+    { type: "dispose" },
+    { type: "mute", muted: false },
+    { type: "fetchHead", id: 1, status: 200, statusText: "OK", headers: [["a", "b"]], url: "https://example.test" },
+    { type: "fetchChunk", id: 1, data: "abc" },
+    { type: "fetchEnd", id: 1 },
+    { type: "fetchError", id: 1, message: "boom" },
+  ];
+  for (const [i, message] of accepted.entries()) g.__jslabHostMessage({ seq: i + 1, message });
+  expect(received).toEqual(accepted);
+});
+
 test("the entry point cannot be reassigned or deleted by page code", () => {
   const { g } = sandbox();
   createHostBridge(() => {}, g);

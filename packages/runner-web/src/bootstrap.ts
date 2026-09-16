@@ -273,7 +273,7 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
     },
   });
 
-  installConsole(
+  const resetConsole = installConsole(
     {
       push: (body) => run?.buffer.push(body) ?? null,
       encodeMany: (values) =>
@@ -300,6 +300,9 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
     // from a previous run must never resolve against a later one. `registry` is otherwise process/page-lifetime
     // state shared only because `Encoder` needs a fresh instance wrapped around it every run.
     registry.clear();
+    // Task 9d: the console hook's group depth, count tallies and timers are per-run state too, and this page is
+    // never unmounted between runs -- so without this an unmatched `console.group()` would indent every later run.
+    resetConsole();
     // Task 13: "once per run, not once per call" -- a fresh run gets to see the console warning again if it calls
     // alert/confirm/prompt, the same way every other per-run bit of state above is reset here.
     dialogShim.startRun();

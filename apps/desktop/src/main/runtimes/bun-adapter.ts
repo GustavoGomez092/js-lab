@@ -80,16 +80,31 @@ class BunRunSession implements RunHandle {
     return new Promise((resolve) => {
       this.#stopSettle = resolve;
       this.#stopTimer = setTimeout(() => {
-        if (this.#terminal) {
-          resolve();
-          return;
+        if (!this.#terminal) {
+          this.#terminal = "killed";
+          this.killExpected();
+          this.#reportTerminal("killed");
         }
-        this.#terminal = "killed";
-        this.killExpected();
-        this.#reportTerminal("killed");
-        resolve();
+        this.#settleStop();
       }, this.deps.stopGraceMs ?? 500);
     });
+  }
+
+  /**
+   * Settles a pending `stop()` and clears its escalation timer, together, so the two can never drift apart.
+   *
+   * `stop()` returns a promise, and every terminal path has to settle it. Previously only the `state: "stopped"`
+   * message did: a runner that answered Stop by exiting cleanly instead took `#onExit`, which cleared the
+   * escalation timer -- the one remaining thing that could have settled it -- and then reported the terminal state
+   * without ever resolving the promise, leaving it pending for the process's life. Nothing hung in practice only
+   * because the single caller ignored the promise (`void run.handle.stop()`), so the broken contract was invisible
+   * to a fully passing suite; the first caller to await it would have waited forever.
+   */
+  #settleStop(): void {
+    clearTimeout(this.#stopTimer);
+    const settle = this.#stopSettle;
+    this.#stopSettle = undefined;
+    settle?.();
   }
 
   kill(): void {
@@ -145,10 +160,7 @@ class BunRunSession implements RunHandle {
         return;
       }
       case "state":
-        if (message.state === "stopped") {
-          clearTimeout(this.#stopTimer);
-          this.#stopSettle?.();
-        }
+        if (message.state === "stopped") this.#settleStop();
         if (message.state !== "evaluating") this.deps.runLock.remove(this.run.runId);
         if (this.#stopRequested && message.state !== "stopped") return;
         this.sink.state(message.state, message.activeHandles);
@@ -167,7 +179,9 @@ class BunRunSession implements RunHandle {
   }
 
   #onExit(exitCode: number | null, exitSignal: string | null): void {
-    clearTimeout(this.#stopTimer);
+    // The runtime is gone, so no acknowledgement is ever coming: settle any pending stop() here rather than just
+    // clearing its timer, which would strand the promise forever.
+    this.#settleStop();
     clearTimeout(this.#idleTimer);
     clearTimeout(this.#exitTimer);
     for (const settle of [...this.#pendingExpands.values()]) settle(null);

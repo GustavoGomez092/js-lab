@@ -594,7 +594,10 @@ export class Encoder {
       () => el.attributes as ArrayLike<{ name?: unknown; value?: unknown }> | null | undefined,
       undefined,
     );
-    const attrCount = readSafely(() => (typeof attributes?.length === "number" ? attributes.length : 0), 0);
+    const attrCount = readSafely(() => {
+      const length = attributes?.length;
+      return typeof length === "number" ? length : 0;
+    }, 0);
     const attrLimit = Math.min(attrCount, this.limits.maxEntries);
     for (let i = 0; i < attrLimit; i++) {
       const attr = readSafely(() => attributes?.[i], undefined);

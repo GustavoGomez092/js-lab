@@ -77,16 +77,64 @@ describe("DOM nodes", () => {
     expect(e.expand(handle)).toEqual({ t: "string", v: full });
   });
 
-  test("never throws when tagName, attributes, childNodes or outerHTML accessors throw", () => {
+  // Each of the next three makes exactly one accessor hostile and asserts the OTHER fields still come through
+  // correctly. That is what distinguishes "each field guarded independently" from a single shared try/catch
+  // around all four reads: a shared catch would lose the healthy fields too the moment any one accessor throws.
+
+  test("attributes alone hostile: childCount and outerHTML still encode correctly", () => {
     const hostile = {
       nodeType: 1,
       tagName: "DIV",
       get attributes(): never {
         throw new Error("blocked");
       },
+      childNodes: { length: 5 },
+      outerHTML: "<div>ok</div>",
+    };
+    let encoded: unknown;
+    expect(() => {
+      encoded = make().encode(hostile);
+    }).not.toThrow();
+    expect(encoded).toEqual({
+      t: "dom",
+      nodeType: 1,
+      tag: "DIV",
+      attrs: [],
+      childCount: 5,
+      outerHTML: "<div>ok</div>",
+    });
+  });
+
+  test("childNodes alone hostile: attrs and outerHTML still encode correctly", () => {
+    const hostile = {
+      nodeType: 1,
+      tagName: "DIV",
+      attributes: Object.assign({ length: 1 }, [{ name: "id", value: "z" }]),
       get childNodes(): never {
         throw new Error("blocked");
       },
+      outerHTML: "<div>ok</div>",
+    };
+    let encoded: unknown;
+    expect(() => {
+      encoded = make().encode(hostile);
+    }).not.toThrow();
+    expect(encoded).toEqual({
+      t: "dom",
+      nodeType: 1,
+      tag: "DIV",
+      attrs: [["id", "z"]],
+      childCount: 0,
+      outerHTML: "<div>ok</div>",
+    });
+  });
+
+  test("outerHTML alone hostile: tag, attrs and childCount still encode correctly", () => {
+    const hostile = {
+      nodeType: 1,
+      tagName: "DIV",
+      attributes: Object.assign({ length: 1 }, [{ name: "id", value: "z" }]),
+      childNodes: { length: 2 },
       get outerHTML(): never {
         throw new Error("blocked");
       },
@@ -95,7 +143,14 @@ describe("DOM nodes", () => {
     expect(() => {
       encoded = make().encode(hostile);
     }).not.toThrow();
-    expect(encoded).toEqual({ t: "dom", nodeType: 1, tag: "DIV", attrs: [], childCount: 0, outerHTML: "" });
+    expect(encoded).toEqual({
+      t: "dom",
+      nodeType: 1,
+      tag: "DIV",
+      attrs: [["id", "z"]],
+      childCount: 2,
+      outerHTML: "",
+    });
   });
 
   test("duck-types nodeType and tagName, so a node from an exotic document (null prototype, no shared class) still encodes", () => {
@@ -114,5 +169,21 @@ describe("DOM nodes", () => {
     expect(encoded).toMatchObject({ t: "handle" });
     const handle = (encoded as { handle: string }).handle;
     expect(e.expand(handle)).toMatchObject({ t: "dom", tag: "DIV" });
+  });
+
+  test("rolls back a dom node's own truncation handle when the whole node still doesn't fit the budget", () => {
+    // outerHTML exceeds maxString, so #dom() registers its own truncation-string handle while producing the full
+    // encoding. The budget here (10,150 bytes) is large enough for that full encoding to be produced (the 10,000
+    // char preview alone costs ~10,051 bytes) but too small for the *actual* JSON size of the whole dom object
+    // (10,119 bytes, structural overhead included) to fit — so #fit must discard the truncation handle registered
+    // during that failed attempt before #summary() registers the whole-node handle it falls back to.
+    const el = fakeElement({ outerHTML: `<div>${"x".repeat(20_000)}</div>` });
+    const registry = new HandleRegistry();
+    const e = new Encoder(registry, { ...DEFAULT_LIMITS, maxEncodedBytes: 10_150 }, {});
+    const [encoded] = e.encodeMany([el]);
+    expect(encoded).toMatchObject({ t: "handle" });
+    // Only the #summary() fallback handle should be live: the #dom() truncation handle registered during the
+    // failed attempt must have been rolled back, not left to leak.
+    expect(registry.size).toBe(1);
   });
 });

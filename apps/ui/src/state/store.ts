@@ -20,7 +20,7 @@ import {
 import { createStore } from "zustand/vanilla";
 import { MAX_NPM_LOG_CHARS, MAX_NPM_OPERATIONS, maskCredentials, splitLogChunk } from "../npm/npm-panel";
 import type { TimerApi } from "./auto-run";
-import { applyRunEvents, applyRunState, initialOutput, type OutputState } from "./output";
+import { applyRunEvents, applyRunState, dismissWebDialog, initialOutput, type OutputState } from "./output";
 import { clampEditorSize, EDITOR_SIZE_RESET, insertAfterActive, isPermutation, renamePatch } from "./workspace";
 
 export interface TabRuntime {
@@ -221,6 +221,9 @@ export interface AppState {
    * other `receive*` methods, there is no M1-era "no active tab yet" caller to default for). */
   receiveAudio(active: boolean, tabId: string): void;
   clearOutput(tabId?: string): void;
+  /** Task 13: removes one shown alert() dialog from its tab's queue, once the user has answered it. Defaults to
+   *  the active tab, like every other `tabId?`-optional action here. */
+  dismissWebDialog(key: string, tabId?: string): void;
   setHoveredLine(line: number | null): void;
   reveal(line: number): void;
 
@@ -524,12 +527,27 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           entries: [],
           stale: false,
           truncated: 0,
-          // Fix round 1 (I-1): clearing the output clears any WorkingDirectoryError row with it.
+          // Task 13: clearing the output clears any still-shown alert() dialog with it, the same as it already
+          // does for a WorkingDirectoryError row (fix round 1, I-1).
+          dialogs: [],
           workingDirectoryMissing: false,
         });
         const id = resolve(tabId);
         if (!id) set({ output: clear(get().output) });
         else updateRuntime(id, (runtime) => ({ ...runtime, output: clear(runtime.output) }));
+      },
+
+      dismissWebDialog(key, tabId) {
+        const id = resolve(tabId);
+        // `dismissWebDialog` (./output) is typed against the runtime-agnostic `OutputState`, so its result is
+        // merged back onto the full `TabRuntime["output"]` here rather than replacing it outright -- the same
+        // shape `clearOutput`'s own `clear` above preserves `workingDirectoryMissing` through.
+        const apply = (output: TabRuntime["output"]): TabRuntime["output"] => ({
+          ...output,
+          dialogs: dismissWebDialog(output, key).dialogs,
+        });
+        if (!id) set({ output: apply(get().output) });
+        else updateRuntime(id, (runtime) => ({ ...runtime, output: apply(runtime.output) }));
       },
 
       setHoveredLine(line) {

@@ -213,6 +213,12 @@ export const strings = {
     /** R24-4: a relative module-not-found row offers to set a working directory when the tab has none. */
     setWorkingDirectory: "Set Working Directory…",
   },
+  webDialog: {
+    /** Task 13 (spec §5.12): JSLab's own non-blocking stand-in for `alert()`. */
+    region: "Page message",
+    dismiss: "Dismiss",
+    queued: (count: number) => `${count} more waiting`,
+  },
   env: {
     title: "Environment Variables",
     help: "Every tab uses these variables. Paste a .env file into Key to add several at once. Changes apply from the next run.",

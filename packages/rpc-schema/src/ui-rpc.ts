@@ -465,4 +465,21 @@ export type ViewMessages = {
   "npm.changed": NpmListResult;
   "wd.changed": { tabId: string; tab: TabState };
   "app.flushState": Record<string, never>;
+  /**
+   * Task 12/13 (spec §5.12): `browser-node`'s fetch proxy reply, streamed back the same way `apps/desktop/src/
+   * main/rpc/web-fetch-handlers.ts`'s `WebFetchSend` describes -- `head` once, then zero or more `chunk`s, then
+   * exactly one of `end`/`error`. Mirrors `file.opened`/`run.audio`'s own shape: a tab-scoped push the UI relays
+   * onward (here, into that tab's `<electrobun-webview>` page over the host bridge) rather than a request/reply.
+   */
+  "webFetch.head": {
+    tabId: string;
+    id: number;
+    status: number;
+    statusText: string;
+    headers: [string, string][];
+    url: string;
+  };
+  "webFetch.chunk": { tabId: string; id: number; data: string };
+  "webFetch.end": { tabId: string; id: number };
+  "webFetch.error": { tabId: string; id: number; message: string };
 };

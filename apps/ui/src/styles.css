@@ -425,6 +425,33 @@ button:disabled {
   color: var(--fg-warn);
 }
 
+/* Task 13 (spec §5.12): the non-blocking alert() dialog -- a banner row, not a modal, so it never covers the
+   editor or steals focus from anything else. */
+.web-dialog {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border-default);
+  color: var(--fg-default);
+}
+
+.web-dialog-text {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.web-dialog-queued {
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+
+.web-dialog-dismiss {
+  padding: 2px 8px;
+  color: var(--fg-accent);
+}
+
 /* Output empty states (T19A-m3, review rec 2): muted text on the canvas, centered, no icon. */
 .output-empty {
   display: flex;

@@ -20,6 +20,10 @@ export const VIEW_MESSAGES = [
   "npm.changed",
   "wd.changed",
   "app.flushState",
+  "webFetch.head",
+  "webFetch.chunk",
+  "webFetch.end",
+  "webFetch.error",
 ] as const satisfies readonly (keyof ViewMessages)[];
 
 // Type-level exhaustiveness check: a ViewMessages key missing from VIEW_MESSAGES fails typecheck here (m-5).

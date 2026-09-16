@@ -43,7 +43,14 @@ export type RawRunEventBody =
       value: EncodedValue;
     }
   | { kind: "promiseSettled"; ref: number; value: EncodedValue }
-  | { kind: "truncated"; dropped: number };
+  | { kind: "truncated"; dropped: number }
+  /**
+   * Task 13 (spec §5.12, M0-S4): the web runner's own non-blocking `alert` shim -- `packages/runner-web/src/
+   * dialogs.ts` pushes one of these per `alert()` call, carrying the message text. Not rendered inline with the
+   * rest of a run's console output: `apps/ui`'s reducer routes it into its own display, the same way
+   * `promiseSettled`/`truncated` are excluded from `DisplayEvent` for their own reasons.
+   */
+  | { kind: "dialog"; text: string };
 
 export type RawRunEvent = RawRunEventBody & { seq: number; t: number };
 

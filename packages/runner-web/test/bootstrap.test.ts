@@ -72,6 +72,11 @@ function beginRun(code: string, runId: string) {
   sendHost({ type: "run", runId, code, settings: { maxEntries: 100 } });
 }
 
+// Fix round 2, NEW-2: this must stay the first test in the file. `sent[0]` is only the initial `ready` message
+// while nothing has called `beginRun()` yet (every test below this one does, and `beginRun()` resets `sent`).
+// bun:test runs a file's tests in declaration order, so this holds today; if that ever stopped being true, this
+// assertion would fail loudly (sent[0] would be something else, or the array would be empty) rather than pass
+// falsely, which is why no extra guard was added here.
 test("reports ready and sends heartbeats", async () => {
   expect(sent[0]).toEqual({ type: "ready" });
   await until((m) => m.type === "heartbeat");

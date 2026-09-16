@@ -62,6 +62,15 @@ describe("app store", () => {
     expect(shouldAutoRun(store.getState())).toBe(true);
   });
 
+  test("switching a tab's runtime arms auto-run on its own (spec §5.2, M4 Task 9)", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    expect(shouldAutoRun(store.getState())).toBe(false);
+    store.getState().setRuntime("browser");
+    expect(store.getState().tab?.runtime).toBe("browser");
+    expect(shouldAutoRun(store.getState())).toBe(true);
+  });
+
   test("auto-run stays off in safe mode and when disabled in settings", () => {
     const safe = createAppStore();
     safe.getState().hydrate(payload({ safeMode: { active: true, reason: "crashLoop" } }));

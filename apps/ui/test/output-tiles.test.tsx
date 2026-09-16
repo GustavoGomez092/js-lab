@@ -113,20 +113,35 @@ describe("OutputTiles / WebViewHosts", () => {
     expect(screen.queryByTestId("webview-tile-t1")).toBeNull();
   });
 
-  test("a browser-mode tab's Web View starts parked (hidden by default), with no dishonest divider (fix round 1, F4)", () => {
+  test("a browser-mode tab whose Web View toggle was never switched on gets no live webview at all (N4: lazy creation)", () => {
     const store = hydrated({ runtime: "browser" });
     const { api } = createFakeApi();
     renderTiles(store, api);
     // Default webviewVisible is false: no split at all, same shape as a bun tab's console-only render, so there
     // is no separator advertising a pane that isn't there (F4 -- output-tiles.test.tsx:58 formerly enshrined one).
     expect(screen.queryByRole("separator")).toBeNull();
-    // But the host itself exists and is mounted, not merely absent -- parked, not destroyed. It always lives
-    // inside .webview-parking (WebViewTile never moves in the DOM -- see WebViewTile.tsx); aria-hidden is what
-    // actually distinguishes docked from parked.
+    // Task 8 keyed a host purely on the tab's runtime, so a browser tab got a live webview whether or not its own
+    // toggle was ever switched on. N4 (carried into Task 9): create lazily, on first enable -- until then, nothing
+    // exists at all, not merely hidden.
+    expect(screen.queryByTestId("webview-tile-t1")).toBeNull();
+    expect(document.querySelector("electrobun-webview")).toBeNull();
+  });
+
+  test("switching the toggle on creates the host for the first time, parked and mounted (N4: lazy creation)", () => {
+    const store = hydrated({ runtime: "browser" });
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+    expect(screen.queryByTestId("webview-tile-t1")).toBeNull();
+
+    act(() => store.getState().toggleWebviewVisible());
+
+    // Now docked (Output visible, toggle on): a real host exists, lives inside .webview-parking (WebViewTile never
+    // moves in the DOM -- see WebViewTile.tsx), and is genuinely exposed -- aria-hidden is what distinguishes
+    // docked from parked, but this tab is docked.
     const tile = screen.getByTestId("webview-tile-t1");
-    expect(tile.getAttribute("aria-hidden")).toBe("true");
     expect(tile.closest(".webview-parking")).toBeTruthy();
     expect(tile.querySelector("electrobun-webview")).toBeTruthy();
+    expect(exposed(tile)).toBe(true);
   });
 
   test("hiding the Output panel parks the webview instead of destroying it, and redocks the same node (fix round 1, F1a)", () => {
@@ -205,25 +220,85 @@ describe("OutputTiles / WebViewHosts", () => {
     expect(exposed(tile2After)).toBe(true); // now active, genuinely exposed
   });
 
-  test("toggling Web View visible collapses/expands the tile without recreating its <electrobun-webview> (M0-S4; restored, fix round 2 N5)", () => {
+  test("toggling Web View visible off again parks the tile without destroying its <electrobun-webview> (M0-S4; restored, fix round 2 N5; N4 lazy creation)", () => {
     const store = hydrated({ runtime: "browser" }); // default webviewVisible: false
     const { api } = createFakeApi();
     renderTiles(store, api);
-    const before = screen.getByTestId("webview-tile-t1");
-    const beforeWebview = before.querySelector("electrobun-webview");
-    expect(before.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByTestId("webview-tile-t1")).toBeNull(); // N4: nothing created before the first enable
 
     act(() => store.getState().toggleWebviewVisible());
     const docked = screen.getByTestId("webview-tile-t1");
-    expect(docked).toBe(before); // same node -- not destroyed and recreated
-    expect(docked.querySelector("electrobun-webview")).toBe(beforeWebview);
+    const dockedWebview = docked.querySelector("electrobun-webview");
+    expect(dockedWebview).toBeTruthy();
     expect(exposed(docked)).toBe(true);
 
+    // The Task 8 invariant this lazy-creation change must not weaken: once created, a host is never unmounted
+    // for going back off -- only re-parked. Node identity (`toBe`), not mere presence, is what proves it.
     act(() => store.getState().toggleWebviewVisible());
     const parked = screen.getByTestId("webview-tile-t1");
-    expect(parked).toBe(before);
-    expect(parked.querySelector("electrobun-webview")).toBe(beforeWebview);
+    expect(parked).toBe(docked); // same node -- not destroyed and recreated
+    expect(parked.querySelector("electrobun-webview")).toBe(dockedWebview);
     expect(parked.getAttribute("aria-hidden")).toBe("true");
+
+    // And flipping it back on a second time reuses that same host again, not a fresh one.
+    act(() => store.getState().toggleWebviewVisible());
+    const redocked = screen.getByTestId("webview-tile-t1");
+    expect(redocked).toBe(docked);
+    expect(redocked.querySelector("electrobun-webview")).toBe(dockedWebview);
+    expect(exposed(redocked)).toBe(true);
+  });
+
+  test("a docked tile re-measures through ResizeObserver when its placeholder's box changes, not only at mount (Task 8's central mechanism, unexercised by jsdom until now)", () => {
+    // jsdom defines no ResizeObserver -- WebViewTile.tsx:75 early-returns without one, and until this test nothing
+    // ever constructed a real one or fired its callback: the tracking claim was correct by reading the code, not
+    // by executing it. Injecting a controllable fake exercises the real registration and re-measure path.
+    // A plain mutable holder, not two separate `let`s: TypeScript can't see that `renderTiles` below (via React's
+    // effects) is what invokes `FakeResizeObserver`'s constructor/`observe`, so a bare `let` narrows to its
+    // initializer's literal type (`null`) at every read after -- a property on an object isn't narrowed that way.
+    const captured: { observedTarget: Element | null; fire: (() => void) | null } = {
+      observedTarget: null,
+      fire: null,
+    };
+    class FakeResizeObserver {
+      constructor(callback: () => void) {
+        captured.fire = callback;
+      }
+      observe(target: Element) {
+        captured.observedTarget = target;
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    const globals = globalThis as { ResizeObserver?: unknown };
+    const original = globals.ResizeObserver;
+    globals.ResizeObserver = FakeResizeObserver;
+    try {
+      const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
+      const { api } = createFakeApi();
+      renderTiles(store, api);
+
+      const dockNode = document.querySelector(".webview-tile-dock");
+      expect(dockNode).toBeTruthy();
+      expect(captured.observedTarget).toBe(dockNode); // the real dock node, not some other element
+      expect(captured.fire).toBeTruthy();
+
+      const tile = screen.getByTestId("webview-tile-t1");
+      const rect = { top: 12, left: 34, width: 500, height: 600, right: 0, bottom: 0, x: 34, y: 12, toJSON() {} };
+      const rectSpy = spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(rect);
+      try {
+        // Simulates a real ResizeObserver firing after the split was dragged or the window resized -- the case
+        // jsdom's absence of the API left entirely unexercised (spec §7.1 / WebViewTile.tsx's own doc comment).
+        act(() => captured.fire?.());
+        expect(tile.style.top).toBe("12px");
+        expect(tile.style.left).toBe("34px");
+        expect(tile.style.width).toBe("500px");
+        expect(tile.style.height).toBe("600px");
+      } finally {
+        rectSpy.mockRestore();
+      }
+    } finally {
+      globals.ResizeObserver = original;
+    }
   });
 
   test("an order swap while docked re-targets the host onto the new, connected dock node (fix round 2, N1)", () => {

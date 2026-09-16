@@ -67,8 +67,9 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
           code,
           language,
           logpoints,
-          // The tab is the source of truth; the UI's copy can lag (M4 T1). `effectiveRuntime` still collapses
-          // everything to "bun" until a later task widens AVAILABLE_RUNTIMES, so behaviour is unchanged.
+          // The tab is the source of truth; the UI's copy can lag (M4 T1). Every runtime is available since M4
+          // Task 9 (AVAILABLE_RUNTIMES), so a tab whose runtime differs from the request's now actually starts on
+          // its own runtime (R-M4-T1-MINOR-1), not just Bun.
           runtime: effectiveRuntime(tab?.runtime ?? runtime),
           workingDirectory: tab?.workingDirectory ?? null,
           // The run compiles as the request's language, so __filename's extension follows it (N-4).

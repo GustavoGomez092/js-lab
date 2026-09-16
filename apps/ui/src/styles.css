@@ -278,8 +278,9 @@ button:disabled {
    layout does, which is the entire point (fix round 1, F1/F2). Contributes no box of its own; every `.webview-
    tile` inside it is independently `position: fixed`.
    Fix round 2 (N3): `position: fixed` is viewport-relative ONLY as long as no ancestor establishes a containing
-   block for fixed-position descendants -- `transform`, `filter`, `perspective`, `contain` (any value but
-   `size`/`style`) or `will-change: transform`/`will-change: filter` on `html`, `body`, `#root`, `.app` or
+   block for fixed-position descendants -- `transform`, `filter`, `backdrop-filter`, `perspective`, `contain` (any
+   value but `size`/`style`) or `will-change: transform`/`will-change: filter`/`will-change: backdrop-filter` on
+   `html`, `body`, `#root`, `.app` or
    `.app-main` would silently re-base every docked webview's coordinates to that ancestor's box instead of the
    viewport. None of them declare any of those today (checked repo-wide) -- this holds by accident, not by
    contract, so anyone adding one of those properties to an ancestor here needs to know this relies on their

@@ -135,10 +135,16 @@ describe("settings", () => {
     expect(nextZoom(1.75, 0)).toBe(1);
   });
 
-  test("only available runtimes execute; others fall back to bun", () => {
+  test("every runtime is available now that M4 Task 9 turns the switch on", () => {
     expect(isRuntimeAvailable("bun")).toBe(true);
-    expect(isRuntimeAvailable("browser-node")).toBe(false);
-    expect(effectiveRuntime("browser")).toBe("bun");
+    expect(isRuntimeAvailable("browser-node")).toBe(true);
+    expect(isRuntimeAvailable("browser")).toBe(true);
+  });
+
+  test("effectiveRuntime keeps every runtime unchanged; none collapses to bun any more", () => {
+    expect(effectiveRuntime("bun")).toBe("bun");
+    expect(effectiveRuntime("browser-node")).toBe("browser-node");
+    expect(effectiveRuntime("browser")).toBe("browser");
   });
 
   test("readSetting and settingPatch address a single key", () => {

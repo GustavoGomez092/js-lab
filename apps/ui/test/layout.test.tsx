@@ -139,10 +139,12 @@ describe("layout", () => {
     expect(screen.getByTestId("run-status").textContent).toBe("Safe Mode: press ⌘R to run");
     expect(screen.getByText("Safe Mode")).toBeTruthy();
     const runtime = screen.getByLabelText("Runtime") as HTMLSelectElement;
+    // Every runtime is available since M4 Task 9 (packages/shared/src/settings.ts AVAILABLE_RUNTIMES): none of
+    // the status bar's own runtime options is disabled any more.
     expect([...runtime.options].map((o) => [o.value, o.disabled])).toEqual([
-      ["browser-node", true],
+      ["browser-node", false],
       ["bun", false],
-      ["browser", true],
+      ["browser", false],
     ]);
     fireEvent.change(screen.getByLabelText("Language"), { target: { value: "jsx" } });
     expect(store.getState().tab?.language).toBe("jsx");

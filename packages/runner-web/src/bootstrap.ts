@@ -315,12 +315,45 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
     g.console as Console,
   );
 
+  /**
+   * The last-resort event for when `pushError` itself throws: it touches neither the encoder nor the thrown value's
+   * own accessors, so it is the one report that cannot fail the same way the report it replaces did.
+   */
+  function pushLastResortError(phase: "runtime" | "unhandledRejection"): void {
+    try {
+      run?.buffer.push({
+        kind: "error",
+        phase,
+        name: "RuntimeError",
+        message: "This run failed, and JSLab could not encode the error it failed with.",
+        stack: [],
+        value: { t: "undefined" },
+      });
+    } catch {}
+  }
+
+  /**
+   * `pushError`, guaranteed not to throw. `pushError` reads the value's `stack` and hands it to the encoder, and
+   * both can throw on a hostile or exotic value -- which is exactly how M4's `jsonBytes`/`Buffer` defect turned a
+   * loud runtime error into an invisible hang. `startRun` already guarded its own call site; the global `error` and
+   * `unhandledrejection` listeners below called `pushError` bare, so the same hostile value thrown *asynchronously*
+   * made the listener itself throw: no error event, no flush, nothing reported at all. Every call site now goes
+   * through here, so reporting an error can never again be what loses it.
+   */
+  function reportError(phase: "runtime" | "unhandledRejection", error: unknown): void {
+    try {
+      pushError(phase, error);
+    } catch {
+      pushLastResortError(phase);
+    }
+  }
+
   const onError = (event: unknown) => {
     const e = event as { error?: unknown; message?: unknown } | null;
-    pushError("runtime", e?.error ?? (typeof e?.message === "string" ? new Error(e.message) : event));
+    reportError("runtime", e?.error ?? (typeof e?.message === "string" ? new Error(e.message) : event));
   };
   const onRejection = (event: unknown) =>
-    pushError("unhandledRejection", (event as { reason?: unknown } | null)?.reason);
+    reportError("unhandledRejection", (event as { reason?: unknown } | null)?.reason);
   g.addEventListener("error", onError);
   g.addEventListener("unhandledrejection", onRejection);
 
@@ -370,32 +403,24 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
       // terminal state below could be sent. The tab sat in `evaluating` forever with no events and no error. The
       // root cause is fixed in `packages/serializer`, but a reporter that can throw must never again be the only
       // thing standing between a failed run and the host hearing about it.
-      try {
-        pushError("runtime", error);
-      } catch {
-        // A last-resort event that touches neither the encoder nor the thrown value's own accessors.
-        try {
-          run?.buffer.push({
-            kind: "error",
-            phase: "runtime",
-            name: "RuntimeError",
-            message: "This run failed, and JSLab could not encode the error it failed with.",
-            stack: [],
-            value: { t: "undefined" },
-          });
-        } catch {}
-      }
+      // The same guard the listeners use, sharing one last-resort shape rather than a second copy of it.
+      reportError("runtime", error);
     } finally {
       URL.revokeObjectURL(url);
     }
     if (current.state !== "evaluating") return;
+    // Computed once and reused by the fallback below: the guard used to hardcode `"idle"`, which contradicted its
+    // own `activeHandles` on a run that still held handles and told the host a run with a live interval had
+    // finished. `setState` assigns `run.state` before it flushes, so the state is already recorded either way.
+    const terminal: RunnerState = tracker.count > 0 ? "settled" : "idle";
     try {
-      setState(tracker.count > 0 ? "settled" : "idle");
+      setState(terminal);
     } catch {
       // `setState` flushes the buffer before it sends, so a single unencodable queued event could otherwise take
       // the terminal state down with it. The state is the one message the host cannot do without: without it the
       // tab spins in `evaluating` until the user kills it. Send it directly, skipping the flush that failed.
-      bridge.send({ type: "state", runId: current.runId, state: "idle", activeHandles: tracker.count });
+      current.state = terminal;
+      bridge.send({ type: "state", runId: current.runId, state: terminal, activeHandles: tracker.count });
     }
   }
 

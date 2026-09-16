@@ -95,7 +95,7 @@ Tasks are ordered so each one lands green on its own. Tasks 1–2 open the seam 
 | 8a | Vendor/app bundle join | Page-global registry plus a per-package CommonJS stub (externals + import map cannot work). | merged |
 | 9 | Runtime switcher enablement | All three runtimes selectable; Monaco type libs follow the runtime. | merged |
 | 9a | Wire the browser runtime to a real webview | Lazy host creation; proven against a built app. | merged |
-| 9b | Close the page-side run-completion gap | **The milestone blocker:** runs reach `evaluating` and never settle. Plus the production fetch transport. | in progress |
+| 9b | Close the page-side run-completion gap | **Was the milestone blocker.** Cause: the serializer measured JSON with Node's `Buffer`, absent in a webview, so the first `console.log` threw and the error reporter threw the same error encoding that rejection — escaping before any terminal state. Also fixed: `browser-node` could not bundle any package (catch-all resolve hook), and the fetch transport was never installed. | **merged `25a5e25`** |
 | 9c | Web View occlusion, stacking and the portal hoist | Native surfaces paint above HTML; overlays are hidden behind a docked Web View. | in progress |
 | 9d | Defects found by automated review | `stop()` settle-on-exit, console reset between runs, sync `play()` throw, host-bridge union validation. | queued, after 9b |
 | 10 | Sync polyfills | The §5.13 bundled modules and the `process`/`os` snapshots. | merged |
@@ -544,7 +544,7 @@ Per spec §5.13: `buffer, path, events, util, url, querystring, string_decoder, 
 - Every bridged call is validated by `createValidators`.
 - **Redaction is scoped to logged diagnostic fields only — never to returned data or stream payloads.** `createRedactor` applies to what JSLab itself logs about a bridged call (the diagnostic record of the call). It must **not** be applied to a value the user's code asked for: a file's contents returned by `fs/promises.readFile`, or `stdout`/`stderr` payloads streamed from `child_process`, pass through **unchanged**, even when they contain credential-like text. Redacting those would silently corrupt the data the program requested — a correctness bug wearing a security label. State which fields are redacted, and add a test proving a returned file whose body looks like a credential comes back byte-identical.
 
-- [ ] Steps: failing tests for each throw message and for one round-trip read, implementation, a path-escape refusal test. **Counts: runner-web +8, desktop +6; root 1010 → 1024.**
+- [ ] Steps: failing tests for each throw message and for one round-trip read, implementation, a path-escape refusal test. **Counts: runner-web +8, desktop +6 as an estimate only — measure your own baseline first and report `baseline N → after M`.** The plan's original "root 1010 → 1024" was written before Tasks 8a, 9a, 9b, 9c and 9d existed and is stale by over 200; the tip is currently **1245**. That is context, not a target. Never add a test to make a total match.
 
 ---
 

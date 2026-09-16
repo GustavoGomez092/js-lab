@@ -15,4 +15,15 @@ import { startRunnerWeb } from "./bootstrap";
  * The page it lands in is bare (`packages/runner-web/index.html`: a single empty `<div id="root">`), so this is
  * the only script that ever runs there besides the user's own bundled code.
  */
-startRunnerWeb();
+/**
+ * Which web runtime this page is (Task 9b). Main injects `window.__jslabRuntime` immediately before this bundle, in
+ * the same `executeJavascript` call (`runtimePrelude`, `apps/desktop/src/main/runtimes/web-adapter.ts`) -- the only
+ * channel available, since one bootstrap bundle serves every tab and `installFetchProxy` has to run synchronously
+ * inside `startRunnerWeb`, before `installHandleTracking` wraps `fetch`.
+ *
+ * Fail-closed: anything other than the exact string `"browser-node"` is treated as `"browser"`, the CORS-enforced
+ * runtime that routes nothing through Main. A missing or unrecognised prelude therefore costs a `browser-node` tab
+ * its proxy (a visible, ordinary CORS failure) rather than handing a plain `browser` tab a CORS-free fetch.
+ */
+const declared = (globalThis as { __jslabRuntime?: unknown }).__jslabRuntime;
+startRunnerWeb({ runtime: declared === "browser-node" ? "browser-node" : "browser" });

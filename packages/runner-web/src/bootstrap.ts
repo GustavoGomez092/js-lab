@@ -10,7 +10,13 @@ import {
 } from "@jslab/serializer";
 import { installConsole } from "./console-hook";
 import { type DialogGlobal, installDialogShim } from "./dialogs";
-import { type FetchProxyGlobal, type FetchTransport, installFetchProxy, type WebRuntime } from "./fetch-proxy";
+import {
+  type FetchHostEvent,
+  type FetchProxyGlobal,
+  type FetchTransport,
+  installFetchProxy,
+  type WebRuntime,
+} from "./fetch-proxy";
 import { AudioController, HandleTracker, handleCountAction, installHandleTracking } from "./handles";
 import { createHostBridge, type HostBridgeGlobal } from "./host-bridge";
 
@@ -103,10 +109,13 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
   // JSLab's own EventBuffer flush timer and heartbeat interval are never tracked as user-code activity.
   // Bound to the global deliberately. These are captured before `installHandleTracking` wraps them, and they are
   // then called as methods of these plain objects (`timers.setTimeout(...)`, `rawInterval.setInterval(...)`), which
-  // makes `this` the object rather than the Window. A WebIDL operation with a receiver that isn't the Window
-  // throws "Illegal invocation" in WebKit -- fatal here, because it happens between installing the host bridge and
-  // `bridge.send({ type: "ready" })` below, so the page never reports ready and the host can only time out with
-  // nothing to show the user. Bun ignores the receiver entirely, which is why every unit test passed regardless.
+  // would otherwise make `this` the object rather than the Window. `setTimeout`/`setInterval` are WebIDL
+  // operations, whose receiver is specified to be the Window, so binding is right on the platform contract.
+  // Task 9b correction: this comment used to assert that an unbound receiver throws "Illegal invocation" in WebKit
+  // and that this was why a browser-mode page never finished a run. Task 9a's own in-page probe of the exact call
+  // shape returned `method-ok` and the emitted bundle is not strict-mode, so that mechanism is unproven, and the
+  // hang it was blamed for had a different cause entirely (the serializer's use of `Buffer`; see `startRun`).
+  // The binding stays because the contract says so, not because of a diagnosis this codebase can demonstrate.
   const timers = { setTimeout: g.setTimeout.bind(g), clearTimeout: g.clearTimeout.bind(g) };
   const rawInterval = { setInterval: g.setInterval.bind(g), clearInterval: g.clearInterval.bind(g) };
 
@@ -115,13 +124,48 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
   // is outstanding and releases the handle once the promise settles, including the rejection an abort produces.
   // Reversed, an aborted `browser-node` request would leak a handle forever (fetch-proxy.ts's own doc comment;
   // enforced here by bootstrap-fetch-order.test.ts, since a comment alone cannot catch this going forward).
-  if (options.fetchTransport) {
-    installFetchProxy({
-      runtime: options.runtime ?? "browser",
-      transport: options.fetchTransport,
-      global: g as unknown as FetchProxyGlobal,
-    });
-  }
+  // Task 9b (ledger ruling R-M4-T13-FETCHWIRE-1): the **production** `browser-node` transport. Until this existed,
+  // `web-entry.ts` called `startRunnerWeb()` with no arguments, so `options.fetchTransport` was always undefined and
+  // the proxy was never installed in a real page -- `browser-node` silently got a plain CORS-enforced `fetch`, the
+  // opposite of what spec §5.12 requires. The transport is built here rather than handed in by `web-entry.ts`
+  // because only this function can route the host's replies back: they arrive as ordinary `HostToWebMessage`s in
+  // `handleHostMessage` below, which is private to this closure. `options.fetchTransport` remains as the test seam.
+  //
+  // `bridge` is referenced here before its own `const` runs further down this function. That is safe for the same
+  // reason `setState` closing over it is: nothing below is ever *called* until a run is underway, long after the
+  // declaration has executed.
+  const fetchListeners = new Set<(event: FetchHostEvent) => void>();
+  const hostFetchTransport: FetchTransport = {
+    request(id, request) {
+      bridge.send({
+        type: "fetchRequest",
+        id,
+        url: request.url,
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+      });
+    },
+    abort(id) {
+      bridge.send({ type: "fetchAbort", id });
+    },
+    onEvent(listener) {
+      fetchListeners.add(listener);
+      return () => fetchListeners.delete(listener);
+    },
+  };
+  /** Fans one host reply out to the proxy. The only consumer of the four `fetch*` cases in `handleHostMessage`. */
+  const deliverFetch = (event: FetchHostEvent): void => {
+    for (const listener of [...fetchListeners]) listener(event);
+  };
+  // Called unconditionally now: `installFetchProxy` is itself the no-op for `"browser"` (it does not wrap the
+  // global and does not even subscribe -- `fetch-proxy.ts`), so the runtime, not the presence of a transport, is
+  // what decides. That ordering requirement above (before `installHandleTracking`) is unchanged.
+  installFetchProxy({
+    runtime: options.runtime ?? "browser",
+    transport: options.fetchTransport ?? hostFetchTransport,
+    global: g as unknown as FetchProxyGlobal,
+  });
 
   let run: Run | null = null;
   const registry = new HandleRegistry();
@@ -284,12 +328,40 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
     try {
       await import(url);
     } catch (error) {
-      pushError("runtime", error);
+      // Task 9b, defence in depth. `pushError` encodes the thrown value, and the encoder can itself throw -- which
+      // is exactly how this failure stayed invisible for a whole milestone. A webview has no `Buffer`, so the
+      // serializer's `jsonBytes` threw `ReferenceError` inside the user's first `console.log`; that rejected this
+      // import, and then threw *again* here while encoding the rejection, propagating out of `startRun` before the
+      // terminal state below could be sent. The tab sat in `evaluating` forever with no events and no error. The
+      // root cause is fixed in `packages/serializer`, but a reporter that can throw must never again be the only
+      // thing standing between a failed run and the host hearing about it.
+      try {
+        pushError("runtime", error);
+      } catch {
+        // A last-resort event that touches neither the encoder nor the thrown value's own accessors.
+        try {
+          run?.buffer.push({
+            kind: "error",
+            phase: "runtime",
+            name: "RuntimeError",
+            message: "This run failed, and JSLab could not encode the error it failed with.",
+            stack: [],
+            value: { t: "undefined" },
+          });
+        } catch {}
+      }
     } finally {
       URL.revokeObjectURL(url);
     }
     if (current.state !== "evaluating") return;
-    setState(tracker.count > 0 ? "settled" : "idle");
+    try {
+      setState(tracker.count > 0 ? "settled" : "idle");
+    } catch {
+      // `setState` flushes the buffer before it sends, so a single unencodable queued event could otherwise take
+      // the terminal state down with it. The state is the one message the host cannot do without: without it the
+      // tab spins in `evaluating` until the user kills it. Send it directly, skipping the flush that failed.
+      bridge.send({ type: "state", runId: current.runId, state: "idle", activeHandles: tracker.count });
+    }
   }
 
   function handleHostMessage(message: HostToWebMessage): void {
@@ -318,16 +390,27 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
         run = null;
         registry.clear();
         return;
-      // Fix round 2 (Task 13): no consumer yet -- `RunnerWebOptions.fetchTransport` is an external seam
-      // (`fetch-proxy.ts`'s `FetchTransport`), and nothing here feeds inbound traffic into its `onEvent`
-      // listeners. Wiring that dispatch is Task 9b's job (the production `browser-node` transport); these cases
-      // exist so the `default` branch below stays exhaustive today, which is what makes it a compile error --
-      // rather than a silently dropped reply and a promise left pending forever -- if that wiring (or anything
-      // later) touches this switch without handling every `HostToWebMessage` variant.
+      // Task 9b: these now feed the production transport above. Task 13 left them as no-ops purely to keep the
+      // `default` branch exhaustive, precisely so this wiring could not be added without the compiler checking it
+      // -- an unrouted reply leaves the page's `fetch` promise pending forever, with no error and no timeout.
       case "fetchHead":
+        deliverFetch({
+          type: "head",
+          id: message.id,
+          status: message.status,
+          statusText: message.statusText,
+          headers: message.headers,
+          url: message.url,
+        });
+        return;
       case "fetchChunk":
+        deliverFetch({ type: "chunk", id: message.id, data: message.data });
+        return;
       case "fetchEnd":
+        deliverFetch({ type: "end", id: message.id });
+        return;
       case "fetchError":
+        deliverFetch({ type: "error", id: message.id, message: message.message });
         return;
       default: {
         const _never: never = message;

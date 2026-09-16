@@ -188,10 +188,16 @@ export function clipToJsonBytes(text: string, maxBytes: number): string {
   return text;
 }
 
+// M4 Task 9b: this module runs in a **webview** as well as in Bun -- `packages/runner-web` imports it to encode
+// every `console.log` argument and every `__jl.log` value -- and a webview has no `Buffer`. `TextEncoder` is the
+// standard API both realms have, exactly as `EventBuffer` (`packages/runner-shared`) already does its own byte
+// accounting. One instance is reused rather than constructed per call.
+const textEncoder = new TextEncoder();
+
 /** Exact size of `value` serialized with JSON.stringify, in UTF-8 bytes. */
 export function jsonBytes(value: unknown): number {
   // Exact: JSON.stringify already escapes lone surrogates, so its UTF-8 length is the wire size (FA-m13).
-  return Buffer.byteLength(JSON.stringify(value) ?? "");
+  return textEncoder.encode(JSON.stringify(value) ?? "").length;
 }
 
 /** Replaces the values of an event that no longer fit even as summaries. */

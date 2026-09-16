@@ -59,6 +59,55 @@ async function runBrowserNodeEntry(source: string): Promise<unknown> {
   return runJoinedModule(joined);
 }
 
+/**
+ * Task 9b. `nodePolyfills`' second `onResolve` hook (the one serving `crypto.ts`'s own vendor entries) used to be
+ * registered as `filter: /.*​/`. Merely *registering* a hook that matches every specifier corrupted Bun's output,
+ * even though the callback returned `undefined` for everything but `crypto`: a package that internally does
+ * `import * as ns from "./ns.js"` had its namespace object dropped while every `ns.foo(...)` call site survived, so
+ * the chunk died at evaluation with `ReferenceError: ns is not defined` -- and ~425 KB of the graph went with it.
+ *
+ * This is the shape every real npm package hits (it was found with zod), so it is tested with a real bundle and a
+ * real evaluation, not by inspecting the plugin. It is a `browser-node`-only regression: the `browser` build never
+ * registered that hook, which is why only one of the two runtimes was broken.
+ */
+describe("browser-node bundles packages that use an internal namespace import (Task 9b)", () => {
+  async function writeNamespacePackage(name: string): Promise<void> {
+    const pkgDir = join(packagesNodeModules, name);
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(join(pkgDir, "package.json"), JSON.stringify({ name, main: "index.js", type: "module" }));
+    await writeFile(
+      join(pkgDir, "index.js"),
+      'import * as util from "./util.js";\nexport function greet() {\n  return util.hello() + util.NAME;\n}\n',
+    );
+    await writeFile(
+      join(pkgDir, "util.js"),
+      'export function hello() {\n  return "hi ";\n}\nexport const NAME = "there";\n',
+    );
+  }
+
+  test("the package's namespace object survives, so its call sites still resolve", async () => {
+    await writeNamespacePackage("ns-pkg");
+    const result = await runBrowserNodeEntry('import { greet } from "ns-pkg";\nglobalThis.__jlProbe = greet();\n');
+    expect(result).toBe("hi there");
+  });
+
+  test("the same package works under the browser runtime too, so the two runtimes agree", async () => {
+    await writeNamespacePackage("ns-pkg2");
+    const entry = join(workingDirectory, "entry-browser.js");
+    await writeFile(entry, 'import { greet } from "ns-pkg2";\nglobalThis.__jlProbe = greet();\n');
+    const app = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules });
+    if ("error" in app) throw new Error(`app build failed: ${app.error.message}`);
+    const vendor = await bundleVendorForWeb({
+      imports: app.imports,
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+    if ("error" in vendor) throw new Error(`vendor build failed: ${vendor.error.message}`);
+    expect(await runJoinedModule(joinVendorAndApp(vendor.code, app.code))).toBe("hi there");
+  });
+});
+
 describe("browser-node module table -- the ten sync builtins (spec §5.13)", () => {
   test("buffer: Buffer.from/toString round-trips", async () => {
     const result = await runBrowserNodeEntry(

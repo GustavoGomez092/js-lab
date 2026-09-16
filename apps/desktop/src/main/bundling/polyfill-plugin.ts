@@ -265,7 +265,17 @@ export function nodePolyfills(
       // `resolve-plugin.ts`'s `VENDOR_STUB_NAMESPACE` check (a namespace check works there because that stub
       // content is loaded under a namespace with no further imports of its own to resolve). `args.importer` is the
       // one field that reliably names which virtual module is doing the importing.
-      build.onResolve({ filter: /.*/ }, (args) => {
+      //
+      // M4 Task 9b: the `filter` is the load-bearing part, NOT just an optimization ahead of the `args.importer`
+      // check below it. This hook used to be registered as `filter: /.*/`, and merely *registering* a hook that
+      // matches every specifier corrupts Bun's output even though the callback returns `undefined` for everything
+      // but `crypto`: bundling a package that internally does `import * as util from "./util.js"` (zod does)
+      // emitted the module's functions but no namespace object, while leaving every `util.foo(...)` call site
+      // intact, so the chunk died at evaluation with `ReferenceError: util is not defined` -- and silently dropped
+      // ~425 KB of the graph with it. Measured by bisecting the plugin list: identical builds with this hook's
+      // filter narrowed (or the hook removed) produce 667,635 bytes that evaluate cleanly, versus 242,634 bytes
+      // that throw with it registered catch-all. Keep this filter as narrow as the two specifiers it exists for.
+      build.onResolve({ filter: /^\.\/vendor\/create-(hash|hmac)-entry$/ }, (args) => {
         if (args.importer !== "crypto") return undefined;
         if (!(args.path in INTERNAL_VENDOR_TABLE)) return undefined;
         return { path: args.path, namespace: NAMESPACE };

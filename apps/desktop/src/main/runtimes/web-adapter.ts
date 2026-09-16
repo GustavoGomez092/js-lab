@@ -64,8 +64,15 @@ export interface WebviewHost {
    * happened -- NOT once the bootstrap's own `ready` message arrives; the caller awaits that separately via
    * `onMessage` (see `WebAdapter.start()`), since "the bootstrap ran" and "the bootstrap's first round-trip
    * completed" are two different events.
+   *
+   * `runtime` is which of the two web runtimes this tab is, and it is **required** rather than defaulted (Task 9b):
+   * the page cannot discover it any other way. One `WebviewSource` is shared by both adapters and the bootstrap
+   * bundle is byte-identical for every tab, so the injected prelude is the only channel -- and it has to be this
+   * one, because `installFetchProxy` must run synchronously inside `startRunnerWeb` (before `installHandleTracking`
+   * wraps `fetch`), which rules out learning the runtime from a later message. Defaulting it would silently give a
+   * `browser-node` tab a CORS-enforced `fetch`, which is exactly the gap this parameter closes.
    */
-  reset(): Promise<void>;
+  reset(runtime: WebRuntimeId): Promise<void>;
   /** Delivers one host->page message, wrapped with the next strictly-consecutive sequence number (decision 3). */
   send(message: HostToWebMessage): void;
   /** Subscribes to inbound page->host messages. Returns an unsubscribe function. */
@@ -105,6 +112,23 @@ function isWebToHostEnvelope(value: unknown): value is { seq: number; message: W
 export const ASSERT_HOST_HOOK_SNIPPET =
   'if (typeof window.__electrobunSendToHost !== "function") { throw new Error("JSLab: __electrobunSendToHost missing before runner-web bootstrap injection"); }';
 
+/** The two web runtimes, as `WebAdapter` is instantiated for each (`main-services.ts` registers one adapter each). */
+export type WebRuntimeId = Extract<Runtime, "browser" | "browser-node">;
+
+/**
+ * Task 9b (ledger ruling R-M4-T13-FETCHWIRE-1): tells the page which web runtime it is, injected immediately before
+ * the bootstrap in the same `executeJavascript` call. `packages/runner-web/src/web-entry.ts` reads it and passes it
+ * to `startRunnerWeb`, which is what decides whether `installFetchProxy` routes `fetch` through Main at all. Before
+ * this existed the entry called `startRunnerWeb()` with no arguments, so the runtime defaulted to `"browser"` and a
+ * `browser-node` tab never got its proxy.
+ *
+ * A literal assignment rather than anything the page could have influenced: it is built here, from the adapter's own
+ * fixed `deps.runtime`, and `JSON.stringify` on a value of a two-member string union cannot produce anything else.
+ */
+export function runtimePrelude(runtime: WebRuntimeId): string {
+  return `window.__jslabRuntime = ${JSON.stringify(runtime)};`;
+}
+
 /**
  * Wraps a `RawWebview` primitive with the bridge discipline decisions 2 and 3 pin to this task:
  * - Decision 2: the bootstrap is injected only once `onLoaded` fires (never earlier), with `ASSERT_HOST_HOOK_SNIPPET`
@@ -122,12 +146,12 @@ export function createSequencedWebviewHost(raw: RawWebview, bootstrapSource: str
   });
 
   return {
-    reset(): Promise<void> {
+    reset(runtime: WebRuntimeId): Promise<void> {
       seq = 0;
       return new Promise((resolve) => {
         const unsub = raw.onLoaded(() => {
           unsub();
-          raw.executeJavascript(`${ASSERT_HOST_HOOK_SNIPPET}\n${bootstrapSource}`);
+          raw.executeJavascript(`${ASSERT_HOST_HOOK_SNIPPET}\n${runtimePrelude(runtime)}\n${bootstrapSource}`);
           resolve();
         });
         raw.reload();
@@ -234,6 +258,7 @@ async function waitForReady(
   webviews: WebviewSource,
   tabId: string,
   timeoutMs: number,
+  runtime: WebRuntimeId,
 ): Promise<void> {
   let settled = false;
   await new Promise<void>((resolve, reject) => {
@@ -260,7 +285,7 @@ async function waitForReady(
       webviews.destroy(tabId);
       reject(new Error(`Web runner's webview never reported ready within ${timeoutMs}ms (tab ${tabId}).`));
     }, timeoutMs);
-    host.reset().catch((error: unknown) => {
+    host.reset(runtime).catch((error: unknown) => {
       if (settled) return;
       settled = true;
       unsubMessage();
@@ -549,7 +574,7 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
       // Spec §5.12 steps 1-2 ("Main sends runner.reset... the page reloads"), decision 1: every run gets a fresh
       // realm/DOM via reload, not just Stop/Kill -- see the report for why this is safe without an uninstall path.
       // Fix round 1 (C2): bounded and crash-aware -- see `waitForReady`'s own doc comment.
-      await waitForReady(host, deps.webviews, run.tabId, deps.expandTimeoutMs ?? 5000);
+      await waitForReady(host, deps.webviews, run.tabId, deps.expandTimeoutMs ?? 5000, deps.runtime);
       if (run.isCancelled()) return deadHandle(run.runId);
 
       // Ledger ruling R-M4-T7-GAP-1 (from Task 7's re-review). From here until the session below wires its own

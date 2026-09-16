@@ -7,6 +7,7 @@ import {
   VENDOR_CACHE_MAX_AGE_MS,
   VENDOR_CACHE_MAX_TOTAL_BYTES,
   VendorCache,
+  type VendorChunk,
   vendorCacheKey,
 } from "../../src/main/bundling/vendor-cache";
 
@@ -92,5 +93,106 @@ describe("VendorCache", () => {
 
     expect(await cache.get(keyA)).toBeNull();
     expect(await cache.get(keyB)).toBeNull();
+  });
+});
+
+describe("VendorCache concurrency (fix round 1)", () => {
+  /**
+   * C1: reproduces the reviewer's torn-write / mismatched-pair race entirely through the public `get()`/`set()`
+   * API (never touching the filesystem directly), so this test exercises exactly what a real caller (Task 7,
+   * bundling several tabs at once) would do. Mirrors the reviewer's own methodology (`task-6-review.md`): one
+   * continuous writer alternates two full-size, easily distinguishable payloads (~200 KB code / ~20 KB map each,
+   * built from a single repeated character so any byte mixing -- a torn write -- shows up immediately as a
+   * non-uniform string) into the *same* key, while several readers hammer `get()` for that same key throughout the
+   * whole write sequence. Every successful `get()` is checked for two things a corrupt cache could violate: the
+   * code is either wholly payload A or wholly payload B (never torn/mixed), and its map is the map that belongs to
+   * *that same* payload (never a mismatched pair).
+   *
+   * An earlier version of this test fired all the `set()`/`get()` calls at once via `Promise.all` over two flat
+   * arrays and never reproduced anything against the pre-fix code -- a `get()` against an empty/nonexistent cache
+   * fails fast (no file to read), so every read against the still-warming-up cache "won" the race and returned a
+   * clean miss before any write finished. Priming the cache first, then running one continuous writer loop
+   * alongside concurrent reader loops for the writer's whole duration, matches the reviewer's fixture and reliably
+   * exercises the actual race window (a write in progress, not an empty cache).
+   *
+   * Loop count: 100 sequential `set()` calls (alternating A/B) from one writer, read throughout by 8 concurrent
+   * readers. Chosen empirically (see the fix-round-1 report): 5 exploratory runs at this size against the pre-fix
+   * code produced 55-62 mismatched pairs out of ~1,300 reads every time (never zero), in ~40 ms; smaller loop
+   * counts (down to 50) still reproduced it reliably too, so 100 leaves comfortable margin above the noise floor
+   * without slowing the suite. Against the fixed code this same test completes in well under a second with zero
+   * violations, every time -- the fix makes the pairing invariant hold by construction (same-key `get()`/`set()`
+   * calls are fully serialized), not just statistically less likely, so there is no flake risk on the green side.
+   */
+  test("concurrent set() calls for the same key never let get() observe a torn chunk or a mismatched code/map pair", async () => {
+    const cache = new VendorCache({ cacheDir });
+    const key = vendorCacheKey(hashBunLock("{}"), ["react", "react-dom"]);
+    const payloads = {
+      A: { code: "A".repeat(200_000), map: "a".repeat(20_000) },
+      B: { code: "B".repeat(200_000), map: "b".repeat(20_000) },
+    } as const;
+    const ITERATIONS = 100;
+    const READER_CONCURRENCY = 8;
+
+    await cache.set(key, payloads.A); // prime the cache so readers have something to race against from the start
+
+    let writing = true;
+    const reads: (VendorChunk | null)[] = [];
+
+    async function writer() {
+      for (let i = 0; i < ITERATIONS; i++) {
+        await cache.set(key, i % 2 === 0 ? payloads.A : payloads.B);
+      }
+      writing = false;
+    }
+
+    async function reader() {
+      while (writing) {
+        reads.push(await cache.get(key));
+      }
+    }
+
+    await Promise.all([writer(), ...Array.from({ length: READER_CONCURRENCY }, () => reader())]);
+
+    const violations: string[] = [];
+    for (const hit of reads) {
+      if (!hit) continue; // a clean miss is always safe
+      const isPureA = hit.code === payloads.A.code;
+      const isPureB = hit.code === payloads.B.code;
+      if (!isPureA && !isPureB) {
+        violations.push(`torn code: length ${hit.code.length}, not uniformly A or B`);
+        continue;
+      }
+      const expectedMap = isPureA ? payloads.A.map : payloads.B.map;
+      if (hit.map !== expectedMap) {
+        violations.push(`mismatched pair: code matches ${isPureA ? "A" : "B"} but map does not match its own`);
+      }
+    }
+    expect(reads.length).toBeGreaterThan(0); // sanity: readers actually ran concurrently with the writer
+    expect(violations).toEqual([]);
+  });
+
+  /**
+   * I1: many concurrent `set()` calls for *distinct* keys on one shared `VendorCache` instance -- the ordinary
+   * multi-tab shape the reviewer measured losing 24 of 25 entries against the pre-fix code, because the shared
+   * `index.json` read-modify-write had no serialization.
+   *
+   * Loop count: 40 distinct keys. Chosen empirically (see the fix-round-1 report) as comfortably larger than the
+   * reviewer's own 25-key reproduction (so it's at least as likely to expose the race), while still completing
+   * near-instantly against the fixed code -- each `set()` writes only a few bytes, so the cost here is entirely
+   * the number of concurrent index read-modify-write cycles, not I/O volume.
+   */
+  test("concurrent set() calls for distinct keys never lose an index entry", async () => {
+    const cache = new VendorCache({ cacheDir });
+    const KEY_COUNT = 40;
+    const keys = Array.from({ length: KEY_COUNT }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`]));
+
+    await Promise.all(keys.map((key, i) => cache.set(key, { code: `code-${i}`, map: `map-${i}` })));
+
+    const results = await Promise.all(keys.map((key) => cache.get(key)));
+    const lost = results.filter((hit) => hit === null).length;
+    expect(lost).toBe(0);
+    results.forEach((hit, i) => {
+      expect(hit).toEqual({ code: `code-${i}`, map: `map-${i}` });
+    });
   });
 });

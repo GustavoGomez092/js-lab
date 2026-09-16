@@ -397,6 +397,35 @@ Also measure and report **how long a bare local `views://` page takes to report 
 
 ---
 
+### Task 9a: Wire the browser runtime to a real webview
+
+**Added after Task 9's review (ledger ruling R-M4-C1-1).** Tasks 1–9 built every piece of the browser runtime and switched it on, but **nothing connects them**: `createWebAdapter` (`web-adapter.ts:442`) is unit-tested and registered nowhere, `main-services.ts:116` passes a single `bun` key, and `registry.ts:25` is `adapters[id] ?? adapters.bun` — so a tab set to `browser` silently executes under Bun and code touching `document` throws a `ReferenceError`.
+
+**This is a plan-ordering defect, not an implementer's omission.** Task 7's report deferred the wiring, Task 8 did not pick it up, and Task 9's brief never named it, so it belonged to nobody. Task 9 declined it correctly: registering the adapter without a real `WebviewSource` means registering a stub, which converts silent mis-execution into a 5-second hang and teardown (`waitForReady`, `:465`).
+
+**M4 cannot close, and no release note may claim browser tabs run, until this lands.**
+
+**Files:**
+- Create: a UI-side host module (today `WebViewTile.tsx:50-60` creates the element and hands it to nobody)
+- Modify: `apps/desktop/src/main/main-services.ts` (register the adapter), `packages/rpc-schema/src/ui-rpc.ts` (the Main↔UI protocol), `apps/ui/src/output/WebViewTile.tsx`, `apps/desktop/src/main/runtimes/web-adapter.ts` (a real `WebviewSource`)
+- Test: the protocol schema, the host module, adapter registration, and the lifecycle case below
+
+**This task must own:**
+
+- A real **`WebviewSource`** (`web-adapter.ts:76`, called at `:447`/`:455`).
+- **The Main→UI protocol, which does not exist yet:** `executeJavascript`, reload and destroy outbound; `ready` and `exit` inbound. Schema it in `rpc-schema` like every other message.
+- A **UI-side host module** that owns the element and answers that protocol.
+- **A lifecycle collision Task 9 created, recorded nowhere else:** after N4's lazy creation a host exists only once the Web View toggle has been switched on, so a run on an untouched `browser` tab has **no webview at all** — yet `prepare`/`start` assume `ensure()` always produces one. Decide and test what happens: create on demand, or refuse the run with an honest message.
+- **Registering the adapter** so `registry.get("browser")` stops falling back.
+- The **`views://` ready-time measurement** (ledger R-M4-T7-TIMEOUT-1 — `waitForReady` is still bounded by `expandTimeoutMs ?? 5000`, a value borrowed from a warm-page RPC round trip that gives up benignly, where this one tears down the webview and fails the run) and the **compositor z-index question** (whether a native surface paints above HTML regardless of z-index — check the command palette and a modal over a live Web View). Both are first observable here.
+- **Verifying `ResizeObserver` tracking in a real run.** jsdom defines none, so `WebViewTile.tsx:75` early-returns and **no test exercises that path at all**; Task 8's central mechanism is currently correct by reading, not by execution.
+
+**This task needs permission to build and run the app**, or it inherits exactly the unverifiability that made declining correct in Task 9.
+
+- [ ] Steps: schema the protocol with failing tests; the host module; the real `WebviewSource`; registration; the no-webview lifecycle case; then the live-run checks and measurements reported as evidence. **Counts: stated by the controller at dispatch.**
+
+---
+
 ### Task 10: Sync polyfills for `browser-node`
 
 **Files:**

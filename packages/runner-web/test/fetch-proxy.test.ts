@@ -231,8 +231,8 @@ test("a data: or blob: url is served by the page's own fetch and never reaches t
   installFetchProxy({ runtime: "browser-node", transport: host.transport, global: g });
 
   expect(await (await g.fetch?.("data:text/plain,hello"))?.text()).toBe("served natively");
-  // A literal blob: url rather than URL.createObjectURL: only the scheme is inspected, and a registered blob URL
-  // keeps Bun's event loop alive, which hangs the whole test process at exit rather than failing anything.
+  // A literal blob: url rather than URL.createObjectURL: only the scheme is ever inspected, so registering a real
+  // blob would buy nothing and leave a live registration behind for a body this test never reads.
   const blobUrl = "blob:https://example.test/6f1a2b3c";
   expect(await (await g.fetch?.(blobUrl))?.text()).toBe("served natively");
 

@@ -100,9 +100,10 @@ const NATIVE_SCHEMES = new Set(["data:", "blob:"]);
 /**
  * The scheme of what `fetch` was called with, or null when there isn't one that can be determined here.
  *
- * Deliberately a bare `URL` parse rather than `new Request(...)`: constructing a `Request` for a `file:` or `data:`
- * url makes the runtime touch the resource itself, so the scheme has to be decided *before* any normalization or
- * body access happens.
+ * Deliberately a bare `URL` parse rather than `new Request(...)`: it is cheaper, it does not depend on `Request`
+ * normalization semantics this module does not control, and it keeps the refusal at the edge -- the scheme is
+ * settled before anything else in this file looks at the request. (Constructing a `Request` for a `file:`/`data:`
+ * url does *not* make the runtime touch the resource; that was measured, so it is not a reason to keep this order.)
  */
 function schemeOf(raw: string): string | null {
   try {

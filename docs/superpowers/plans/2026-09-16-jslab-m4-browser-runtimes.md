@@ -589,6 +589,12 @@ Scenarios that need packages belong in the opt-in suite (`e2e:npm`), not the def
 
 ### Task 17: Docs, parity and QA
 
+**Carried from Task 9a's review (ledger ruling R-M4-EX24-1) — you own a known-failing e2e scenario.** `EX-24` currently asserts *"the runtime selector keeps Bun and rejects runtimes that arrive later"*, checking that `runtime.browserNode` is **disabled**. Task 9 invalidated that by making all three runtimes selectable via `AVAILABLE_RUNTIMES`. It is the **single failing e2e scenario** on the branch and was deliberately left failing rather than quietly rewritten, because it is a behavioural assertion belonging to another task.
+
+- **Replace it with a selector test, not an execution test:** *"the runtime selector switches the active tab between all three runtimes (EX-24)"*, asserting `activeTab(...).runtime` becomes `bun`, then `browser-node`, then `browser`.
+- **`docs/parity.md:48` must change in the same breath** — the "rejects runtimes that arrive later" clause was a **milestone gate, never parity behaviour**, and this task already owns that row.
+- The principle behind leaving it red: **never buy a green suite by editing another task's assertion.** Verify the replacement actually exercises the selector rather than merely passing.
+
 **Files:**
 - Create: `docs/qa/m4-checklist.md`
 - Modify: `docs/parity.md` (EX-22, EX-23, EX-24, EX-26, EX-34, EX-35, LB-06, WV-01, WV-04, WV-05, TF-19), `docs/superpowers/plans/2026-09-12-jslab-roadmap.md`, `README.md`, `docs/user/bun-vs-node.md` (a runtimes section), the spec where M4 decisions need recording

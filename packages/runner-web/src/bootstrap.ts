@@ -318,6 +318,22 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
         run = null;
         registry.clear();
         return;
+      // Fix round 2 (Task 13): no consumer yet -- `RunnerWebOptions.fetchTransport` is an external seam
+      // (`fetch-proxy.ts`'s `FetchTransport`), and nothing here feeds inbound traffic into its `onEvent`
+      // listeners. Wiring that dispatch is Task 9b's job (the production `browser-node` transport); these cases
+      // exist so the `default` branch below stays exhaustive today, which is what makes it a compile error --
+      // rather than a silently dropped reply and a promise left pending forever -- if that wiring (or anything
+      // later) touches this switch without handling every `HostToWebMessage` variant.
+      case "fetchHead":
+      case "fetchChunk":
+      case "fetchEnd":
+      case "fetchError":
+        return;
+      default: {
+        const _never: never = message;
+        void _never;
+        return;
+      }
     }
   }
 

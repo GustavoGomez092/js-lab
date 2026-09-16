@@ -418,6 +418,12 @@ class WebRunSession implements RunHandle {
     this.sink.exited();
   }
 
+  /** Fix round 2 (nit 4): the one place `this.deps.redact`'s no-op fallback is computed -- `#fetchRunnerFor()` and
+   *  `#onMessage`'s `"fetchRequest"` refusal both used to repeat `this.deps.redact ?? ((text) => text)` inline. */
+  #redact(text: string): string {
+    return (this.deps.redact ?? ((t: string) => t))(text);
+  }
+
   /**
    * Fix round 1 (security): the fail-closed gate for `browser-node`'s fetch proxy, moved here from a `tabId`
    * lookup a `browser` tab could forge. `this.deps.runtime` is fixed per `WebAdapter` instance (one adapter per
@@ -433,7 +439,7 @@ class WebRunSession implements RunHandle {
           end: (payload) => this.host.send({ type: "fetchEnd", ...payload }),
           error: (payload) => this.host.send({ type: "fetchError", ...payload }),
         },
-        redact: this.deps.redact ?? ((text: string) => text),
+        redact: (text) => this.#redact(text),
         log: this.deps.log ?? (() => {}),
         ...(this.deps.webFetch ? { fetch: this.deps.webFetch } : {}),
       });
@@ -460,11 +466,10 @@ class WebRunSession implements RunHandle {
         // `fetch-proxy.ts` entirely) is refused here exactly the same way, because there is no `tabId` left to
         // forge: this session IS the tab.
         if (this.deps.runtime !== "browser-node") {
-          const redact = this.deps.redact ?? ((text: string) => text);
           this.host.send({
             type: "fetchError",
             id: message.id,
-            message: redact(
+            message: this.#redact(
               `Fetch is only routed through JSLab for the "browser-node" runtime; this tab is "${this.deps.runtime}".`,
             ),
           });

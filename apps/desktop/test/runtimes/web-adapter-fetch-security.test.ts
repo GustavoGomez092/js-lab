@@ -28,6 +28,19 @@ import {
 
 const BOOTSTRAP_SOURCE = "/* fake runner-web bootstrap */";
 
+/**
+ * Fix round 2: a compile-time guarantee against the real `@jslab/rpc-schema` type, replacing a runtime test that
+ * only ever asserted `Object.keys()` on a literal the test itself constructed -- that could never fail short of
+ * editing the test, so it documented the wire shape without guarding it. This does guard it: if `fetchRequest` or
+ * `fetchAbort` ever gains a `tabId` field, `NoTabId<...>` resolves to `never` and the assignment below stops
+ * compiling, which `bun run typecheck` catches even though nothing here executes at runtime.
+ */
+type NoTabId<T> = "tabId" extends keyof T ? never : true;
+const _fetchRequestHasNoTabId: NoTabId<Extract<WebToHostMessage, { type: "fetchRequest" }>> = true;
+const _fetchAbortHasNoTabId: NoTabId<Extract<WebToHostMessage, { type: "fetchAbort" }>> = true;
+void _fetchRequestHasNoTabId;
+void _fetchAbortHasNoTabId;
+
 class FakeRawWebview implements RawWebview {
   readonly executed: string[] = [];
   readonly #loadedListeners = new Set<() => void>();
@@ -167,19 +180,36 @@ describe("browser-node fetch security (fix round 1)", () => {
     expect(called).toBe(false);
   });
 
-  test("an unrelated tab cannot get a browser-node request by naming this browser session at all -- there is no tabId field to put one in", async () => {
-    // The forged-envelope shape itself: no `tabId` anywhere in `WebToHostMessage`, so a `browser` tab's page has no
-    // field to write a `browser-node` tab's id into even if it wanted to -- the type this test constructs proves
-    // the shape carries none.
-    const message: WebToHostMessage = {
+  // Fix round 2: replaces a test that asserted `Object.keys()` on a literal the test itself constructed (passed
+  // either way; documented the wire shape without guarding anything the implementation controls). This guards a
+  // stronger, more direct claim: a page can still smuggle an extra `tabId` past TypeScript by hand-building the
+  // raw JSON envelope `window.__electrobunSendToHost` carries (the cast below models exactly that), and it must
+  // still have zero effect -- the session decides purely from `this.deps.runtime`, never from the message. A
+  // regression that reintroduced reading `message.tabId` would make this specific assertion fail; the compile-time
+  // check above only catches the field being reintroduced into the *type*, not the implementation reading one that
+  // slipped past it.
+  test("an injected tabId in a forged fetchRequest has no effect on which runtime answers it", async () => {
+    let called = false;
+    const { raw } = await startSession("browser", {
+      webFetch: async () => {
+        called = true;
+        return new Response("should never happen");
+      },
+    });
+    raw.executed.length = 0;
+    raw.emit(2, {
       type: "fetchRequest",
       id: 1,
       url: "https://example.com/",
       method: "GET",
       headers: [],
       body: null,
-    };
-    expect(Object.keys(message)).not.toContain("tabId");
+      tabId: "some-browser-node-tab",
+    } as unknown as WebToHostMessage);
+    const [reply] = parseHostMessages(raw);
+    expect(reply).toMatchObject({ type: "fetchError", id: 1 });
+    expect((reply as { message: string }).message).toContain('is "browser"');
+    expect(called).toBe(false);
   });
 
   test("a browser-node session performs a forged (or proxy-sent) fetchRequest for real, streaming the reply back", async () => {

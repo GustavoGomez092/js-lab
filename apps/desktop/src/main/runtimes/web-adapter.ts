@@ -16,6 +16,7 @@ import { type CachedVendorChunk, hashBunLock, type VendorCache, vendorCacheKey }
 import type { Redactor } from "../logging/redact";
 import type { Log } from "../rpc/validate";
 import { createWebFetchRunner, type WebFetchRunner } from "../rpc/web-fetch-handlers";
+import { createWebNodeRunner, type WebNodeRunner } from "../rpc/web-node-handlers";
 import {
   type PreparedRun,
   type RunEventSink,
@@ -215,6 +216,16 @@ export interface WebAdapterDeps {
    */
   redact?: Redactor;
   log?: Log;
+  /**
+   * Task 11: the app's data directory -- what a `browser-node` tab's Node bridge resolves a relative path against
+   * when the tab has no working directory, matching `../runs/runner-config.ts`'s
+   * `const cwd = workingDirectory ?? deps.paths.dataDir` exactly, so the same relative path reaches the same file
+   * under both runtimes.
+   *
+   * Optional for the same reason `redact`/`log` above are: this file's large existing fixture set predates it and
+   * almost none of it exercises the Node bridge at all. `main-services.ts` always passes it in production.
+   */
+  dataDir?: string;
   /** Test seam; production always uses the runtime's own `fetch`. */
   webFetch?(url: string, init?: RequestInit): Promise<Response>;
 }
@@ -361,6 +372,8 @@ class WebRunSession implements RunHandle {
   /** Fix round 1 (security): built lazily, only the first time this session actually sees a `fetchRequest` -- most
    *  runs (and every `"browser"` session, ever) never need one. */
   #fetchRunner: WebFetchRunner | null = null;
+  /** Task 11: built lazily for the same reason `#fetchRunner` is -- most runs never make a bridged Node call. */
+  #nodeRunner: WebNodeRunner | null = null;
 
   constructor(
     private readonly host: WebviewHost,
@@ -468,6 +481,9 @@ class WebRunSession implements RunHandle {
     // Fix round 1: a run that retires mid-request must not leave Main still talking to a server on the user's
     // behalf for a page nothing is listening to anymore.
     this.#fetchRunner?.abortAll();
+    // Task 11: the same rule for child processes -- a run that retires mid-command must not leave Main running a
+    // process on the user's behalf for a page nothing is listening to anymore.
+    this.#nodeRunner?.abortAll();
     this.#unsubMessage();
     this.#unsubExit();
     this.deps.runLock.remove(this.run.runId);
@@ -501,6 +517,31 @@ class WebRunSession implements RunHandle {
       });
     }
     return this.#fetchRunner;
+  }
+
+  /**
+   * Task 11 (spec §5.13): the `browser-node` Node bridge's runner, gated exactly the way `#fetchRunnerFor` is.
+   * The tab's working directory comes from `this.run` -- the run Main itself prepared -- never from the message,
+   * so a page cannot name a scope it was not given.
+   */
+  #nodeRunnerFor(): WebNodeRunner {
+    if (!this.#nodeRunner) {
+      this.#nodeRunner = createWebNodeRunner({
+        send: {
+          result: (payload) => this.host.send({ type: "nodeResult", ...payload }),
+          error: (payload) => this.host.send({ type: "nodeError", ...payload }),
+          stdout: (payload) => this.host.send({ type: "nodeStdout", ...payload }),
+          stderr: (payload) => this.host.send({ type: "nodeStderr", ...payload }),
+          exit: (payload) => this.host.send({ type: "nodeExit", ...payload }),
+        },
+        redact: (text) => this.#redact(text),
+        log: this.deps.log ?? (() => {}),
+        // The parity expression, mirroring `../runs/runner-config.ts`'s own `workingDirectory ?? dataDir`. Kept
+        // here, in the one place that knows both, so the two runtimes cannot drift apart silently.
+        baseDirectory: this.run.workingDirectory ?? this.deps.dataDir ?? this.deps.runsDir,
+      });
+    }
+    return this.#nodeRunner;
   }
 
   #onMessage(message: WebToHostMessage): void {
@@ -540,6 +581,31 @@ class WebRunSession implements RunHandle {
         return;
       case "fetchAbort":
         this.#fetchRunner?.abort(message.id);
+        return;
+      case "nodeCall":
+        // Task 11: the same structural gate the `fetchRequest` case documents. A `browser` tab has no Node
+        // builtins at all, so a `nodeCall` from one can only be forged -- and it is refused against
+        // `this.deps.runtime`, which this session's adapter was constructed with, never against the message.
+        if (this.deps.runtime !== "browser-node") {
+          this.host.send({
+            type: "nodeError",
+            id: message.id,
+            name: "JSLabUnsupportedError",
+            message: this.#redact(
+              `Node APIs are only bridged for the "browser-node" runtime; this tab is "${this.deps.runtime}".`,
+            ),
+          });
+          return;
+        }
+        this.#nodeRunnerFor().call(message.id, {
+          id: message.id,
+          module: message.module,
+          method: message.method,
+          args: message.args,
+        });
+        return;
+      case "nodeAbort":
+        this.#nodeRunner?.abort(message.id);
         return;
       case "state": {
         if (message.state === "stopped") {

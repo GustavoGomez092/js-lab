@@ -1,8 +1,5 @@
 import { readFileSync } from "node:fs";
 import * as nodeOs from "node:os";
-import cryptoSrcModule from "@jslab/runner-web/polyfills/crypto.ts.txt" with { type: "text" };
-// @ts-expect-error -- `os.ts` has no default export, and that's by design.
-import osSrc from "@jslab/runner-web/polyfills/os.ts.txt" with { type: "text" };
 /*
  * Task 10 (spec §5.13): every import below reads a `packages/runner-web/src/polyfills/**` file's raw text at
  * *this* build's compile time (an import attribute, not a normal import), so its source ships inside Main's own
@@ -17,6 +14,36 @@ import osSrc from "@jslab/runner-web/polyfills/os.ts.txt" with { type: "text" };
  * where the text is used below -- the `as unknown as string` cast is exactly as narrow a lie as the two
  * `@ts-expect-error`s are.
  */
+/*
+ * Task 11: imported for its **values**, not its text -- unlike every `polyfills/*` import above.
+ *
+ * `node-bridge.ts` deliberately is NOT text-imported here, and must not become one: Bun keys a module by its
+ * resolved path, ignoring the `type: "text"` attribute when deciding identity, so importing one file both ways in
+ * one program makes whichever load happens first win. Measured: with both imports present, the text load won and
+ * every named import from it failed at evaluation with "Export named 'CHILD_PROCESS_SYNC_METHODS' not found".
+ *
+ * It also is not needed as text. The bridge *client* lives in the bootstrap (`startRunnerWeb` installs it on the
+ * page global); a tab's bundle only needs a few lines of glue that read that global, which is generated below from
+ * these constants -- so the module-name lists and the spec's refusal wording keep a single source of truth without
+ * shipping the whole client into every bundle.
+ */
+import {
+  CHILD_PROCESS_SYNC_METHODS,
+  childProcessSyncAlternative,
+  FS_ASYNC_METHODS,
+  FS_SYNC_ALTERNATIVE,
+  FS_SYNC_METHODS,
+  NODE_BRIDGE_GLOBAL,
+  NODE_BRIDGE_MISSING_MESSAGE,
+  UNSUPPORTED_ERROR_NAME,
+  UNSUPPORTED_MODULE_EXPORTS,
+  UNSUPPORTED_MODULES,
+  unsupportedModuleMessage,
+  unsupportedSyncMessage,
+} from "@jslab/runner-web/node-bridge";
+import cryptoSrcModule from "@jslab/runner-web/polyfills/crypto.ts.txt" with { type: "text" };
+// @ts-expect-error -- `os.ts` has no default export, and that's by design.
+import osSrc from "@jslab/runner-web/polyfills/os.ts.txt" with { type: "text" };
 // @ts-expect-error -- `process.ts` has no default export, and that's by design.
 import processSrc from "@jslab/runner-web/polyfills/process.ts.txt" with { type: "text" };
 import type { Runtime } from "@jslab/shared";
@@ -174,6 +201,136 @@ function osModuleSource(): string {
   ].join("\n");
 }
 
+/**
+ * Task 11 (spec §5.13): the three modules served by the async Node bridge. Each one is `node-bridge.ts`'s whole
+ * source text (which is import-free precisely so it can be served here, where no bare specifier resolves) plus a
+ * generated tail that names the module's exports.
+ *
+ * Every forwarding wrapper resolves the bridge **lazily**, per call, rather than once at module scope: importing
+ * `fs` must not throw merely because a page has no bridge installed, and the `*Sync` refusals below have to work
+ * with no bridge at all -- they are the whole point of the module for a user who reaches for the sync API.
+ */
+const CHILD_PROCESS_ASYNC_METHODS = ["exec", "execFile", "spawn"] as const;
+
+/**
+ * The two helpers every generated bridge module shares: a lazy read of the client the bootstrap installed, and the
+ * sync refusal.
+ *
+ * Lazy, per call, rather than resolved once at module scope: importing `fs` must not throw merely because a page
+ * has no bridge installed, and the `*Sync` refusals have to work with **no bridge at all** -- they are the whole
+ * point of the module for a user who reaches for the sync API, and they must never depend on the async half being
+ * reachable.
+ */
+function bridgeAccessorSource(): string {
+  return [
+    "var __jslabBridge = function () {",
+    `  var bridge = globalThis[${JSON.stringify(NODE_BRIDGE_GLOBAL)}];`,
+    "  if (!bridge) {",
+    `    var missing = new Error(${JSON.stringify(NODE_BRIDGE_MISSING_MESSAGE)});`,
+    `    missing.name = ${JSON.stringify(UNSUPPORTED_ERROR_NAME)};`,
+    "    throw missing;",
+    "  }",
+    "  return bridge;",
+    "};",
+    "var __jslabRefuseSync = function (message) {",
+    "  var error = new Error(message);",
+    `  error.name = ${JSON.stringify(UNSUPPORTED_ERROR_NAME)};`,
+    "  throw error;",
+    "};",
+  ].join("\n");
+}
+
+/** `function`, not an arrow, so `arguments` forwards every argument Node's own signature accepts. */
+function forward(name: string, surface: string): string {
+  return `export var ${name} = function () { return __jslabBridge().${surface}.${name}.apply(null, arguments); };`;
+}
+
+function refusal(name: string, qualified: string, alternative: string): string {
+  return `export var ${name} = function () { return __jslabRefuseSync(${JSON.stringify(
+    unsupportedSyncMessage(qualified, alternative),
+  )}); };`;
+}
+
+function fsPromisesModuleSource(): string {
+  return [
+    bridgeAccessorSource(),
+    ...FS_ASYNC_METHODS.map((name) => forward(name, "fsPromises")),
+    `export default { ${FS_ASYNC_METHODS.join(", ")} };`,
+    "",
+  ].join("\n");
+}
+
+function fsModuleSource(): string {
+  const promises = FS_ASYNC_METHODS.map(
+    (name) => `${name}: function () { return __jslabBridge().fsPromises.${name}.apply(null, arguments); }`,
+  ).join(", ");
+  return [
+    bridgeAccessorSource(),
+    ...FS_ASYNC_METHODS.map((name) => forward(name, "fs")),
+    ...FS_SYNC_METHODS.map((name) => refusal(name, `fs.${name}`, FS_SYNC_ALTERNATIVE)),
+    `export var promises = { ${promises} };`,
+    `export default { ${[...FS_ASYNC_METHODS, ...FS_SYNC_METHODS].join(", ")}, promises: promises };`,
+    "",
+  ].join("\n");
+}
+
+function childProcessModuleSource(): string {
+  return [
+    bridgeAccessorSource(),
+    ...CHILD_PROCESS_ASYNC_METHODS.map((name) => forward(name, "childProcess")),
+    ...CHILD_PROCESS_SYNC_METHODS.map((name) =>
+      refusal(name, `child_process.${name}`, childProcessSyncAlternative(name)),
+    ),
+    `export default { ${[...CHILD_PROCESS_ASYNC_METHODS, ...CHILD_PROCESS_SYNC_METHODS].join(", ")} };`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * One of the §5.13 throw-only modules (`http`, `net`, `tls`, `dgram`, `worker_threads`, `vm`).
+ *
+ * An **ES module with explicit named throwers plus a `Proxy` default export**. That shape was chosen by measuring
+ * four candidates, on both Bun 1.3.13 and 1.4.0 (identical results; the table is in the Task 11 report):
+ * - CommonJS whose `module.exports` is a `Proxy` serves `import http from "http"` correctly, but binds
+ *   `import { createServer } from "http"` to `undefined`, so the call fails with a bare `TypeError` rather than the
+ *   spec's refusal. Bun does **not** compile that named import into a runtime property read, so the `get` trap
+ *   never runs -- contrary to what `resolve-plugin.ts`'s vendor-stub note suggests for a plain object.
+ * - An ES module that throws at top level fails the **build**, for every import form.
+ * - A CommonJS object with getters does refuse, but at *import* time rather than on use.
+ * - This shape is the only one where the named form throws `JSLabUnsupportedError` **when called**, the default
+ *   form refuses on any property at all, and an unused `import` stays harmless.
+ *
+ * The default export stays a `Proxy` so that a property nobody enumerated still refuses. Its interop allowlist is
+ * what keeps an unused import harmless: a bundler's own interop reads those keys before any user code runs, and
+ * §5.13 asks for a refusal when the module is *used*.
+ */
+function unsupportedModuleSource(moduleName: string): string {
+  const names = UNSUPPORTED_MODULE_EXPORTS[moduleName] ?? [];
+  return [
+    `var __jslabMessage = ${JSON.stringify(unsupportedModuleMessage(moduleName))};`,
+    "var __jslabRefuse = function () {",
+    "  var error = new Error(__jslabMessage);",
+    `  error.name = ${JSON.stringify(UNSUPPORTED_ERROR_NAME)};`,
+    "  throw error;",
+    "};",
+    ...names.map((name) => `export var ${name} = function () { return __jslabRefuse(); };`),
+    'var __jslabInterop = ["__esModule", "default", "then", "constructor", "prototype"];',
+    "export default new Proxy(function () { return __jslabRefuse(); }, {",
+    "  get: function (_target, key) {",
+    '    if (typeof key === "symbol" || __jslabInterop.indexOf(key) >= 0) return undefined;',
+    "    return __jslabRefuse();",
+    "  },",
+    "  apply: __jslabRefuse,",
+    "  construct: __jslabRefuse,",
+    "});",
+    "",
+  ].join("\n");
+}
+
+/** The bridged module specifiers, and the throw-only ones, as sets the resolve hook below can test membership on. */
+const BRIDGE_MODULES = new Set(["fs", "fs/promises", "child_process"]);
+const UNSUPPORTED_MODULE_SET = new Set<string>(UNSUPPORTED_MODULES);
+
 /** The virtual namespace every `browser-node` module table entry loads under (real user files never enter it). */
 const NAMESPACE = "jslab-node-polyfill";
 
@@ -255,6 +412,12 @@ export function nodePolyfills(
         if (bare in VENDOR_TABLE || bare === "process" || bare === "os" || bare === "crypto") {
           return { path: bare, namespace: NAMESPACE };
         }
+        // Task 11: the async bridge's three modules and the six throw-only ones. Before this they fell through
+        // unhandled, and `Bun.build({target:'browser'})` silently stubbed them -- so `browser-node` advertised
+        // Node APIs and delivered neither the APIs nor the spec's refusal.
+        if (BRIDGE_MODULES.has(bare) || UNSUPPORTED_MODULE_SET.has(bare)) {
+          return { path: bare, namespace: NAMESPACE };
+        }
         return undefined;
       });
 
@@ -287,6 +450,15 @@ export function nodePolyfills(
         if (args.path === "process") return { contents: processModuleSource(ctx), loader: "ts" };
         if (args.path === "os") return { contents: osModuleSource(), loader: "ts" };
         if (args.path === "crypto") return { contents: cryptoSrc, loader: "ts" };
+        // Task 11 (spec §5.13). All four are plain JavaScript: the bridge modules are generated glue rather than
+        // this package's TypeScript source (see `bridgeAccessorSource`), and the throw-only modules' exact module
+        // shape is load-bearing rather than incidental -- see `unsupportedModuleSource`'s own note.
+        if (args.path === "fs/promises") return { contents: fsPromisesModuleSource(), loader: "js" };
+        if (args.path === "fs") return { contents: fsModuleSource(), loader: "js" };
+        if (args.path === "child_process") return { contents: childProcessModuleSource(), loader: "js" };
+        if (UNSUPPORTED_MODULE_SET.has(args.path)) {
+          return { contents: unsupportedModuleSource(args.path), loader: "js" };
+        }
         return undefined;
       });
     },

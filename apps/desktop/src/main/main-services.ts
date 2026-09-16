@@ -157,6 +157,9 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     webviews: source,
     runtime,
     runsDir: paths.runsDir,
+    // Task 11: what a `browser-node` Node call resolves a relative path against when the tab has no working
+    // directory -- the same `workingDirectory ?? dataDir` the Bun runner uses (`./runs/runner-config.ts`).
+    dataDir: paths.dataDir,
     packagesNodeModules: paths.packagesNodeModules,
     bunLockPath: join(paths.packagesDir, "bun.lock"),
     vendorCache,

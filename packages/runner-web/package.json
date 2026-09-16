@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./bootstrap": "./src/bootstrap.ts",
+    "./node-bridge": "./src/node-bridge.ts",
     "./polyfills/process.ts.txt": "./src/polyfills/process.ts",
     "./polyfills/os.ts.txt": "./src/polyfills/os.ts",
     "./polyfills/crypto.ts.txt": "./src/polyfills/crypto.ts",

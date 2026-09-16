@@ -109,7 +109,21 @@ export type HostToWebMessage =
   | { type: "fetchHead"; id: number; status: number; statusText: string; headers: [string, string][]; url: string }
   | { type: "fetchChunk"; id: number; data: string }
   | { type: "fetchEnd"; id: number }
-  | { type: "fetchError"; id: number; message: string };
+  | { type: "fetchError"; id: number; message: string }
+  /**
+   * Task 11 (spec §5.13): one reply to a bridged Node call, on this same per-tab channel. A plain call gets exactly
+   * one `nodeResult` or `nodeError`; a `child_process` call gets zero or more `nodeStdout`/`nodeStderr` payloads
+   * and then exactly one of `nodeExit`/`nodeError`.
+   *
+   * `value` and the two stream payloads deliberately cross back **unredacted** -- they are the data the user's own
+   * program asked for, and masking them would silently corrupt it (see `apps/desktop/src/main/rpc/
+   * web-node-handlers.ts`'s header). Only what JSLab *logs* about a call is redacted.
+   */
+  | { type: "nodeResult"; id: number; value: unknown }
+  | { type: "nodeError"; id: number; name: string; message: string; code?: string }
+  | { type: "nodeStdout"; id: number; data: string }
+  | { type: "nodeStderr"; id: number; data: string }
+  | { type: "nodeExit"; id: number; code: number | null; signal: string | null };
 
 export type WebToHostMessage =
   | { type: "ready" }
@@ -127,7 +141,15 @@ export type WebToHostMessage =
    * runtimes/web-adapter.ts`), never from a field in the message itself.
    */
   | { type: "fetchRequest"; id: number; url: string; method: string; headers: [string, string][]; body: string | null }
-  | { type: "fetchAbort"; id: number };
+  | { type: "fetchAbort"; id: number }
+  /**
+   * Task 11 (spec §5.13): one bridged `fs`/`child_process` call, and the abort that kills a child it started.
+   * Carries no `tabId`, for the same reason `fetchRequest` doesn't: which tab this belongs to is derived from the
+   * connection it arrived on (`WebRunSession`), never from a field the page supplies. `args` is `unknown[]` on the
+   * wire and becomes a typed tuple only once `webNodeCallSchema` has validated it on Main's side.
+   */
+  | { type: "nodeCall"; id: number; module: "fs" | "child_process"; method: string; args: unknown[] }
+  | { type: "nodeAbort"; id: number };
 
 /** Host → page envelope, delivered by calling `window.__jslabHostMessage(envelope)` through `executeJavascript`. */
 export interface HostToWeb {

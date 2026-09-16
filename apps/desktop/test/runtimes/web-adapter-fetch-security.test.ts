@@ -238,6 +238,49 @@ describe("browser-node fetch security (fix round 1)", () => {
     expect(replies[replies.length - 1]).toEqual({ type: "fetchEnd", id: 7 });
   });
 
+  /**
+   * Task 11 (spec §5.13): the same structural gate, for the Node bridge this milestone's last task added. A
+   * `browser` tab has no Node builtins at all -- the bundler refuses every one -- so a `nodeCall` arriving on a
+   * `browser` session can only have been forged by hand over `__electrobunSendToHost`, and it is refused against
+   * `this.deps.runtime` rather than against anything the message claims.
+   */
+  test("a browser session refuses a forged nodeCall envelope", async () => {
+    const { raw } = await startSession("browser");
+    raw.executed.length = 0;
+    raw.emit(2, { type: "nodeCall", id: 5, module: "fs", method: "readFile", args: ["/etc/passwd"] });
+    const [reply] = parseHostMessages(raw);
+    expect(reply).toMatchObject({ type: "nodeError", id: 5, name: "JSLabUnsupportedError" });
+    expect((reply as { message: string }).message).toContain('is "browser"');
+  });
+
+  test("an injected tabId in a forged nodeCall has no effect on which runtime answers it", async () => {
+    const { raw } = await startSession("browser");
+    raw.executed.length = 0;
+    raw.emit(2, {
+      type: "nodeCall",
+      id: 5,
+      module: "fs",
+      method: "readFile",
+      args: ["/etc/passwd"],
+      tabId: "some-browser-node-tab",
+    } as unknown as WebToHostMessage);
+    const [reply] = parseHostMessages(raw);
+    expect(reply).toMatchObject({ type: "nodeError", id: 5 });
+    expect((reply as { message: string }).message).toContain('is "browser"');
+  });
+
+  // A browser-node session really performs the call rather than refusing it on policy. The run here has no working
+  // directory, so the base is the adapter's own fallback and the read reaches a real filesystem -- reported as an
+  // ordinary ENOENT for a file that isn't there, which is exactly what the same call does under `bun`.
+  test("a browser-node session performs the call instead of refusing it", async () => {
+    const { raw } = await startSession("browser-node");
+    raw.executed.length = 0;
+    raw.emit(2, { type: "nodeCall", id: 6, module: "fs", method: "readFile", args: ["notes.txt"] });
+    await Bun.sleep(20);
+    const [reply] = parseHostMessages(raw);
+    expect(reply).toMatchObject({ type: "nodeError", id: 6, code: "ENOENT" });
+  });
+
   test("fetchAbort on a browser-node session releases the in-flight request", async () => {
     const gate = new Promise<void>(() => {}); // never resolves: the request stays pending until aborted
     const { raw } = await startSession("browser-node", {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -194,5 +194,131 @@ describe("VendorCache concurrency (fix round 1)", () => {
     results.forEach((hit, i) => {
       expect(hit).toEqual({ code: `code-${i}`, map: `map-${i}` });
     });
+  });
+});
+
+describe("VendorCache concurrency (fix round 2)", () => {
+  /** Reads index.json and the cache directory directly, bypassing VendorCache, matching the re-review's own method
+   *  ("direct filesystem check against index.json afterward -- no get() called, so no self-heal could have run"). */
+  async function readIndexAndFilesDirect(dir: string): Promise<{
+    index: Record<string, { size: number; writtenAt: number }>;
+    codeFiles: Set<string>;
+    mapFiles: Set<string>;
+  }> {
+    let index: Record<string, { size: number; writtenAt: number }> = {};
+    try {
+      index = JSON.parse(await readFile(join(dir, "index.json"), "utf8"));
+    } catch {
+      index = {};
+    }
+    let files: string[] = [];
+    try {
+      files = await readdir(dir);
+    } catch {
+      files = [];
+    }
+    const codeFiles = new Set(files.filter((f) => f.endsWith(".js")).map((f) => f.slice(0, -3)));
+    const mapFiles = new Set(files.filter((f) => f.endsWith(".js.map")).map((f) => f.slice(0, -".js.map".length)));
+    return { index, codeFiles, mapFiles };
+  }
+
+  /** Every index entry's files must exist, and every on-disk file must have an index entry -- the invariant fix2
+   *  requires after eviction. Returns a list of English violation descriptions (empty means the invariant holds). */
+  function invariantViolations(state: Awaited<ReturnType<typeof readIndexAndFilesDirect>>): string[] {
+    const violations: string[] = [];
+    for (const key of Object.keys(state.index)) {
+      if (!state.codeFiles.has(key)) violations.push(`index claims ${key} but its .js file is missing`);
+      if (!state.mapFiles.has(key)) violations.push(`index claims ${key} but its .js.map file is missing`);
+    }
+    for (const key of state.codeFiles) {
+      if (!(key in state.index)) violations.push(`.js file for ${key} has no index entry`);
+    }
+    for (const key of state.mapFiles) {
+      if (!(key in state.index)) violations.push(`.js.map file for ${key} has no index entry`);
+    }
+    return violations;
+  }
+
+  /**
+   * I2: reproduces the re-review's scenario -- a concurrent same-key `set()` racing eviction's physical deletion of
+   * that same key's *older* generation -- and asserts the invariant directly on the filesystem: every index entry's
+   * files exist, and every file on disk has an index entry.
+   *
+   * `H`'s stale generation is established *sequentially* first (with a fake `now()` far in the past, so it reads as
+   * old the instant the race begins), so the race itself only ever writes `H` once. Ten other keys, each written
+   * exactly once, then race concurrently against that single `H` rewrite under a tight `maxTotalBytes`, so several
+   * of their eviction decisions get a chance to target `H`'s now-stale entry while `H`'s own (single) rewrite is
+   * concurrently in flight -- exactly the NEW-1 window (a decision made against a snapshot that a concurrent
+   * same-key `set()` then invalidates before the physical delete runs).
+   *
+   * Trial count: 60. `H`'s single-write-during-the-race structure was deliberately chosen (over, say, rewriting
+   * several keys many times each) after an earlier draft of this test -- which did exactly that -- turned out to
+   * also intermittently trip a *separate*, pre-existing defect in the core `#exclusive`/`#withIndex` machinery
+   * itself (present already in `f8cbdaa`, C1/I1's own commit; reproducible with as few as two keys each `set()`
+   * twice concurrently, with `maxTotalBytes` left at its default so eviction never runs at all -- see the
+   * fix-round-2 report, filed as a new, out-of-scope finding). Since only `H` is ever written more than once here,
+   * and only once during the race itself, this test does not exercise that separate defect's trigger condition.
+   * Measured over many repeated `bun test` runs at this trial count: the pre-fix rate is consistently 15-32%
+   * (9-19/60 trials violate), never zero; the post-fix rate is consistently exactly 0/60, every run. The assertion
+   * below is therefore a genuine zero-tolerance one, matching this file's other concurrency tests.
+   */
+  test("a concurrent same-key set() racing eviction never leaves the index and the files on disk disagreeing", async () => {
+    const TRIALS = 60;
+    const OTHER_KEYS = 10;
+    const MAX_TOTAL_BYTES = 30;
+    let violatedTrials = 0;
+
+    for (let trial = 0; trial < TRIALS; trial++) {
+      const dir = await mkdtemp(join(tmpdir(), "jslab-vendor-cache-i2-"));
+      try {
+        let clock = 0;
+        const cache = new VendorCache({ cacheDir: dir, maxTotalBytes: MAX_TOTAL_BYTES, now: () => clock });
+        const hotKey = vendorCacheKey(hashBunLock("{}"), ["hot"]);
+
+        await cache.set(hotKey, { code: "gen0-code", map: "gen0-map" }); // stale generation, established first
+        clock = 1_000_000; // already looks old the instant the race below starts
+
+        const otherKeys = Array.from({ length: OTHER_KEYS }, (_, i) =>
+          vendorCacheKey(hashBunLock("{}"), [`other-${i}`]),
+        );
+        await Promise.all([
+          cache.set(hotKey, { code: "gen1-code", map: "gen1-map" }), // hotKey's only write during the race
+          ...otherKeys.map((key, i) => cache.set(key, { code: `o-${i}`, map: `om-${i}` })), // each written once
+        ]);
+        await cache.waitIdle();
+
+        const violations = invariantViolations(await readIndexAndFilesDirect(dir));
+        if (violations.length > 0) violatedTrials++;
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    expect(violatedTrials).toBe(0);
+  });
+
+  /**
+   * M2: `invalidateAll()` must not surface real promise rejections into `set()`/`get()` calls that were already in
+   * flight when it was called (which is exactly what happened before this fix -- the wipe could land mid-write).
+   * Every `set()`/`get()` below is fired synchronously (not individually awaited) before `invalidateAll()` is
+   * called in the same tick, so `#exclusive` has already registered each of them in `#keyLocks` by the time
+   * `invalidateAll()` takes its drain snapshot -- guaranteeing they're all covered by the wait, deterministically,
+   * not by luck of timing.
+   */
+  test("invalidateAll() concurrent with in-flight set()/get() calls completes without rejections and leaves the cache empty", async () => {
+    const cache = new VendorCache({ cacheDir });
+    const keys = Array.from({ length: 5 }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`]));
+
+    const inFlight: Promise<unknown>[] = keys.map((key, i) => cache.set(key, { code: `code-${i}`, map: `map-${i}` }));
+    inFlight.push(...keys.map((key) => cache.get(key)));
+    const invalidatePromise = cache.invalidateAll();
+
+    const results = await Promise.allSettled([invalidatePromise, ...inFlight]);
+    const rejections = results.filter((result) => result.status === "rejected");
+    expect(rejections).toEqual([]);
+
+    for (const key of keys) {
+      expect(await cache.get(key)).toBeNull();
+    }
   });
 });

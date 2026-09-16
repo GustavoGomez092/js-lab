@@ -82,14 +82,35 @@ export interface VendorCacheDeps {
  *   `index.json`): the index's read-modify-write is serialized process-wide through `#withIndex`, a single promise
  *   queue whose critical section is kept to exactly the read, the caller's in-memory mutation, and the write --
  *   the slow parts (writing the `.js`/`.js.map` files themselves, deleting evicted files) happen outside it.
+ *
+ * Fix round 2 (I2, M2): `#exclusive`/`#withIndex` alone don't cover *eviction's* physical file deletion or
+ * `invalidateAll`'s directory wipe, both of which touch files/index state outside a `set()`/`get()` call's own key.
+ * `#evict` excludes the key it's running on behalf of from its own candidates (that key was just published, so
+ * it's also the worst eviction target) and never awaits another key's deletion -- see `#evict` and
+ * `#deleteIfStillAbsent` for why awaiting it would risk a cross-key deadlock. `invalidateAll` drains in-flight
+ * per-key work before wiping, then wipes as one step inside `#withIndex` -- see `invalidateAll`.
  */
 export class VendorCache {
   /** Fix round 1 (I1): the single process-wide queue every `index.json` read-modify-write runs through. */
   #indexQueue: Promise<void> = Promise.resolve();
   /** Fix round 1 (C1): one promise chain per key currently in flight; see `#exclusive`. */
   #keyLocks = new Map<string, Promise<void>>();
+  /** Fix round 2 (I2): eviction's background per-key deletions currently in flight; see `#evict`, `waitIdle`. */
+  #pendingEvictions = new Set<Promise<void>>();
 
   constructor(private readonly deps: VendorCacheDeps) {}
+
+  /**
+   * Fix round 2 (I2): resolves once every eviction cleanup that had already started by the time this was called
+   * has settled. `set()`/`get()` never wait on this themselves (see `#evict`'s doc comment for why that would risk
+   * a cross-key deadlock), so without this there would be no way to observe -- from a test, or from any future
+   * caller that cares, such as a clean shutdown -- that background cleanup has actually finished; the index is
+   * already fully consistent the instant `set()`/`get()`/`invalidateAll()` resolve regardless, since eviction's
+   * *decision* is always durably recorded before this method's cleanup work even starts.
+   */
+  async waitIdle(): Promise<void> {
+    await Promise.all([...this.#pendingEvictions]);
+  }
 
   /** A cache hit reads both files; a miss (absent, or past `VENDOR_CACHE_MAX_AGE_MS`) returns null and evicts it. */
   get(key: string): Promise<VendorChunk | null> {
@@ -105,9 +126,23 @@ export class VendorCache {
    * Spec §11.3: joined into the existing npm-change path (`main-services.ts`'s `NpmService.afterChange`, alongside
    * `spares.invalidateAll()` and `types.invalidate()`) so every cached vendor chunk is dropped after any npm change,
    * not just the ones whose key happens to have gone stale.
+   *
+   * Fix round 2 (M2): first waits for whatever `get()`/`set()` calls are already in flight (a snapshot of
+   * `#keyLocks` taken right now -- their stored chains never reject, so nothing here can throw), so the wipe never
+   * lands mid-write and turns an in-flight `writeFileAtomic`/`readIndex` into a real rejection for that caller. The
+   * actual `rm()` then runs as one step inside `#withIndex`, the same queue every other index mutation goes
+   * through, so it can't interleave with a concurrent index read/write either. A brand-new `set()`/`get()` issued
+   * *after* this snapshot isn't blocked -- it just runs against a freshly-empty cache, which is a clean outcome,
+   * not a race.
    */
   async invalidateAll(): Promise<void> {
-    await rm(this.deps.cacheDir, { recursive: true, force: true });
+    await Promise.all([...this.#keyLocks.values()]);
+    await this.#withIndex(
+      async () => {
+        await rm(this.deps.cacheDir, { recursive: true, force: true });
+      },
+      { persist: false },
+    );
   }
 
   async #doGet(key: string): Promise<VendorChunk | null> {
@@ -154,7 +189,7 @@ export class VendorCache {
     await this.#withIndex((index) => {
       index[key] = { size, writtenAt };
     });
-    await this.#evict();
+    await this.#evict(key);
   }
 
   #codePath(key: string): string {
@@ -206,13 +241,14 @@ export class VendorCache {
    * section is exactly the read, `fn`'s in-memory mutation, and the write: no file I/O for the cache entries
    * themselves happens inside it, so an unrelated slow `.js`/`.js.map` write never blocks another key's index
    * update. `persist: false` skips the write-back for a pure lookup (`#doGet`'s common hit path), so an ordinary
-   * cache hit costs one read of `index.json`, not a read plus a redundant rewrite.
+   * cache hit costs one read of `index.json`, not a read plus a redundant rewrite. `fn` may be async (fix round 2,
+   * M2: `invalidateAll`'s `rm()` runs as its own critical section this way, never overlapping another index op).
    */
-  #withIndex<T>(fn: (index: VendorCacheIndex) => T, options: { persist?: boolean } = {}): Promise<T> {
+  #withIndex<T>(fn: (index: VendorCacheIndex) => T | Promise<T>, options: { persist?: boolean } = {}): Promise<T> {
     const persist = options.persist ?? true;
     const run = this.#indexQueue.then(async () => {
       const index = await this.#readIndex();
-      const result = fn(index);
+      const result = await fn(index);
       if (persist) await this.#writeIndex(index);
       return result;
     });
@@ -251,21 +287,35 @@ export class VendorCache {
    * Runs after every `set()`, so eviction is amortized instead of needing its own scheduler. Deciding what to
    * evict is a pure in-memory step done inside `#withIndex`'s critical section; the actual file deletions run
    * afterward, outside it, so they never hold up another key's index update.
+   *
+   * Fix round 2 (I2): `excludeKey` is the key the caller (`#doSet`) is *currently* publishing under its own
+   * `#exclusive` lock, and it is never a candidate here -- a key mid-write is also the freshest, least sensible
+   * thing to evict, so excluding it costs nothing in cache behaviour (spec fix2, shape 1). Each *other* victim's
+   * physical deletion is routed through that key's own `#exclusive` lock (`#deleteIfStillAbsent`) so it can never
+   * race a concurrent `set()` for that same key -- but deliberately NOT awaited by this method: awaiting it would
+   * make `#doSet` (already holding `excludeKey`'s lock) block on another key's lock queue, and if that key's own
+   * concurrent `set()` is symmetrically mid-eviction and waiting on `excludeKey`'s lock, the two would deadlock
+   * each other. Firing and forgetting removes that cycle entirely -- no `set()`/`get()` call's completion ever
+   * depends on another key's lock queue, only on its own key's and the shared (non-nesting) index queue, so there
+   * is no pair of calls that can wait on each other.
    */
-  async #evict(): Promise<void> {
+  async #evict(excludeKey: string): Promise<void> {
     const now = this.#now();
     const maxAge = this.#maxAgeMs();
     const maxTotal = this.#maxTotalBytes();
     const toRemove = await this.#withIndex((index) => {
       const removed: string[] = [];
       for (const [key, entry] of Object.entries(index)) {
+        if (key === excludeKey) continue;
         if (now - entry.writtenAt > maxAge) {
           removed.push(key);
           delete index[key];
         }
       }
       let total = Object.values(index).reduce((sum, entry) => sum + entry.size, 0);
-      const byAge = Object.entries(index).sort(([, a], [, b]) => a.writtenAt - b.writtenAt);
+      const byAge = Object.entries(index)
+        .filter(([key]) => key !== excludeKey)
+        .sort(([, a], [, b]) => a.writtenAt - b.writtenAt);
       for (const [key, entry] of byAge) {
         if (total <= maxTotal) break;
         removed.push(key);
@@ -274,6 +324,33 @@ export class VendorCache {
       }
       return removed;
     });
-    await Promise.all(toRemove.map((key) => this.#removeEntry(key)));
+    for (const key of toRemove) {
+      const task = this.#exclusive(key, () => this.#deleteIfStillAbsent(key)).catch(() => {
+        // Best-effort cleanup: a failure here (or losing this key's lock race, see #deleteIfStillAbsent) leaves a
+        // phantom index-less file on disk a little longer than ideal, never a corrupt read -- the next eviction
+        // pass, or a later `get()` for a genuinely different key, naturally retries reclaiming it.
+      });
+      this.#pendingEvictions.add(task);
+      task.then(() => this.#pendingEvictions.delete(task));
+    }
+  }
+
+  /**
+   * Fix round 2 (I2): runs only once this key's `#exclusive` lock is actually held, which may be well after
+   * `#evict`'s decision above -- a concurrent `set(key, ...)` that was already in flight when that decision was
+   * made could have finished in the meantime and legitimately re-added `key` to the index. The re-check and the
+   * physical delete both run *inside the same* `#withIndex` call (not a separate check followed by a separate
+   * delete) so there is no window at all -- not even a single microtask -- between "the index still agrees `key`
+   * is gone" and "the files are removed" for anything else to land in. A concurrent `set(key, ...)`'s own index
+   * update can't run during that window either, since it goes through the same `#withIndex` queue; if that write
+   * happens first, it wins the queue and re-adds `key` before this check ever sees it.
+   */
+  async #deleteIfStillAbsent(key: string): Promise<void> {
+    await this.#withIndex(
+      async (index) => {
+        if (!(key in index)) await this.#removeEntry(key);
+      },
+      { persist: false },
+    );
   }
 }

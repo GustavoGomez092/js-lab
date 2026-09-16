@@ -4,7 +4,7 @@ Browser runtimes: the `browser` and `browser-node` tabs, the Web View tile, dial
 
 > [!IMPORTANT]
 > **Build before you run the suites. `bun run e2e` does not build anything.**
-> `packages/e2e`'s `e2e` script is `bun test ./scenarios` and nothing more — it drives whatever bundle is already
+> `packages/e2e`'s `e2e` script is `bun test ./scenarios --timeout 180000` and nothing more — it drives whatever bundle is already
 > on disk, however old. A stale bundle produces fast, confident, entirely misleading failures: running the suite
 > against a build that predated this milestone gave **60 pass / 9 fail**, with every browser-runtime scenario
 > refused at `Command is disabled: runtime.browser` in about a second, because `AVAILABLE_RUNTIMES` inside that

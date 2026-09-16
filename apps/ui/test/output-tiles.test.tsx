@@ -329,7 +329,12 @@ describe("OutputTiles / WebViewHosts", () => {
     }
   });
 
-  test("tile DOM order tracks tab order, not first-enable order (M4 T9 fix round 1, M2)", () => {
+  // Named for exactly what it proves. DOM order among tiles is *mount* order, which coincides with tab order only
+  // while tabs become web-capable in tab order -- Task 9's re-review demonstrated three divergences against the
+  // real components (a tab switched `bun`→`browser` later, a new tab opened while an earlier one is active, and
+  // `reorderTabs`). A name claiming tiles track tab order would assert a property the codebase is known not to
+  // have, and would be cited as if it did.
+  test("enable order does not determine tile DOM order (M4 T9 fix round 1, M2)", () => {
     const store = hydrated({ runtime: "browser" }); // t1
     store.getState().openTab(tabWith("t2", { runtime: "browser" }), "");
     store.getState().activateTab("t1");

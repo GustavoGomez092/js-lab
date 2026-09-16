@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_RUNTIME } from "@jslab/shared";
 import { compilerOptionsFor, IGNORED_DIAGNOSTIC_CODES, libFor } from "../src/editor/ts-environment";
 import { workerDiagnostics } from "./ts-worker";
 
@@ -48,7 +47,13 @@ describe("editor TypeScript environment", () => {
     "every lib entry is a lib file Monaco bundles",
     async () => {
       const { libFileMap } = (await import(LIB_MODULE)) as { libFileMap: Record<string, string> };
-      for (const name of libFor(DEFAULT_RUNTIME)) expect(Object.hasOwn(libFileMap, name)).toBe(true);
+      // DOM_RUNTIME, not DEFAULT_RUNTIME: this is the PR #1 TS2584 guard, and it only guards anything while the
+      // lib set it checks actually contains the DOM libs. Following the default would silently shrink it to one
+      // lib name the moment DEFAULT_RUNTIME stopped being a DOM runtime -- which M4 Task 9a did -- and the suite
+      // would stay green while covering strictly less.
+      const libNames = libFor(DOM_RUNTIME);
+      expect(libNames).toHaveLength(3);
+      for (const name of libNames) expect(Object.hasOwn(libFileMap, name)).toBe(true);
     },
     SLOW_MS,
   );

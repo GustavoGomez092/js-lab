@@ -557,3 +557,156 @@ describe("browser-node module table -- node: prefix (fix round 1, I2)", () => {
     expect(result).toBe("900150983cd24fb0d6963f7d28e17f72");
   });
 });
+
+/**
+ * Task 11 (spec §5.13): the async bridge's own table entries, through the same real `Bun.build` pipeline.
+ *
+ * These are the end-to-end tests for the gap this task closed. Before it, `fs`, `child_process` and the six
+ * throw-only builtins fell through the plugin unhandled and `Bun.build({target:'browser'})` silently stubbed them,
+ * so a `browser-node` tab offered neither the Node APIs the spec promises nor the refusal it mandates -- and a
+ * plugin-level assertion could not have caught that, because the plugin was not the thing that was wrong.
+ */
+describe("browser-node module table -- the async Node bridge (Task 11, spec §5.13)", () => {
+  test("fs.readFileSync throws the spec's exact message from inside a real bundle", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import fs from 'fs';",
+        "try {",
+        "  fs.readFileSync('/etc/passwd');",
+        "  globalThis.__jlProbe = 'did-not-throw';",
+        "} catch (e) {",
+        "  globalThis.__jlProbe = e.name + ': ' + e.message;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toBe(
+      'JSLabUnsupportedError: fs.readFileSync isn\'t available in "Browser & Node APIs". Use fs/promises or switch this tab to the Bun runtime.',
+    );
+  });
+
+  test("a named sync import refuses too, with its own method name", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import { writeFileSync } from 'fs';",
+        "try {",
+        "  writeFileSync('x', 'y');",
+        "  globalThis.__jlProbe = 'did-not-throw';",
+        "} catch (e) {",
+        "  globalThis.__jlProbe = e.message;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toBe(
+      'fs.writeFileSync isn\'t available in "Browser & Node APIs". Use fs/promises or switch this tab to the Bun runtime.',
+    );
+  });
+
+  test("child_process.execSync refuses as well", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import { execSync } from 'child_process';",
+        "try {",
+        "  execSync('ls');",
+        "  globalThis.__jlProbe = 'did-not-throw';",
+        "} catch (e) {",
+        "  globalThis.__jlProbe = e.name + '|' + e.message;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toBe(
+      'JSLabUnsupportedError|child_process.execSync isn\'t available in "Browser & Node APIs". Use child_process.exec or switch this tab to the Bun runtime.',
+    );
+  });
+
+  // The CommonJS shape is what makes this work: a named import off an ES module would have failed the *build*
+  // with "no matching export", which names neither the runtime nor the way out.
+  test("each throw-only module refuses on use, in both the default and named import forms", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import http from 'http';",
+        "import { createServer } from 'http';",
+        "const out = [];",
+        "try { http.createServer(); } catch (e) { out.push(e.name + ': ' + e.message); }",
+        "try { createServer(); } catch (e) { out.push(e.name); }",
+        "globalThis.__jlProbe = out;",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toEqual([
+      'JSLabUnsupportedError: http isn\'t available in "Browser & Node APIs". Switch this tab to the Bun runtime.',
+      "JSLabUnsupportedError",
+    ]);
+  });
+
+  test("net, tls, dgram, worker_threads and vm all refuse the same way", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import net from 'net';",
+        "import tls from 'tls';",
+        "import dgram from 'dgram';",
+        "import worker_threads from 'worker_threads';",
+        "import vm from 'vm';",
+        "const names = [];",
+        "for (const [label, mod] of [['net', net], ['tls', tls], ['dgram', dgram], ['worker_threads', worker_threads], ['vm', vm]]) {",
+        "  try { mod.anything; names.push('did-not-throw'); } catch (e) { names.push(label + ':' + e.name); }",
+        "}",
+        "globalThis.__jlProbe = names;",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toEqual([
+      "net:JSLabUnsupportedError",
+      "tls:JSLabUnsupportedError",
+      "dgram:JSLabUnsupportedError",
+      "worker_threads:JSLabUnsupportedError",
+      "vm:JSLabUnsupportedError",
+    ]);
+  });
+
+  /**
+   * The round trip a real tab makes: the bundled `fs/promises` module reads the client the bootstrap installed on
+   * the page global. Here the bootstrap's role is played by a fake installed on `globalThis` before the joined
+   * module runs, which is the same realm the bundle evaluates in.
+   */
+  test("fs/promises forwards to the bridge the bootstrap installed on the page global", async () => {
+    const g = globalThis as unknown as Record<string, unknown>;
+    const asked: unknown[] = [];
+    g.__jslabNodeBridge = {
+      fsPromises: {
+        readFile: (...args: unknown[]) => {
+          asked.push(args);
+          return Promise.resolve("from the bridge");
+        },
+      },
+    };
+    try {
+      const result = await runBrowserNodeEntry(
+        [
+          "import { readFile } from 'fs/promises';",
+          "globalThis.__jlProbe = await readFile('notes.txt', 'utf8');",
+          "",
+        ].join("\n"),
+      );
+      expect(result).toBe("from the bridge");
+      expect(asked).toEqual([["notes.txt", "utf8"]]);
+    } finally {
+      delete g.__jslabNodeBridge;
+    }
+  });
+
+  test("node:fs/promises resolves to the same bridged module as the unprefixed spelling", async () => {
+    const g = globalThis as unknown as Record<string, unknown>;
+    g.__jslabNodeBridge = { fsPromises: { readFile: () => Promise.resolve("prefixed") } };
+    try {
+      const result = await runBrowserNodeEntry(
+        ["import { readFile } from 'node:fs/promises';", "globalThis.__jlProbe = await readFile('a');", ""].join("\n"),
+      );
+      expect(result).toBe("prefixed");
+    } finally {
+      delete g.__jslabNodeBridge;
+    }
+  });
+});

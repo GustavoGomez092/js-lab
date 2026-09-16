@@ -19,6 +19,7 @@ import {
 } from "./fetch-proxy";
 import { AudioController, HandleTracker, handleCountAction, installHandleTracking } from "./handles";
 import { createHostBridge, type HostBridgeGlobal } from "./host-bridge";
+import { installNodeBridge, type NodeBridgeGlobal, type NodeHostEvent, type NodeTransport } from "./node-bridge";
 
 // Same limits as packages/runner-bun/src/bootstrap.ts (spec §5.9, R-M1-17(a)): an error event's text sits beside
 // its budgeted `value`, bounded the same way in both runners.
@@ -165,6 +166,37 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
     runtime: options.runtime ?? "browser",
     transport: options.fetchTransport ?? hostFetchTransport,
     global: g as unknown as FetchProxyGlobal,
+  });
+
+  // Task 11 (spec §5.13): `browser-node`'s async Node bridge, installed the same way and for the same reason the
+  // fetch proxy above is -- the page's only channel to Main is this closure's `bridge`, so only this function can
+  // route the host's replies back into it. A no-op for `browser`, where the bundler refuses every Node builtin
+  // outright, so there is nothing for a bridge to serve.
+  //
+  // Unlike the fetch proxy this has no ordering requirement against `installHandleTracking`: a bridged call is not
+  // a tracked handle. A run that ends with a Node call outstanding is covered by the host side instead -- the
+  // session's `abortAll` kills anything still running when the handle retires (`web-adapter.ts`).
+  const nodeListeners = new Set<(event: NodeHostEvent) => void>();
+  const hostNodeTransport: NodeTransport = {
+    call(id, request) {
+      bridge.send({ type: "nodeCall", id, module: request.module, method: request.method, args: request.args });
+    },
+    abort(id) {
+      bridge.send({ type: "nodeAbort", id });
+    },
+    onEvent(listener) {
+      nodeListeners.add(listener);
+      return () => nodeListeners.delete(listener);
+    },
+  };
+  /** Fans one host reply out to the bridge. The only consumer of the five `node*` cases in `handleHostMessage`. */
+  const deliverNode = (event: NodeHostEvent): void => {
+    for (const listener of [...nodeListeners]) listener(event);
+  };
+  installNodeBridge({
+    runtime: options.runtime ?? "browser",
+    transport: hostNodeTransport,
+    global: g as unknown as NodeBridgeGlobal,
   });
 
   let run: Run | null = null;
@@ -411,6 +443,29 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
         return;
       case "fetchError":
         deliverFetch({ type: "error", id: message.id, message: message.message });
+        return;
+      // Task 11: the bridged Node call replies. Routed the same way the fetch cases above are, and for the same
+      // reason they must be routed at all -- an unrouted reply leaves the page's promise pending forever.
+      case "nodeResult":
+        deliverNode({ type: "result", id: message.id, value: message.value });
+        return;
+      case "nodeError":
+        deliverNode({
+          type: "error",
+          id: message.id,
+          name: message.name,
+          message: message.message,
+          ...(message.code === undefined ? {} : { code: message.code }),
+        });
+        return;
+      case "nodeStdout":
+        deliverNode({ type: "stdout", id: message.id, data: message.data });
+        return;
+      case "nodeStderr":
+        deliverNode({ type: "stderr", id: message.id, data: message.data });
+        return;
+      case "nodeExit":
+        deliverNode({ type: "exit", id: message.id, code: message.code, signal: message.signal });
         return;
       default: {
         const _never: never = message;

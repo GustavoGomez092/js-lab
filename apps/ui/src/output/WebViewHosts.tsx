@@ -49,8 +49,12 @@ export function WebViewHosts({ store, dock }: { store: AppStore; dock: WebviewDo
     <>
       {/* Always mounted; every tab's element lives here, positioned via its own `position: fixed` (see
           WebViewTile.tsx) rather than DOM nesting -- so nothing here is ever a portal target that can vanish out
-          from under a webview. */}
-      <div ref={setParkingNode} className="webview-parking" aria-hidden="true" />
+          from under a webview. Fix round 2 (N2): deliberately NOT `aria-hidden` -- that attribute on an ancestor
+          removes the *whole* subtree from the accessibility tree, and a descendant's `aria-hidden="false"` cannot
+          re-expose it. That would make the one tile that's actually on screen permanently unreachable to
+          assistive technology. Exposure is each `WebViewTile`'s own job (its `aria-hidden={!docked}`), which only
+          works because nothing above it says otherwise. */}
+      <div ref={setParkingNode} className="webview-parking" />
       {parkingNode &&
         webTabs.map((tabId) => {
           const docked = dock?.tabId === tabId;

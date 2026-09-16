@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { tabPatchSchema } from "@jslab/rpc-schema";
 import { createTab, defaultSession, defaultSettings, type Runtime, type TabState } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
@@ -32,6 +32,16 @@ function tabWith(id: string, overrides: { runtime?: Runtime; tiles?: Partial<Tab
       },
     },
   });
+}
+
+/**
+ * Fix round 2 (N2): a docked tile's own `aria-hidden="false"` (`WebViewTile.tsx`) means nothing if an ANCESTOR
+ * carries `aria-hidden="true"` -- that attribute removes the whole subtree from the accessibility tree, and a
+ * descendant's own `aria-hidden="false"` cannot re-expose it. Checking the element's own attribute (as the
+ * pre-fix tests did) proves nothing about real exposure; this checks the whole chain, including itself.
+ */
+function exposed(element: Element): boolean {
+  return element.closest('[aria-hidden="true"]') === null;
 }
 
 function hydrated(overrides: Parameters<typeof tabWith>[1] = {}) {
@@ -125,7 +135,7 @@ describe("OutputTiles / WebViewHosts", () => {
     renderArea(store, api);
     const before = screen.getByTestId("webview-tile-t1");
     const beforeWebview = before.querySelector("electrobun-webview");
-    expect(before.getAttribute("aria-hidden")).toBe("false");
+    expect(exposed(before)).toBe(true);
 
     act(() => store.getState().toggleOutputVisible());
     // Reachable from the View menu's "Output" item and the view.toggleOutput command (menu.ts:208).
@@ -139,7 +149,7 @@ describe("OutputTiles / WebViewHosts", () => {
     const redocked = screen.getByTestId("webview-tile-t1");
     expect(redocked).toBe(before);
     expect(redocked.querySelector("electrobun-webview")).toBe(beforeWebview);
-    expect(redocked.getAttribute("aria-hidden")).toBe("false");
+    expect(exposed(redocked)).toBe(true);
   });
 
   test("switching to a bun tab parks the other tab's webview instead of destroying it; the bun tab never creates one (fix round 1, F1b)", () => {
@@ -150,7 +160,7 @@ describe("OutputTiles / WebViewHosts", () => {
     renderTiles(store, api);
     const before = screen.getByTestId("webview-tile-t1");
     const beforeWebview = before.querySelector("electrobun-webview");
-    expect(before.getAttribute("aria-hidden")).toBe("false");
+    expect(exposed(before)).toBe(true);
 
     act(() => store.getState().activateTab("t2"));
     expect(document.querySelectorAll("electrobun-webview")).toHaveLength(1); // still only t1's -- t2 never got one
@@ -164,7 +174,7 @@ describe("OutputTiles / WebViewHosts", () => {
     const redocked = screen.getByTestId("webview-tile-t1");
     expect(redocked).toBe(before);
     expect(redocked.querySelector("electrobun-webview")).toBe(beforeWebview);
-    expect(redocked.getAttribute("aria-hidden")).toBe("false");
+    expect(exposed(redocked)).toBe(true);
   });
 
   test("two browser tabs each keep their own persistent host; only the active tab's is ever docked (fix round 1, F2)", () => {
@@ -181,7 +191,7 @@ describe("OutputTiles / WebViewHosts", () => {
     expect(webview1).toBeTruthy();
     expect(webview2).toBeTruthy();
     expect(webview1).not.toBe(webview2); // distinct hosts, not one shared instance
-    expect(tile1Before.getAttribute("aria-hidden")).toBe("false"); // t1 active: docked
+    expect(exposed(tile1Before)).toBe(true); // t1 active: docked and genuinely exposed
     expect(tile2Before.getAttribute("aria-hidden")).toBe("true"); // t2 backgrounded: parked, not gone
 
     act(() => store.getState().activateTab("t2"));
@@ -192,7 +202,81 @@ describe("OutputTiles / WebViewHosts", () => {
     expect(tile1After.querySelector("electrobun-webview")).toBe(webview1);
     expect(tile2After.querySelector("electrobun-webview")).toBe(webview2);
     expect(tile1After.getAttribute("aria-hidden")).toBe("true"); // now backgrounded
-    expect(tile2After.getAttribute("aria-hidden")).toBe("false"); // now active
+    expect(exposed(tile2After)).toBe(true); // now active, genuinely exposed
+  });
+
+  test("toggling Web View visible collapses/expands the tile without recreating its <electrobun-webview> (M0-S4; restored, fix round 2 N5)", () => {
+    const store = hydrated({ runtime: "browser" }); // default webviewVisible: false
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+    const before = screen.getByTestId("webview-tile-t1");
+    const beforeWebview = before.querySelector("electrobun-webview");
+    expect(before.getAttribute("aria-hidden")).toBe("true");
+
+    act(() => store.getState().toggleWebviewVisible());
+    const docked = screen.getByTestId("webview-tile-t1");
+    expect(docked).toBe(before); // same node -- not destroyed and recreated
+    expect(docked.querySelector("electrobun-webview")).toBe(beforeWebview);
+    expect(exposed(docked)).toBe(true);
+
+    act(() => store.getState().toggleWebviewVisible());
+    const parked = screen.getByTestId("webview-tile-t1");
+    expect(parked).toBe(before);
+    expect(parked.querySelector("electrobun-webview")).toBe(beforeWebview);
+    expect(parked.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  test("an order swap while docked re-targets the host onto the new, connected dock node (fix round 2, N1)", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true, order: ["console", "webview"] } });
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+
+    const webviewBefore = screen.getByTestId("webview-tile-t1").querySelector("electrobun-webview");
+    const dockBefore = document.querySelector(".webview-tile-dock");
+    expect(dockBefore).toBeTruthy();
+
+    // Records which elements actually get measured, without changing jsdom's own (zero-rect) behavior -- the
+    // fix's observable signature is that the NEW dock node gets measured after the swap, not just the old one.
+    const measured = new Set<Element>();
+    const original = Element.prototype.getBoundingClientRect;
+    const spy = spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      measured.add(this);
+      return original.call(this);
+    });
+    try {
+      // No `order` control exists in the UI yet (Task 15 adds one) -- drive the swap directly through the store,
+      // the same shape a hand-edited session.json or a future arrangement control would produce.
+      act(() => {
+        const tab = store.getState().tab as TabState;
+        store.getState().applyTabUpdate({
+          ...tab,
+          layout: { ...tab.layout, tiles: { ...tab.layout.tiles, order: ["webview", "console"] } },
+        });
+      });
+    } finally {
+      spy.mockRestore();
+    }
+
+    const dockAfter = document.querySelector(".webview-tile-dock");
+    expect(dockAfter).toBeTruthy();
+    // Confirms the swap genuinely remounted the placeholder (SplitPane sees a different element type at that
+    // position) -- the trigger this test exists to exercise, not just a no-op re-render.
+    expect(dockAfter).not.toBe(dockBefore);
+    expect(document.body.contains(dockAfter)).toBe(true);
+    // The old, pre-fix bug: WebViewHosts kept reporting `dockBefore` (now detached) forever, because the
+    // reporting effect's deps didn't include `order`. The fix: a callback ref reports on every attach, so the
+    // host re-measures against whatever node is actually in the tree now.
+    expect(measured.has(dockAfter as Element)).toBe(true);
+
+    const tile = screen.getByTestId("webview-tile-t1");
+    expect(tile.querySelector("electrobun-webview")).toBe(webviewBefore); // still the same host, never recreated
+    expect(exposed(tile)).toBe(true); // still genuinely docked, not silently orphaned
+  });
+
+  test("resetConsoleSize resets to the tiles schema default (55), not editorSize's own reset value (fix round 1, F8)", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true, consoleSize: 20 } });
+    act(() => store.getState().resetConsoleSize());
+    expect(store.getState().tab?.layout.tiles.consoleSize).toBe(55);
   });
 
   test("arrangement maps to the split's orientation, and order controls which tile's dock renders first", () => {

@@ -276,7 +276,17 @@ button:disabled {
 
 /* Always mounted, permanent home for every tab's `.webview-tile` -- never unmounted by anything this task's
    layout does, which is the entire point (fix round 1, F1/F2). Contributes no box of its own; every `.webview-
-   tile` inside it is independently `position: fixed`. */
+   tile` inside it is independently `position: fixed`.
+   Fix round 2 (N3): `position: fixed` is viewport-relative ONLY as long as no ancestor establishes a containing
+   block for fixed-position descendants -- `transform`, `filter`, `perspective`, `contain` (any value but
+   `size`/`style`) or `will-change: transform`/`will-change: filter` on `html`, `body`, `#root`, `.app` or
+   `.app-main` would silently re-base every docked webview's coordinates to that ancestor's box instead of the
+   viewport. None of them declare any of those today (checked repo-wide) -- this holds by accident, not by
+   contract, so anyone adding one of those properties to an ancestor here needs to know this relies on their
+   absence. Stacking is the same story: neither this rule nor `.webview-tile` sets `z-index`, so both sit at the
+   implicit 0 -- every overlay in this stylesheet declares a higher one (`.dialog-backdrop` 50, `.context-menu`
+   60, `.palette-scrim` 70, `.palette` 71), which is why dialogs/menus/the palette correctly paint over a docked
+   webview without this rule needing its own z-index -- again, true only as long as nothing here drops below it. */
 .webview-parking {
   position: fixed;
   top: 0;

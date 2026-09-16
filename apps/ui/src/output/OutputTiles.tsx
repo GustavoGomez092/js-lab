@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useRef } from "react";
+import { useCallback } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { SplitPane } from "../shell/SplitPane";
@@ -45,15 +45,23 @@ export function OutputTiles({
   const webviewSupported = runtime !== undefined && runtime !== "bun";
   const showSplit = webviewSupported && Boolean(tiles?.webviewVisible);
 
-  const dockRef = useRef<HTMLDivElement | null>(null);
-  // Reports the placeholder up whenever there is one to report, and unconditionally clears it on cleanup -- which
-  // fires both on every dependency change (a tab switch, a visibility toggle) and on unmount (Output hidden, or
-  // this whole component leaving the tree for any other reason). `WebViewHosts` parks the tab the moment this
-  // fires null; it never removes the tab's element merely because nobody is currently docking it.
-  useEffect(() => {
-    if (showSplit && tabId && dockRef.current) onWebviewDock({ tabId, node: dockRef.current });
-    return () => onWebviewDock(null);
-  }, [showSplit, tabId, onWebviewDock]);
+  // Fix round 2 (N1): a callback ref, not a `useRef` read inside an effect keyed on unrelated deps. A callback ref
+  // fires exactly when the DOM node it's attached to actually changes -- mount, unmount, *or* a remount React
+  // triggers because it sees a different element type at this JSX position. That last case is what an effect
+  // missed: an in-place `order` swap moves this div between SplitPane's `first`/`second` slots, so React unmounts
+  // the old node and mounts a new one in the same render -- but `[showSplit, tabId, onWebviewDock]` never changes,
+  // so the effect never re-ran and `WebViewHosts` kept reporting the old, now-detached node (the webview then
+  // silently collapsed to 0x0 at the viewport origin). The invariant this holds instead: the node `WebViewHosts`
+  // is ever told about is always the node currently in the tree, because React calls this on every attach/detach,
+  // not on a dependency list. (Reachable only via a hand-edited session.json today -- Task 15 adds the arrangement
+  // controls that reach it through the UI.)
+  const onDockRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node && showSplit && tabId) onWebviewDock({ tabId, node });
+      else onWebviewDock(null);
+    },
+    [showSplit, tabId, onWebviewDock],
+  );
 
   const consoleTile = <OutputPanel store={store} api={api} runKeys={runKeys} onInstall={onInstall} />;
 
@@ -61,7 +69,7 @@ export function OutputTiles({
 
   const panes: Record<"console" | "webview", ReactNode> = {
     console: consoleTile,
-    webview: <div className="webview-tile-dock" ref={dockRef} />,
+    webview: <div className="webview-tile-dock" ref={onDockRef} />,
   };
   // The schema (`tabTilesSchema`, packages/shared) refines `order` to always list both kinds exactly once, but
   // that guarantee isn't visible to TypeScript's plain-array type -- these defaults are unreachable in practice.

@@ -80,25 +80,36 @@
 
 Tasks are ordered so each one lands green on its own. Tasks 1–2 open the seam without changing behaviour; 3–7 build the web runner end to end; 8–9 make it visible; 10–13 complete `browser-node`; 14–17 finish the runtime, then prove and document it.
 
-| # | Task | Deliverable |
-|---|---|---|
-| 1 | Runtime on the wire | `run.start` carries the tab's runtime; schema, handler and tests. No behaviour change yet. |
-| 2 | The `RuntimeAdapter` seam | Bun path extracted behind the interface; `RunCoordinator` talks only to adapters. |
-| 3 | `packages/runner-web` bootstrap | `__jl`, console hooks, heartbeat, `expand`, handle tracking, all unit-tested in a DOM-less harness. |
-| 4 | The runner-web page and build wiring | `views://runner-web`, Vite entry, Electrobun copy rule, a smoke test that the page loads. |
-| 5 | The bundler | `Bun.build` with resolve, polyfill and CSS plugins; bundle errors in the §5.11 shape. |
-| 6 | The vendor cache | Keyed chunks, plus invalidation on npm change. |
-| 7 | `WebAdapter` | Per-tab webview lifecycle, run, Stop, Kill, unresponsive, dispose. |
-| 8 | Web View tile and arrangement | The tile, its toggle, per-tab persistence, hidden for `bun`. |
-| 9 | Runtime switcher enablement | All three runtimes selectable; Monaco type libs follow the runtime. |
-| 10 | Sync polyfills | The §5.13 bundled modules and the `process`/`os` snapshots. |
-| 11 | The async Node bridge | `fs/promises`, callback `fs`, `child_process`; `*Sync` and the unsupported modules throw the exact messages. |
-| 12 | The fetch proxy | `browser-node` fetch through Main with streaming `Response` semantics; `browser` keeps native fetch and CORS. |
-| 13 | The dialog shim | Non-blocking `alert`/`confirm`/`prompt`, the console warning, and `JSLAB_E2E` scripting. |
-| 14 | DOM serialization | Tag, attributes, child count, `outerHTML` preview. |
-| 15 | Audio indicator and mute | Tracking, the tab icon, and per-tab persistence. |
-| 16 | E2E scenarios | Web runtime basics, the tile, canvas/rAF, React, Three.js, Web Audio — the WV-04 exit — plus fetch and bridge errors. |
-| 17 | Docs, parity and QA | The M4 checklist, parity and roadmap rows, README, and the full-suite run. |
+> **This index is the milestone's map, and it must be reconciled against the commit log by number before M4 closes.** Tasks 8a, 9a, 9b, 9c and 9d were added during execution and were missing from this table for days. **Task 11 was skipped entirely and nobody noticed**, because every gate in use is diff-shaped or tree-shaped and none of them can see a task that produced no diff. Status is tracked in the column below for exactly that reason.
+
+| # | Task | Deliverable | Status |
+|---|---|---|---|
+| 1 | Runtime on the wire | `run.start` carries the tab's runtime; schema, handler and tests. No behaviour change yet. | merged |
+| 2 | The `RuntimeAdapter` seam | Bun path extracted behind the interface; `RunCoordinator` talks only to adapters. | merged |
+| 3 | `packages/runner-web` bootstrap | `__jl`, console hooks, heartbeat, `expand`, handle tracking, all unit-tested in a DOM-less harness. | merged |
+| 4 | The runner-web page and build wiring | `views://runner-web`, Vite entry, Electrobun copy rule, a smoke test that the page loads. | merged |
+| 5 | The bundler | `Bun.build` with resolve, polyfill and CSS plugins; bundle errors in the §5.11 shape. | merged |
+| 6 | The vendor cache | Keyed chunks, plus invalidation on npm change. | merged |
+| 7 | `WebAdapter` | Per-tab webview lifecycle, run, Stop, Kill, unresponsive, dispose. | merged |
+| 8 | Web View tile and arrangement | The tile, its toggle, per-tab persistence, hidden for `bun`. | merged |
+| 8a | Vendor/app bundle join | Page-global registry plus a per-package CommonJS stub (externals + import map cannot work). | merged |
+| 9 | Runtime switcher enablement | All three runtimes selectable; Monaco type libs follow the runtime. | merged |
+| 9a | Wire the browser runtime to a real webview | Lazy host creation; proven against a built app. | merged |
+| 9b | Close the page-side run-completion gap | **The milestone blocker:** runs reach `evaluating` and never settle. Plus the production fetch transport. | in progress |
+| 9c | Web View occlusion, stacking and the portal hoist | Native surfaces paint above HTML; overlays are hidden behind a docked Web View. | in progress |
+| 9d | Defects found by automated review | `stop()` settle-on-exit, console reset between runs, sync `play()` throw, host-bridge union validation. | queued, after 9b |
+| 10 | Sync polyfills | The §5.13 bundled modules and the `process`/`os` snapshots. | merged |
+| 11 | The async Node bridge | `fs/promises`, callback `fs`, `child_process`; `*Sync` and the unsupported modules throw the exact messages. | **⚠️ NEVER IMPLEMENTED — re-instated, milestone exit condition (R-M4-T11-1)** |
+| 12 | The fetch proxy | `browser-node` fetch through Main with streaming `Response` semantics; `browser` keeps native fetch and CORS. | merged |
+| 13 | The dialog shim | Non-blocking `alert`/`confirm`/`prompt`, the console warning, and `JSLAB_E2E` scripting. | merged |
+| 14 | DOM serialization | Tag, attributes, child count, `outerHTML` preview. | merged |
+| 15 | Audio indicator and mute | Tracking, the tab icon, and per-tab persistence. | merged |
+| 16 | E2E scenarios | Web runtime basics, the tile, canvas/rAF, React, Three.js, Web Audio — the WV-04 exit — plus fetch and bridge errors. | blocked on 9b and 11 |
+| 17 | Docs, parity and QA | The M4 checklist, parity and roadmap rows, README, and the full-suite run. | last |
+
+**Milestone exit conditions.** M4 cannot close, and no release note may make the corresponding claim, until **both** hold:
+1. **R-M4-C1-1** — browser tabs actually complete runs (Task 9b). No note may claim browser tabs run until they do.
+2. **R-M4-T11-1** — `browser-node` actually provides the Node APIs it offers (Task 11). No note may describe it as providing Node APIs until it does.
 
 ---
 
@@ -174,7 +185,9 @@ return deps.coordinator.start({
 });
 ```
 
-`effectiveRuntime` (`packages/shared/src/settings.ts:51-53`) still collapses everything to `bun` while `AVAILABLE_RUNTIMES` is `["bun"]`, which is what keeps this task behaviour-free.
+`effectiveRuntime` (defined in `packages/shared/src/settings.ts`, alongside `AVAILABLE_RUNTIMES` and `isRuntimeAvailable`) still collapses everything to `bun` **as of this task**, because `AVAILABLE_RUNTIMES` is `["bun"]` at this point in the plan — which is what keeps Task 1 behaviour-free. **Task 9 later widens `AVAILABLE_RUNTIMES` to all three runtimes; that is the behaviour change, and it is deliberately not part of this task.**
+
+> **Citation corrected.** This line previously cited `settings.ts:51-53`, which points at the `run` settings schema, not the runtime selectors — an automated reviewer caught it. Symbols are now cited **by name rather than line range**: line numbers in a long-lived plan drift onto unrelated code and quietly mislead, which is the same class of defect as the stale absolute test totals recorded in the self-review below.
 
 - [ ] **Step 5: Assert it in the handler test**
 
@@ -510,6 +523,16 @@ Per spec §5.13: `buffer, path, events, util, url, querystring, string_decoder, 
 
 ### Task 11: The async Node bridge
 
+> **⚠️ THIS TASK WAS SKIPPED AND IS RE-INSTATED (ruling R-M4-T11-1). READ THIS BEFORE ANYTHING ELSE.**
+>
+> Task 11 was never implemented. None of the four files below exist, `JSLabUnsupportedError` appears nowhere in the repository, and no commit on the branch mentions this task. It was parked as a side effect of ruling R-M4-T10-PARK-1 (which paused Task 10 over a dependency-install question and observed that Task 11 depended on it), Task 10 was later unparked and merged, and **nothing ever came back for Task 11.**
+>
+> **Consequence today:** `browser-node` is selectable in the UI but provides **no `fs/promises`, no callback `fs.*`, no `child_process`**, and **none of the spec-mandated `JSLabUnsupportedError` refusals**. Users get silent absence where the spec promises an explicit, helpful error.
+>
+> **This is a milestone exit condition.** M4 cannot close without it, alongside R-M4-C1-1 (runs must complete). **No release note may describe `browser-node` as providing Node APIs until this ships.** Task 16's E2E scenario 4 tests these exact behaviours and cannot pass before it.
+>
+> **Sequencing:** dispatch immediately after Task 9b merges — this task creates files in `packages/runner-web` and touches the bootstrap's install ordering, which is 9b's live file surface — and **before Task 16**, which depends on it.
+
 **Files:**
 - Create: `packages/runner-web/src/node-bridge.ts`, `apps/desktop/src/main/rpc/web-node-handlers.ts`
 - Test: `packages/runner-web/test/node-bridge.test.ts`, `apps/desktop/test/rpc/web-node-handlers.test.ts`
@@ -518,7 +541,8 @@ Per spec §5.13: `buffer, path, events, util, url, querystring, string_decoder, 
 - `child_process.exec/execFile/spawn` bridge and stream `stdout`/`stderr` events.
 - `fs.*Sync` and `child_process.*Sync` throw exactly: `JSLabUnsupportedError: fs.readFileSync isn't available in "Browser & Node APIs". Use fs/promises or switch this tab to the Bun runtime.` — the message text is spec-mandated; use it verbatim, with the method name substituted.
 - `http, net, tls, dgram, worker_threads, vm` throw `JSLabUnsupportedError` with the switch-to-Bun hint.
-- Every bridged call is validated by `createValidators`; output that could carry credentials passes through `createRedactor` **before** crossing the bridge.
+- Every bridged call is validated by `createValidators`.
+- **Redaction is scoped to logged diagnostic fields only — never to returned data or stream payloads.** `createRedactor` applies to what JSLab itself logs about a bridged call (the diagnostic record of the call). It must **not** be applied to a value the user's code asked for: a file's contents returned by `fs/promises.readFile`, or `stdout`/`stderr` payloads streamed from `child_process`, pass through **unchanged**, even when they contain credential-like text. Redacting those would silently corrupt the data the program requested — a correctness bug wearing a security label. State which fields are redacted, and add a test proving a returned file whose body looks like a credential comes back byte-identical.
 
 - [ ] Steps: failing tests for each throw message and for one round-trip read, implementation, a path-escape refusal test. **Counts: runner-web +8, desktop +6; root 1010 → 1024.**
 
@@ -554,6 +578,25 @@ Per spec §5.12 and M0-S4: `alert` shows JSLab's own non-blocking dialog and ret
 
 ---
 
+### Task 9d: Defects found by automated review
+
+**Added after the fact (ruling R-M4-CR-1).** Four independent, well-evidenced defects raised by CodeRabbit on PR #3 and verified against HEAD by the controller. Each is small; they are batched into one task and one review seat rather than four dispatches. **Sequencing: after Task 9b merges** — three of the four are in `packages/runner-web`, which is 9b's live file surface.
+
+**Files:**
+- Modify: `apps/desktop/src/main/runtimes/bun-adapter.ts`, `packages/runner-web/src/console-hook.ts`, `packages/runner-web/src/handles.ts`, `packages/runner-web/src/host-bridge.ts`
+- Test: the matching test files in `apps/desktop/test/runtimes/` and `packages/runner-web/test/`
+
+1. **`stop()` never settles when the runner exits cleanly.** `BunRunSession.stop()` stores its resolver in `#stopSettle`, which is invoked **only** from the `"state" === "stopped"` message handler. `#onExit()` calls `clearTimeout(this.#stopTimer)` first — destroying the `stopGraceMs` fallback that is the only other thing that resolves it — then takes the clean-exit path into `#reportTerminal`, which touches `runLock` and `sink.state` and **never settles `#stopSettle`**. Resolve and clear it on every terminal exit path. *Severity is latent, not live:* the sole caller today is `void run.handle.stop()` in `run-coordinator.ts`, so nothing hangs yet — but the `RunHandle.stop(): Promise<void>` contract is violated and the first consumer that awaits it will hang. A fixture for the scenario already exists (`test/runs/fixtures/exit-on-stop-runner.ts`). **The test must actually await the contract** — that is precisely why 1230 passing tests never saw this.
+2. **Console state leaks between runs.** `installConsole` returns `void`; `counts`, `timers` and the group depth persist for the page's lifetime. This matters *because* of an invariant we deliberately built: a webview host is **never unmounted between runs** (Task 8), so the page really does persist. An unmatched `console.group()` leaves the next run indented, and `console.count()`/`console.time()` labels carry across. Return a reset function and call it before each run.
+3. **A synchronous `play()` throw leaks a handle.** The rejected-promise path is already fixed (`handles.ts:274`, Task 15 fix round 1) but `play.apply(this, args)` itself is unguarded, so a synchronous throw leaves `tracker.add(this, …)` registered and the run never reaches idle. Release on both paths. **Half of this finding was fixed and the other half never re-checked** — verify both.
+4. **The host bridge validates the envelope but not the message.** `isHostToWeb` checks `seq` is a safe positive integer and that `message` is a non-null object — its own comment says *"A cheap shape check only"*. So `{seq: 1, message: {type: "run"}}` is accepted, `lastInboundSeq` advances, and the bootstrap then reads `message.settings.maxEntries` and throws. Parse **every** variant of the discriminated union before advancing the sequence or dispatching. Note Task 13's `const _never: never` guard **cannot** cover this: it is compile-time exhaustiveness over a typed union, and this payload crosses a JSON boundary untyped. The two defences are complementary.
+
+**Explicitly out of scope** (each is its own item): the forgeable inbound command channel (accepted by Task 7's ruling — page code shares the realm and can call `__jslabHostMessage`; documented under Task 17, not fixed here), the ESM-namespace divergence in the vendor join (questions Task 8a's load-bearing mechanism), and the webview generation token for `webRunner.ready`/`exit` (touches `packages/rpc-schema`).
+
+- [ ] Steps: one failing test per defect **that fails for the stated reason**, then each fix, then the gates. **Counts: measure your own baseline and report `baseline N → after M`.** Four fixes, roughly four to eight tests; no absolute total is given here on purpose.
+
+---
+
 ### Task 14: DOM value serialization
 
 **Files:**
@@ -572,7 +615,9 @@ Per spec §5.9, a DOM node encodes as tag, attributes, child count and an `outer
 - Modify: `packages/runner-web/src/handles.ts` (report audio activity), `packages/shared/src/session.ts` (`muted` per tab), the tab UI
 - Test: `apps/ui/test/audio-indicator.test.tsx`, `packages/runner-web/test/handles.test.ts`
 
-While an `AudioContext` is running or a media element is playing, the tab shows a speaker icon; clicking it toggles mute (spec §5.12, parity EX-35). Mute is per tab and persists. Muting sets every tracked `AudioContext`'s destination gain to zero and pauses media, rather than suspending the context, so a running animation keeps its timing.
+While an `AudioContext` is running or a media element is playing, the tab shows a speaker icon; clicking it toggles mute (spec §5.12, parity EX-35). Mute is per tab and persists. Muting routes every tracked `AudioContext` through an **inserted `GainNode`** and sets that node's gain to zero, and pauses media, rather than suspending the context, so a running animation keeps its timing.
+
+> **Wording corrected after the fact.** This line originally read "sets every tracked `AudioContext`'s destination gain to zero", which **describes something the Web Audio API cannot do**: `AudioContext.destination` is an `AudioDestinationNode` and has no `gain` property — `gain` belongs to `GainNode`. An automated reviewer flagged the plan text on exactly that basis. **The shipped implementation is correct and was always correct**: `packages/runner-web/src/handles.ts:224-230` captures the real destination, inserts a `GainNode` between the graph and it, and shadows `destination` via `defineProperty` so every later connection reroutes through that node. Task 15's implementer built the right thing despite the instruction. The text is fixed so the next reader is not misled the way the reviewer was.
 
 - [ ] Steps: failing tests for activity reporting and the toggle, implementation. **Counts: runner-web +4, ui +4, shared +2; root 1050 → 1060.**
 

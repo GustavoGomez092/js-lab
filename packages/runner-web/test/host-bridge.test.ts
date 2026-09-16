@@ -58,3 +58,37 @@ test("dispose removes the inbound hook", () => {
   bridge.dispose();
   expect(g.__jslabHostMessage).toBeUndefined();
 });
+
+// Fix round 1, I1: `typeof seq === "number"` alone let NaN and ±Infinity through the guard.
+test("rejects a NaN or an Infinite sequence number", () => {
+  const { g } = sandbox();
+  const received: HostToWebMessage[] = [];
+  createHostBridge((message) => received.push(message), g);
+  g.__jslabHostMessage({ seq: Number.NaN, message: { type: "stop" } });
+  g.__jslabHostMessage({ seq: Number.POSITIVE_INFINITY, message: { type: "stop" } });
+  g.__jslabHostMessage({ seq: Number.NEGATIVE_INFINITY, message: { type: "stop" } });
+  expect(received).toEqual([]);
+});
+
+test("rejects a negative, zero, or non-integer sequence number", () => {
+  const { g } = sandbox();
+  const received: HostToWebMessage[] = [];
+  createHostBridge((message) => received.push(message), g);
+  g.__jslabHostMessage({ seq: -1, message: { type: "stop" } });
+  g.__jslabHostMessage({ seq: 0, message: { type: "stop" } });
+  g.__jslabHostMessage({ seq: 1.5, message: { type: "stop" } });
+  expect(received).toEqual([]);
+});
+
+// The important case: a NaN passes `x <= lastInboundSeq` for every later x (every comparison against NaN is
+// false), so if it were ever accepted as `lastInboundSeq`, replay protection would be permanently disabled. A
+// rejected NaN must leave `lastInboundSeq` untouched, so a genuine duplicate right after it is still caught.
+test("a rejected NaN attempt does not disable replay protection: a genuine duplicate is still rejected afterward", () => {
+  const { g } = sandbox();
+  const received: HostToWebMessage[] = [];
+  createHostBridge((message) => received.push(message), g);
+  g.__jslabHostMessage({ seq: Number.NaN, message: { type: "stop" } }); // rejected, must not become lastInboundSeq
+  g.__jslabHostMessage({ seq: 1, message: { type: "stop" } }); // accepted
+  g.__jslabHostMessage({ seq: 1, message: { type: "stop" } }); // duplicate: must still be rejected
+  expect(received).toEqual([{ type: "stop" }]);
+});

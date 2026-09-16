@@ -21,7 +21,12 @@ function isHostToWeb(value: unknown): value is HostToWeb {
   return (
     typeof value === "object" &&
     value !== null &&
-    typeof (value as { seq?: unknown }).seq === "number" &&
+    // A positive integer, not just `typeof seq === "number"` (fix round 1, I1): `NaN` and `±Infinity` are numbers
+    // too, and `NaN` is uniquely dangerous here — every comparison against it is false, so `raw.seq <=
+    // lastInboundSeq` in the caller below would never reject it, `lastInboundSeq` would become `NaN`, and every
+    // later comparison (`anything <= NaN`) would also be false forever, permanently disabling replay protection.
+    Number.isInteger((value as { seq?: unknown }).seq) &&
+    (value as { seq: number }).seq > 0 &&
     typeof (value as { message?: unknown }).message === "object" &&
     (value as { message?: unknown }).message !== null
   );

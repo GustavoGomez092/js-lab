@@ -43,7 +43,12 @@ export interface RunnerWebOptions {
 }
 
 export interface RunnerWebHandle {
-  /** Tears the runner down: stops the heartbeat, disposes active handles, and removes every installed hook. */
+  /**
+   * Tears the runner down: stops the heartbeat, disposes active handles, clears the expand registry, and removes
+   * the error/rejection listeners and the host bridge's inbound hook. `__jl`, `console` and the wrapped timer/
+   * fetch/WebSocket/... globals stay installed, since `__jl` is non-configurable and the others are meant to
+   * outlive any one run for the lifetime of the page (or, in a test, the file that shares one bootstrap instance).
+   */
   dispose(): void;
 }
 
@@ -126,10 +131,14 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
 
   Object.defineProperty(g, "__jl", {
     enumerable: false,
-    // The Bun runner marks this non-configurable (a fresh OS process per run makes that free hardening). A page
-    // is also only ever bootstrapped once per its lifetime in production, but leaving this configurable lets an
-    // in-process test create more than one runner instance in a row without a "Cannot redefine property" throw.
-    configurable: true,
+    // Matches packages/runner-bun/src/bootstrap.ts exactly: a run executes as an ES module, so its top-level code
+    // is implicit strict mode, where `delete globalThis.__jl` on a configurable property would silently succeed
+    // and let the run install its own stub — every later `__jl.log`/`__jl.mc` would then report nothing, with no
+    // error and no event (fix round 1, C1). `configurable: false` makes that same `delete` throw instead, exactly
+    // as it already does on Bun. Tests inject the object this instruments (see `RunnerWebOptions.global`) instead
+    // of weakening this descriptor, and share one bootstrap instance per test file for the same reason Bun's own
+    // runner never re-installs `__jl` either: a real page, like a real Bun process, is only ever bootstrapped once.
+    configurable: false,
     writable: false,
     value: {
       log(line: number, value: unknown) {
@@ -183,6 +192,10 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
 
   async function startRun(message: Extract<HostToWebMessage, { type: "run" }>): Promise<void> {
     if (run) return;
+    // The expand registry is scoped to the run (fix round 1, I2), not to this bootstrap instance: a handle id
+    // from a previous run must never resolve against a later one. `registry` is otherwise process/page-lifetime
+    // state shared only because `Encoder` needs a fresh instance wrapped around it every run.
+    registry.clear();
     // A Blob URL is the only portable way to run an ES module from a string in both a browser and Bun's own
     // module loader (no `//# sourceURL`-style relabeling applies to modules): the blob URL itself becomes the
     // "entry" file console-hook.ts matches call sites against, so every top-level frame of the user's code matches
@@ -230,6 +243,7 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
         tracker.disposeAll();
         run?.buffer.close();
         run = null;
+        registry.clear();
         return;
     }
   }
@@ -245,8 +259,10 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
       tracker.disposeAll();
       run?.buffer.close();
       run = null;
+      registry.clear();
       bridge.dispose();
-      delete (g as { __jl?: unknown }).__jl;
+      // `__jl` is intentionally left in place: it is non-configurable (see the comment above its definition), so
+      // it cannot be removed even here, the same way a Bun runner process never un-defines it either.
     },
   };
 }

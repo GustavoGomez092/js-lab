@@ -130,7 +130,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
-| WV-01 | Web View tile toggle (browser runtimes only) | Docs | Same | §7.1 | M4 | E | ⬜ |
+| WV-01 | Web View tile toggle (browser runtimes only) | Docs | Same + command id, View menu item and ⌥⌘W | §7.1 | M4 | U, E | ✅ `packages/e2e/scenarios/web-view-tile.test.ts`, `apps/ui/test/output-tiles.test.tsx`, `apps/desktop/test/menu.test.ts`, `packages/shared/test/commands.test.ts` (📝 Task 9g gave the status-bar toggle a command id, so the palette, the menu and the chord all drive one path) |
 | WV-02 | Page with `#root`, no stylesheet | Docs | Same | §5.12 | M4 | E | ⬜ |
 | WV-03 | DOM APIs, React `createRoot`, CSS-in-JS, `<style>`, CSS imports from the WD | Docs | `Bun.build` + cssInject | §5.12 | M4 | E | ⬜ |
 | WV-04 | Canvas + rAF, Three.js, p5, Web Audio, WebGL guides work | Docs (guides) | Same, WKWebView | §5.12 | M4 | E, M | ⬜ |
@@ -159,7 +159,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | TF-16 | Horizontal/vertical layout; draggable divider | Docs, CL 2.1.0 | Same, per tab | §7.1 | M2 | E | 🚧 orientation ✅ (`packages/e2e/scenarios/layout.test.ts`); divider drag pending Q3 (docs/qa/m2-checklist.md) |
 | TF-17 | Toggle Output, Side Bar, Activity Bar, Status Bar, Full Screen | Docs, Strings | View menu | §7.4 | M2 | E | 🚧 Full Screen pending Q1 (docs/qa/m2-checklist.md); the other toggles ✅ `packages/e2e/scenarios/layout.test.ts`, `packages/e2e/scenarios/menu.test.ts` |
 | TF-18 | Activity bar: Run, Stop, Snippets, NPM, AI Chat, Settings | Docs | Same | §7.1 | M2 | E | 🚧 Run/Stop/Settings in M2, NPM in M3; Snippets/AI panels M5; side bar resizing M5 |
-| TF-19 | Status bar: runtime, language, web view toggle, split toggle | Docs | Same + WD chip, run state, vim mode | §7.1 | M2 | E | 🚧 runtime/language/split in M2, WD chip in M3; Web View toggle M4 |
+| TF-19 | Status bar: runtime, language, web view toggle, split toggle | Docs | Same + WD chip, run state, vim mode | §7.1 | M2 | U, E | ✅ `apps/ui/test/layout.test.tsx`, `apps/ui/test/output-tiles.test.tsx` (📝 runtime/language/split in M2, WD chip in M3, Web View toggle in M4) |
 | TF-20 | File associations js/jsx/ts/tsx | #620 | + mjs/cjs/mts/cts via Info.plist patch | §4.6 | M6 | M | ⬜ |
 | TF-21 | Closing last tab quits the app | #650 | Opens a fresh tab instead | §7.3 | M2 | E | 📝 intentional improvement; implemented (M2) |
 

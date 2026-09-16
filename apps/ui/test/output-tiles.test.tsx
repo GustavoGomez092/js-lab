@@ -1,10 +1,12 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { tabPatchSchema } from "@jslab/rpc-schema";
 import { createTab, defaultSession, defaultSettings, type Runtime, type TabState } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../src/api";
+import { CommandRegistry } from "../src/commands/registry";
+import { createViewCommands } from "../src/commands/view-commands";
 import { OutputTiles } from "../src/output/OutputTiles";
 import { WebViewHosts, type WebviewDock } from "../src/output/WebViewHosts";
 import type { WebviewElement } from "../src/output/webview-host";
@@ -495,7 +497,7 @@ describe("OutputTiles / WebViewHosts", () => {
 
   test("the status bar's Web View toggle is disabled with a reason for the Bun runtime (R-M4-T8-DISABLED-1)", () => {
     const store = hydrated({ runtime: "bun" });
-    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
+    render(<StatusBar store={store} onToggleLayout={() => {}} onToggleWebView={() => {}} runKeys="⌘R" />);
     const toggle = screen.getByRole("button", { name: strings.shell.webView.show });
     expect(toggle.hasAttribute("disabled")).toBe(true);
     expect(toggle.getAttribute("title")).toBe(strings.shell.webView.unavailable);
@@ -505,19 +507,52 @@ describe("OutputTiles / WebViewHosts", () => {
     // A tab can carry webviewVisible: true from before its runtime was switched to bun -- the label must still
     // say "Show", not "Hide", since there is nothing to hide.
     const store = hydrated({ runtime: "bun", tiles: { webviewVisible: true } });
-    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
+    render(<StatusBar store={store} onToggleLayout={() => {}} onToggleWebView={() => {}} runKeys="⌘R" />);
     expect(screen.getByRole("button", { name: strings.shell.webView.show })).toBeTruthy();
     expect(screen.queryByRole("button", { name: strings.shell.webView.hide })).toBeNull();
   });
 
-  test("the status bar's Web View toggle flips webviewVisible for a runtime that supports it", () => {
+  /** The registry the palette, the menu and the keybindings all dispatch through, wired as `App.tsx` wires it. */
+  function viewRegistry(store: AppStore) {
+    const { api } = createFakeApi();
+    const registry = new CommandRegistry();
+    registry.register(...createViewCommands(store, api));
+    return registry;
+  }
+
+  test("the status bar's Web View toggle flips webviewVisible through the command the palette also runs", () => {
     const store = hydrated({ runtime: "browser" });
-    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
+    const registry = viewRegistry(store);
+    render(
+      <StatusBar
+        store={store}
+        onToggleLayout={() => {}}
+        onToggleWebView={() => registry.execute("view.toggleWebView")}
+        runKeys="⌘R"
+      />,
+    );
     const toggle = screen.getByRole("button", { name: strings.shell.webView.show });
     expect(toggle.hasAttribute("disabled")).toBe(false);
     fireEvent.click(toggle);
     expect(store.getState().tab?.layout.tiles.webviewVisible).toBe(true);
     expect(screen.getByRole("button", { name: strings.shell.webView.hide })).toBeTruthy();
+  });
+
+  // One path, not two: the button must dispatch, never reach into the store itself, or the palette and the
+  // button could drift apart (and only one of them would honour the command's enablement rule).
+  test("the status bar's Web View button dispatches rather than touching the store itself", () => {
+    const store = hydrated({ runtime: "browser" });
+    const onToggleWebView = mock(() => {});
+    render(<StatusBar store={store} onToggleLayout={() => {}} onToggleWebView={onToggleWebView} runKeys="⌘R" />);
+    fireEvent.click(screen.getByRole("button", { name: strings.shell.webView.show }));
+    expect(onToggleWebView).toHaveBeenCalledTimes(1);
+    expect(store.getState().tab?.layout.tiles.webviewVisible).toBe(false);
+  });
+
+  test("the Web View command is disabled for a Bun tab, exactly as the button is", () => {
+    const store = hydrated({ runtime: "bun" });
+    expect(viewRegistry(store).execute("view.toggleWebView")).toBe("disabled");
+    expect(store.getState().tab?.layout.tiles.webviewVisible).toBe(false);
   });
 
   test("a tiles change survives the trip from the UI's tab.patch through Main's tabPatchSchema (R-M4-T8-PATCH-1)", () => {

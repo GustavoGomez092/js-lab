@@ -52,6 +52,26 @@ describe("application menu", () => {
     );
   });
 
+  test("the View menu offers the Web View tile toggle, checked and enabled from the active tab (WV-01, TF-19)", () => {
+    const withTile = (runtime: "browser" | "bun", webviewVisible: boolean) => {
+      const tab = createTab({ id: "t1", runtime });
+      return {
+        ...tab,
+        layout: { ...tab.layout, tiles: { ...tab.layout.tiles, webviewVisible } },
+      };
+    };
+    expect(byLabel(buildMenu(model({ activeTab: withTile("browser", true) })), "Web View")).toMatchObject({
+      action: menuAction("view.toggleWebView"),
+      checked: true,
+      enabled: true,
+    });
+    // A bun tab can never host a webview, so the item is there but disabled -- exactly like the status-bar button.
+    expect(byLabel(buildMenu(model({ activeTab: withTile("bun", true) })), "Web View")).toMatchObject({
+      checked: false,
+      enabled: false,
+    });
+  });
+
   test("keeps native roles, never the delete role, and accelerators only for Quit and Hide", () => {
     const items = flatten(buildMenu(model()));
     for (const role of [

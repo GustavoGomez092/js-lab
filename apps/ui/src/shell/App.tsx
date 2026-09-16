@@ -555,6 +555,7 @@ export function App({
         <StatusBar
           store={store}
           onToggleLayout={() => registry.execute("view.toggleLayout")}
+          onToggleWebView={() => registry.execute("view.toggleWebView")}
           runKeys={keycaps.run}
           onPickWorkingDirectory={() => registry.execute("wd.set")}
           onClearWorkingDirectory={() => registry.execute("wd.clear")}

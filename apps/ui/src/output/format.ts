@@ -58,6 +58,15 @@ export function summarize(value: EncodedValue): string {
       return `Headers(${value.entries.length})`;
     case "response":
       return `Response { status: ${value.status} }`;
+    case "dom": {
+      // `tagName` is uppercase for HTML elements and already correctly cased for SVG/XML ones (`linearGradient`),
+      // so only an all-uppercase tag is lowered -- it then reads the way the node's own markup does (spec §5.9).
+      const tag = /^[A-Z][A-Z0-9-]*$/.test(value.tag) ? value.tag.toLowerCase() : value.tag;
+      const attrs = value.attrs.map(([name, v]) => ` ${name}=${JSON.stringify(v)}`).join("");
+      const count =
+        value.childCount === 1 ? " (1 child)" : value.childCount > 0 ? ` (${value.childCount} children)` : "";
+      return `<${tag}${attrs}>${count}`;
+    }
     case "getter":
       return "(...)";
     case "handle":
@@ -128,6 +137,19 @@ export function childrenOf(value: EncodedValue): Child[] | null {
         { label: "status", value: { t: "number", v: String(value.status) } },
         { label: "statusText", value: text(value.statusText) },
         { label: "url", value: text(value.url) },
+      ];
+    case "dom":
+      // The preview carries its own truncation, so it expands through the existing string branch in `ValueView`
+      // rather than a second, dom-specific "… more characters" path.
+      return [
+        ...value.attrs.map(([name, v]) => ({ label: name, value: text(v) })),
+        { label: "childCount", value: { t: "number", v: String(value.childCount) } },
+        {
+          label: "outerHTML",
+          value: value.truncated
+            ? { t: "string", v: value.outerHTML, truncated: value.truncated }
+            : text(value.outerHTML),
+        },
       ];
     default:
       return null;

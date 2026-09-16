@@ -108,6 +108,11 @@ export function buildMenu(model: MenuModel): MenuItem[] {
   const language = (command: CommandId, value: Language, text: string): MenuItem =>
     item(command, { text, checked: activeTab?.language === value });
   const { view, appearance } = settings;
+  // spec §7.1: a `bun` tab can never host a webview, so the item shows but stays disabled, like the status-bar button.
+  const webView = {
+    supported: activeTab !== null && activeTab.runtime !== "bun",
+    on: activeTab?.layout.tiles.webviewVisible ?? false,
+  };
 
   return [
     {
@@ -206,6 +211,11 @@ export function buildMenu(model: MenuModel): MenuItem[] {
         item("view.zoomOut"),
         separator,
         item("view.toggleOutput", { text: "Output", checked: activeTab?.layout.outputVisible ?? true }),
+        item("view.toggleWebView", {
+          text: "Web View",
+          checked: webView.supported && webView.on,
+          enabled: webView.supported,
+        }),
         item("view.toggleSideBar", { text: "Side Bar", checked: view.sideBar }),
         item("view.toggleActivityBar", { text: "Activity Bar", checked: view.activityBar }),
         item("view.toggleStatusBar", { text: "Status Bar", checked: view.statusBar }),

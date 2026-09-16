@@ -135,7 +135,7 @@ describe("layout", () => {
       store.getState().setCursor({ line: 4, column: 7 });
       store.getState().setVimMode("insert");
     });
-    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
+    render(<StatusBar store={store} onToggleLayout={() => {}} onToggleWebView={() => {}} runKeys="⌘R" />);
     expect(screen.getByTestId("run-status").textContent).toBe("Safe Mode: press ⌘R to run");
     expect(screen.getByText("Safe Mode")).toBeTruthy();
     const runtime = screen.getByLabelText("Runtime") as HTMLSelectElement;
@@ -196,6 +196,7 @@ describe("layout", () => {
       <StatusBar
         store={store}
         onToggleLayout={() => {}}
+        onToggleWebView={() => {}}
         runKeys="⌘R"
         onPickWorkingDirectory={onPick}
         onClearWorkingDirectory={onClear}
@@ -213,6 +214,7 @@ describe("layout", () => {
       <StatusBar
         store={store2}
         onToggleLayout={() => {}}
+        onToggleWebView={() => {}}
         runKeys="⌘R"
         onPickWorkingDirectory={onPick}
         onClearWorkingDirectory={onClear}
@@ -248,7 +250,7 @@ describe("layout", () => {
         t: 0,
       },
     ]);
-    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
+    render(<StatusBar store={store} onToggleLayout={() => {}} onToggleWebView={() => {}} runKeys="⌘R" />);
     expect(screen.getByRole("button", { name: strings.shell.workingDirectory.missing("/work/api") })).toBeTruthy();
   });
 
@@ -274,7 +276,7 @@ describe("layout", () => {
         t: 0,
       },
     ]);
-    render(<StatusBar store={store} onToggleLayout={() => {}} runKeys="⌘R" />);
+    render(<StatusBar store={store} onToggleLayout={() => {}} onToggleWebView={() => {}} runKeys="⌘R" />);
     expect(screen.getByRole("button", { name: strings.shell.workingDirectory.missing("/work/api") })).toBeTruthy();
 
     // The same store action the wd.changed handler uses (App.tsx: applyTabUpdate(tab)).

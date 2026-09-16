@@ -18,6 +18,15 @@ export interface BundleOptions {
   workingDirectory: string | null;
   /** `apps/desktop/src/main/app-paths.ts:46`'s `packagesNodeModules`. */
   packagesNodeModules: string;
+  /**
+   * The app's data directory -- what a `browser-node` tab resolves a relative path against when it has **no**
+   * working directory (Task 9f item 5), matching `../runs/runner-config.ts`'s `workingDirectory ?? dataDir`.
+   *
+   * Required rather than optional deliberately: the value it replaces was Main's own `process.cwd()`, which is a
+   * plausible-looking wrong answer. A missing `dataDir` must be a call site someone has to think about, not a
+   * silent fall back to the exact bug this closed.
+   */
+  dataDir: string;
 }
 
 /** What the vendor half of a run needs: the packages the app chunk named, and where to resolve them from. */
@@ -152,7 +161,11 @@ export async function bundleAppForWeb(options: BundleOptions): Promise<AppBundle
           (error) => {
             capturedError ??= error;
           },
-          { workingDirectory: options.workingDirectory, packagesNodeModules: options.packagesNodeModules },
+          {
+            workingDirectory: options.workingDirectory,
+            packagesNodeModules: options.packagesNodeModules,
+            dataDir: options.dataDir,
+          },
         ),
         cssInject(),
       ],
@@ -292,7 +305,11 @@ export async function bundleVendorForWeb(options: VendorBundleOptions): Promise<
           (error) => {
             capturedError ??= error;
           },
-          { workingDirectory: options.workingDirectory, packagesNodeModules: options.packagesNodeModules },
+          {
+            workingDirectory: options.workingDirectory,
+            packagesNodeModules: options.packagesNodeModules,
+            dataDir: options.dataDir,
+          },
         ),
         cssInject(),
       ],

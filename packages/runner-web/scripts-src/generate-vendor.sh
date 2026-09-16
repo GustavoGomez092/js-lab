@@ -22,6 +22,30 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUT_DIR="$SCRIPT_DIR/../src/polyfills/vendor"
 cd "$REPO_ROOT"
 
+# NOTE (M4 Task 9f, item 2): shared built-in constructor identity is BROKEN across these files, and `--external`
+# is NOT the fix. Recorded here with the measurements so the next person does not spend the afternoon rediscovering
+# it.
+#
+# The defect is real: every file below flattens its own private copy of the built-ins it depends on, so
+# `stream-browserify.js` embeds one `EventEmitter` while `events.js` is built separately with another. Measured:
+# `new Readable() instanceof EventEmitter` is `false`, and a chunk a stream emits is not `instanceof` the `Buffer`
+# that `buffer` exports. Every unit test passes regardless; only real library code branching on `instanceof` sees it.
+#
+# Two mechanisms were tried against Bun 1.3.13 and both fail:
+#   1. `bun build --external=events` (and `--external events`, and `--external=node:events`): silently ignored for
+#      Node built-in NAMES under `--target=browser`. Bun substitutes its own internal browser shim before the
+#      external list is consulted. Output is byte-for-byte identical with and without the flag (88,278 bytes both
+#      ways). The flag itself works fine for an ordinary bare package -- `--external=stream-browserify` on the same
+#      entry yields 256 bytes with `from"stream-browserify"` retained -- so this is specific to built-in names.
+#   2. A `Bun.build` plugin whose `onResolve` returns `{ external: true }`: works for a direct **ESM** bare import
+#      (a probe importing `events`/`buffer` came out at 97 bytes with both imports retained), but these packages
+#      reach their dependencies through CommonJS `require()`, and for those Bun emits **no import at all** and drops
+#      the dependency -- 39,245 bytes, zero import statements, `require('events')` resolving to nothing. That output
+#      is broken at runtime, i.e. strictly worse than the duplication it was meant to fix.
+#
+# A real fix means building the shared built-ins into ONE module graph (a single synthetic entry re-exporting all of
+# them, so exactly one `EventEmitter`/`Buffer` exists) and having the module table serve each name out of that one
+# chunk. That is a redesign of this vendor layer, not a flag, and it is deliberately left for a task of its own.
 build() {
   local entry="$1"
   local outfile="$2"

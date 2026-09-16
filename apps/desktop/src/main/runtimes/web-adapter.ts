@@ -226,6 +226,17 @@ export interface WebAdapterDeps {
    * almost none of it exercises the Node bridge at all. `main-services.ts` always passes it in production.
    */
   dataDir?: string;
+  /**
+   * Task 9f item 6: the layered environment a bridged `child_process` command gets when the page supplies none.
+   *
+   * `main-services.ts` builds this through `../runs/runner-config.ts`'s `runnerContextFor` -- the same function the
+   * Bun runner's own `configFor` uses -- so env.json, the working directory's `.env` and the `JSLAB_*`/`BUN_OPTIONS`
+   * stripping all apply identically under both runtimes. Without it the bridge fell back to Main's raw
+   * `process.env`, so a user's `.env` silently never applied to a `browser-node` tab.
+   *
+   * Optional like `dataDir` above, for the same reason: this file's existing fixture set predates it.
+   */
+  nodeEnvironment?(workingDirectory: string | null): Record<string, string>;
   /** Test seam; production always uses the runtime's own `fetch`. */
   webFetch?(url: string, init?: RequestInit): Promise<Response>;
 }
@@ -539,6 +550,8 @@ class WebRunSession implements RunHandle {
         // The parity expression, mirroring `../runs/runner-config.ts`'s own `workingDirectory ?? dataDir`. Kept
         // here, in the one place that knows both, so the two runtimes cannot drift apart silently.
         baseDirectory: this.run.workingDirectory ?? this.deps.dataDir ?? this.deps.runsDir,
+        // Task 9f item 6: the same layering a `bun` tab's command gets, rather than Main's raw `process.env`.
+        ...(this.deps.nodeEnvironment ? { baseEnvironment: this.deps.nodeEnvironment(this.run.workingDirectory) } : {}),
       });
     }
     return this.#nodeRunner;
@@ -731,6 +744,7 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
           runtime: deps.runtime,
           workingDirectory: run.workingDirectory,
           packagesNodeModules: deps.packagesNodeModules,
+          dataDir: deps.dataDir ?? deps.runsDir,
         });
         if (run.isCancelled() || crashed) return deadHandle(run.runId);
         if ("error" in app) {
@@ -742,7 +756,7 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
         // The vendor chunk: the only half a cache hit may stand in for, and only on an exact key match.
         let vendorCode: string | null = null;
         if (app.imports.length > 0) {
-          const key = app.vendorCacheable ? await vendorKeyFor(deps, app.imports) : null;
+          const key = app.vendorCacheable ? await vendorKeyFor(deps, app.imports, run.workingDirectory) : null;
           const cached = key ? await deps.vendorCache.get(key).catch(() => null) : null;
           if (run.isCancelled() || crashed) return deadHandle(run.runId);
           if (cached && vendorChunkFitsTab(cached, run.workingDirectory, deps.packagesNodeModules)) {
@@ -753,6 +767,7 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
               runtime: deps.runtime,
               workingDirectory: run.workingDirectory,
               packagesNodeModules: deps.packagesNodeModules,
+              dataDir: deps.dataDir ?? deps.runsDir,
             });
             if (run.isCancelled() || crashed) return deadHandle(run.runId);
             if ("error" in vendor) {
@@ -813,10 +828,14 @@ async function readBunLockFile(path: string): Promise<string> {
  * cache at all for this run" -- there is no `bun.lock` yet (no packages installed for this profile), so there is
  * nothing to pin versions with.
  */
-async function vendorKeyFor(deps: WebAdapterDeps, imports: readonly string[]): Promise<string | null> {
+async function vendorKeyFor(
+  deps: WebAdapterDeps,
+  imports: readonly string[],
+  workingDirectory: string | null,
+): Promise<string | null> {
   try {
     const lockText = await (deps.readBunLock ?? readBunLockFile)(deps.bunLockPath);
-    return vendorCacheKey(hashBunLock(lockText), imports, deps.runtime);
+    return vendorCacheKey(hashBunLock(lockText), imports, deps.runtime, workingDirectory);
   } catch {
     return null;
   }
@@ -839,6 +858,14 @@ async function vendorKeyFor(deps: WebAdapterDeps, imports: readonly string[]): P
  * directory at all, rather than assumed innocent.
  *
  * A tab with no working directory needs no check: there is no second `node_modules` for anything to resolve out of.
+ *
+ * Task 9f (item 4): that last sentence is only sound because the **key** now carries the working directory too. It
+ * did not before -- and a `browser-node` vendor chunk can embed a `process` snapshot built from the tab's working
+ * directory (its `cwd`, and the `NODE_PATH` `runnerEnvironment` derives from it) without that ever showing up in
+ * the resolved closure, because `process` is a virtual module rather than a resolved package. So a chunk carrying
+ * one tab's snapshot hashed to the same key as any other tab's and was served straight to it, and this guard waved
+ * it through on exactly the branch below. Keying on the working directory is what closes that; this stays as the
+ * shadowing check it was written to be.
  */
 function vendorChunkFitsTab(
   cached: CachedVendorChunk,

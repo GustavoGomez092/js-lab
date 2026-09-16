@@ -86,6 +86,47 @@ const textOf = (events: SentEvent[], type: "stdout" | "stderr") =>
     .map((event) => decode(event.payload.data).toString("utf8"))
     .join("");
 
+/**
+ * Task 9f item 6: a bridged command's **default** environment.
+ *
+ * The Bun runner composes its environment through `runnerEnvironment` (`../../src/main/app-paths.ts`): the login
+ * shell, then env.json, then the working directory's `.env`, with every `JSLAB_*` key and `BUN_OPTIONS` stripped
+ * and `JSLAB=1`/`NODE_PATH` set. This runner defaulted to Main's own raw `process.env` instead, so the same
+ * `child_process` call saw a different environment under `browser-node` than under `bun` -- a user's `.env` simply
+ * never applied, and Main's own `JSLAB_*` variables leaked into the child. A caller-supplied `env` was always
+ * honoured exactly, so this is the default path only.
+ */
+describe("a bridged command's default environment (Task 9f item 6)", () => {
+  test("a command with no env of its own inherits the runner's layered environment, not Main's raw one", async () => {
+    const { runner, events } = setup({
+      baseEnvironment: {
+        PATH: process.env.PATH ?? "",
+        JSLAB: "1",
+        JSLAB_TEST_MARKER: "from-the-layered-env",
+      },
+    });
+
+    runner.call(1, cpCall(1, "exec", ["printenv JSLAB_TEST_MARKER", {}]));
+    await waitUntil(() => events.some((event) => event.type === "exit"), "the command to finish");
+
+    expect(textOf(events, "stdout").trim()).toBe("from-the-layered-env");
+  });
+
+  test("a caller-supplied env still replaces it outright, exactly as Node does", async () => {
+    const { runner, events } = setup({
+      baseEnvironment: { PATH: process.env.PATH ?? "", JSLAB_TEST_MARKER: "from-the-layered-env" },
+    });
+
+    runner.call(
+      1,
+      cpCall(1, "exec", ["printenv JSLAB_TEST_MARKER || true", { env: { PATH: process.env.PATH ?? "" } }]),
+    );
+    await waitUntil(() => events.some((event) => event.type === "exit"), "the command to finish");
+
+    expect(textOf(events, "stdout").trim()).toBe("");
+  });
+});
+
 describe("fs over the bridge", () => {
   test("readFile returns the file's bytes", async () => {
     await writeFile(join(workingDirectory, "notes.txt"), "hello from the project");

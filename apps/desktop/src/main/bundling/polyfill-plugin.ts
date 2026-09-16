@@ -79,6 +79,11 @@ export interface BrowserNodeContext {
   workingDirectory: string | null;
   /** `apps/desktop/src/main/app-paths.ts:46`'s `packagesNodeModules` -- what `runnerEnvironment` needs for `NODE_PATH`. */
   packagesNodeModules: string;
+  /**
+   * The app's data directory: what a tab with **no** working directory takes as its cwd, exactly as
+   * `../runs/runner-config.ts`'s `runnerContextFor` does for a `bun` tab (Task 9f item 5).
+   */
+  dataDir: string;
 }
 
 const VENDOR_TABLE: Record<string, string> = {
@@ -132,9 +137,22 @@ function browserNodeEnv(ctx: BrowserNodeContext): Record<string, string> {
  * without binding.
  */
 function processModuleSource(ctx: BrowserNodeContext): string {
+  /*
+   * Task 9f (item 5): `workingDirectory ?? dataDir`, **not** `?? process.cwd()`.
+   *
+   * `process.cwd()` here is Main's own process cwd -- wherever the app binary happened to be launched from, which
+   * is nothing to do with the tab. Task 11 made `fs` and `child_process` resolve relative paths against
+   * `workingDirectory ?? dataDir`, matching the Bun runner (`../runs/runner-config.ts`), so a tab with no working
+   * directory ended up with three different answers to "what is the cwd?": `process.cwd()` said one place,
+   * `fs.readFile("notes.txt")` read from another, and `bun` would have used a third. All three now agree.
+   *
+   * `PWD` is set alongside it for the same reason `runnerContextFor` sets it: a runner's `PWD` always matches its
+   * real cwd, so a command or a library reading `process.env.PWD` sees the same directory `process.cwd()` reports.
+   */
+  const cwd = ctx.workingDirectory ?? ctx.dataDir;
   const snapshot = {
-    env: browserNodeEnv(ctx),
-    cwd: ctx.workingDirectory ?? process.cwd(),
+    env: { ...browserNodeEnv(ctx), PWD: cwd },
+    cwd,
     platform: process.platform,
     // No real argv exists for a page: this mirrors the shape of a Bun runner's own argv (execPath, entry) closely
     // enough for code that merely checks `process.argv.length` or logs it, without pretending to a real script path.
@@ -327,6 +345,30 @@ function unsupportedModuleSource(moduleName: string): string {
   ].join("\n");
 }
 
+/**
+ * Task 9f (item 3): binds `process` inside a vendored source that references it.
+ *
+ * The vendor text used to be served **raw**. `assert.js` references `process.env` and `path-browserify.js`
+ * references `process.cwd` -- free references, resolved against whatever `process` the surrounding realm happens to
+ * have. A real page has none, so they are unbound; Bun's test realm does have one, which is why this never threw
+ * and instead silently read the *host process's* cwd, making `path.resolve('x')` disagree with the tab's own
+ * `process.cwd()`. Prepending the import binds them to the same snapshot-backed module the tab's own
+ * `import process from "process"` resolves to, so there is one `process` per bundle rather than two.
+ *
+ * An import rather than a page global, deliberately: this codebase avoids adding new page globals, and `process`
+ * *is* already resolvable in this namespace, so the module table can simply serve it.
+ *
+ * Applied only to files that actually mention `process`, so a bundle that merely imports `path` does not drag in
+ * the snapshot (and the per-tab environment it carries) for nothing. Safe to prepend blindly otherwise: an ESM
+ * import is hoisted, so a leading line cannot disturb the minified body, and no vendor file declares a top-level
+ * binding named `process` for it to shadow (measured across all twelve).
+ */
+const VENDOR_PROCESS_IMPORT = 'import process from "process";\n';
+
+function bindVendorProcess(vendor: string): string {
+  return vendor.includes("process.") ? VENDOR_PROCESS_IMPORT + vendor : vendor;
+}
+
 /** The bridged module specifiers, and the throw-only ones, as sets the resolve hook below can test membership on. */
 const BRIDGE_MODULES = new Set(["fs", "fs/promises", "child_process"]);
 const UNSUPPORTED_MODULE_SET = new Set<string>(UNSUPPORTED_MODULES);
@@ -397,7 +439,11 @@ export function nodePolyfills(
       }
 
       if (runtime !== "browser-node") return;
-      const ctx: BrowserNodeContext = browserNode ?? { workingDirectory: null, packagesNodeModules: "" };
+      const ctx: BrowserNodeContext = browserNode ?? {
+        workingDirectory: null,
+        packagesNodeModules: "",
+        dataDir: "",
+      };
 
       // The ten sync builtins, `process`, `os` and `crypto` -- the top-level bare specifiers a tab (or a vendored
       // npm package) can import directly, `node:`-prefixed or not. `isNodeBuiltin` already gated everything
@@ -446,7 +492,7 @@ export function nodePolyfills(
 
       build.onLoad({ filter: /.*/, namespace: NAMESPACE }, (args) => {
         const vendor = VENDOR_TABLE[args.path] ?? INTERNAL_VENDOR_TABLE[args.path];
-        if (vendor !== undefined) return { contents: vendor, loader: "js" };
+        if (vendor !== undefined) return { contents: bindVendorProcess(vendor), loader: "js" };
         if (args.path === "process") return { contents: processModuleSource(ctx), loader: "ts" };
         if (args.path === "os") return { contents: osModuleSource(), loader: "ts" };
         if (args.path === "crypto") return { contents: cryptoSrc, loader: "ts" };

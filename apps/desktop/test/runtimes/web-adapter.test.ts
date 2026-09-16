@@ -230,7 +230,7 @@ describe("WebAdapter", () => {
       expect(await readFile(join(h.dir, "t1", "entry-run-1.mjs"), "utf8")).toBe("1 + 1");
       expect(h.locks.has("run-1")).toBe(true);
 
-      const expectedKey = vendorCacheKey(hashBunLock(LOCK_TEXT), ["react"]);
+      const expectedKey = vendorCacheKey(hashBunLock(LOCK_TEXT), ["react"], "browser");
       // The cache stores the VENDOR chunk -- never the app chunk, which is what would make a later run stale.
       expect(h.vendorSets).toEqual([{ key: expectedKey, chunk: { code: "VENDOR", map: "VMAP" } }]);
     } finally {

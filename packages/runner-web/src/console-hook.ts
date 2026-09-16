@@ -17,7 +17,15 @@ export function callSite(stack: string | undefined, entryBase: string | null): G
   return frame?.line ? { line: frame.line, column: frame.column ?? 1 } : undefined;
 }
 
-export function installConsole(sink: ConsoleSink, target: Console = console): void {
+/**
+ * Wraps `target`'s console methods and returns a function that clears the per-run state this keeps: the group
+ * depth, the `console.count` tallies and the `console.time` timers.
+ *
+ * Unlike the Bun runner (where every run gets a fresh process), a webview host is deliberately never unmounted between
+ * runs, so this closure really does live for the page's whole lifetime. Without the reset, an unmatched
+ * `console.group()` left every later run indented, and `count`/`time` labels carried across runs.
+ */
+export function installConsole(sink: ConsoleSink, target: Console = console): () => void {
   let depth = 0;
   const counts = new Map<string, number>();
   const timers = new Map<string, number>();
@@ -88,4 +96,10 @@ export function installConsole(sink: ConsoleSink, target: Console = console): vo
       sink.push({ kind: "console", level: "clear", groupDepth: 0, args: [] });
     },
   });
+
+  return () => {
+    depth = 0;
+    counts.clear();
+    timers.clear();
+  };
 }

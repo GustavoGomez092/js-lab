@@ -63,20 +63,31 @@ function invariantViolations(state: Awaited<ReturnType<typeof readIndexAndFilesD
 }
 
 describe("vendorCacheKey", () => {
+  // Task 9d: the key was the lock hash plus the sorted import set and nothing else. But `bundleVendorForWeb` also
+  // receives the runtime and feeds it to `nodePolyfills`, where `browser` rejects the Node builtins that
+  // `browser-node` resolves through polyfills -- so the two runtimes can produce materially different chunks from
+  // identical inputs. Sharing one key meant a `browser-node` chunk could be served to a `browser` tab on a hit.
+  test("changes with the runtime, so a browser-node chunk can never be served to a browser tab", () => {
+    const lockHash = hashBunLock('{"lockfileVersion":2}');
+    const browser = vendorCacheKey(lockHash, ["react"], "browser");
+    const browserNode = vendorCacheKey(lockHash, ["react"], "browser-node");
+    expect(browserNode).not.toBe(browser);
+  });
+
   test("is stable regardless of import order", () => {
     const lockHash = hashBunLock('{"lockfileVersion":2}');
-    const a = vendorCacheKey(lockHash, ["react-dom", "react"]);
-    const b = vendorCacheKey(lockHash, ["react", "react-dom"]);
+    const a = vendorCacheKey(lockHash, ["react-dom", "react"], "browser");
+    const b = vendorCacheKey(lockHash, ["react", "react-dom"], "browser");
     expect(a).toBe(b);
   });
 
   test("changes when the lock hash or the import set changes, holding the other fixed", () => {
     const lockHashA = hashBunLock('{"lockfileVersion":2,"a":1}');
     const lockHashB = hashBunLock('{"lockfileVersion":2,"a":2}');
-    const baseline = vendorCacheKey(lockHashA, ["react"]);
+    const baseline = vendorCacheKey(lockHashA, ["react"], "browser");
 
-    expect(vendorCacheKey(lockHashB, ["react"])).not.toBe(baseline);
-    expect(vendorCacheKey(lockHashA, ["react", "react-dom"])).not.toBe(baseline);
+    expect(vendorCacheKey(lockHashB, ["react"], "browser")).not.toBe(baseline);
+    expect(vendorCacheKey(lockHashA, ["react", "react-dom"], "browser")).not.toBe(baseline);
   });
 
   /**
@@ -95,7 +106,7 @@ describe("vendorCacheKey", () => {
     const cache = new VendorCache({ cacheDir });
     await cache.set(preSplitKey, { code: "WHOLE PREVIOUS RUN BUNDLE", map: "" });
 
-    const currentKey = vendorCacheKey(lockHash, ["react"]);
+    const currentKey = vendorCacheKey(lockHash, ["react"], "browser");
     expect(currentKey).not.toBe(preSplitKey);
     expect(await cache.get(currentKey)).toBeNull();
     // The old entry stays where it was, under its own key and its own index entry, so the existing age and
@@ -113,8 +124,8 @@ describe("VendorCache", () => {
    */
   test("the resolved closure recorded with an entry round-trips, and an entry written without one reads back as unknown", async () => {
     const cache = new VendorCache({ cacheDir });
-    const recorded = vendorCacheKey(hashBunLock("{}"), ["react"]);
-    const unrecorded = vendorCacheKey(hashBunLock("{}"), ["lodash"]);
+    const recorded = vendorCacheKey(hashBunLock("{}"), ["react"], "browser");
+    const unrecorded = vendorCacheKey(hashBunLock("{}"), ["lodash"], "browser");
 
     await cache.set(recorded, { code: "c", map: "m" }, ["react", "scheduler"]);
     await cache.set(unrecorded, { code: "c2", map: "m2" });
@@ -125,7 +136,7 @@ describe("VendorCache", () => {
 
   test("set then get round-trips the code and source map for a key", async () => {
     const cache = new VendorCache({ cacheDir });
-    const key = vendorCacheKey(hashBunLock("{}"), ["react"]);
+    const key = vendorCacheKey(hashBunLock("{}"), ["react"], "browser");
 
     expect(await cache.get(key)).toBeNull();
     await cache.set(key, { code: "console.log('react vendor chunk')", map: '{"version":3}' });
@@ -139,7 +150,7 @@ describe("VendorCache", () => {
   test("get treats an entry older than VENDOR_CACHE_MAX_AGE_MS as a miss and removes it from disk", async () => {
     let now = 1_000_000;
     const cache = new VendorCache({ cacheDir, now: () => now });
-    const key = vendorCacheKey(hashBunLock("{}"), ["react"]);
+    const key = vendorCacheKey(hashBunLock("{}"), ["react"], "browser");
     await cache.set(key, { code: "code", map: "map" });
     // still fresh, before advancing the clock
     expect(await cache.get(key)).toEqual({ code: "code", map: "map", closure: null });
@@ -155,8 +166,8 @@ describe("VendorCache", () => {
   test("set evicts the oldest entries once the total size passes VENDOR_CACHE_MAX_TOTAL_BYTES", async () => {
     let now = 0;
     const cache = new VendorCache({ cacheDir, now: () => now, maxTotalBytes: 20 });
-    const oldKey = vendorCacheKey(hashBunLock("{}"), ["old-pkg"]);
-    const newKey = vendorCacheKey(hashBunLock("{}"), ["new-pkg"]);
+    const oldKey = vendorCacheKey(hashBunLock("{}"), ["old-pkg"], "browser");
+    const newKey = vendorCacheKey(hashBunLock("{}"), ["new-pkg"], "browser");
 
     await cache.set(oldKey, { code: "0123456789", map: "" }); // 10 bytes, under the 20-byte cap alone
     now += 1;
@@ -168,8 +179,8 @@ describe("VendorCache", () => {
 
   test("invalidateAll clears every cached entry, joining the npm-change invalidation path", async () => {
     const cache = new VendorCache({ cacheDir });
-    const keyA = vendorCacheKey(hashBunLock("{}"), ["react"]);
-    const keyB = vendorCacheKey(hashBunLock("{}"), ["lodash"]);
+    const keyA = vendorCacheKey(hashBunLock("{}"), ["react"], "browser");
+    const keyB = vendorCacheKey(hashBunLock("{}"), ["lodash"], "browser");
     await cache.set(keyA, { code: "a", map: "a-map" });
     await cache.set(keyB, { code: "b", map: "b-map" });
     expect(await cache.get(keyA)).toEqual({ code: "a", map: "a-map", closure: null }); // both present before invalidation
@@ -211,7 +222,7 @@ describe("VendorCache concurrency (fix round 1)", () => {
    */
   test("concurrent set() calls for the same key never let get() observe a torn chunk or a mismatched code/map pair", async () => {
     const cache = new VendorCache({ cacheDir });
-    const key = vendorCacheKey(hashBunLock("{}"), ["react", "react-dom"]);
+    const key = vendorCacheKey(hashBunLock("{}"), ["react", "react-dom"], "browser");
     const payloads = {
       A: { code: "A".repeat(200_000), map: "a".repeat(20_000) },
       B: { code: "B".repeat(200_000), map: "b".repeat(20_000) },
@@ -270,7 +281,9 @@ describe("VendorCache concurrency (fix round 1)", () => {
   test("concurrent set() calls for distinct keys never lose an index entry", async () => {
     const cache = new VendorCache({ cacheDir });
     const KEY_COUNT = 40;
-    const keys = Array.from({ length: KEY_COUNT }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`]));
+    const keys = Array.from({ length: KEY_COUNT }, (_, i) =>
+      vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`], "browser"),
+    );
 
     await Promise.all(keys.map((key, i) => cache.set(key, { code: `code-${i}`, map: `map-${i}` })));
 
@@ -318,13 +331,13 @@ describe("VendorCache concurrency (fix round 2)", () => {
       try {
         let clock = 0;
         const cache = new VendorCache({ cacheDir: dir, maxTotalBytes: MAX_TOTAL_BYTES, now: () => clock });
-        const hotKey = vendorCacheKey(hashBunLock("{}"), ["hot"]);
+        const hotKey = vendorCacheKey(hashBunLock("{}"), ["hot"], "browser");
 
         await cache.set(hotKey, { code: "gen0-code", map: "gen0-map" }); // stale generation, established first
         clock = 1_000_000; // already looks old the instant the race below starts
 
         const otherKeys = Array.from({ length: OTHER_KEYS }, (_, i) =>
-          vendorCacheKey(hashBunLock("{}"), [`other-${i}`]),
+          vendorCacheKey(hashBunLock("{}"), [`other-${i}`], "browser"),
         );
         await Promise.all([
           cache.set(hotKey, { code: "gen1-code", map: "gen1-map" }), // hotKey's only write during the race
@@ -352,7 +365,7 @@ describe("VendorCache concurrency (fix round 2)", () => {
    */
   test("invalidateAll() concurrent with in-flight set()/get() calls completes without rejections and leaves the cache empty", async () => {
     const cache = new VendorCache({ cacheDir });
-    const keys = Array.from({ length: 5 }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`]));
+    const keys = Array.from({ length: 5 }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`], "browser"));
 
     const inFlight: Promise<unknown>[] = keys.map((key, i) => cache.set(key, { code: `code-${i}`, map: `map-${i}` }));
     inFlight.push(...keys.map((key) => cache.get(key)));
@@ -400,11 +413,11 @@ describe("VendorCache correctness (fix round 3)", () => {
       try {
         const cache = new VendorCache({ cacheDir: dir });
         for (let i = 0; i < PRE_EXISTING; i++) {
-          await cache.set(vendorCacheKey(hashBunLock("{}"), [`pre-${i}`]), { code: `c${i}`, map: `m${i}` });
+          await cache.set(vendorCacheKey(hashBunLock("{}"), [`pre-${i}`], "browser"), { code: `c${i}`, map: `m${i}` });
         }
 
         const newKeys = Array.from({ length: NEW_KEYS }, (_, i) =>
-          vendorCacheKey(hashBunLock("{}"), [`new-${trial}-${i}`]),
+          vendorCacheKey(hashBunLock("{}"), [`new-${trial}-${i}`], "browser"),
         );
         const setPromises = newKeys.map(
           (key, i) =>
@@ -442,7 +455,7 @@ describe("VendorCache correctness (fix round 3)", () => {
   test("#removeEntry attempts both deletions even when one fails, and surfaces the failure", async () => {
     let clock = 0;
     const cache = new VendorCache({ cacheDir, now: () => clock, maxAgeMs: 100 });
-    const key = vendorCacheKey(hashBunLock("{}"), ["pkg"]);
+    const key = vendorCacheKey(hashBunLock("{}"), ["pkg"], "browser");
     await cache.set(key, { code: "code", map: "map" });
     clock = 1000; // now stale
 
@@ -469,7 +482,7 @@ describe("VendorCache correctness (fix round 3)", () => {
    */
   test("a truncated index.json is rebuilt from the files on disk, not read as an empty cache", async () => {
     const seeding = new VendorCache({ cacheDir });
-    const keys = Array.from({ length: 3 }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`]));
+    const keys = Array.from({ length: 3 }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`], "browser"));
     for (const [i, key] of keys.entries()) {
       await seeding.set(key, { code: `code-${i}`, map: `map-${i}` });
     }
@@ -496,7 +509,7 @@ describe("VendorCache correctness (fix round 3)", () => {
   /** B1b: a genuinely absent index.json (no prior writes at all) is still treated as a legitimately empty cache. */
   test("a genuinely absent index.json still reads as an empty cache", async () => {
     const cache = new VendorCache({ cacheDir });
-    const key = vendorCacheKey(hashBunLock("{}"), ["pkg"]);
+    const key = vendorCacheKey(hashBunLock("{}"), ["pkg"], "browser");
     expect(await cache.get(key)).toBeNull();
     await cache.set(key, { code: "code", map: "map" });
     expect(await cache.get(key)).toEqual({ code: "code", map: "map", closure: null });
@@ -510,7 +523,7 @@ describe("VendorCache correctness (fix round 3)", () => {
    */
   test("get()'s repair branch reclaims the surviving sibling file, not just the index entry", async () => {
     const cache = new VendorCache({ cacheDir });
-    const keys = Array.from({ length: 3 }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`]));
+    const keys = Array.from({ length: 3 }, (_, i) => vendorCacheKey(hashBunLock("{}"), [`pkg-${i}`], "browser"));
     for (const [i, key] of keys.entries()) {
       await cache.set(key, { code: `code-${i}`, map: `map-${i}` });
     }
@@ -542,7 +555,7 @@ describe("VendorCache correctness (fix round 3)", () => {
       try {
         let clock = 0;
         const cache = new VendorCache({ cacheDir: dir, now: () => clock, maxAgeMs: 100 });
-        const key = vendorCacheKey(hashBunLock("{}"), ["pkg"]);
+        const key = vendorCacheKey(hashBunLock("{}"), ["pkg"], "browser");
         await cache.set(key, { code: "code", map: "map" });
         clock = 1000; // now stale
 

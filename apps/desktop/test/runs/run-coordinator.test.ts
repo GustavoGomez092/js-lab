@@ -545,6 +545,33 @@ describe("RunCoordinator", () => {
     ]);
   }, 15_000);
 
+  // Task 9d: `lastHeartbeatAt` was stamped at run creation and refreshed only by a `heartbeat` message, but
+  // transpiling and bundling happen in between. `#checkHeartbeats` skips a run only until its handle attaches --
+  // it defers the judgement without refreshing the stale stamp -- so the instant `attached:` fired, a creation-time
+  // stamp already older than `unresponsiveTimeoutMs` was judged and the user saw the unresponsive prompt for a run
+  // that had only just begun. This runner never sends a heartbeat, so Main stamping the attach itself is the only
+  // thing that can keep the run out of that state.
+  test("a run whose preparation outlasts the unresponsive timeout is not declared unresponsive the moment it starts", async () => {
+    const h = await createHarness(
+      { unresponsiveTimeoutMs: 300 },
+      {
+        bootstrapPath: join(import.meta.dir, "fixtures/silent-runner.ts"),
+        transform: async (source, options) => {
+          // Deliberately longer than the unresponsive timeout, so the creation-time stamp is already stale by the
+          // time a handle exists to judge it against.
+          await Bun.sleep(600);
+          return transform(source, options);
+        },
+      },
+    );
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1", language: "typescript", logpoints: [] });
+    await h.waitForState("evaluating", runId);
+    // Comfortably past the 50 ms watchdog interval (so a stale stamp would already have been judged) and well
+    // inside the fresh 300 ms window an attach-time stamp buys.
+    await Bun.sleep(100);
+    expect(h.states.filter((s) => s.runId === runId).map((s) => s.state)).toEqual(["transpiling", "evaluating"]);
+  }, 15_000);
+
   test("output logged right before process.exit(0) reaches the UI before the run settles, 20 runs plus near-256 KB final flushes (FA-I4, spec §5.11)", async () => {
     // The text of the last console event the UI had received when each run reported "idle".
     const lastAtIdle = new Map<string, string | null>();

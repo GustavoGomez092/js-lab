@@ -66,6 +66,9 @@ class FakeMediaElement {
   /** Fix round 1, M2: makes the next (only the next) `play()` call reject instead of resolve, the way a real
    * browser does when autoplay is blocked, the source is missing, or decoding fails. */
   rejectNextPlay = false;
+  /** Task 9d: makes the next (only the next) `play()` call throw synchronously rather than return a promise at
+   * all -- what a real element does for an InvalidStateError, and the one path `play.apply` left unguarded. */
+  throwNextPlay = false;
   #listeners = new Map<string, Set<() => void>>();
   addEventListener(type: string, cb: () => void): void {
     bucket(this.#listeners, type).add(cb);
@@ -77,6 +80,10 @@ class FakeMediaElement {
     for (const cb of [...(this.#listeners.get(type) ?? [])]) cb();
   }
   play(): Promise<void> {
+    if (this.throwNextPlay) {
+      this.throwNextPlay = false;
+      throw new Error("InvalidStateError");
+    }
     if (this.rejectNextPlay) {
       this.rejectNextPlay = false;
       return Promise.reject(new Error("NotAllowedError"));
@@ -350,6 +357,19 @@ test("a rejected play() releases the handle instead of leaving the indicator stu
   await Bun.sleep(0); // let the rejection settle and handles.ts's own .catch() run
   expect(tracker.count).toBe(0);
   expect(audio.active).toBe(false);
+});
+
+// Task 9d: fix round 1 (M2) closed the *rejected promise* path above, but `play.apply(this, args)` itself was
+// still unguarded -- so a synchronous throw left `tracker.add(this, ...)` registered and the run never reached
+// idle. Half of the finding was fixed and the other half never re-checked.
+test("a synchronously thrown play() releases the handle instead of leaking it", () => {
+  const { tracker, g, audio, audioEvents } = sandbox();
+  const el = new g.HTMLMediaElement();
+  el.throwNextPlay = true;
+  expect(() => el.play()).toThrow("InvalidStateError");
+  expect(tracker.count).toBe(0);
+  expect(audio.active).toBe(false);
+  expect(audioEvents).toEqual([]);
 });
 
 // Fix round 1, M3: a play attempt while already muted must not audibly play, but registering it as active and

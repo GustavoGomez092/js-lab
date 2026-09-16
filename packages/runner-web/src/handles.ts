@@ -259,7 +259,16 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
       };
       this.addEventListener("pause", release, { once: true });
       this.addEventListener("ended", release, { once: true });
-      const result = play.apply(this, args);
+      // Task 9d: `play()` can also fail *synchronously* (an InvalidStateError, say). The rejected-promise path
+      // below was already handled, but a synchronous throw skipped it entirely, leaving the handle registered and
+      // the audio indicator stuck on, so the run never reached idle.
+      let result: any;
+      try {
+        result = play.apply(this, args);
+      } catch (error) {
+        release();
+        throw error;
+      }
       // Task 15: mute is a persistent state, not a one-shot action -- media that starts playing while the tab is
       // already muted must not audibly play either. Fix round 1, M3: checking `audio.muted` *before* registering
       // with AudioController (rather than registering then immediately pausing) avoids emitting a spurious

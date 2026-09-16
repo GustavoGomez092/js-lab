@@ -20,19 +20,74 @@ export interface HostBridge {
   dispose(): void;
 }
 
+const isString = (value: unknown): value is string => typeof value === "string";
+const isInt = (value: unknown): value is number => Number.isSafeInteger(value);
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+/** `[name, value]` string pairs, the shape `fetchHead` carries headers in. */
+const isHeaderPairs = (value: unknown): boolean =>
+  Array.isArray(value) &&
+  value.every((pair) => Array.isArray(pair) && pair.length === 2 && isString(pair[0]) && isString(pair[1]));
+
+/**
+ * Task 9d: validates the message itself, variant by variant, not merely that it is some object.
+ *
+ * The previous guard checked only that `message` was a non-null object, so `{type: "run"}` -- with no `runId`,
+ * `code` or `settings` -- was accepted, advanced `lastInboundSeq`, and then threw in the bootstrap the moment it
+ * read `message.settings.maxEntries`. Because a rejected message must never move the counter, an accepted-but-
+ * malformed one also consumed the sequence number the genuine next message needed, so recovery was impossible.
+ *
+ * `bootstrap.ts`'s `const _never: never` exhaustiveness guard does not overlap with this and cannot replace it:
+ * that is a compile-time check over an already-typed union, while this payload arrives across a JSON boundary
+ * with no type at all. The two defences are complementary -- one proves every variant is handled, this one proves
+ * the thing being handed over really is one of those variants.
+ */
+function isHostToWebMessage(value: unknown): value is HostToWebMessage {
+  if (!isObject(value)) return false;
+  switch (value.type) {
+    case "stop":
+    case "dispose":
+      return true;
+    case "run":
+      return (
+        isString(value.runId) &&
+        isString(value.code) &&
+        isObject(value.settings) &&
+        isInt(value.settings.maxEntries) &&
+        (value.muted === undefined || typeof value.muted === "boolean")
+      );
+    case "mute":
+      return typeof value.muted === "boolean";
+    case "expand":
+      return isInt(value.reqId) && isString(value.handleId);
+    case "fetchHead":
+      return (
+        isInt(value.id) &&
+        isInt(value.status) &&
+        isString(value.statusText) &&
+        isHeaderPairs(value.headers) &&
+        isString(value.url)
+      );
+    case "fetchChunk":
+      return isInt(value.id) && isString(value.data);
+    case "fetchEnd":
+      return isInt(value.id);
+    case "fetchError":
+      return isInt(value.id) && isString(value.message);
+    default:
+      return false;
+  }
+}
+
 function isHostToWeb(value: unknown): value is HostToWeb {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    // A cheap shape check only (fix round 2, NEW-1): whether `seq` is actually the next one due is
-    // `createHostBridge`'s job below, since only it holds `lastInboundSeq`. `Number.isSafeInteger` (not just
-    // `Number.isInteger`, fix round 1's guard) also rules out a value like `Number.MAX_VALUE`, which has no
-    // fractional part but isn't exactly comparable once past 2^53 — the successor check below needs exact
-    // integer equality, not just "not NaN/Infinity/fractional".
-    Number.isSafeInteger((value as { seq?: unknown }).seq) &&
-    (value as { seq: number }).seq > 0 &&
-    typeof (value as { message?: unknown }).message === "object" &&
-    (value as { message?: unknown }).message !== null
+    isObject(value) &&
+    // Whether `seq` is actually the next one due is `createHostBridge`'s job below, since only it holds
+    // `lastInboundSeq`. `Number.isSafeInteger` (not just `Number.isInteger`, fix round 1's guard) also rules out a
+    // value like `Number.MAX_VALUE`, which has no fractional part but isn't exactly comparable once past 2^53 --
+    // the successor check below needs exact integer equality, not just "not NaN/Infinity/fractional".
+    isInt(value.seq) &&
+    value.seq > 0 &&
+    isHostToWebMessage(value.message)
   );
 }
 

@@ -750,7 +750,7 @@ async function readBunLockFile(path: string): Promise<string> {
 async function vendorKeyFor(deps: WebAdapterDeps, imports: readonly string[]): Promise<string | null> {
   try {
     const lockText = await (deps.readBunLock ?? readBunLockFile)(deps.bunLockPath);
-    return vendorCacheKey(hashBunLock(lockText), imports);
+    return vendorCacheKey(hashBunLock(lockText), imports, deps.runtime);
   } catch {
     return null;
   }

@@ -18,6 +18,8 @@ import {
   tabPatchSchema,
   tabReorderSchema,
   tabViewStateSchema,
+  webRunnerMessageParamsSchema,
+  webRunnerTabSchema,
 } from "../src/ui-rpc";
 
 const validStart = {
@@ -187,5 +189,29 @@ describe("inbound validators", () => {
     expect(fileSaveParamsSchema.safeParse({ tabId: "t", content: "x".repeat(MAX_TEXT_CHARS + 1) }).success).toBe(false);
     expect(fileConfirmLargeSchema.safeParse({ tokens: Array.from({ length: 101 }, () => "t") }).success).toBe(false);
     expect(fileConfirmSaveAsSchema.safeParse({ token: "t", confirmed: "yes" }).success).toBe(false);
+  });
+});
+
+// M4 Task 9a: the Main <-> UI web-runner bridge (spec §5.12). Only the UI -> Main direction is validated here;
+// the Main -> UI messages are typed by `ViewMessages` and never cross an untrusted boundary.
+describe("web runner bridge payloads", () => {
+  test("webRunner.ready / webRunner.exit accept a tab id and reject a malformed one", () => {
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1" }).success).toBe(true);
+    expect(webRunnerTabSchema.safeParse({ tabId: "" }).success).toBe(false);
+    // The same path-safety rule every other tabId payload keeps (spec §18): Main joins these into runs/<tabId>/…
+    expect(webRunnerTabSchema.safeParse({ tabId: "../escape" }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: 1 }).success).toBe(false);
+  });
+
+  test("webRunner.message requires an object envelope and passes its contents through untouched", () => {
+    const envelope = { seq: 1, message: { type: "ready" } };
+    const parsed = webRunnerMessageParamsSchema.parse({ tabId: "t1", raw: envelope });
+    // `raw` is the page's own WebToHost envelope: this boundary only confirms it is routable, it never
+    // re-implements the bridge's own shape check (createSequencedWebviewHost does that).
+    expect(parsed.raw).toEqual(envelope);
+    expect(webRunnerMessageParamsSchema.safeParse({ tabId: "t1", raw: "ready" }).success).toBe(false);
+    expect(webRunnerMessageParamsSchema.safeParse({ tabId: "t1", raw: null }).success).toBe(false);
+    expect(webRunnerMessageParamsSchema.safeParse({ tabId: "t1" }).success).toBe(false);
+    expect(webRunnerMessageParamsSchema.safeParse({ tabId: "", raw: envelope }).success).toBe(false);
   });
 });

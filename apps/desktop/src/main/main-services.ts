@@ -9,7 +9,9 @@ import { EXIT_KILL_GRACE_MS, RunCoordinator, type RunCoordinatorDeps } from "./r
 import { createRunnerConfig } from "./runs/runner-config";
 import { SparePool } from "./runs/spare-pool";
 import { createBunAdapter } from "./runtimes/bun-adapter";
-import { createRuntimeRegistry } from "./runtimes/registry";
+import { createRuntimeRegistry, type RuntimeRegistry } from "./runtimes/registry";
+import { createWebAdapter, type WebAdapterDeps } from "./runtimes/web-adapter";
+import { createUiWebviewSource, type UiWebviewSource, type WebviewBridge } from "./runtimes/webview-source";
 import { EnvStore } from "./services/env-store";
 import { NpmService } from "./services/npm-service";
 import { createBunSpawn, type NpmSpawn } from "./services/npm-spawn";
@@ -47,6 +49,13 @@ export interface MainServicesOptions {
   realHome: string;
   /** E2E only: a temp Bun cache for npm operations instead of the user's. */
   bunCacheDirOverride?: string;
+  /**
+   * M4 §5.12: how Main reaches the UI's `<electrobun-webview>` elements. `index.ts` provides it (it owns the main
+   * window's RPC); headless tests don't, and there is nothing a web adapter could drive without one -- so
+   * `browser`/`browser-node` then keep the documented Bun fallback rather than registering a runtime whose every
+   * run could only time out. That is the same trade Task 9 made when it declined to register a stub.
+   */
+  webviewBridge?: WebviewBridge;
   npmSpawn?: NpmSpawn;
   npmFetch?: typeof fetch;
   onNpmOperation(operation: NpmOperation): void;
@@ -66,6 +75,13 @@ export interface MainServices {
   spares: SparePool;
   /** M4: the web runner's third-party chunk cache (spec §5.12); invalidated by `npm.afterChange` below (§11.3). */
   vendorCache: VendorCache;
+  /** The runtime → adapter lookup (spec §5.1), exposed so callers can see what actually got registered. */
+  runtimes: RuntimeRegistry;
+  /**
+   * M4 §5.12: Main's side of the browser runtimes' webviews -- where `index.ts` routes the UI's `webRunner.*`
+   * messages. Null when no `webviewBridge` was provided, which is also when no web adapter is registered.
+   */
+  webviews: UiWebviewSource | null;
   coordinator: RunCoordinator;
   /** Disposes runners, the watchdog and the transform worker, and releases run.lock. */
   dispose(): void;
@@ -112,13 +128,32 @@ export async function createMainServices(options: MainServicesOptions): Promise<
       workingDirectory: (tabId) => session.session.tabs[tabId]?.workingDirectory ?? null,
     }),
   );
-  // The runtime registry (spec §5.1): only "bun" is registered. `createWebAdapter` (./runtimes/web-adapter.ts)
-  // exists and is unit-tested against a fake `WebviewSource`, but no production `WebviewSource` has been built to
-  // construct one from -- Task 7 deferred it pending a live `<electrobun-webview>` DOM node, Task 8 landed that
-  // node but didn't wire the bridge, and M4 Task 9 (AVAILABLE_RUNTIMES) made `browser`/`browser-node` selectable
-  // without it existing. Until a follow-up task registers real "browser"/"browser-node" adapters here, a run on
-  // either falls back to this "bun" adapter (registry.ts's `get()`), silently executing browser-mode code under
-  // Bun -- logged there when that happens.
+  const vendorCache = new VendorCache({ cacheDir: paths.vendorCacheDir });
+  // M4 Task 9a (ledger ruling R-M4-C1-1): the runtime registry (spec §5.1), now with the browser runtimes really
+  // registered. Before this, `createWebAdapter` was fully built and unit-tested but constructed nowhere, so
+  // `registry.get("browser")` fell through to the Bun adapter and a tab the user had explicitly set to Browser ran
+  // its code under Bun, where `document` doesn't exist. What was missing was never the adapter: it was a real
+  // `WebviewSource` to build one from, which needs a live `<electrobun-webview>` (Task 8) *and* a Main⇄UI protocol
+  // to drive it (this task) -- see `./runtimes/webview-source.ts`.
+  const webviews = options.webviewBridge
+    ? createUiWebviewSource({
+        bridge: options.webviewBridge,
+        readBootstrap: () => Bun.file(paths.webRunnerBootstrap).text(),
+      })
+    : null;
+  // Both web runtimes share the one source: a tab's runtime is fixed when the tab is created, so two adapters can
+  // never contend over the same tab's webview.
+  const webAdapterDeps = (runtime: "browser" | "browser-node", source: UiWebviewSource): WebAdapterDeps => ({
+    webviews: source,
+    runtime,
+    runsDir: paths.runsDir,
+    packagesNodeModules: paths.packagesNodeModules,
+    bunLockPath: join(paths.packagesDir, "bun.lock"),
+    vendorCache,
+    runLock,
+    ...(options.stopGraceMs === undefined ? {} : { stopGraceMs: options.stopGraceMs }),
+    ...(options.expandTimeoutMs === undefined ? {} : { expandTimeoutMs: options.expandTimeoutMs }),
+  });
   const runtimes = createRuntimeRegistry(
     {
       bun: createBunAdapter({
@@ -130,6 +165,12 @@ export async function createMainServices(options: MainServicesOptions): Promise<
         idleRunnerTtlMs: options.idleRunnerTtlMs,
         expandTimeoutMs: options.expandTimeoutMs,
       }),
+      ...(webviews
+        ? {
+            browser: createWebAdapter(webAdapterDeps("browser", webviews)),
+            "browser-node": createWebAdapter(webAdapterDeps("browser-node", webviews)),
+          }
+        : {}),
     },
     log,
   );
@@ -150,7 +191,6 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   // Spec §12.1: saving env.json recycles every tab's spare, so the next run gets the new values.
   env.onChange(() => spares.invalidateAll());
   const workingDirectoryFor = (tabId: string) => session.session.tabs[tabId]?.workingDirectory ?? null;
-  const vendorCache = new VendorCache({ cacheDir: paths.vendorCacheDir });
   const types = new TypesService({
     workingDirectoryFor,
     nodeModulesDirsFor: (tabId) => {
@@ -192,6 +232,8 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     transform,
     spares,
     vendorCache,
+    runtimes,
+    webviews,
     coordinator,
     dispose() {
       coordinator.dispose();

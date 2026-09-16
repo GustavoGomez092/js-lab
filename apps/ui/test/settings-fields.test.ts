@@ -28,8 +28,10 @@ describe("settings fields", () => {
   });
 
   test("the Default Runtime help text doesn't claim browser runtimes are unavailable or that new tabs use Bun (M4 T9 fix round 1, I1)", () => {
-    // AVAILABLE_RUNTIMES holds all three since M4 Task 9, and DEFAULT_RUNTIME is "browser-node" -- both clauses
-    // of the old copy ("Browser runtimes arrive in a later version; until then new tabs use Bun.") are false.
+    // AVAILABLE_RUNTIMES holds all three since M4 Task 9, so the old copy's first clause ("Browser runtimes
+    // arrive in a later version") is false. Its second ("until then new tabs use Bun") is the wrong thing to say
+    // either way: DEFAULT_RUNTIME is a setting the user controls, not a limitation -- M4 Task 9a points it back
+    // at "bun" only until browser runs finish, and the help text must not re-acquire either claim.
     // Pinned exactly, plus a defensive check that neither false claim can silently creep back in another form.
     const help = strings.settings.fields["run.defaultRuntime"]?.help ?? "";
     expect(help).toBe("Runtime for new tabs.");

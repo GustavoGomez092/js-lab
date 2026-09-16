@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { WebviewElement } from "./webview-host";
 
 /**
  * The page every browser-mode tab's `<electrobun-webview>` loads (spec §5.12): a bare, local `views://` page with
@@ -7,6 +8,9 @@ import { createPortal } from "react-dom";
  * `packages/runner-web/index.html` ends up served at this URL.
  */
 export const RUNNER_WEB_URL = "views://runner-web/index.html";
+
+/** One tab's live webview element: a real DOM node that also answers the Electrobun webview tag's own API. */
+export type TileWebview = HTMLElement & WebviewElement;
 
 type Rect = { top: number; left: number; width: number; height: number };
 
@@ -32,18 +36,18 @@ type Rect = { top: number; left: number; width: number; height: number };
  *
  * **`enabled` (M4 T9 fix round 1, M2/N4).** `WebViewHosts` mounts one of these for every web-capable tab as soon
  * as it exists -- in tab order, from the very first render -- so DOM sibling order among tiles is established
- * once, at ordinary sequential mount time, and never needs to be re-derived later. (An earlier version of this
- * fix instead delayed *mounting the whole tile* until first enable and derived its render order from tab order at
- * every render; that doesn't actually reorder the DOM, because these tiles are portals into a shared container --
- * React's reconciler does not move an already-mounted portal's node relative to a sibling portal's node just
- * because the JS array feeding `.map()` changed order, since portal placement isn't tracked through the normal
- * host-sibling machinery that ordinary (non-portal) keyed children get. Verified empirically: reordering the
- * array after two portals had already mounted separately left the DOM order exactly as first mounted.) What stays
- * genuinely lazy is the **expensive** part: the real `<electrobun-webview>` element inside this cheap wrapper div
- * is created only once `enabled` becomes true (mirrors `WebViewHosts`'s `everEnabled`: the tab's own Web View
- * toggle has been switched on at least once), and, once created, is never removed while this component stays
- * mounted -- `created` below is a ref, not state, specifically so a later `enabled: false` (which the invariant
- * says should never happen while mounted, but this guards it anyway) can never re-trigger or undo the creation.
+ * once, at ordinary sequential mount time, and never needs to be re-derived later. What stays genuinely lazy is
+ * the **expensive** part: the real `<electrobun-webview>` element inside this cheap wrapper div is created only
+ * once `enabled` becomes true.
+ *
+ * **`generation` (M4 Task 9a).** Task 8's invariant was that the element, once created, is never removed while
+ * this component stays mounted. That held while the only thing that could create one was the user's own toggle.
+ * It cannot hold now that Main drives the webview as a *runtime*: Kill (and a reset that times out) destroy the
+ * webview deliberately and immediately ask for a fresh one (`web-adapter.ts`'s `#killWebview`), and a tab whose
+ * element was destroyed but never replaced would fail every later run with a timeout. `generation` is that
+ * replacement, made explicit: `WebViewHosts` bumps it only when Main has asked for an element the host registry
+ * hasn't got, so the element is still never removed by anything the *user* does -- only by the runtime that owns
+ * it, which is the one actor entitled to.
  */
 export function WebViewTile({
   tabId,
@@ -51,6 +55,9 @@ export function WebViewTile({
   docked,
   parkingNode,
   enabled,
+  generation,
+  createWebview,
+  onElement,
 }: {
   tabId: string;
   /** `OutputTiles`'s live docking placeholder to visually track, or `null` when there isn't one right now. */
@@ -58,26 +65,37 @@ export function WebViewTile({
   docked: boolean;
   /** `WebViewHosts`'s own permanent node: this always portals here, and only ever here. */
   parkingNode: HTMLElement;
-  /** Whether the tab's own Web View toggle has ever been switched on. Gates creating the real webview element. */
+  /** Whether the tab's own Web View toggle has ever been switched on, or Main has asked for a webview. */
   enabled: boolean;
+  /** Bumped when Main needs a replacement element; each value creates exactly one webview. */
+  generation: number;
+  /** Builds the element. Must be referentially stable, or every render would replace the webview. */
+  createWebview: () => TileWebview;
+  /** Reports this tab's live element (or `null` once it goes away). Must be referentially stable. */
+  onElement: (tabId: string, element: TileWebview | null) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
-  const created = useRef(false);
 
+  // `generation` is deliberately a dependency this effect never reads. It is the *reason* the effect re-runs:
+  // Main destroying a tab's webview and asking for another (Kill, a timed-out reset) must tear the old element
+  // down and build a new one, and a value the body ignores is exactly how that request is expressed. Removing it
+  // would leave a killed tab with no webview for good.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above -- `generation` is the re-run trigger.
   useEffect(() => {
-    if (!enabled || created.current) return;
+    if (!enabled) return;
     const host = container.current;
     if (!host) return;
-    const webview = document.createElement("electrobun-webview");
-    webview.setAttribute("src", RUNNER_WEB_URL);
-    webview.className = "webview-tile-surface";
+    const webview = createWebview();
     host.appendChild(webview);
-    created.current = true;
-    // No cleanup: once created, this element is never removed while the component stays mounted (the never-
-    // unmount invariant, at the finer grain `enabled` operates on). The component unmounting entirely -- the tab
-    // closes, or loses web capability -- removes this portaled subtree (webview included) the ordinary way,
-    // through React's own portal teardown, with no manual `removeChild` needed.
-  }, [enabled]);
+    onElement(tabId, webview);
+    return () => {
+      // Runs only when `generation` changes (Main asked for a replacement) or this tile unmounts (the tab closed,
+      // or stopped being web-capable). Reporting `null` first is what lets the host registry tell those two apart
+      // from its own `webRunner.destroy`, which has already removed the element and forgotten the tab by now.
+      onElement(tabId, null);
+      webview.remove();
+    };
+  }, [enabled, generation, tabId, createWebview, onElement]);
 
   const [rect, setRect] = useState<Rect | null>(null);
   useLayoutEffect(() => {
@@ -90,8 +108,9 @@ export function WebViewTile({
       setRect({ top: box.top, left: box.left, width: box.width, height: box.height });
     };
     measure();
-    // jsdom (this package's own tests) has no ResizeObserver; the one measurement above is all a test can see,
-    // which is enough to prove docking -- a real browser also tracks the split being dragged or the window resizing.
+    // jsdom/happy-dom (this package's own tests) has no ResizeObserver; the one measurement above is all a test
+    // can see, which is enough to prove docking -- a real browser also tracks the split being dragged or the
+    // window resizing. That real-run behaviour is verified by hand, not here (see the task report).
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(dockNode);

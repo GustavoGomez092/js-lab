@@ -9,7 +9,13 @@ export type Runtime = (typeof RUNTIMES)[number];
  * Defaults for new tabs (spec §8 `run.defaultRuntime` / `run.defaultLanguage`; §7.3). As built by the M1 fix wave: the
  * settings schema and the tab schema both read these, so they can't drift apart.
  */
-export const DEFAULT_RUNTIME: Runtime = "browser-node";
+/**
+ * Back to Bun for now (M4 Task 9a). With the browser runtimes really registered, a default tab would route to a
+ * web view that loads, receives the code and starts evaluating -- and never reports a result, so the run never
+ * finishes. Defaulting to a runtime that cannot complete what it starts is worse than the silent fallback it
+ * replaced. This returns to a browser runtime once runs finish there.
+ */
+export const DEFAULT_RUNTIME: Runtime = "bun";
 export const DEFAULT_LANGUAGE: Language = "typescript";
 
 /** Runtimes that can execute code in this build. M4 (Task 9) turns on "browser-node" and "browser" alongside "bun". */

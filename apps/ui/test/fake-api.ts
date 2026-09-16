@@ -77,6 +77,9 @@ export function createFakeApi() {
     clearWorkingDirectory: mock((_tabId: string) => {}),
     appCommand: mock((_action: AppAction) => {}),
     e2eRespond: mock((_response: E2EResponse) => {}),
+    webRunnerReady: mock((_tabId: string) => {}),
+    webRunnerExit: mock((_tabId: string) => {}),
+    webRunnerMessage: mock((_tabId: string, _raw: unknown) => {}),
     on(name: string, listener: (payload: never) => void) {
       const set = listeners.get(name) ?? new Set();
       listeners.set(name, set);

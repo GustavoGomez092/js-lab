@@ -59,10 +59,17 @@ describe("build wiring: packages/runner-web/index.html", () => {
 describe("build wiring: the runner-web bootstrap Main injects", () => {
   const WEB_ENTRY = join(import.meta.dir, "..", "..", "..", "packages", "runner-web", "src", "web-entry.ts");
 
-  test("the self-starting page entry exists and actually starts the runner", () => {
+  test("the self-starting page entry exists, starts the runner, and tells it which runtime the page is", () => {
     expect(existsSync(WEB_ENTRY)).toBe(true);
     const source = readFileSync(WEB_ENTRY, "utf8");
-    expect(source).toContain("startRunnerWeb()");
+    expect(source).toContain("startRunnerWeb(");
+    // Task 9b: the entry must pass the runtime Main injected as `window.__jslabRuntime` (`runtimePrelude`,
+    // ../src/main/runtimes/web-adapter.ts). It previously called `startRunnerWeb()` with no arguments at all, so
+    // `browser-node` pages silently fell back to the default `"browser"` and never installed their fetch proxy.
+    expect(source).toContain("__jslabRuntime");
+    expect(source).toContain('"browser-node"');
+    // This file only guards the wiring's *shape*; that the emitted bundle actually reports `ready` and actually
+    // adopts the injected runtime is proven by executing it in packages/runner-web/test/web-entry.test.ts.
   });
 
   test("build:bundles builds that entry to dist/runner as a classic script", () => {

@@ -2,20 +2,23 @@ import { expect, test } from "bun:test";
 import { type RunnerWebGlobal, startRunnerWeb } from "../src/bootstrap";
 
 /**
- * Regression test for a bug that only ever appeared in a real page, and that every other test in this package was
- * structurally unable to catch.
+ * Pins a platform contract, not a diagnosed bug.
  *
  * `startRunnerWeb` captures the unwrapped timers before `installHandleTracking` replaces them, and then calls them
- * as methods of the plain objects holding them (`rawInterval.setInterval(...)`, `timers.setTimeout(...)`). That
- * makes `this` the holder object rather than the Window. `setInterval` and `setTimeout` are WebIDL operations, and
- * WebKit rejects a receiver that isn't the Window with "Illegal invocation" -- which lands between installing the
- * host bridge and `bridge.send({ type: "ready" })`, so the page never reports ready and the host can do nothing
- * but time out. Bun ignores the receiver entirely, so every unit test (and `bootstrap.test.ts`, which deliberately
- * runs against the real `globalThis`) passed while a browser-mode run could not start at all.
+ * as methods of the plain objects holding them (`rawInterval.setInterval(...)`, `timers.setTimeout(...)`), which
+ * would make `this` the holder object rather than the Window. Binding them to the global is correct on the
+ * platform contract regardless: `setTimeout`/`setInterval` are WebIDL operations, whose receiver is specified to
+ * be the Window. That is why the binding stays, and that is all this test asserts.
  *
- * Reproducing WebKit's receiver check under Bun is not possible, so this pins the mechanism instead: the timers
- * must be invoked with the global as their receiver. Before the fix this records the private holder object; after
- * it, the global itself.
+ * **What this test does NOT establish, despite what it used to claim.** It previously stated as fact that an
+ * unbound receiver throws "Illegal invocation" in WebKit and that this was why a browser-mode page never reported
+ * ready. Task 9a's own in-page probe of the exact call shape contradicted that: it returned `method-ok`, and the
+ * emitted bundle is not strict-mode. Why the probe reported that is still unexplained. The hang that prompted the
+ * original claim turned out to have a different cause entirely -- `packages/serializer`'s `jsonBytes` used Node's
+ * `Buffer`, which a webview does not have (M4 Task 9b) -- so nothing here should be read as the explanation for it.
+ *
+ * Reproducing a WebKit receiver check under Bun is not possible, so this pins the observable property instead: the
+ * captured timers must be invoked with the global as their receiver, never a holder object.
  */
 test("the bootstrap calls its captured timers with the global as the receiver, not a holder object", () => {
   const receivers: unknown[] = [];

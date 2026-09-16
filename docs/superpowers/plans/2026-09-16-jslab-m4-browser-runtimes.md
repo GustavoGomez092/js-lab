@@ -459,6 +459,14 @@ heartbeat × 32    every ~500 ms   → the page keeps reporting liveness
 
 **Files:** unknown until diagnosed. Expect `packages/runner-web/src/bootstrap.ts`, `apps/desktop/src/main/bundling/bundler.ts`, and whatever the join turns out to require.
 
+**Also yours, carried from Task 13's review (ledger ruling R-M4-T13-FETCHWIRE-1) — `browser-node` fetch never installs in production.** `packages/runner-web/src/web-entry.ts:18` calls `startRunnerWeb()` with **no arguments**, and `bootstrap.ts:118` gates `installFetchProxy` on `options.fetchTransport` — which **no production code supplies**. So `runtime` defaults to `"browser"` and the proxy never runs, which is the opposite of what §5.12 requires for `browser-node`.
+
+This is not a regression: the page half was unwired at Task 12 too, and Task 13 documented it. But the chain became **Task 12 → Task 13 → "a later integration", owned by nobody** — the same gap-class that created Task 9a — so it stops here. Task 13's rework also changed the wire shape (fetch identity now comes from the per-connection channel, with **no `tabId` on the wire**), so this is genuinely new work rather than a forgotten line.
+
+- Construct a real `FetchTransport` page-side and pass it into `startRunnerWeb()`, speaking the channel Task 13 built.
+- **Task 13 lands an exhaustiveness guard before you** (`const _never: never` in `handleHostMessage`'s switch), specifically so this wiring cannot reintroduce a silent hang: without it, an unrouted `fetchHead`/`fetchChunk`/`fetchEnd`/`fetchError` reply leaves the page's promise **pending forever**. If you add a variant, the compiler will now stop you.
+- Prove it in a real run: a `browser-node` tab performing a cross-origin `fetch` that a plain `browser` tab could not.
+
 **Also yours, carried from Task 9a's review (ledger ruling R-M4-T9A-F6-1) — a one-line honesty fix in code you will be reading anyway.** `packages/runner-web/test/timer-receiver.test.ts:8-18` states the `Illegal invocation` mechanism **as fact**, and Task 9a's own in-page probe contradicts it: the probe returned `method-ok`, and the emitted bundle is not strict-mode. The timer binding itself is correct and stays — it is right on the platform contract, since WebIDL operations require a `Window` receiver — but the comment asserts a cause that was disproved. Task 9a called this "my own honesty defect" and offered to close it; it folds here because this task reads that timer code regardless. **Make the comment as honest as the report:** binding is correct on the contract, and why the probe reported `method-ok` remains unexplained.
 
 - [ ] Steps: reproduce in a built app; bisect the bundle (app-only, vendor-only, joined) to find which import stalls; fix; prove a real run completes with output and a terminal state; correct the timer comment; then re-run Task 9a's live checks. **Counts: stated by the controller at dispatch.**

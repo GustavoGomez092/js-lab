@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_LIMITS, Encoder, HandleRegistry } from "../src/encode";
+import { DEFAULT_LIMITS, Encoder, HandleRegistry, jsonBytes } from "../src/encode";
 
 const make = (limits = DEFAULT_LIMITS) => new Encoder(new HandleRegistry(), limits, {});
 
@@ -159,6 +159,9 @@ describe("DOM nodes", () => {
     expect(make().encode(exotic)).toMatchObject({ t: "dom", tag: "SPAN", childCount: 0 });
   });
 
+  // This exercises the generic #fit/#summary/expand machinery every object type shares (no dom-specific carve-
+  // out needed), NOT rollback of #dom()'s own truncation handle: this outerHTML stays under maxString, so #dom()
+  // never reaches its register branch at all — see the rollback test below for that path.
   test("a dom node too large for the per-event budget becomes a handle, like any other object", () => {
     const el = fakeElement({
       attributes: [{ name: "data-big", value: "z".repeat(500) }],
@@ -173,17 +176,36 @@ describe("DOM nodes", () => {
 
   test("rolls back a dom node's own truncation handle when the whole node still doesn't fit the budget", () => {
     // outerHTML exceeds maxString, so #dom() registers its own truncation-string handle while producing the full
-    // encoding. The budget here (10,150 bytes) is large enough for that full encoding to be produced (the 10,000
-    // char preview alone costs ~10,051 bytes) but too small for the *actual* JSON size of the whole dom object
-    // (10,119 bytes, structural overhead included) to fit — so #fit must discard the truncation handle registered
-    // during that failed attempt before #summary() registers the whole-node handle it falls back to.
+    // encoding. The budget that reproduces this can't be a literal: it must sit inside the narrow gap between the
+    // encoder's internal charge *estimate* for the full value and its *actual* jsonBytes size — a gap pinned to
+    // implementation details (NODE_BYTES vs. real overhead) that shifts if the dom encoding's shape ever changes.
+    // So it's derived at run time instead, from a real measurement of this exact node: one byte under the real
+    // size of an unconstrained encode. That stays inside the window regardless of future shape/constant changes,
+    // and the register-count/registry-size assertions below fail loudly (rather than silently drifting into a
+    // neighboring regime) if it ever doesn't.
     const el = fakeElement({ outerHTML: `<div>${"x".repeat(20_000)}</div>` });
+    const full = new Encoder(
+      new HandleRegistry(),
+      { ...DEFAULT_LIMITS, maxEncodedBytes: Number.POSITIVE_INFINITY },
+      {},
+    ).encode(el);
+    const budget = jsonBytes(full) - 1;
+
     const registry = new HandleRegistry();
-    const e = new Encoder(registry, { ...DEFAULT_LIMITS, maxEncodedBytes: 10_150 }, {});
+    let registerCalls = 0;
+    const register = registry.register.bind(registry);
+    registry.register = (target) => {
+      registerCalls++;
+      return register(target);
+    };
+    const e = new Encoder(registry, { ...DEFAULT_LIMITS, maxEncodedBytes: budget }, {});
     const [encoded] = e.encodeMany([el]);
+
     expect(encoded).toMatchObject({ t: "handle" });
-    // Only the #summary() fallback handle should be live: the #dom() truncation handle registered during the
-    // failed attempt must have been rolled back, not left to leak.
+    // Two register() calls prove the truncation handle really was registered (not skipped for being too small to
+    // even attempt): #dom()'s own truncation handle, then #summary()'s whole-node fallback handle. registry.size
+    // === 1 proves the first was then rolled back rather than left to leak.
+    expect(registerCalls).toBe(2);
     expect(registry.size).toBe(1);
   });
 });

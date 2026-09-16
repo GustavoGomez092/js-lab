@@ -9,6 +9,8 @@ import {
   parseStack,
 } from "@jslab/serializer";
 import { installConsole } from "./console-hook";
+import { type DialogGlobal, installDialogShim } from "./dialogs";
+import { type FetchProxyGlobal, type FetchTransport, installFetchProxy, type WebRuntime } from "./fetch-proxy";
 import { AudioController, HandleTracker, handleCountAction, installHandleTracking } from "./handles";
 import { createHostBridge, type HostBridgeGlobal } from "./host-bridge";
 
@@ -40,14 +42,29 @@ export interface RunnerWebOptions {
   global?: RunnerWebGlobal;
   /** Defaults to the same 500 ms as the Bun runner. */
   heartbeatMs?: number;
+  /**
+   * Task 13 (spec §5.12): which web runtime this page is running as. Determines whether `installFetchProxy` does
+   * anything at all -- it's a no-op for `"browser"` (see `fetch-proxy.ts`'s own doc comment). Defaults to
+   * `"browser"`, the safe, CORS-enforced choice, so a caller that hasn't wired runtime detection through yet gets
+   * no proxy rather than an accidental one.
+   */
+  runtime?: WebRuntime;
+  /**
+   * Task 13: the `browser-node` fetch proxy's host transport (`fetch-proxy.ts`). Wiring a real, production
+   * transport to the host bridge is a later integration's job -- the same way `RawWebview`'s real implementation
+   * (`apps/desktop/src/main/runtimes/web-adapter.ts`) was out of an earlier task's scope until a live webview
+   * existed. Omitting it here simply skips installing the proxy, exactly like `runtime: "browser"` does.
+   */
+  fetchTransport?: FetchTransport;
 }
 
 export interface RunnerWebHandle {
   /**
    * Tears the runner down: stops the heartbeat, disposes active handles, clears the expand registry, and removes
-   * the error/rejection listeners and the host bridge's inbound hook. `__jl`, `console` and the wrapped timer/
-   * fetch/WebSocket/... globals stay installed, since `__jl` is non-configurable and the others are meant to
-   * outlive any one run for the lifetime of the page (or, in a test, the file that shares one bootstrap instance).
+   * the error/rejection listeners and the host bridge's inbound hook. `__jl`, `console`, `alert`/`confirm`/`prompt`
+   * and the wrapped timer/fetch/WebSocket/... globals stay installed, since `__jl` is non-configurable and the
+   * others are meant to outlive any one run for the lifetime of the page (or, in a test, the file that shares one
+   * bootstrap instance).
    */
   dispose(): void;
 }
@@ -62,6 +79,25 @@ interface Run {
 
 export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle {
   const g = (options.global ?? (globalThis as unknown as RunnerWebGlobal)) as RunnerWebGlobal;
+
+  // Task 13 (spec §5.12, M0-S4): this function's first statement after resolving `g`, before any user code can
+  // possibly run -- so a native `alert`/`confirm`/`prompt` panel has no chance to flash behind the shim. There is
+  // no native call left for one to flash from at all: the globals are replaced outright (see dialogs.ts's own
+  // module doc). `run` is referenced inside the closure below before its `let` runs further down this function --
+  // safe because the closure is only ever called once a run is actually underway, exactly like `setState` below
+  // closes over `bridge`, declared later in this same function, for the same reason.
+  const dialogShim = installDialogShim({
+    // `g`'s index signature makes every one of `DialogGlobal`'s properties structurally present, but TS's "weak
+    // type" check for an all-optional target still wants an explicit cast (the same reason `handles.ts` below
+    // types its own `g` parameter as `any` rather than a named interface).
+    global: g as unknown as DialogGlobal,
+    sink: {
+      push(body) {
+        run?.buffer.push(body);
+      },
+    },
+  });
+
   const heartbeatMs = options.heartbeatMs ?? 500;
   // Captured before `installHandleTracking` wraps `g`'s timers (mirrors packages/runner-bun/src/bootstrap.ts):
   // JSLab's own EventBuffer flush timer and heartbeat interval are never tracked as user-code activity.
@@ -73,6 +109,19 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
   // nothing to show the user. Bun ignores the receiver entirely, which is why every unit test passed regardless.
   const timers = { setTimeout: g.setTimeout.bind(g), clearTimeout: g.clearTimeout.bind(g) };
   const rawInterval = { setInterval: g.setInterval.bind(g), clearInterval: g.clearInterval.bind(g) };
+
+  // Task 12/13 (spec §5.12): MUST run before `installHandleTracking` below wraps `fetch` -- that wrapper captures
+  // whichever `fetch` the global holds at the moment it runs, and it's what keeps a run "active" while a request
+  // is outstanding and releases the handle once the promise settles, including the rejection an abort produces.
+  // Reversed, an aborted `browser-node` request would leak a handle forever (fetch-proxy.ts's own doc comment;
+  // enforced here by bootstrap-fetch-order.test.ts, since a comment alone cannot catch this going forward).
+  if (options.fetchTransport) {
+    installFetchProxy({
+      runtime: options.runtime ?? "browser",
+      transport: options.fetchTransport,
+      global: g as unknown as FetchProxyGlobal,
+    });
+  }
 
   let run: Run | null = null;
   const registry = new HandleRegistry();
@@ -207,6 +256,9 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
     // from a previous run must never resolve against a later one. `registry` is otherwise process/page-lifetime
     // state shared only because `Encoder` needs a fresh instance wrapped around it every run.
     registry.clear();
+    // Task 13: "once per run, not once per call" -- a fresh run gets to see the console warning again if it calls
+    // alert/confirm/prompt, the same way every other per-run bit of state above is reset here.
+    dialogShim.startRun();
     // Task 15: re-asserts the tab's saved mute preference before any user code can create an AudioContext or
     // media element -- a no-op when it already matches (AudioController.setMuted), so an explicit `mute` message
     // arriving separately (spec §5.12, a live toggle mid-run) is never fought over by this.
@@ -266,6 +318,22 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
         run = null;
         registry.clear();
         return;
+      // Fix round 2 (Task 13): no consumer yet -- `RunnerWebOptions.fetchTransport` is an external seam
+      // (`fetch-proxy.ts`'s `FetchTransport`), and nothing here feeds inbound traffic into its `onEvent`
+      // listeners. Wiring that dispatch is Task 9b's job (the production `browser-node` transport); these cases
+      // exist so the `default` branch below stays exhaustive today, which is what makes it a compile error --
+      // rather than a silently dropped reply and a promise left pending forever -- if that wiring (or anything
+      // later) touches this switch without handling every `HostToWebMessage` variant.
+      case "fetchHead":
+      case "fetchChunk":
+      case "fetchEnd":
+      case "fetchError":
+        return;
+      default: {
+        const _never: never = message;
+        void _never;
+        return;
+      }
     }
   }
 

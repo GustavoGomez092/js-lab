@@ -47,6 +47,12 @@ export interface MainServicesOptions {
   expandTimeoutMs?: RunCoordinatorDeps["expandTimeoutMs"];
   /** Main's log (index.ts passes the rotating log). Defaults to console.error. */
   log?: (message: string, detail?: unknown) => void;
+  /**
+   * Fix round 1 (Task 13, security): masks anything recorded about a `browser-node` fetch (spec §18) before it
+   * reaches the log or the page. `index.ts` passes its own `redact`; defaults to a no-op so tests that never touch
+   * `browser-node` fetch don't need to supply one.
+   */
+  redact?: (text: string) => string;
   /** The user's real home folder (for the Bun cache location, spec §11.3). */
   realHome: string;
   /** E2E only: a temp Bun cache for npm operations instead of the user's. */
@@ -155,6 +161,8 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     bunLockPath: join(paths.packagesDir, "bun.lock"),
     vendorCache,
     runLock,
+    log,
+    ...(options.redact ? { redact: options.redact } : {}),
     ...(options.stopGraceMs === undefined ? {} : { stopGraceMs: options.stopGraceMs }),
     ...(options.expandTimeoutMs === undefined ? {} : { expandTimeoutMs: options.expandTimeoutMs }),
   });

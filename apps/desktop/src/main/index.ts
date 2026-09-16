@@ -172,6 +172,7 @@ async function start(): Promise<void> {
     env: baseEnv,
     shiftHeld,
     log,
+    redact,
     onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
     onState: (tabId, runId, state, activeHandles) =>
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
@@ -331,6 +332,13 @@ async function start(): Promise<void> {
       }),
       appHandlers,
       createUiFlushHandlers(uiFlush, log),
+      // Task 12/13 (spec §5.12), fix round 1: `browser-node`'s fetch proxy is no longer an RPC handler group here.
+      // It used to take a page-supplied `tabId` in a flat payload, authorized by looking the tab's runtime up by
+      // that same id -- once registered, a `browser` tab could name a `browser-node` tab's id and get a CORS-free
+      // request issued on the user's session. It's now constructed per `WebRunSession`
+      // (`runtimes/web-adapter.ts`), which already knows its own tab and runtime from the `WebviewHost` the
+      // connection arrived on, never from anything the message claims -- see `rpc/web-fetch-handlers.ts`'s doc
+      // comment and `main-services.ts`'s `webAdapterDeps` for the wiring.
       createFileHandlers({
         files: new FileService(nodeFileSystem),
         session,

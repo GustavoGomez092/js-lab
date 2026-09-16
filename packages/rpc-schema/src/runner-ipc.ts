@@ -43,7 +43,14 @@ export type RawRunEventBody =
       value: EncodedValue;
     }
   | { kind: "promiseSettled"; ref: number; value: EncodedValue }
-  | { kind: "truncated"; dropped: number };
+  | { kind: "truncated"; dropped: number }
+  /**
+   * Task 13 (spec §5.12, M0-S4): the web runner's own non-blocking `alert` shim -- `packages/runner-web/src/
+   * dialogs.ts` pushes one of these per `alert()` call, carrying the message text. Not rendered inline with the
+   * rest of a run's console output: `apps/ui`'s reducer routes it into its own display, the same way
+   * `promiseSettled`/`truncated` are excluded from `DisplayEvent` for their own reasons.
+   */
+  | { kind: "dialog"; text: string };
 
 export type RawRunEvent = RawRunEventBody & { seq: number; t: number };
 
@@ -92,7 +99,17 @@ export type HostToWebMessage =
    * media element is paused, without suspending any AudioContext (a suspended context stops its own clock, which
    * would desync anything the run times off it, such as a rAF-driven visualisation).
    */
-  | { type: "mute"; muted: boolean };
+  | { type: "mute"; muted: boolean }
+  /**
+   * Task 12/13, fix round 1 (spec §5.12): the `browser-node` fetch proxy's reply, streamed back on this same
+   * per-tab channel -- `head` once, then zero or more `chunk`s, then exactly one of `end`/`error`. Carries no
+   * `tabId`: this message only ever reaches the page whose webview it was sent to, the same way every other
+   * `HostToWebMessage` does, so there is nothing for a page to spoof here even in principle.
+   */
+  | { type: "fetchHead"; id: number; status: number; statusText: string; headers: [string, string][]; url: string }
+  | { type: "fetchChunk"; id: number; data: string }
+  | { type: "fetchEnd"; id: number }
+  | { type: "fetchError"; id: number; message: string };
 
 export type WebToHostMessage =
   | { type: "ready" }
@@ -101,7 +118,16 @@ export type WebToHostMessage =
   | { type: "state"; runId: string; state: RunnerState; activeHandles: number }
   | { type: "expanded"; reqId: number; value: EncodedValue | null }
   /** Task 15: pushed whenever the page's audio-active state changes (handles.ts's AudioController), not polled. */
-  | { type: "audio"; active: boolean };
+  | { type: "audio"; active: boolean }
+  /**
+   * Task 12/13, fix round 1 (spec §5.12): one `browser-node` fetch request/abort. Carries no `tabId` -- unlike the
+   * old `webFetch.request`/`webFetch.abort` RPC messages this replaces, which took one in a flat payload a
+   * `browser` tab could forge to name a `browser-node` tab and get a CORS-free request issued on its behalf. Which
+   * tab this belongs to is now derived from the connection it arrived on (`WebRunSession`, `apps/desktop/src/main/
+   * runtimes/web-adapter.ts`), never from a field in the message itself.
+   */
+  | { type: "fetchRequest"; id: number; url: string; method: string; headers: [string, string][]; body: string | null }
+  | { type: "fetchAbort"; id: number };
 
 /** Host → page envelope, delivered by calling `window.__jslabHostMessage(envelope)` through `executeJavascript`. */
 export interface HostToWeb {

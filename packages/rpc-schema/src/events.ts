@@ -25,7 +25,9 @@ export type RunEventBody =
       value?: EncodedValue;
     }
   | { kind: "promiseSettled"; ref: number; value: EncodedValue }
-  | { kind: "truncated"; dropped: number };
+  | { kind: "truncated"; dropped: number }
+  /** Task 13: mirrors `RawRunEventBody`'s own "dialog" variant (`runner-ipc.ts`) -- see its comment. */
+  | { kind: "dialog"; text: string };
 
 export type RunEvent = RunEventBody & { seq: number; t: number };
 

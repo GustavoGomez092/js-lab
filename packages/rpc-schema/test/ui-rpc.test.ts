@@ -204,12 +204,19 @@ describe("inbound validators", () => {
 // M4 Task 9a: the Main <-> UI web-runner bridge (spec §5.12). Only the UI -> Main direction is validated here;
 // the Main -> UI messages are typed by `ViewMessages` and never cross an untrusted boundary.
 describe("web runner bridge payloads", () => {
-  test("webRunner.ready / webRunner.exit accept a tab id and reject a malformed one", () => {
-    expect(webRunnerTabSchema.safeParse({ tabId: "t1" }).success).toBe(true);
-    expect(webRunnerTabSchema.safeParse({ tabId: "" }).success).toBe(false);
+  test("webRunner.ready / webRunner.exit accept a tab id and generation, and reject malformed ones", () => {
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: 1 }).success).toBe(true);
+    expect(webRunnerTabSchema.safeParse({ tabId: "", generation: 1 }).success).toBe(false);
     // The same path-safety rule every other tabId payload keeps (spec §18): Main joins these into runs/<tabId>/…
-    expect(webRunnerTabSchema.safeParse({ tabId: "../escape" }).success).toBe(false);
-    expect(webRunnerTabSchema.safeParse({ tabId: 1 }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: "../escape", generation: 1 }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: 1, generation: 1 }).success).toBe(false);
+    // T9e: `generation` is what lets Main tell a stale event (from an entry it has already replaced) from a
+    // current one, so it must actually be present and a real generation counter, not just any number.
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1" }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: 0 }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: -1 }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: 1.5 }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: "1" }).success).toBe(false);
   });
 
   test("webRunner.message requires an object envelope and passes its contents through untouched", () => {

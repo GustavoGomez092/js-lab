@@ -8,8 +8,8 @@ function setup() {
   const deps = {
     webviews: {
       receive: mock((tabId: string, raw: unknown) => void received.push({ tabId, raw })),
-      ready: mock((tabId: string) => void ready.push(tabId)),
-      exit: mock((tabId: string) => void exited.push(tabId)),
+      ready: mock((tabId: string, generation: number) => void ready.push(`${tabId}:${generation}`)),
+      exit: mock((tabId: string, generation: number) => void exited.push(`${tabId}:${generation}`)),
     },
     log: mock(() => {}),
   };
@@ -44,22 +44,33 @@ describe("web runner handlers", () => {
     expect(deps.log).toHaveBeenCalled();
   });
 
-  test("webRunner.ready tells the source that tab's page is ready for script", () => {
+  test("webRunner.ready tells the source that tab's page is ready for script, with its generation", () => {
     const { handlers, ready } = setup();
-    handlers.messages["webRunner.ready"]({ tabId: "t1" });
-    expect(ready).toEqual(["t1"]);
+    handlers.messages["webRunner.ready"]({ tabId: "t1", generation: 1 });
+    expect(ready).toEqual(["t1:1"]);
   });
 
-  test("webRunner.exit tells the source that tab's webview is gone", () => {
+  test("webRunner.exit tells the source that tab's webview is gone, with its generation", () => {
     const { handlers, exited } = setup();
-    handlers.messages["webRunner.exit"]({ tabId: "t1" });
-    expect(exited).toEqual(["t1"]);
+    handlers.messages["webRunner.exit"]({ tabId: "t1", generation: 1 });
+    expect(exited).toEqual(["t1:1"]);
   });
 
   test("a malformed ready or exit is dropped, not routed", () => {
     const { handlers, deps, ready, exited } = setup();
     handlers.messages["webRunner.ready"]({ tabId: "" });
     handlers.messages["webRunner.exit"]({});
+    expect(ready).toEqual([]);
+    expect(exited).toEqual([]);
+    expect(deps.log).toHaveBeenCalledTimes(2);
+  });
+
+  // T9e: `generation` is what lets Main tell a stale event apart from a current one, so a payload missing it (or
+  // carrying a non-positive one) must be rejected here the same as a missing tabId, not silently defaulted.
+  test("a ready or exit with a valid tab id but no generation is dropped, not routed", () => {
+    const { handlers, deps, ready, exited } = setup();
+    handlers.messages["webRunner.ready"]({ tabId: "t1" });
+    handlers.messages["webRunner.exit"]({ tabId: "t1", generation: 0 });
     expect(ready).toEqual([]);
     expect(exited).toEqual([]);
     expect(deps.log).toHaveBeenCalledTimes(2);

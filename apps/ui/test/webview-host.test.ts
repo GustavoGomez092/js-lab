@@ -77,13 +77,15 @@ describe("the UI-side webview host registry", () => {
     const { api, emit, registry } = harness();
     // Main asked for this tab first (the ordinary case: `webRunner.ensure` -> element created -> registered) --
     // see the "ready-NO-HOST" test below for the case where nobody did.
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
     const element = new FakeWebviewElement();
     registry.register("t1", element);
 
     element.emit("dom-ready");
 
-    expect(api.webRunnerReady).toHaveBeenCalledWith("t1");
+    // T9e: stamped with the generation `webRunner.ensure` named, so Main can tell this apart from a report
+    // belonging to whatever entry it has since replaced.
+    expect(api.webRunnerReady).toHaveBeenCalledWith("t1", 1);
   });
 
   /**
@@ -112,11 +114,11 @@ describe("the UI-side webview host registry", () => {
     expect(api.webRunnerReady).not.toHaveBeenCalled(); // not yet -- nobody asked
 
     // Main starts a run on this same tab. `ensure()` finds the element already registered (so no `needsElement`
-    // fires), but must still mark the tab wanted -- this is the only place that later interest is ever recorded.
-    await emit("webRunner.ensure", { tabId: "t1" });
+    // fires), but must still record its generation -- this is the only place that later interest is ever recorded.
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
     element.emit("dom-ready"); // the real run's own reload firing its ready
 
-    expect(api.webRunnerReady).toHaveBeenCalledWith("t1");
+    expect(api.webRunnerReady).toHaveBeenCalledWith("t1", 1);
   });
 
   test("webRunner.execute runs the script in that tab's element and no other", async () => {
@@ -151,6 +153,10 @@ describe("the UI-side webview host registry", () => {
    */
   test("a reload arriving before the element exists is satisfied by that element's first load, not a second one", async () => {
     const { api, emit, registry } = harness();
+    // T9e: `ensure` always precedes `reload` for the same entry (`webview-source.ts`'s `ensure()` sends the
+    // former before `host.reset()` can send the latter), so the generation is already on file by the time this
+    // handler runs -- only the *element* is missing here, not the generation.
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
     await emit("webRunner.reload", { tabId: "t1" });
 
     const element = new FakeWebviewElement();
@@ -158,7 +164,7 @@ describe("the UI-side webview host registry", () => {
     expect(element.reloadCount).toBe(0);
 
     element.emit("dom-ready");
-    expect(api.webRunnerReady).toHaveBeenCalledWith("t1");
+    expect(api.webRunnerReady).toHaveBeenCalledWith("t1", 1);
   });
 
   test("webRunner.execute for a tab with no element is dropped rather than replayed into a later realm", async () => {
@@ -176,7 +182,7 @@ describe("the UI-side webview host registry", () => {
     const element = new FakeWebviewElement();
     registry.register("t1", element);
 
-    await emit("webRunner.destroy", { tabId: "t1" });
+    await emit("webRunner.destroy", { tabId: "t1", generation: 1 });
 
     expect(element.removed).toBe(true);
     expect(element.listenerCount).toBe(0);
@@ -189,26 +195,28 @@ describe("the UI-side webview host registry", () => {
 
   test("webRunner.ensure asks for an element only when the tab hasn't got one", async () => {
     const { emit, registry, needed } = harness();
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
     expect(needed).toEqual(["t1"]);
 
     registry.register("t1", new FakeWebviewElement());
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 2 });
     expect(needed).toEqual(["t1"]);
   });
 
   test("a destroyed tab asks for a fresh element on the next ensure -- what Kill's destroy/recreate needs", async () => {
     const { emit, registry, needed } = harness();
     registry.register("t1", new FakeWebviewElement());
-    await emit("webRunner.destroy", { tabId: "t1" });
+    await emit("webRunner.destroy", { tabId: "t1", generation: 1 });
 
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 2 });
 
     expect(needed).toEqual(["t1"]);
   });
 
-  test("unregistering a tab's element stops relaying and reports the webview as gone", () => {
-    const { api, registry } = harness();
+  test("unregistering a tab's element stops relaying and reports the webview as gone", async () => {
+    const { api, emit, registry } = harness();
+    // Main has shown interest in this tab, so it has an entry on the other side to report to.
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
     const element = new FakeWebviewElement();
     registry.register("t1", element);
     registry.unregister("t1");
@@ -218,13 +226,28 @@ describe("the UI-side webview host registry", () => {
     expect(element.listenerCount).toBe(0);
     expect(api.webRunnerMessage).not.toHaveBeenCalled();
     // The tab closed or stopped being web-capable: Main must hear about it, or `WebAdapter` keeps driving a
-    // webview that no longer exists and the run only ends when a timeout notices.
-    expect(api.webRunnerExit).toHaveBeenCalledWith("t1");
+    // webview that no longer exists and the run only ends when a timeout notices. T9e: stamped with the
+    // generation `webRunner.ensure` named, the same one a `dom-ready`-driven `ready` would carry.
+    expect(api.webRunnerExit).toHaveBeenCalledWith("t1", 1);
   });
 
   test("unregistering a tab that never had an element reports nothing", () => {
     const { api, registry } = harness();
     registry.unregister("t1");
+    expect(api.webRunnerExit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * T9e: an element the user created by hand (opening the Web View pane) that Main never showed interest in has no
+   * generation on file, so there is no entry on Main's side to report to either -- reporting anyway would just be
+   * a `webRunnerTabSchema` payload Main's own validator rejects and logs as invalid, for no benefit.
+   */
+  test("unregistering an element Main never asked about reports nothing, for lack of a generation to stamp it with", () => {
+    const { api, registry } = harness();
+    const element = new FakeWebviewElement();
+    registry.register("t1", element); // the user's own toggle: Main hasn't asked yet
+    registry.unregister("t1");
+
     expect(api.webRunnerExit).not.toHaveBeenCalled();
   });
 

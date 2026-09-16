@@ -102,7 +102,7 @@ describe("WebViewHosts wired to the runtime in Main", () => {
     const { created } = renderHosts(store, api);
     expect(created).toHaveLength(0);
 
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
 
     expect(created).toHaveLength(1);
     expect(tileWebview()).toBe(created[0] ?? null);
@@ -112,18 +112,19 @@ describe("WebViewHosts wired to the runtime in Main", () => {
     const store = hydrated();
     const { api, emit } = createFakeApi();
     const { created } = renderHosts(store, api);
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
 
     act(() => created[0]?.emit("dom-ready"));
 
-    expect(api.webRunnerReady).toHaveBeenCalledWith("t1");
+    // T9e: stamped with the generation `webRunner.ensure` named.
+    expect(api.webRunnerReady).toHaveBeenCalledWith("t1", 1);
   });
 
   test("a page message from that element reaches Main tagged with its own tab", async () => {
     const store = hydrated();
     const { api, emit } = createFakeApi();
     const { created } = renderHosts(store, api);
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
 
     act(() => created[0]?.emit("host-message", { seq: 1, message: { type: "ready" } }));
 
@@ -134,7 +135,7 @@ describe("WebViewHosts wired to the runtime in Main", () => {
     const store = hydrated();
     const { api, emit } = createFakeApi();
     const { created } = renderHosts(store, api);
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
 
     await emit("webRunner.execute", { tabId: "t1", js: "globalThis.ran = true;" });
 
@@ -160,10 +161,10 @@ describe("WebViewHosts wired to the runtime in Main", () => {
     const store = hydrated();
     const { api, emit } = createFakeApi();
     const { created } = renderHosts(store, api);
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
 
-    await emit("webRunner.destroy", { tabId: "t1" });
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.destroy", { tabId: "t1", generation: 1 });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 2 });
 
     expect(created).toHaveLength(2);
     expect(created[1]).not.toBe(created[0]);
@@ -174,10 +175,11 @@ describe("WebViewHosts wired to the runtime in Main", () => {
     const store = hydrated();
     const { api, emit } = createFakeApi();
     renderHosts(store, api);
-    await emit("webRunner.ensure", { tabId: "t1" });
+    await emit("webRunner.ensure", { tabId: "t1", generation: 1 });
 
     act(() => store.getState().removeTab("t1"));
 
-    expect(api.webRunnerExit).toHaveBeenCalledWith("t1");
+    // T9e: stamped with the generation `webRunner.ensure` named.
+    expect(api.webRunnerExit).toHaveBeenCalledWith("t1", 1);
   });
 });

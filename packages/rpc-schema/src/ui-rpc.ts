@@ -151,7 +151,7 @@ export const fileConfirmSaveAsSchema = z.object({ token: z.uuid(), confirmed: z.
  * Only the UI → Main direction carries validators: `ViewMessages` payloads are built by Main itself and never
  * re-enter it, exactly as every other `ViewMessages` entry is left unvalidated.
  */
-export const webRunnerTabSchema = z.object({ tabId });
+export const webRunnerTabSchema = z.object({ tabId, generation: z.number().int().positive() });
 
 /**
  * `webRunner.message`: one page → host envelope, relayed verbatim. `raw` is deliberately only checked for being a
@@ -463,9 +463,18 @@ export type MainMessages = {
   "wd.pick": TabParams;
   "wd.clear": TabParams;
   "ui.stateFlushed": Record<string, never>;
-  /** M4 §5.12: the tab's page reached `dom-ready` -- it is safe to inject script into it now. */
+  /**
+   * M4 §5.12 / T9e: the tab's page reached `dom-ready` -- it is safe to inject script into it now. `generation`
+   * is the counter Main minted for the entry this event's element belongs to (see `webRunner.ensure` below); Main
+   * drops the event rather than acting on it when that no longer matches the tab's current entry, which is what
+   * keeps a late `dom-ready` from a destroyed-and-replaced webview from waking the wrong one.
+   */
   "webRunner.ready": WebRunnerTabParams;
-  /** M4 §5.12: the tab's webview died or was torn down by something other than Main's own `webRunner.destroy`. */
+  /**
+   * M4 §5.12 / T9e: the tab's webview died or was torn down by something other than Main's own `webRunner.destroy`.
+   * Carries the same `generation` correlation as `webRunner.ready`, for the same reason: a crash reported by an
+   * element Main has already replaced must not tear down the replacement.
+   */
   "webRunner.exit": WebRunnerTabParams;
   /**
    * M4 §5.12: one page → host envelope, relayed from the element's `host-message` event. `raw` is `unknown` on the
@@ -504,12 +513,21 @@ export type ViewMessages = {
    * M4 §5.12: make sure this tab has a live `<electrobun-webview>`, creating one if the tab's own Web View toggle
    * has never been switched on. Sent by `WebviewSource.ensure()` before every run, which is what lets a run on an
    * untouched `browser` tab work at all -- Task 9's lazy creation otherwise leaves it with no webview to drive.
+   *
+   * T9e: `generation` is the monotonic-per-tab counter Main mints the moment it creates this entry. The UI records
+   * it as the tab's current generation and stamps every `webRunner.ready` / `.exit` it forwards for this tab with
+   * it, until a later `webRunner.ensure` replaces it -- see `apps/ui/src/output/webview-host.ts`.
    */
-  "webRunner.ensure": { tabId: string };
+  "webRunner.ensure": { tabId: string; generation: number };
   /** M4 §5.12: run `js` inside the tab's page (the element's own `executeJavascript`). */
   "webRunner.execute": { tabId: string; js: string };
   /** M4 §5.12: reload the tab's page, for the fresh realm/DOM every run starts from. */
   "webRunner.reload": { tabId: string };
-  /** M4 §5.12: tear the tab's webview down for good (Kill, tab dispose, a timed-out reset). */
-  "webRunner.destroy": { tabId: string };
+  /**
+   * M4 §5.12: tear the tab's webview down for good (Kill, tab dispose, a timed-out reset). T9e: carries the entry's
+   * own `generation`, paired with `webRunner.ensure` above, so Main's side of the wire is symmetric even though the
+   * UI does not need to gate on it -- Main only ever destroys an entry after removing it from its own map, so a
+   * `webRunner.ensure` for a replacement is never sent ahead of the `webRunner.destroy` for what it replaces.
+   */
+  "webRunner.destroy": { tabId: string; generation: number };
 };

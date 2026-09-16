@@ -28,15 +28,29 @@ type Rect = { top: number; left: number; width: number; height: number };
  * tab is active, Output is visible, and its own Web View toggle is on), a `ResizeObserver` on `dockNode` -- plus
  * one measurement whenever docking starts -- drives this element's own `position: fixed` coordinates to visually
  * track `dockNode`'s box. `dockNode` is read from, never rendered into. When not docked, this element collapses
- * to a zero-size, non-interactive box instead of being removed. Because it is never physically nested inside
- * anything that can unmount, and its own mount effect (empty deps) never re-runs, the underlying
- * `<electrobun-webview>` is never recreated by any of this.
+ * to a zero-size, non-interactive box instead of being removed.
+ *
+ * **`enabled` (M4 T9 fix round 1, M2/N4).** `WebViewHosts` mounts one of these for every web-capable tab as soon
+ * as it exists -- in tab order, from the very first render -- so DOM sibling order among tiles is established
+ * once, at ordinary sequential mount time, and never needs to be re-derived later. (An earlier version of this
+ * fix instead delayed *mounting the whole tile* until first enable and derived its render order from tab order at
+ * every render; that doesn't actually reorder the DOM, because these tiles are portals into a shared container --
+ * React's reconciler does not move an already-mounted portal's node relative to a sibling portal's node just
+ * because the JS array feeding `.map()` changed order, since portal placement isn't tracked through the normal
+ * host-sibling machinery that ordinary (non-portal) keyed children get. Verified empirically: reordering the
+ * array after two portals had already mounted separately left the DOM order exactly as first mounted.) What stays
+ * genuinely lazy is the **expensive** part: the real `<electrobun-webview>` element inside this cheap wrapper div
+ * is created only once `enabled` becomes true (mirrors `WebViewHosts`'s `everEnabled`: the tab's own Web View
+ * toggle has been switched on at least once), and, once created, is never removed while this component stays
+ * mounted -- `created` below is a ref, not state, specifically so a later `enabled: false` (which the invariant
+ * says should never happen while mounted, but this guards it anyway) can never re-trigger or undo the creation.
  */
 export function WebViewTile({
   tabId,
   dockNode,
   docked,
   parkingNode,
+  enabled,
 }: {
   tabId: string;
   /** `OutputTiles`'s live docking placeholder to visually track, or `null` when there isn't one right now. */
@@ -44,20 +58,26 @@ export function WebViewTile({
   docked: boolean;
   /** `WebViewHosts`'s own permanent node: this always portals here, and only ever here. */
   parkingNode: HTMLElement;
+  /** Whether the tab's own Web View toggle has ever been switched on. Gates creating the real webview element. */
+  enabled: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
+  const created = useRef(false);
 
   useEffect(() => {
+    if (!enabled || created.current) return;
     const host = container.current;
     if (!host) return;
     const webview = document.createElement("electrobun-webview");
     webview.setAttribute("src", RUNNER_WEB_URL);
     webview.className = "webview-tile-surface";
     host.appendChild(webview);
-    return () => {
-      host.removeChild(webview);
-    };
-  }, []);
+    created.current = true;
+    // No cleanup: once created, this element is never removed while the component stays mounted (the never-
+    // unmount invariant, at the finer grain `enabled` operates on). The component unmounting entirely -- the tab
+    // closes, or loses web capability -- removes this portaled subtree (webview included) the ordinary way,
+    // through React's own portal teardown, with no manual `removeChild` needed.
+  }, [enabled]);
 
   const [rect, setRect] = useState<Rect | null>(null);
   useLayoutEffect(() => {

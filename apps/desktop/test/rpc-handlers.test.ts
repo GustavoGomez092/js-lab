@@ -49,7 +49,9 @@ describe("requests", () => {
       code: "1 + 1",
       language: "typescript",
       logpoints: [],
-      runtime: "bun",
+      // The default tab's runtime is DEFAULT_RUNTIME ("browser-node"), and every runtime is available since M4
+      // Task 9 (packages/shared/src/settings.ts AVAILABLE_RUNTIMES), so effectiveRuntime no longer collapses it.
+      runtime: "browser-node",
       workingDirectory: null,
       scriptName: "1 + 1.ts",
     });
@@ -78,9 +80,22 @@ describe("requests", () => {
       runtime: "browser",
     };
     handlers.requests["run.start"](validStart);
-    // effectiveRuntime still collapses everything to "bun" until a later task widens AVAILABLE_RUNTIMES; this
-    // proves the field is plumbed through without changing behaviour yet.
-    expect(deps.coordinator.start).toHaveBeenCalledWith(expect.objectContaining({ runtime: "bun" }));
+    // Every runtime is available since M4 Task 9, so effectiveRuntime forwards the tab's own runtime unchanged.
+    expect(deps.coordinator.start).toHaveBeenCalledWith(expect.objectContaining({ runtime: "browser" }));
+  });
+
+  test("run.start prefers the tab's runtime over the request's when they differ -- the tab is the source of truth (R-M4-T1-MINOR-1, M4 T9)", () => {
+    const { handlers, deps } = setup();
+    deps.session.session.tabs.t1 = {
+      ...(deps.session.session.tabs.t1 as NonNullable<(typeof deps.session.session.tabs)["t1"]>),
+      runtime: "browser",
+    };
+    // The request explicitly carries "bun" -- a stale UI copy of the tab's runtime (M4 T1's own comment on
+    // rpc-handlers.ts). Task 1's precedence test couldn't distinguish tab-wins from request-wins because every
+    // runtime collapsed to "bun" regardless of which source won; now that AVAILABLE_RUNTIMES holds all three
+    // (Task 9), a divergent request proves it for real: the tab starts on "browser", not the request's "bun".
+    handlers.requests["run.start"]({ ...validStart, runtime: "bun" });
+    expect(deps.coordinator.start).toHaveBeenCalledWith(expect.objectContaining({ runtime: "browser" }));
   });
 
   test("run.expand forwards validated handles", async () => {

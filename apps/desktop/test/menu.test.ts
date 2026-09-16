@@ -96,7 +96,9 @@ describe("application menu", () => {
     expect(byLabel(menu, "Follow System Appearance")?.checked).toBe(false);
     expect(byLabel(menu, "JSX")?.checked).toBe(true);
     expect(byLabel(menu, "Bun")).toMatchObject({ checked: true, enabled: true });
-    expect(byLabel(menu, "Browser & Node APIs")).toMatchObject({ checked: false, enabled: false });
+    // Every runtime is available since M4 Task 9 (AVAILABLE_RUNTIMES): the Actions -> Runtime menu enables all
+    // three, same as the status bar's own runtime selector.
+    expect(byLabel(menu, "Browser & Node APIs")).toMatchObject({ checked: false, enabled: true });
     expect(byLabel(menu, "Output")?.checked).toBe(false);
     expect(byLabel(menu, "Status Bar")?.checked).toBe(false);
     expect(byLabel(menu, "Vertical")?.checked).toBe(true);

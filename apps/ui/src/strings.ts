@@ -383,7 +383,7 @@ export const strings = {
       "run.autoLog": { label: "Auto Log", help: "Show the value of each top-level expression." },
       "run.defaultRuntime": {
         label: "Default Runtime",
-        help: "Runtime for new tabs. Browser runtimes arrive in a later version; until then new tabs use Bun.",
+        help: "Runtime for new tabs.",
       },
       "run.defaultLanguage": { label: "Default Language", help: "Language for new tabs." },
       "run.formatOnRun": {

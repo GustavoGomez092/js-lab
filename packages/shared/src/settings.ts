@@ -12,8 +12,8 @@ export type Runtime = (typeof RUNTIMES)[number];
 export const DEFAULT_RUNTIME: Runtime = "browser-node";
 export const DEFAULT_LANGUAGE: Language = "typescript";
 
-/** Runtimes that can execute code in this build. M4 adds "browser-node" and "browser". */
-export const AVAILABLE_RUNTIMES: readonly Runtime[] = ["bun"];
+/** Runtimes that can execute code in this build. M4 (Task 9) turns on "browser-node" and "browser" alongside "bun". */
+export const AVAILABLE_RUNTIMES: readonly Runtime[] = ["bun", "browser-node", "browser"];
 
 export function isRuntimeAvailable(runtime: Runtime): boolean {
   return AVAILABLE_RUNTIMES.includes(runtime);

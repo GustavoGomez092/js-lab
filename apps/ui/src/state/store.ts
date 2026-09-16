@@ -400,7 +400,15 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       },
 
       setRuntime(runtime) {
-        updateTab(null, (tab) => ({ ...tab, runtime }));
+        // Unlike setLanguage, this arms auto-run itself (mirrors editCode) rather than relying on the tab already
+        // being dirty: spec §5.2 states switching a tab's runtime triggers a run when Auto Run is on, unconditionally.
+        const id = resolve();
+        const tab = id ? get().tabs[id] : undefined;
+        if (!id || !tab) return;
+        commit({
+          tabs: { ...get().tabs, [id]: { ...tab, runtime } },
+          runtimes: { ...get().runtimes, [id]: { ...(get().runtimes[id] ?? newRuntime()), autoRunArmed: true } },
+        });
       },
 
       setEditorSize(size) {

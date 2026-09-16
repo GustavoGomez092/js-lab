@@ -11,10 +11,12 @@ const defaultTimers: TimerApi = {
 };
 
 /**
- * Debounces runs after code or language changes (spec §4.2). Nothing runs until auto-run is armed by an edit,
- * and nothing runs in Safe Mode (spec §5.14). The guard is re-checked both when scheduling and when the timer
- * fires, and a pending timer is cancelled the moment the guard stops holding (Safe Mode engages, Auto Run is
- * turned off, or `hydrate()` disarms it) so a stale timer never runs code the guard would now reject.
+ * Debounces runs after code, language or runtime changes (spec §4.2, §5.2). Nothing runs until auto-run is armed --
+ * by an edit, or (M4 Task 9) by the runtime switch itself, since spec §5.2 states a runtime change triggers a run
+ * unconditionally, not only on an already-dirty tab -- and nothing runs in Safe Mode (spec §5.14). The guard is
+ * re-checked both when scheduling and when the timer fires, and a pending timer is cancelled the moment the guard
+ * stops holding (Safe Mode engages, Auto Run is turned off, or `hydrate()` disarms it) so a stale timer never runs
+ * code the guard would now reject.
  * Returns an unsubscribe function that also exposes `cancelPending()` (fix round 1, I-1), so a caller that
  * already covers a pending edit (for example a manual run that just formatted the code) can cancel the
  * timer that edit armed without tearing down the subscription.
@@ -40,7 +42,10 @@ export function startAutoRun(
       cancel();
       return;
     }
-    const changed = state.code !== previous.code || state.tab?.language !== previous.tab?.language;
+    const changed =
+      state.code !== previous.code ||
+      state.tab?.language !== previous.tab?.language ||
+      state.tab?.runtime !== previous.tab?.runtime;
     if (!changed) return;
     cancel();
     pending = timers.setTimeout(() => {

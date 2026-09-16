@@ -1,13 +1,31 @@
 import { deflateSync } from "node:zlib";
 
 export type Rgb = readonly [number, number, number];
-type Point = readonly [number, number];
 
-/** Graphite tokens: bg.canvas, bg.chrome and fg.accent. */
-export const ICON_COLORS: { canvas: Rgb; chrome: Rgb; accent: Rgb } = {
+/**
+ * Graphite tokens plus the two tones the icon's ground is mixed from.
+ *
+ * `canvas`, `chrome` and `accent` are the shared Graphite values. `groundTop`/`groundBottom` are the icon's own
+ * diagonal ground -- a little lighter and a little darker than `canvas` respectively, so the tile reads as a surface
+ * rather than a flat swatch. `muted` is the editor's dimmed foreground, used for the code lines; `notch` is the
+ * ground tone punched back out of the accent rail.
+ */
+export const ICON_COLORS: {
+  canvas: Rgb;
+  chrome: Rgb;
+  accent: Rgb;
+  groundTop: Rgb;
+  groundBottom: Rgb;
+  muted: Rgb;
+  notch: Rgb;
+} = {
   canvas: [0x1b, 0x1e, 0x23],
   chrome: [0x16, 0x19, 0x1d],
   accent: [0x6f, 0x9b, 0xff],
+  groundTop: [0x23, 0x28, 0x31],
+  groundBottom: [0x14, 0x17, 0x1b],
+  muted: [0x83, 0x8c, 0x99],
+  notch: [0x1a, 0x1d, 0x22],
 };
 
 /** The macOS iconset files (iconutil's names) and their pixel sizes. */
@@ -26,43 +44,45 @@ const mix = (from: Rgb, to: Rgb, amount: number): Rgb => [
   from[2] + (to[2] - from[2]) * amount,
 ];
 
-/** Signed distance from (x, y) to a rounded square centred at (c, c) with half-size `half` and corner radius `radius`. */
-function roundedSquareDistance(x: number, y: number, c: number, half: number, radius: number): number {
-  const qx = Math.abs(x - c) - (half - radius);
-  const qy = Math.abs(y - c) - (half - radius);
-  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - radius;
+/**
+ * Signed distance from (x, y) to a rounded rectangle centred at (cx, cy). Negative inside, and measured in pixels,
+ * so `clamp01(0.5 - distance)` is a one-pixel antialiased coverage value for any shape here.
+ */
+function roundedRectDistance(
+  x: number,
+  y: number,
+  cx: number,
+  cy: number,
+  halfWidth: number,
+  halfHeight: number,
+  radius: number,
+): number {
+  const r = Math.min(radius, halfWidth, halfHeight);
+  const qx = Math.abs(x - cx) - (halfWidth - r);
+  const qy = Math.abs(y - cy) - (halfHeight - r);
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
 }
 
-function distanceToSegment(x: number, y: number, a: Point, b: Point): number {
-  const dx = b[0] - a[0];
-  const dy = b[1] - a[1];
-  const lengthSquared = dx * dx + dy * dy;
-  const t = lengthSquared === 0 ? 0 : clamp01(((x - a[0]) * dx + (y - a[1]) * dy) / lengthSquared);
-  return Math.hypot(x - (a[0] + t * dx), y - (a[1] + t * dy));
-}
-
-/** Points on a circular arc from `from` to `to` degrees (y grows downward). */
-function arc(cx: number, cy: number, radius: number, from: number, to: number, steps = 12): Point[] {
-  return Array.from({ length: steps + 1 }, (_, index): Point => {
-    const angle = ((from + ((to - from) * index) / steps) * Math.PI) / 180;
-    return [cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)];
-  });
-}
-
-/** "{" as a polyline: the top hook, the stem, the tip at mid-height, the stem, the bottom hook. */
-function leftBrace(size: number): Point[] {
-  const c = size / 2;
-  const x = c - 0.17 * size;
-  const top = c - 0.2 * size;
-  const bottom = c + 0.2 * size;
-  const r = 0.06 * size;
-  return [
-    ...arc(x + r, top + r, r, 270, 180),
-    ...arc(x - r, c - r, r, 0, 90),
-    ...arc(x - r, c + r, r, 270, 360),
-    ...arc(x + r, bottom - r, r, 180, 90),
-  ];
-}
+/**
+ * The artwork's layout, as fractions of the icon **body** (not the full canvas).
+ *
+ * macOS draws an `.icns` exactly as supplied -- it applies no mask of its own -- so the body is the rounded square
+ * this file draws, and every neighbour in the Dock is built on the same grid: a square inset to ~80% of the canvas
+ * with a 22.5% corner radius. Laying the artwork out in body fractions (rather than canvas fractions) keeps the
+ * composition identical to the approved design while the inset handles the platform convention.
+ *
+ * Heights are 96/1024 rather than the concept's 84/1024. Inside an 80% body, 84 units would put the code lines at
+ * 6.6% of the canvas -- 1.05 px at 16 px, on the edge of what a display resolves, and the exact failure that
+ * retired the previous icon. 96 units puts them at 7.5% (1.2 px) with the row centres unmoved.
+ */
+const RAIL_LEFT = 700 / 1024;
+const BAR_LEFT = 150 / 1024;
+const BAR_WIDTHS = [400 / 1024, 300 / 1024, 350 / 1024] as const;
+/** Row centres: the three code lines, the middle one aligned with the notch. Evenly spaced by 182/1024. */
+const ROW_CENTERS = [330 / 1024, 512 / 1024, 694 / 1024] as const;
+const ROW_HALF_HEIGHT = 48 / 1024;
+const NOTCH_LEFT = 752 / 1024;
+const NOTCH_RIGHT = 952 / 1024;
 
 /** The JSLab app icon at `size`×`size` pixels, as straight-alpha RGBA. */
 export function renderAppIcon(size: number): Uint8Array {
@@ -70,38 +90,61 @@ export function renderAppIcon(size: number): Uint8Array {
   const c = size / 2;
   const half = 0.4 * size;
   const radius = 0.225 * (2 * half);
-  const rim = 0.035 * size;
-  const strokeHalf = 0.0275 * size;
-  const left = leftBrace(size);
-  const right = left.map(([x, y]): Point => [size - x, y]);
-  const segments: [Point, Point][] = [];
-  for (const brace of [left, right]) {
-    for (let index = 1; index < brace.length; index++)
-      segments.push([brace[index - 1] as Point, brace[index] as Point]);
-  }
-  for (let py = 0; py < size; py++) {
-    for (let px = 0; px < size; px++) {
-      const x = px + 0.5;
-      const y = py + 0.5;
-      const body = clamp01(0.5 - roundedSquareDistance(x, y, c, half, radius));
-      if (body === 0) continue;
-      const face = clamp01(0.5 - roundedSquareDistance(x, y, c, half - rim, Math.max(radius - rim, 0)));
-      let ink = 0;
-      // Only pixels near the braces (|x - c| within 17% ± 6% plus the stroke) measure segment distances.
-      if (
-        Math.abs(Math.abs(x - c) - 0.17 * size) <= 0.06 * size + strokeHalf + 1 &&
-        Math.abs(y - c) <= 0.2 * size + strokeHalf + 1
-      ) {
-        let nearest = Number.POSITIVE_INFINITY;
-        for (const [a, b] of segments) nearest = Math.min(nearest, distanceToSegment(x, y, a, b));
-        ink = clamp01(strokeHalf + 0.5 - nearest);
+  const body = 2 * half;
+  const originX = c - half;
+  const originY = c - half;
+  /** Body fraction → absolute pixels, horizontally and vertically. */
+  const px = (fraction: number) => originX + fraction * body;
+  const py = (fraction: number) => originY + fraction * body;
+  const len = (fraction: number) => fraction * body;
+
+  const railLeft = px(RAIL_LEFT);
+  const rowHalfHeight = len(ROW_HALF_HEIGHT);
+  const notchCenterX = px((NOTCH_LEFT + NOTCH_RIGHT) / 2);
+  const notchHalfWidth = len((NOTCH_RIGHT - NOTCH_LEFT) / 2);
+  const notchCenterY = py(ROW_CENTERS[1] as number);
+  const bars = BAR_WIDTHS.map((width, row) => ({
+    centerX: px(BAR_LEFT + width / 2),
+    centerY: py(ROW_CENTERS[row] as number),
+    halfWidth: len(width / 2),
+  }));
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const sx = x + 0.5;
+      const sy = y + 0.5;
+      const coverage = clamp01(0.5 - roundedRectDistance(sx, sy, c, c, half, half, radius));
+      if (coverage === 0) continue;
+
+      // The ground: the concept's top-left to bottom-right gradient, across the body's own diagonal.
+      const t = clamp01((sx - originX + (sy - originY)) / (2 * body));
+      let color = mix(ICON_COLORS.groundTop, ICON_COLORS.groundBottom, t);
+
+      // The output rail: full-bleed to the body's right edge, so the rounded corners clip it rather than a border.
+      color = mix(color, ICON_COLORS.accent, clamp01(sx - railLeft + 0.5));
+
+      // The notch, punched out of the rail on the middle row -- where the anchored result lands.
+      const notch = clamp01(
+        0.5 - roundedRectDistance(sx, sy, notchCenterX, notchCenterY, notchHalfWidth, rowHalfHeight, rowHalfHeight),
+      );
+      color = mix(color, ICON_COLORS.notch, notch);
+
+      // The three code lines on the left.
+      let bar = 0;
+      for (const { centerX, centerY, halfWidth } of bars) {
+        if (Math.abs(sy - centerY) > rowHalfHeight + 1) continue;
+        bar = Math.max(
+          bar,
+          clamp01(0.5 - roundedRectDistance(sx, sy, centerX, centerY, halfWidth, rowHalfHeight, rowHalfHeight)),
+        );
       }
-      const color = mix(mix(ICON_COLORS.chrome, ICON_COLORS.canvas, face), ICON_COLORS.accent, ink);
-      const offset = (py * size + px) * 4;
+      color = mix(color, ICON_COLORS.muted, bar);
+
+      const offset = (y * size + x) * 4;
       rgba[offset] = Math.round(color[0]);
       rgba[offset + 1] = Math.round(color[1]);
       rgba[offset + 2] = Math.round(color[2]);
-      rgba[offset + 3] = Math.round(255 * body);
+      rgba[offset + 3] = Math.round(255 * coverage);
     }
   }
   return rgba;

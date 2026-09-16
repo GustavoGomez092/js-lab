@@ -26,7 +26,7 @@ import { type Formatter, shouldFormatBeforeRun } from "../format/formatter";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { NpmSheet } from "../npm/NpmSheet";
 import { operationStatusMessage } from "../npm/npm-panel";
-import { OutputPanel } from "../output/OutputPanel";
+import { OutputTiles } from "../output/OutputTiles";
 import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
@@ -49,6 +49,7 @@ import { SideBar } from "./SideBar";
 import { SplitPane } from "./SplitPane";
 import { StatusBar } from "./StatusBar";
 import { Toolbar } from "./Toolbar";
+import { computeTabPatch } from "./tab-patch";
 
 const UI_HEARTBEAT_MS = 2000;
 
@@ -396,28 +397,8 @@ export function App({
             else bufferSync.changed(id, content);
             if (id === state.activeTabId) lastTypedAt.current = Date.now();
           }
-          // updateLayout (state/store.ts) always replaces the layout object, even when the clamped
-          // fields end up the same (a divider drag past 10/90, or a reset to the current split), so
-          // compare fields rather than the object reference (fix round 1, I-1).
-          const layoutChanged =
-            next.layout.orientation !== before.layout.orientation ||
-            next.layout.editorSize !== before.layout.editorSize ||
-            next.layout.outputVisible !== before.layout.outputVisible;
-          if (
-            next.language !== before.language ||
-            next.runtime !== before.runtime ||
-            layoutChanged ||
-            next.title !== before.title ||
-            next.titleIsCustom !== before.titleIsCustom
-          ) {
-            api.patchTab(id, {
-              language: next.language,
-              runtime: next.runtime,
-              layout: next.layout,
-              title: next.title,
-              titleIsCustom: next.titleIsCustom,
-            });
-          }
+          const patch = computeTabPatch(before, next);
+          if (patch) api.patchTab(id, patch);
         }
       }),
     [store, api, bufferSync],
@@ -544,7 +525,7 @@ export function App({
               vimSlot={vimSlot}
             />
           }
-          second={<OutputPanel store={store} api={api} runKeys={keycaps.run} onInstall={install} />}
+          second={<OutputTiles store={store} api={api} runKeys={keycaps.run} onInstall={install} />}
         />
       </div>
       <div className="vim-slot" ref={vimSlot} />

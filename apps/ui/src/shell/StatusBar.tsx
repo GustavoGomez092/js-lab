@@ -25,6 +25,10 @@ export function StatusBar({
   const runtime = useStore(store, (s) => s.tab?.runtime);
   const language = useStore(store, (s) => s.tab?.language);
   const orientation = useStore(store, (s) => s.tab?.layout.orientation);
+  const webviewVisible = useStore(store, (s) => s.tab?.layout.tiles.webviewVisible ?? false);
+  // spec §7.1: the Web View tile -- and the <electrobun-webview> it hosts -- exists only for a runtime that can
+  // actually run in one; `bun` never gets one (see OutputTiles.tsx).
+  const webviewSupported = runtime !== undefined && runtime !== "bun";
   const workingDirectory = useStore(store, (s) => s.tab?.workingDirectory ?? null);
   // R24-2, fix round 1 (I-1/M-2): an O(1) read of the store-derived flag, instead of scanning `entries` on every
   // render. The flag itself is kept current in `store.ts` (`withWorkingDirectoryMissing`, `applyTabUpdate`).
@@ -78,6 +82,15 @@ export function StatusBar({
         </select>
         <button type="button" className="status-item" onClick={onToggleLayout}>
           {orientation === "horizontal" ? strings.shell.split.horizontal : strings.shell.split.vertical}
+        </button>
+        <button
+          type="button"
+          className="status-item"
+          disabled={!webviewSupported}
+          title={webviewSupported ? undefined : strings.shell.webView.unavailable}
+          onClick={() => store.getState().toggleWebviewVisible()}
+        >
+          {webviewVisible ? strings.shell.webView.hide : strings.shell.webView.show}
         </button>
         {workingDirectory ? (
           <span className="status-wd">

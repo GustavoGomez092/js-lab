@@ -98,6 +98,13 @@ export const strings = {
     safeMode: "Safe Mode",
     sideBarPlaceholder: "This panel arrives in a later version.",
     split: { horizontal: "Side by side", vertical: "Stacked" },
+    // M4 Task 8 (ruling R-M4-T8-DISABLED-1): mirrors the runtime <select>'s own disabled-option idiom -- native
+    // `disabled` plus this string as the button's `title`, for the one runtime that never creates a webview.
+    webView: {
+      show: "Show Web View",
+      hide: "Hide Web View",
+      unavailable: "Web View isn't available for the Bun runtime",
+    },
     cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
     runtime: "Runtime",
     language: "Language",

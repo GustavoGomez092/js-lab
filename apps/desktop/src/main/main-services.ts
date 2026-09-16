@@ -86,7 +86,13 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     tabDefaults: () => ({
       language: settings.current.run.defaultLanguage,
       runtime: effectiveRuntime(settings.current.run.defaultRuntime),
-      layout: { orientation: settings.current.view.layout, editorSize: 55, outputVisible: true },
+      layout: {
+        orientation: settings.current.view.layout,
+        editorSize: 55,
+        outputVisible: true,
+        // M4 Task 8: matches tabTilesSchema's own `.catch()` defaults (packages/shared/src/session.ts).
+        tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+      },
     }),
   });
   await ensurePackagesProject(paths, log);

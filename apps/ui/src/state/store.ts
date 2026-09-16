@@ -195,6 +195,10 @@ export interface AppState {
   toggleOrientation(): void;
   setOrientation(orientation: TabState["layout"]["orientation"]): void;
   toggleOutputVisible(): void;
+  /** M4 Task 8: the nested split between the Console and Web View tiles (`layout.tiles.consoleSize`). */
+  setConsoleSize(size: number): void;
+  resetConsoleSize(): void;
+  toggleWebviewVisible(): void;
   receiveEvents(runId: string, events: RunEvent[], tabId?: string): void;
   receiveState(runId: string, state: RunState, activeHandles?: number, tabId?: string): void;
   receiveDiagnostics(runId: string, diagnostics: DiagnosticPayload[], tabId?: string): void;
@@ -413,6 +417,18 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       setOrientation(orientation) {
         updateLayout(() => ({ orientation }));
+      },
+
+      setConsoleSize(size) {
+        updateLayout((layout) => ({ tiles: { ...layout.tiles, consoleSize: clampEditorSize(size) } }));
+      },
+
+      resetConsoleSize() {
+        updateLayout((layout) => ({ tiles: { ...layout.tiles, consoleSize: EDITOR_SIZE_RESET } }));
+      },
+
+      toggleWebviewVisible() {
+        updateLayout((layout) => ({ tiles: { ...layout.tiles, webviewVisible: !layout.tiles.webviewVisible } }));
       },
 
       toggleOutputVisible() {

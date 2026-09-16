@@ -127,7 +127,12 @@ describe("app store", () => {
     store.getState().hydrate(payload());
     store.getState().setEditorSize(99);
     store.getState().toggleOrientation();
-    expect(store.getState().tab?.layout).toEqual({ orientation: "vertical", editorSize: 90, outputVisible: true });
+    expect(store.getState().tab?.layout).toEqual({
+      orientation: "vertical",
+      editorSize: 90,
+      outputVisible: true,
+      tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+    });
   });
 
   test("hydrate loads every tab with its own buffer and output, and switching swaps the mirrors", () => {

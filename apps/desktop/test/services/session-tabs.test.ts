@@ -30,7 +30,12 @@ describe("SessionStore tabs", () => {
     const store = await open({
       tabDefaults: () => ({
         language: "javascript",
-        layout: { orientation: "vertical", editorSize: 55, outputVisible: true },
+        layout: {
+          orientation: "vertical",
+          editorSize: 55,
+          outputVisible: true,
+          tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+        },
       }),
     });
     const second = await store.createTab({ content: "1 + 1" });

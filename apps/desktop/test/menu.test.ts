@@ -83,7 +83,12 @@ describe("application menu", () => {
       id: "t1",
       language: "jsx",
       runtime: "bun",
-      layout: { orientation: "vertical", editorSize: 55, outputVisible: false },
+      layout: {
+        orientation: "vertical",
+        editorSize: 55,
+        outputVisible: false,
+        tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+      },
     });
     const menu = buildMenu(model({ settings, activeTab: tab, canReopen: true }));
     expect(byLabel(menu, "Nord")?.checked).toBe(true);

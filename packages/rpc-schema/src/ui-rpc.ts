@@ -73,6 +73,15 @@ export const tabPatchSchema = z.object({
           orientation: z.enum(["horizontal", "vertical"]),
           editorSize: z.number().min(10).max(90),
           outputVisible: z.boolean(),
+          // M4 Task 8 (ruling R-M4-T8-PATCH-1): added alongside the three fields above -- this whitelist is the
+          // one place a new `tabLayoutSchema` (packages/shared) field must also be named, or it is silently
+          // stripped in transit (the UI updates, nothing persists, no error anywhere).
+          tiles: z.object({
+            arrangement: z.enum(["stacked", "side-by-side"]),
+            order: z.array(z.enum(["console", "webview"])).length(2),
+            webviewVisible: z.boolean(),
+            consoleSize: z.number().min(10).max(90),
+          }),
         })
         .partial(),
     })

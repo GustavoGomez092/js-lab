@@ -91,6 +91,13 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         deps.session.setBuffer(tabId, content),
       ),
       "tab.patch": message(tabPatchSchema, "tab.patch", ({ tabId, patch }) => {
+        // Captured before patchTab (fix round 1, F2): the tab's stored value as of right now, so a change is
+        // detected against what's actually on record -- not merely against "was `muted` present in this
+        // patch". The UI's sole producer of tab.patch (App.tsx's computeTabPatch) always sends the *entire*
+        // layout object whenever anything tracked in it changed, so `patch.layout.muted` is present on nearly
+        // every patch (a title rename, a runtime switch, a divider drag) even when mute itself didn't change;
+        // gating on presence alone fired `coordinator.mute()` -- an extra webview round trip -- on every one.
+        const previouslyMuted = deps.session.session.tabs[tabId]?.layout.muted;
         // The write happens after this returns (e.g. a buffer flush during a language rename), so a failure
         // must be caught here rather than left as an unhandled rejection (ruling I2).
         void deps.session
@@ -98,7 +105,9 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
           .catch((error) => deps.log("Handler for tab.patch failed", String(error)));
         // Task 15 (spec §5.12, EX-35): a mute toggle takes effect on whatever is running right now too, not just
         // the tab's next run -- `coordinator.mute` is a harmless no-op when nothing is running.
-        if (patch.layout?.muted !== undefined) deps.coordinator.mute(tabId, patch.layout.muted);
+        if (patch.layout?.muted !== undefined && patch.layout.muted !== previouslyMuted) {
+          deps.coordinator.mute(tabId, patch.layout.muted);
+        }
       }),
       "ui.heartbeat": () => deps.onUiHeartbeat(),
       "e2e.response": message(e2eResponseSchema, "e2e.response", (response) => deps.onE2EResponse?.(response)),

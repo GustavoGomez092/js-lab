@@ -188,14 +188,24 @@ describe("messages", () => {
     expect(deps.session.patchTab).toHaveBeenCalledWith("t1", { language: "tsx" });
   });
 
-  // Task 15 (spec §5.12, EX-35): a mute toggle takes effect on whatever is running right now too, not just the
-  // tab's saved layout -- a patch that doesn't touch `muted` at all must not call coordinator.mute unnecessarily.
-  test("tab.patch's layout.muted also live-mutes whatever is currently running for that tab", () => {
+  // Task 15 (spec §5.12, EX-35, fix round 1 F2): a mute toggle takes effect on whatever is running right now
+  // too, not just the tab's saved layout -- but only when `muted` actually changed. The UI's sole producer of
+  // tab.patch (apps/ui/src/shell/tab-patch.ts's computeTabPatch) always sends the *entire* layout object
+  // whenever anything tracked in it changed, so a patch shaped `{ title: "x" }` alone (what the old version of
+  // this test used) never happens in production -- `layout` rides along on every patch. This uses the shape
+  // production actually sends.
+  test("tab.patch's layout.muted live-mutes whatever is currently running, but only on an actual change", () => {
     const { handlers, deps } = setup();
-    handlers.messages["tab.patch"]({ tabId: "t1", patch: { layout: { muted: true } } });
-    expect(deps.coordinator.mute).toHaveBeenCalledWith("t1", true);
+    const layout = deps.session.session.tabs.t1?.layout;
+    if (!layout) throw new Error("expected tab t1");
 
-    handlers.messages["tab.patch"]({ tabId: "t1", patch: { title: "x" } });
+    // A rename: the whole (unchanged) layout rides along, `muted` included -- must not call coordinator.mute.
+    handlers.messages["tab.patch"]({ tabId: "t1", patch: { title: "x", layout } });
+    expect(deps.coordinator.mute).not.toHaveBeenCalled();
+
+    // An actual mute toggle: same shape, `muted` this time genuinely differs from what's stored.
+    handlers.messages["tab.patch"]({ tabId: "t1", patch: { title: "y", layout: { ...layout, muted: true } } });
+    expect(deps.coordinator.mute).toHaveBeenCalledWith("t1", true);
     expect(deps.coordinator.mute).toHaveBeenCalledTimes(1);
   });
 

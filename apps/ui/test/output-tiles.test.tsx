@@ -511,4 +511,16 @@ describe("OutputTiles / WebViewHosts", () => {
     });
     expect(computeTabPatch(before, before)).toBeNull();
   });
+
+  // Fix round 1, F1: the parallel guard for Task 15's `muted` -- without tab-patch.ts's `layoutChanged` check
+  // naming it, computeTabPatch returns null for a mute-only change and it silently never reaches disk; without
+  // ui-rpc.ts's tabPatchSchema whitelist naming it, Main would silently strip it in transit. One test for both.
+  test("a muted change survives the trip from the UI's tab.patch through Main's tabPatchSchema (Task 15 fix round 1, F1)", () => {
+    const before = tabWith("t1", { runtime: "browser" });
+    const next: TabState = { ...before, layout: { ...before.layout, muted: true } };
+    const patch = computeTabPatch(before, next);
+    expect(patch).not.toBeNull();
+    const parsed = tabPatchSchema.parse({ tabId: before.id, patch });
+    expect(parsed.patch.layout?.muted).toBe(true);
+  });
 });

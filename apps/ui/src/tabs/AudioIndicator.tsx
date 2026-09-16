@@ -24,6 +24,11 @@ export function AudioIndicator({
   title: string;
   onToggle(): void;
 }) {
+  // Fix round 1, N1: if this button currently has focus and `active` goes false (the audio stopped on its
+  // own), it unmounts and focus falls back to <body> -- there is no more specific place for it to go once the
+  // control that held it is gone, and the tab row itself (TabBar.tsx) isn't a focus stop either. Acceptable:
+  // the far more common path out of "muted and active" is the user's own click, which keeps this control (and
+  // its focus) mounted, just re-labelled.
   if (!active) return null;
   return (
     <button

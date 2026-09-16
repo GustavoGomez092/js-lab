@@ -228,11 +228,19 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
         const gain = this.createGain();
         gain.connect(realDestination);
         Object.defineProperty(this, "destination", { value: gain, configurable: true, enumerable: false });
-        audio.addContext(gain.gain);
+        // Fix round 1, M1: a context created without a user gesture starts "suspended" under autoplay policy --
+        // the common case, not the rare one -- and the spec calls for the icon on a *running* context, so
+        // audio-active tracking follows `state` rather than construction/close alone: register only while
+        // actually "running", and follow every later suspend/resume too.
+        if (this.state === "running") audio.addContext(gain.gain);
         this.addEventListener("statechange", () => {
           if (this.state === "closed") {
             tracker.remove(this);
             audio.removeContext(gain.gain);
+          } else if (this.state === "suspended") {
+            audio.removeContext(gain.gain);
+          } else if (this.state === "running") {
+            audio.addContext(gain.gain);
           }
         });
       }
@@ -245,7 +253,6 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
     const play: AnyFn = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function (this: any, ...args: unknown[]) {
       tracker.add(this, () => this.pause());
-      audio.addPlaying(this);
       const release = () => {
         tracker.remove(this);
         audio.removePlaying(this);
@@ -254,8 +261,17 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
       this.addEventListener("ended", release, { once: true });
       const result = play.apply(this, args);
       // Task 15: mute is a persistent state, not a one-shot action -- media that starts playing while the tab is
-      // already muted must not audibly play either, so it's paused right back down immediately.
+      // already muted must not audibly play either. Fix round 1, M3: checking `audio.muted` *before* registering
+      // with AudioController (rather than registering then immediately pausing) avoids emitting a spurious
+      // true-then-false `audio` message pair for a play that was never actually going to be heard.
       if (audio.muted) this.pause();
+      else audio.addPlaying(this);
+      // Fix round 1, M2: a rejected play() -- exactly what a browser does until the user has interacted with
+      // the page -- fires neither "pause" nor "ended", so without this the handle (and the audio-active state
+      // with it) would stay registered for the page's lifetime with nothing actually playing. Attaching this
+      // handler also marks the promise "handled" for unhandled-rejection purposes, the same accepted divergence
+      // `bootstrap.ts`'s own `watchPromise` already documents for the analogous case.
+      if (result && typeof result.then === "function") result.catch(() => release());
       return result;
     };
   }

@@ -663,13 +663,17 @@ Cover, against a dev build:
 
 Scenarios that need packages belong in the opt-in suite (`e2e:npm`), not the default 60.
 
-- [ ] Steps: one scenario at a time, each run before moving on. **Counts: default e2e +6, `e2e:npm` +4; unit counts unchanged. Measure your own baseline first and report `baseline N → after M`** — the deltas are the estimate, the absolutes are not. The plan's original "60 → 66 in 27 files" and "4 → 8 in 2 files" were written before Tasks 3–15 existed; Task 9a alone changed the e2e surface, and EX-24 is currently red by design (Task 17 owns it). Never add a scenario to make a total match.
+- [ ] Steps: one scenario at a time, each run before moving on. **Counts: default e2e +6, `e2e:npm` +4; unit counts unchanged. Measure your own baseline first and report `baseline N → after M`** — the deltas are the estimate, the absolutes are not. The plan's original "60 → 66 in 27 files" and "4 → 8 in 2 files" were written before Tasks 3–15 existed; Task 9a alone changed the e2e surface. Never add a scenario to make a total match.
+
+**Measured as-built, at the tip (verified, not projected):** `packages/e2e/scenarios/` holds **24 files** and `packages/e2e/npm-scenarios/` holds **1**. The scripts are `e2e` → `bun test ./scenarios --timeout 180000` and `e2e:npm` → `bun test ./npm-scenarios --timeout 600000`. The loopback registry harness exists (`packages/test-registry`, `startTestRegistry`) — use it for anything needing packages; **never the public npm registry**. None of the three files you create exists yet.
+
+**EX-24 is currently red by design and is Task 17's, not yours.** It lives at `packages/e2e/scenarios/layout.test.ts:68` — "the runtime selector keeps Bun and rejects runtimes that arrive later (EX-24)". Do not fix it, do not delete it, and do not let its failure stop your own runs.
 
 ---
 
 ### Task 17: Docs, parity and QA
 
-**Carried from Task 9a's review (ledger ruling R-M4-EX24-1) — you own a known-failing e2e scenario.** `EX-24` currently asserts *"the runtime selector keeps Bun and rejects runtimes that arrive later"*, checking that `runtime.browserNode` is **disabled**. Task 9 invalidated that by making all three runtimes selectable via `AVAILABLE_RUNTIMES`. It is the **single failing e2e scenario** on the branch and was deliberately left failing rather than quietly rewritten, because it is a behavioural assertion belonging to another task.
+**Carried from Task 9a's review (ledger ruling R-M4-EX24-1) — you own a known-failing e2e scenario.** It lives at **`packages/e2e/scenarios/layout.test.ts:68`** (verified at the tip). `EX-24` currently asserts *"the runtime selector keeps Bun and rejects runtimes that arrive later"*, checking that `runtime.browserNode` is **disabled**. Task 9 invalidated that by making all three runtimes selectable via `AVAILABLE_RUNTIMES`. It is the **single failing e2e scenario** on the branch and was deliberately left failing rather than quietly rewritten, because it is a behavioural assertion belonging to another task.
 
 - **Replace it with a selector test, not an execution test:** *"the runtime selector switches the active tab between all three runtimes (EX-24)"*, asserting `activeTab(...).runtime` becomes `bun`, then `browser-node`, then `browser`.
 - **`docs/parity.md:48` must change in the same breath** — the "rejects runtimes that arrive later" clause was a **milestone gate, never parity behaviour**, and this task already owns that row.

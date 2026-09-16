@@ -5,12 +5,41 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./bootstrap": "./src/bootstrap.ts"
+    "./bootstrap": "./src/bootstrap.ts",
+    "./polyfills/process.ts.txt": "./src/polyfills/process.ts",
+    "./polyfills/os.ts.txt": "./src/polyfills/os.ts",
+    "./polyfills/crypto.ts.txt": "./src/polyfills/crypto.ts",
+    "./polyfills/vendor/buffer.js.txt": "./src/polyfills/vendor/buffer.js",
+    "./polyfills/vendor/path-browserify.js.txt": "./src/polyfills/vendor/path-browserify.js",
+    "./polyfills/vendor/events.js.txt": "./src/polyfills/vendor/events.js",
+    "./polyfills/vendor/util.js.txt": "./src/polyfills/vendor/util.js",
+    "./polyfills/vendor/url.js.txt": "./src/polyfills/vendor/url.js",
+    "./polyfills/vendor/querystring-es3.js.txt": "./src/polyfills/vendor/querystring-es3.js",
+    "./polyfills/vendor/string_decoder.js.txt": "./src/polyfills/vendor/string_decoder.js",
+    "./polyfills/vendor/assert.js.txt": "./src/polyfills/vendor/assert.js",
+    "./polyfills/vendor/stream-browserify.js.txt": "./src/polyfills/vendor/stream-browserify.js",
+    "./polyfills/vendor/punycode.js.txt": "./src/polyfills/vendor/punycode.js",
+    "./polyfills/vendor/create-hash.js.txt": "./src/polyfills/vendor/create-hash.js",
+    "./polyfills/vendor/create-hmac.js.txt": "./src/polyfills/vendor/create-hmac.js"
   },
   "dependencies": {
     "@jslab/rpc-schema": "workspace:*",
     "@jslab/runner-shared": "workspace:*",
     "@jslab/serializer": "workspace:*"
+  },
+  "devDependencies": {
+    "assert": "2.1.0",
+    "buffer": "6.0.3",
+    "create-hash": "1.2.0",
+    "create-hmac": "1.1.7",
+    "events": "3.3.0",
+    "path-browserify": "1.0.1",
+    "punycode": "2.3.1",
+    "querystring-es3": "0.2.1",
+    "stream-browserify": "3.0.0",
+    "string_decoder": "1.3.0",
+    "url": "0.11.4",
+    "util": "0.12.5"
   },
   "scripts": {
     "test": "bun test",

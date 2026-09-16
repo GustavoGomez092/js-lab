@@ -50,9 +50,10 @@ describe("requests", () => {
       code: "1 + 1",
       language: "typescript",
       logpoints: [],
-      // The default tab's runtime is DEFAULT_RUNTIME ("browser-node"), and every runtime is available since M4
-      // Task 9 (packages/shared/src/settings.ts AVAILABLE_RUNTIMES), so effectiveRuntime no longer collapses it.
-      runtime: "browser-node",
+      // The default tab's runtime is DEFAULT_RUNTIME, which M4 Task 9a returned to "bun": with the browser
+      // runtimes actually registered, a default tab would otherwise route to a web view that starts evaluating
+      // and never reports a result (see packages/shared/src/settings.ts).
+      runtime: "bun",
       workingDirectory: null,
       scriptName: "1 + 1.ts",
       // Task 15: the default tab has no saved mute preference, so this is its schema default.

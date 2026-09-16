@@ -147,9 +147,13 @@ export async function bundleAppForWeb(options: BundleOptions): Promise<AppBundle
           },
           { workingDirectoryImports, vendorStubs: true },
         ),
-        nodePolyfills(options.runtime, (error) => {
-          capturedError ??= error;
-        }),
+        nodePolyfills(
+          options.runtime,
+          (error) => {
+            capturedError ??= error;
+          },
+          { workingDirectory: options.workingDirectory, packagesNodeModules: options.packagesNodeModules },
+        ),
         cssInject(),
       ],
     });
@@ -283,9 +287,13 @@ export async function bundleVendorForWeb(options: VendorBundleOptions): Promise<
           // however deep, is checked against the working directory, not just the tab's direct imports.
           { workingDirectoryImports },
         ),
-        nodePolyfills(options.runtime, (error) => {
-          capturedError ??= error;
-        }),
+        nodePolyfills(
+          options.runtime,
+          (error) => {
+            capturedError ??= error;
+          },
+          { workingDirectory: options.workingDirectory, packagesNodeModules: options.packagesNodeModules },
+        ),
         cssInject(),
       ],
     });

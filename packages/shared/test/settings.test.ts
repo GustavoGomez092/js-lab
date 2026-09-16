@@ -24,7 +24,10 @@ describe("settings", () => {
       autoRunDelayMs: 300,
       unresponsiveTimeoutMs: 3000,
       defaultLanguage: "typescript",
-      defaultRuntime: "browser-node",
+      // M4 Task 9a pointed this back at "bun": with the browser runtimes registered, a default tab would route to
+      // a web view that starts evaluating and never reports a result. It returns to a browser runtime once runs
+      // finish there (packages/shared/src/settings.ts).
+      defaultRuntime: "bun",
     });
     expect(s.output.maxEntries).toBe(10_000);
     expect(s.appearance).toEqual({

@@ -22,7 +22,7 @@ describe("session", () => {
     const s = defaultSession(() => tab("t1"));
     expect(s.tabOrder).toEqual(["t1"]);
     expect(s.activeTabId).toBe("t1");
-    expect(s.tabs.t1).toMatchObject({ title: "Untitled", language: "typescript", runtime: "browser-node" });
+    expect(s.tabs.t1).toMatchObject({ title: "Untitled", language: "typescript", runtime: "bun" });
     expect(s.window).toBeNull();
   });
 

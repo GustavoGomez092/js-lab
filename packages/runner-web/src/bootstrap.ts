@@ -101,8 +101,14 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
   const heartbeatMs = options.heartbeatMs ?? 500;
   // Captured before `installHandleTracking` wraps `g`'s timers (mirrors packages/runner-bun/src/bootstrap.ts):
   // JSLab's own EventBuffer flush timer and heartbeat interval are never tracked as user-code activity.
-  const timers = { setTimeout: g.setTimeout, clearTimeout: g.clearTimeout };
-  const rawInterval = { setInterval: g.setInterval, clearInterval: g.clearInterval };
+  // Bound to the global deliberately. These are captured before `installHandleTracking` wraps them, and they are
+  // then called as methods of these plain objects (`timers.setTimeout(...)`, `rawInterval.setInterval(...)`), which
+  // makes `this` the object rather than the Window. A WebIDL operation with a receiver that isn't the Window
+  // throws "Illegal invocation" in WebKit -- fatal here, because it happens between installing the host bridge and
+  // `bridge.send({ type: "ready" })` below, so the page never reports ready and the host can only time out with
+  // nothing to show the user. Bun ignores the receiver entirely, which is why every unit test passed regardless.
+  const timers = { setTimeout: g.setTimeout.bind(g), clearTimeout: g.clearTimeout.bind(g) };
+  const rawInterval = { setInterval: g.setInterval.bind(g), clearInterval: g.clearInterval.bind(g) };
 
   // Task 12/13 (spec §5.12): MUST run before `installHandleTracking` below wraps `fetch` -- that wrapper captures
   // whichever `fetch` the global holds at the moment it runs, and it's what keeps a run "active" while a request

@@ -139,6 +139,31 @@ export const fileSaveParamsSchema = z.object({ tabId, content: z.string().max(MA
 export const fileConfirmLargeSchema = z.object({ tokens: z.array(z.uuid()).min(1).max(100) });
 export const fileConfirmSaveAsSchema = z.object({ token: z.uuid(), confirmed: z.boolean() });
 
+// ---------- M4 Task 9a: the Main ⇄ UI web-runner bridge (spec §5.12) ----------
+
+/**
+ * A browser-mode tab's `<electrobun-webview>` lives in the UI process (Task 8's `WebViewTile`), but the runtime
+ * that drives it -- `WebAdapter` (`apps/desktop/src/main/runtimes/web-adapter.ts`) -- lives in Main. These messages
+ * are that seam: Main asks the UI to act on one tab's element (`webRunner.ensure` / `.execute` / `.reload` /
+ * `.destroy`, typed in `ViewMessages`), and the UI reports what the element did back (`webRunner.ready` / `.exit` /
+ * `.message`, validated here because they cross into Main).
+ *
+ * Only the UI → Main direction carries validators: `ViewMessages` payloads are built by Main itself and never
+ * re-enter it, exactly as every other `ViewMessages` entry is left unvalidated.
+ */
+export const webRunnerTabSchema = z.object({ tabId });
+
+/**
+ * `webRunner.message`: one page → host envelope, relayed verbatim. `raw` is deliberately only checked for being a
+ * plain object -- enough to route it -- and never interpreted here: the envelope's own `{seq, message}` shape is
+ * `createSequencedWebviewHost`'s to check (`web-adapter.ts`), and the page-side bridge already validated the
+ * reverse direction. A record keeps every key it was given, so nothing inside `raw` is stripped in transit.
+ */
+export const webRunnerMessageParamsSchema = z.object({ tabId, raw: z.record(z.string(), z.unknown()) });
+
+export type WebRunnerTabParams = z.infer<typeof webRunnerTabSchema>;
+export type WebRunnerMessageParams = z.infer<typeof webRunnerMessageParamsSchema>;
+
 // ---------- M3: npm, environment variables, working directory, types and .npmrc (spec §6.2, §11, §12) ----------
 
 /** npm package names: an optional @scope, lowercase URL-safe characters, at most 214 characters. */
@@ -438,6 +463,16 @@ export type MainMessages = {
   "wd.pick": TabParams;
   "wd.clear": TabParams;
   "ui.stateFlushed": Record<string, never>;
+  /** M4 §5.12: the tab's page reached `dom-ready` -- it is safe to inject script into it now. */
+  "webRunner.ready": WebRunnerTabParams;
+  /** M4 §5.12: the tab's webview died or was torn down by something other than Main's own `webRunner.destroy`. */
+  "webRunner.exit": WebRunnerTabParams;
+  /**
+   * M4 §5.12: one page → host envelope, relayed from the element's `host-message` event. `raw` is `unknown` on the
+   * wire -- it is whatever the page handed the element -- and becomes a routable object only once
+   * `webRunnerMessageParamsSchema` has validated it on Main's side.
+   */
+  "webRunner.message": { tabId: string; raw: unknown };
 };
 
 /** Messages received by the UI, sent by Main. */
@@ -465,6 +500,18 @@ export type ViewMessages = {
   "npm.changed": NpmListResult;
   "wd.changed": { tabId: string; tab: TabState };
   "app.flushState": Record<string, never>;
+  /**
+   * M4 §5.12: make sure this tab has a live `<electrobun-webview>`, creating one if the tab's own Web View toggle
+   * has never been switched on. Sent by `WebviewSource.ensure()` before every run, which is what lets a run on an
+   * untouched `browser` tab work at all -- Task 9's lazy creation otherwise leaves it with no webview to drive.
+   */
+  "webRunner.ensure": { tabId: string };
+  /** M4 §5.12: run `js` inside the tab's page (the element's own `executeJavascript`). */
+  "webRunner.execute": { tabId: string; js: string };
+  /** M4 §5.12: reload the tab's page, for the fresh realm/DOM every run starts from. */
+  "webRunner.reload": { tabId: string };
+  /** M4 §5.12: tear the tab's webview down for good (Kill, tab dispose, a timed-out reset). */
+  "webRunner.destroy": { tabId: string };
   /**
    * Task 12/13 (spec §5.12): `browser-node`'s fetch proxy reply, streamed back the same way `apps/desktop/src/
    * main/rpc/web-fetch-handlers.ts`'s `WebFetchSend` describes -- `head` once, then zero or more `chunk`s, then

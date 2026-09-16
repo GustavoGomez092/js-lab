@@ -51,6 +51,7 @@ import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings
 import { createTypesHandlers } from "./rpc/types-handlers";
 import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWebFetchHandlers } from "./rpc/web-fetch-handlers";
+import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
@@ -179,6 +180,15 @@ async function start(): Promise<void> {
     onAudio: (tabId, active) => rpc.send["run.audio"]({ tabId, active }),
     realHome: homedir(),
     ...(cacheDir ? { bunCacheDirOverride: cacheDir } : {}),
+    // M4 §5.12: a browser-mode tab's `<electrobun-webview>` lives in the UI, but the runtime driving it lives
+    // here, so every instruction crosses as one of these four messages. `rpc` is declared further down; like the
+    // run and npm callbacks above, none of these ever runs before it exists.
+    webviewBridge: {
+      ensure: (tabId) => rpc.send["webRunner.ensure"]({ tabId }),
+      execute: (tabId, js) => rpc.send["webRunner.execute"]({ tabId, js }),
+      reload: (tabId) => rpc.send["webRunner.reload"]({ tabId }),
+      destroy: (tabId) => rpc.send["webRunner.destroy"]({ tabId }),
+    },
     onNpmOperation: (operation) => rpc.send["npm.op"](operation),
     // R-M3-T18-LOGCAP-1: a pass-through; the log drawer (Task 26) keeps the newest MAX_NPM_LOG_CHARS per operation.
     onNpmLog: (opId, text) => rpc.send["npm.log"]({ opId, text }),
@@ -262,6 +272,11 @@ async function start(): Promise<void> {
     send: () => rpc.send["app.flushState"]({}),
     isOpen: () => mainWindow.isOpen(),
   });
+  // M4 §5.12 (Task 9a): the Main-side half of the web runner's UI-relayed bridge. Registered only when a webview
+  // source exists, which is whenever a `webviewBridge` was passed above -- i.e. always, in a real app. Without
+  // this group the UI's `webRunner.ready` / `.exit` / `.message` reach no handler at all, and a browser tab's run
+  // hangs until `waitForReady` gives up rather than failing with anything a user could act on.
+  const webRunnerHandlers = services.webviews ? [createWebRunnerHandlers({ webviews: services.webviews, log })] : [];
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
     handlers: mergeHandlers(
@@ -285,6 +300,7 @@ async function start(): Promise<void> {
         notices: startupNotices({ settings, session }),
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
+      ...webRunnerHandlers,
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createNpmHandlers({ npm, log }),
       createEnvHandlers({ env, log }),

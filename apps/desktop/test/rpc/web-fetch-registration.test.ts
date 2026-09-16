@@ -39,7 +39,10 @@ function setup() {
   });
   // A second, unrelated-but-real group (also newly wired in this same task) merged alongside it, exactly the
   // shape `index.ts`'s real `mergeHandlers(...)` call takes -- proving uniqueness isn't just "this group alone".
-  const webRunner = createWebRunnerHandlers({ webviews: { receive: () => {} }, log: mock(() => {}) });
+  const webRunner = createWebRunnerHandlers({
+    webviews: { receive: () => {}, ready: () => {}, exit: () => {} },
+    log: mock(() => {}),
+  });
   // And a THIRD, pre-existing group already merged in production (`index.ts`), so this isn't merging webFetch
   // against an artificially small set either.
   const frame = { x: 0, y: 0, width: 400, height: 300 };

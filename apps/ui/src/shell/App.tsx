@@ -545,7 +545,7 @@ export function App({
       </div>
       {/* Fix round 1 (F1/F2): a sibling of the SplitPane above, not inside it -- so hiding the Output panel
           (which unmounts that SplitPane's `second`, OutputTiles included) never touches this. */}
-      <WebViewHosts store={store} dock={webviewDock} />
+      <WebViewHosts store={store} dock={webviewDock} api={api} />
       <div className="vim-slot" ref={vimSlot} />
       {settings.view.statusBar && (
         <StatusBar

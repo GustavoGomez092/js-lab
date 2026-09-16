@@ -115,7 +115,8 @@ describe("App shell", () => {
       language: "typescript",
       logpoints: [],
       reason: "manual",
-      runtime: "browser-node",
+      // DEFAULT_RUNTIME, which M4 Task 9a returned to "bun" until browser runs finish.
+      runtime: "bun",
     });
   });
 

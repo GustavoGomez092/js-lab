@@ -593,7 +593,7 @@ Cover, against a dev build:
 
 Scenarios that need packages belong in the opt-in suite (`e2e:npm`), not the default 60.
 
-- [ ] Steps: one scenario at a time, each run before moving on. **Counts: default e2e 60 → 66 in 27 files; `e2e:npm` 4 → 8 in 2 files. Unit counts unchanged.**
+- [ ] Steps: one scenario at a time, each run before moving on. **Counts: default e2e +6, `e2e:npm` +4; unit counts unchanged. Measure your own baseline first and report `baseline N → after M`** — the deltas are the estimate, the absolutes are not. The plan's original "60 → 66 in 27 files" and "4 → 8 in 2 files" were written before Tasks 3–15 existed; Task 9a alone changed the e2e surface, and EX-24 is currently red by design (Task 17 owns it). Never add a scenario to make a total match.
 
 ---
 
@@ -623,4 +623,6 @@ Scenarios that need packages belong in the opt-in suite (`e2e:npm`), not the def
 
 **Type consistency.** `RunStartRequest.runtime` (Task 1) is what `registry.get()` selects on (Task 2) and what `bundleForWeb` receives (Task 5). `RuntimeAdapter`/`RunHandle` (Task 2) is implemented by `BunAdapter` (Task 2) and `WebAdapter` (Task 7). `tiles` (Task 8) and `muted` (Task 15) both live in `tabLayoutSchema` under one `SESSION_VERSION` bump — Task 15 must not bump it a second time.
 
-**Running count.** 927 → 930 → 934 → 952 → 954 → 966 → 972 → 982 → 992 → 1000 → 1010 → 1024 → 1036 → 1044 → 1050 → 1060, with E2E 60 → 66 and `e2e:npm` 4 → 8. These are targets, not promises: a task that lands a different number states why, and the controller rules.
+**Running count.** The original projection was 927 → 930 → 934 → 952 → 954 → 966 → 972 → 982 → 992 → 1000 → 1010 → 1024 → 1036 → 1044 → 1050 → 1060, with E2E 60 → 66 and `e2e:npm` 4 → 8. **The per-task deltas have held well; every absolute total after Task 2 is stale and must not be used as a target.** The real total at the Task 13 merge (`2294f55`) is **1230** — 170 above the projection's endpoint, because tasks added tests the plan never anticipated (Task 10 landed +33 against an estimated +10; Task 12 +17 against +12; Task 15 +17 against +10) and because Tasks 8a, 9a, 9b and 9c did not exist when this chain was written.
+
+**Standing rule, earned the hard way — five briefs this milestone carried a stale absolute to an implementer.** A task section's absolute total is a historical estimate, not a requirement. Every implementer measures its own baseline before changing anything and reports `baseline N → after M`. A count that disagrees with this plan is information about the plan, not an error in the work: nine implementers have correctly contradicted my arithmetic, and **a test added to make a total match is a defect, not a fix.**

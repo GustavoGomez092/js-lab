@@ -459,7 +459,9 @@ heartbeat × 32    every ~500 ms   → the page keeps reporting liveness
 
 **Files:** unknown until diagnosed. Expect `packages/runner-web/src/bootstrap.ts`, `apps/desktop/src/main/bundling/bundler.ts`, and whatever the join turns out to require.
 
-- [ ] Steps: reproduce in a built app; bisect the bundle (app-only, vendor-only, joined) to find which import stalls; fix; prove a real run completes with output and a terminal state; then re-run Task 9a's live checks. **Counts: stated by the controller at dispatch.**
+**Also yours, carried from Task 9a's review (ledger ruling R-M4-T9A-F6-1) — a one-line honesty fix in code you will be reading anyway.** `packages/runner-web/test/timer-receiver.test.ts:8-18` states the `Illegal invocation` mechanism **as fact**, and Task 9a's own in-page probe contradicts it: the probe returned `method-ok`, and the emitted bundle is not strict-mode. The timer binding itself is correct and stays — it is right on the platform contract, since WebIDL operations require a `Window` receiver — but the comment asserts a cause that was disproved. Task 9a called this "my own honesty defect" and offered to close it; it folds here because this task reads that timer code regardless. **Make the comment as honest as the report:** binding is correct on the contract, and why the probe reported `method-ok` remains unexplained.
+
+- [ ] Steps: reproduce in a built app; bisect the bundle (app-only, vendor-only, joined) to find which import stalls; fix; prove a real run completes with output and a terminal state; correct the timer comment; then re-run Task 9a's live checks. **Counts: stated by the controller at dispatch.**
 
 ---
 

@@ -4,9 +4,11 @@ import { effectiveRuntime, runnerSettings } from "@jslab/shared";
 import type { AppPaths } from "./app-paths";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
-import { RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
+import { EXIT_KILL_GRACE_MS, RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
 import { createRunnerConfig } from "./runs/runner-config";
 import { SparePool } from "./runs/spare-pool";
+import { createBunAdapter } from "./runtimes/bun-adapter";
+import { createRuntimeRegistry } from "./runtimes/registry";
 import { EnvStore } from "./services/env-store";
 import { NpmService } from "./services/npm-service";
 import { createBunSpawn, type NpmSpawn } from "./services/npm-spawn";
@@ -93,6 +95,10 @@ export async function createMainServices(options: MainServicesOptions): Promise<
       workingDirectory: (tabId) => session.session.tabs[tabId]?.workingDirectory ?? null,
     }),
   );
+  // The runtime registry (spec §5.1): only "bun" is real until Task 7 registers a "web" adapter here too.
+  const runtimes = createRuntimeRegistry({
+    bun: createBunAdapter({ spares, runsDir: paths.runsDir, runLock, exitGraceMs: EXIT_KILL_GRACE_MS }),
+  });
   const coordinator = new RunCoordinator({
     transform: (source, transformOptions) => transform.transform(source, transformOptions),
     spares,
@@ -102,6 +108,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     onState: options.onState,
     onDiagnostics: options.onDiagnostics,
     runLock,
+    runtimes,
   });
   // Spec §12.1: saving env.json recycles every tab's spare, so the next run gets the new values.
   env.onChange(() => spares.invalidateAll());

@@ -1,10 +1,12 @@
-import { mkdir, readdir, stat, unlink } from "node:fs/promises";
-import { basename, join } from "node:path";
-import type { EncodedValue, RunEvent, RunnerToMain, RunState } from "@jslab/rpc-schema";
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
+import type { EncodedValue, RunEvent, RunState } from "@jslab/rpc-schema";
 import type { Runtime } from "@jslab/shared";
 import type { BuildOptions, Diagnostic, Language, TransformOptions, TransformResult } from "@jslab/transform";
+import type { PreparedRun, RunEventSink, RunHandle, RuntimeAdapter } from "../runtimes/adapter";
+import { createBunAdapter, type SpareSource, WorkingDirectoryMismatchError } from "../runtimes/bun-adapter";
+import { createRuntimeRegistry, type RuntimeRegistry } from "../runtimes/registry";
 import { strings } from "../strings";
-import type { BunRunnerProcess } from "./bun-runner-process";
 import { createEventMapper } from "./event-mapper";
 
 export interface RunStartRequest {
@@ -31,7 +33,13 @@ export interface RunnerSettings {
 
 export interface RunCoordinatorDeps {
   transform(source: string, options: TransformOptions): Promise<TransformResult>;
-  spares: { take(tabId: string): Promise<BunRunnerProcess>; invalidate(tabId: string): void; dispose(): void };
+  /**
+   * The Bun spare pool. `RunCoordinator` no longer talks to it (or to `BunRunnerProcess`) directly -- every run goes
+   * through the `RuntimeAdapter` seam (spec §5.1, this task). This stays a required field only so a caller that
+   * builds a `RunCoordinator` straight from a `SparePool` (this file's own test harness included) keeps working
+   * unchanged: absent an explicit `runtimes` registry below, one is built from exactly this and `runsDir`.
+   */
+  spares: SpareSource & { dispose(): void };
   runsDir: string;
   settings(): RunnerSettings;
   onEvents(tabId: string, runId: string, events: RunEvent[]): void;
@@ -44,24 +52,28 @@ export interface RunCoordinatorDeps {
   expandTimeoutMs?: number;
   directoryExists?(path: string): Promise<boolean>;
   exitGraceMs?: number;
+  /**
+   * The runtime registry (spec §5.1, Task 2). When omitted, `RunCoordinator` builds a Bun-only one from `spares`/
+   * `runsDir`/`runLock` above (R-M4-T1-OPTIONAL-1's undefined-runtime default resolves to it either way).
+   * `main-services.ts` builds and passes its own explicitly, ready for Task 7 to add a `web` entry to it.
+   */
+  runtimes?: RuntimeRegistry;
 }
 
 interface ActiveRun {
   runId: string;
   tabId: string;
   state: RunState;
-  runner: BunRunnerProcess | null;
+  handle: RunHandle | null;
   cancelled: boolean;
-  expectedExit: boolean;
-  stopTimer?: ReturnType<typeof setTimeout>;
-  idleTimer?: ReturnType<typeof setTimeout>;
-  exitTimer?: ReturnType<typeof setTimeout>;
-  exitRequestedCode?: number;
-  unsubscribe?: () => void;
-  // Last known activeHandles, and the state to restore when recovering from "unresponsive" (I5): the run may have
-  // gone unresponsive from "settled", not just "evaluating".
-  activeHandles?: number;
+  // The last time this run's runtime reported it was alive (any adapter reporting heartbeats, not just Bun's IPC
+  // ones); unresponsive-detection and recovery are generic Main-level concerns (spec §5.11), owned here regardless
+  // of which adapter is running the code.
+  lastHeartbeatAt: number;
+  // The state to restore when recovering from "unresponsive" (I5): the run may have gone unresponsive from
+  // "settled", not just "evaluating".
   resumeState?: RunState;
+  activeHandles?: number;
 }
 
 // "transpiling" is included because a runner can already be assigned (and the "run" message already sent) while
@@ -88,15 +100,23 @@ async function directoryExists(path: string): Promise<boolean> {
 
 export class RunCoordinator {
   readonly #runs = new Map<string, ActiveRun>();
-  // Each pending expand remembers the runner it was sent to, so it can settle as soon as that runner exits.
-  readonly #pendingExpands = new Map<
-    number,
-    { runner: BunRunnerProcess; settle: (value: EncodedValue | null) => void }
-  >();
+  readonly #registry: RuntimeRegistry;
   readonly #watchdog: ReturnType<typeof setInterval>;
-  #nextReqId = 1;
 
   constructor(private readonly deps: RunCoordinatorDeps) {
+    this.#registry =
+      deps.runtimes ??
+      createRuntimeRegistry({
+        bun: createBunAdapter({
+          spares: deps.spares,
+          runsDir: deps.runsDir,
+          runLock: deps.runLock,
+          stopGraceMs: deps.stopGraceMs,
+          idleRunnerTtlMs: deps.idleRunnerTtlMs,
+          expandTimeoutMs: deps.expandTimeoutMs,
+          exitGraceMs: deps.exitGraceMs ?? EXIT_KILL_GRACE_MS,
+        }),
+      });
     this.#watchdog = setInterval(() => this.#checkHeartbeats(), deps.watchdogIntervalMs ?? 500);
   }
 
@@ -106,9 +126,9 @@ export class RunCoordinator {
       runId: crypto.randomUUID(),
       tabId: request.tabId,
       state: "transpiling",
-      runner: null,
+      handle: null,
       cancelled: false,
-      expectedExit: false,
+      lastHeartbeatAt: Date.now(),
     };
     this.#runs.set(request.tabId, run);
     this.#setState(run, "transpiling");
@@ -119,9 +139,9 @@ export class RunCoordinator {
   stop(tabId: string): void {
     const run = this.#runs.get(tabId);
     if (!run) return;
-    if (!run.runner) {
-      // No runner has been taken yet: cancel outright so #execute bails out (and kills whatever runner
-      // spares.take() returns later) instead of starting anything.
+    if (!run.handle) {
+      // No runner has been taken yet: cancel outright so #execute bails out (and kills whatever the adapter's
+      // start() returns later) instead of starting anything.
       if (run.state === "transpiling") {
         run.cancelled = true;
         this.#setState(run, "stopped");
@@ -130,16 +150,13 @@ export class RunCoordinator {
     }
     if (!STOPPABLE_STATES.has(run.state)) return;
     this.#setState(run, "stopping");
-    run.runner.send({ type: "stop" });
-    run.stopTimer = setTimeout(() => this.kill(tabId), this.deps.stopGraceMs ?? 500);
+    void run.handle.stop();
   }
 
   kill(tabId: string): void {
     const run = this.#runs.get(tabId);
-    if (!run?.runner) return;
-    clearTimeout(run.stopTimer);
-    run.expectedExit = true;
-    run.runner.kill();
+    if (!run?.handle) return;
+    run.handle.kill();
     this.deps.runLock.remove(run.runId);
     // A stopped run is already being recycled (R-M1-18): its runner is gone either way, and it stays "stopped".
     if (run.state === "stopped") return;
@@ -149,50 +166,39 @@ export class RunCoordinator {
   /** The user chose "Wait" in the unresponsive dialog. */
   wait(tabId: string): void {
     const run = this.#runs.get(tabId);
-    if (!run?.runner || run.state !== "unresponsive") return;
-    run.runner.lastHeartbeat = Date.now();
+    if (!run?.handle || run.state !== "unresponsive") return;
+    run.lastHeartbeatAt = Date.now();
     this.#setState(run, run.resumeState ?? "evaluating", run.activeHandles);
   }
 
   expand(tabId: string, runId: string, handleId: string): Promise<EncodedValue | null> {
     const run = this.#runs.get(tabId);
-    if (!run?.runner || run.runId !== runId || run.state === "killed") return Promise.resolve(null);
-    const reqId = this.#nextReqId++;
-    const runner = run.runner;
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.#pendingExpands.delete(reqId);
-        resolve(null);
-      }, this.deps.expandTimeoutMs ?? 5000);
-      this.#pendingExpands.set(reqId, {
-        runner,
-        settle: (value) => {
-          clearTimeout(timer);
-          this.#pendingExpands.delete(reqId);
-          resolve(value);
-        },
-      });
-      runner.send({ type: "expand", reqId, handleId });
-    });
+    if (!run?.handle || run.runId !== runId || run.state === "killed") return Promise.resolve(null);
+    return run.handle.expand(handleId);
   }
 
   disposeTab(tabId: string): void {
     this.#supersede(tabId);
     this.#runs.delete(tabId);
-    this.deps.spares.invalidate(tabId);
+    // Only "bun" is real in Task 2 (Task 7 registers a per-runtime `web` adapter); every tab's runtime resolves to
+    // it either way, so there's no runtime to route by here yet.
+    void this.#registry.get(undefined).dispose(tabId);
   }
 
   dispose(): void {
     clearInterval(this.#watchdog);
     for (const tabId of [...this.#runs.keys()]) this.disposeTab(tabId);
+    // `RuntimeAdapter` has no whole-pool teardown (only per-tab `dispose`/`invalidate`): a background spare warmed
+    // for a tab that never ran anything (via `prepare`/`setActiveTab`, outside this class) would otherwise leak.
     this.deps.spares.dispose();
   }
 
   async #execute(run: ActiveRun, request: RunStartRequest): Promise<void> {
+    const adapter = this.#registry.get(request.runtime);
     try {
       const workingDirectory = request.workingDirectory ?? null;
       if (workingDirectory && !(await (this.deps.directoryExists ?? directoryExists)(workingDirectory))) {
-        this.#failWorkingDirectory(run, workingDirectory);
+        this.#failWorkingDirectory(run, adapter, workingDirectory);
         return;
       }
       const settings = this.deps.settings();
@@ -235,128 +241,66 @@ export class RunCoordinator {
         return;
       }
 
-      const dir = join(this.deps.runsDir, run.tabId);
-      await mkdir(dir, { recursive: true });
-      if (!this.#isCurrent(run)) return;
-      const entryPath = join(dir, `entry-${run.runId}.mjs`);
-      await Bun.write(entryPath, result.code);
-      if (!this.#isCurrent(run)) return;
-      void this.#cleanupEntries(dir, basename(entryPath));
+      // The entry's basename is deterministic from the runId alone (spec §5.3's per-run entry naming), so the
+      // mapper can be built here without knowing how (or whether) an adapter delivers the code to its runtime.
+      const mapper = createEventMapper(result.map, `entry-${run.runId}.mjs`, new Set(request.logpoints));
+      const preparedRun: PreparedRun = {
+        runId: run.runId,
+        tabId: run.tabId,
+        code: result.code,
+        maxEntries: settings.maxEntries,
+        workingDirectory,
+        mapEvent: (event) => mapper(event),
+        isCancelled: () => !this.#isCurrent(run),
+      };
+      const sink: RunEventSink = {
+        events: (events) => {
+          if (!this.#isCurrent(run)) return;
+          // Re-batch for the UI (spec §4.2): at most 200 events per run.events message, whatever the adapter sent.
+          for (let i = 0; i < events.length; i += UI_BATCH_EVENTS) {
+            this.deps.onEvents(run.tabId, run.runId, events.slice(i, i + UI_BATCH_EVENTS));
+          }
+        },
+        state: (state, activeHandles) => {
+          if (!this.#isCurrent(run)) return;
+          this.#setState(run, state, activeHandles);
+        },
+        heartbeat: () => {
+          if (!this.#isCurrent(run)) return;
+          run.lastHeartbeatAt = Date.now();
+          if (run.state === "unresponsive") this.#setState(run, run.resumeState ?? "evaluating", run.activeHandles);
+        },
+        exited: () => {
+          // The runner is gone: Kill, expand and quit must not act on it again (or signal its possibly reused pid).
+          run.handle = null;
+        },
+      };
 
-      let runner: BunRunnerProcess;
+      let handle: RunHandle;
       try {
-        runner = await this.deps.spares.take(run.tabId);
+        handle = await adapter.start(preparedRun, sink);
       } catch (error) {
         if (!this.#isCurrent(run)) return;
-        this.#runnerError(run, `Runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
-        return;
-      }
-      // Fail closed (M-3): a folder deleted after the check makes the runner config fall back to the data folder, and
-      // user code must never run (or write relative files) there. Test fakes have no `cwd`, hence the typeof guard.
-      if (workingDirectory && typeof runner.cwd === "string" && runner.cwd !== workingDirectory) {
-        run.expectedExit = true;
-        runner.kill();
-        this.#failWorkingDirectory(run, workingDirectory);
+        this.deps.runLock.remove(run.runId);
+        if (error instanceof WorkingDirectoryMismatchError) {
+          this.#failWorkingDirectory(run, adapter, error.workingDirectory);
+        } else {
+          this.#runnerError(run, error instanceof Error ? error.message : String(error));
+        }
         return;
       }
       if (!this.#isCurrent(run)) {
-        runner.kill();
+        handle.kill();
         return;
       }
-
-      run.runner = runner;
-      const mapper = createEventMapper(result.map, basename(entryPath), new Set(request.logpoints));
-      run.unsubscribe = runner.onMessage((message) => this.#onRunnerMessage(run, message, mapper));
-      void runner.exited.then((code) => this.#onRunnerExit(run, code, runner.signalCode));
-      this.deps.runLock.add(run.runId);
-      runner.lastHeartbeat = Date.now();
-      // stop() may have run synchronously inside runLock.add above (I1): it already sent "stop" and armed the kill
-      // timer, so sending "run" now would start user code the caller just asked to stop.
-      if (run.state !== "transpiling") return;
-      runner.send({ type: "run", runId: run.runId, entry: entryPath, settings: { maxEntries: settings.maxEntries } });
+      run.handle = handle;
     } catch (error) {
-      // A rejecting transform, or a failing mkdir/write/createEventMapper, must not leave the run stuck in
-      // "transpiling" forever with an unhandled rejection (I3).
+      // A rejecting transform, or a failing adapter start, must not leave the run stuck in "transpiling" forever
+      // with an unhandled rejection (I3).
       if (!this.#isCurrent(run)) return;
-      run.expectedExit = true;
-      run.runner?.kill();
       this.deps.runLock.remove(run.runId);
       this.#runnerError(run, error instanceof Error ? error.message : String(error));
     }
-  }
-
-  #onRunnerMessage(run: ActiveRun, message: RunnerToMain, mapper: ReturnType<typeof createEventMapper>): void {
-    if (message.type === "expanded") {
-      this.#pendingExpands.get(message.reqId)?.settle(message.value);
-      return;
-    }
-    if (!this.#isCurrent(run)) return;
-    switch (message.type) {
-      case "exitRequested":
-        run.exitRequestedCode = message.code;
-        clearTimeout(run.exitTimer);
-        run.exitTimer = setTimeout(() => run.runner?.kill(), this.deps.exitGraceMs ?? EXIT_KILL_GRACE_MS);
-        return;
-      case "heartbeat":
-        if (run.state === "unresponsive") this.#setState(run, run.resumeState ?? "evaluating", run.activeHandles);
-        return;
-      case "events": {
-        // Output from code that resumed after Stop (or from a killed runner's last gasp) is never shown (I1).
-        // FW1: output after a caught process.exit is dropped too (the runner's buffer is already closed).
-        if (run.state === "stopped" || run.state === "killed" || run.exitRequestedCode !== undefined) return;
-        // Re-batch for the UI (spec §4.2): at most 200 events per run.events message, whatever the runner sent.
-        const events = message.events.map(mapper);
-        for (let i = 0; i < events.length; i += UI_BATCH_EVENTS) {
-          this.deps.onEvents(run.tabId, run.runId, events.slice(i, i + UI_BATCH_EVENTS));
-        }
-        return;
-      }
-      case "state":
-        if (message.state === "stopped") clearTimeout(run.stopTimer);
-        if (message.state !== "evaluating") this.deps.runLock.remove(run.runId);
-        if (run.state === "stopping" && message.state !== "stopped") return;
-        this.#setState(run, message.state, message.activeHandles);
-        if (message.state === "stopped") {
-          // R-M1-18: code that resumed after Stop (a CPU loop, an awaited Bun.sleep) would keep running in this runner
-          // until the idle TTL, with its output already dropped. Recycle the runner now; the next run takes a fresh
-          // spare. Values from the stopped run can no longer be expanded (expand resolves null).
-          clearTimeout(run.idleTimer);
-          run.expectedExit = true;
-          run.runner?.kill();
-          return;
-        }
-        if (message.state === "idle") this.#scheduleIdleExpiry(run);
-        else clearTimeout(run.idleTimer);
-        return;
-    }
-  }
-
-  #onRunnerExit(run: ActiveRun, exitCode: number | null, exitSignal: string | null = null): void {
-    clearTimeout(run.stopTimer);
-    clearTimeout(run.idleTimer);
-    clearTimeout(run.exitTimer);
-    // FW1: a runner Main ended after exitRequested reports the code user code asked for.
-    const endedAfterExit = run.exitRequestedCode !== undefined && exitSignal === "SIGKILL";
-    const code = endedAfterExit ? (run.exitRequestedCode as number) : exitCode;
-    const signal = endedAfterExit ? null : exitSignal;
-    // A dead runner can't answer: settle its pending expands now instead of after the expand timeout.
-    for (const pending of [...this.#pendingExpands.values()]) {
-      if (pending.runner === run.runner) pending.settle(null);
-    }
-    run.unsubscribe?.();
-    this.deps.runLock.remove(run.runId);
-    const stderrTail = run.runner?.stderrTail ?? "";
-    // The runner is gone: Kill, supersede, expand and quit must not act on it (or signal its possibly reused pid).
-    run.runner = null;
-    if (run.expectedExit || !this.#isCurrent(run)) return;
-    if (code === 0 && signal === null) {
-      // Spec §5.11 reports a crash only for a non-zero exit: a user `process.exit(0)` ends the run (final review M5).
-      // A clean exit while Stop is in progress is the stop the user asked for (FA-m3).
-      this.#setState(run, run.state === "stopping" ? "stopped" : "idle", 0);
-      return;
-    }
-    const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
-    this.#runnerError(run, `Runtime exited unexpectedly (${reason}). ${stderrTail}`.trim());
   }
 
   #runnerError(run: ActiveRun, message: string): void {
@@ -374,24 +318,12 @@ export class RunCoordinator {
     this.#setState(run, "failed");
   }
 
-  #scheduleIdleExpiry(run: ActiveRun): void {
-    clearTimeout(run.idleTimer);
-    run.idleTimer = setTimeout(
-      () => {
-        if (!run.runner) return;
-        run.expectedExit = true;
-        run.runner.kill();
-      },
-      this.deps.idleRunnerTtlMs ?? 5 * 60_000,
-    );
-  }
-
   #checkHeartbeats(): void {
     const timeout = this.deps.settings().unresponsiveTimeoutMs;
     const now = Date.now();
     for (const run of this.#runs.values()) {
-      if (!run.runner || (run.state !== "evaluating" && run.state !== "settled")) continue;
-      if (now - run.runner.lastHeartbeat > timeout) {
+      if (!run.handle || (run.state !== "evaluating" && run.state !== "settled")) continue;
+      if (now - run.lastHeartbeatAt > timeout) {
         // Remember what to restore on recovery (I5): the run may have gone unresponsive from "settled", not just
         // "evaluating".
         run.resumeState = run.state;
@@ -404,12 +336,7 @@ export class RunCoordinator {
     const previous = this.#runs.get(tabId);
     if (!previous) return;
     previous.cancelled = true;
-    previous.expectedExit = true;
-    clearTimeout(previous.stopTimer);
-    clearTimeout(previous.idleTimer);
-    clearTimeout(previous.exitTimer);
-    previous.unsubscribe?.();
-    previous.runner?.kill();
+    previous.handle?.kill();
     this.deps.runLock.remove(previous.runId);
   }
 
@@ -417,9 +344,9 @@ export class RunCoordinator {
    * Fails a current run whose working directory is missing, or whose runner didn't start in it, with one
    * WorkingDirectoryError (spec §12.2). The tab's spare is discarded, so a recreated folder gets a fresh runner (M-4).
    */
-  #failWorkingDirectory(run: ActiveRun, workingDirectory: string): void {
+  #failWorkingDirectory(run: ActiveRun, adapter: RuntimeAdapter, workingDirectory: string): void {
     if (!this.#isCurrent(run)) return;
-    this.deps.spares.invalidate(run.tabId);
+    adapter.invalidate({ tabId: run.tabId, workingDirectory });
     this.deps.onEvents(run.tabId, run.runId, [
       {
         kind: "error",
@@ -442,13 +369,5 @@ export class RunCoordinator {
     run.state = state;
     if (activeHandles !== undefined) run.activeHandles = activeHandles;
     this.deps.onState(run.tabId, run.runId, state, activeHandles);
-  }
-
-  async #cleanupEntries(dir: string, keep: string): Promise<void> {
-    try {
-      for (const name of await readdir(dir)) {
-        if (name !== keep && name.startsWith("entry-")) await unlink(join(dir, name)).catch(() => {});
-      }
-    } catch {}
   }
 }

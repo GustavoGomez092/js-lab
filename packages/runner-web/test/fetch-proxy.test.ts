@@ -6,7 +6,7 @@ import {
   installFetchProxy,
   type ProxiedRequest,
 } from "../src/fetch-proxy";
-import { HandleTracker, installHandleTracking } from "../src/handles";
+import { AudioController, HandleTracker, installHandleTracking } from "../src/handles";
 
 // bun:test has no DOM, and the host side does not exist here either: the transport is a fake the test drives by
 // hand (the same approach handles.test.ts takes for every other host API), so every assertion below is about the
@@ -186,7 +186,9 @@ test("aborting a proxied request releases the page's handle tracker", async () =
   g.clearInterval = clearInterval;
   installFetchProxy({ runtime: "browser-node", transport: host.transport, global: g });
   const tracker = new HandleTracker(() => {});
-  installHandleTracking(tracker, g);
+  // Audio tracking is irrelevant to this test — it is about an aborted fetch releasing the tracker — but the
+  // third argument is required, so it gets a no-op sink like the tracker above.
+  installHandleTracking(tracker, g, new AudioController(() => {}));
 
   const controller = new AbortController();
   const pending = (g.fetch as (input: unknown, init?: RequestInit) => Promise<Response>)("https://example.test/slow", {

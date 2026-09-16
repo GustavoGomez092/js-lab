@@ -500,10 +500,15 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
         // claimed. This re-verifies the scope directly against the filesystem with nothing else awaited before the
         // build reads `<workingDirectory>/node_modules` -- as tight a gap as an inherently-async check (Web has no
         // synchronous `runner.cwd`-like property to compare, unlike `BunAdapter`) can get.
-        if (run.workingDirectory && !(await (deps.directoryExists ?? directoryExists)(run.workingDirectory))) {
-          throw new WorkingDirectoryMismatchError(run.workingDirectory);
-        }
+        const workingDirectoryGone =
+          run.workingDirectory !== null && !(await (deps.directoryExists ?? directoryExists)(run.workingDirectory));
+        // Fix round 1 (M3): the crash check gates the throw, rather than following it. A crash landing during the
+        // check above has already reported a terminal state; throwing here as well would have `RunCoordinator`
+        // report a second one (`#failWorkingDirectory`). Every other step in this window already checks first.
         if (run.isCancelled() || crashed) return deadHandle(run.runId);
+        if (workingDirectoryGone) {
+          throw new WorkingDirectoryMismatchError(run.workingDirectory as string);
+        }
 
         // The app chunk: the tab's own code, rebuilt every run, never cached under any circumstances (Task 8a).
         const app = await (deps.bundle ?? bundleAppForWeb)({
@@ -543,9 +548,15 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
               return deadHandle(run.runId);
             }
             vendorCode = vendor.code;
-            // Fire-and-forget, exactly as the write-only population was: a run never waits on the cache, and a
-            // failed write only costs the next run a rebuild.
-            if (key) void deps.vendorCache.set(key, { code: vendor.code, map: vendor.map }).catch(() => {});
+            // Fix round 1 (C1): the vendor build's own verdict gates the write as well as the app build's. The app
+            // build only saw the tab's direct imports; this one saw the whole transitive closure, and a chunk
+            // holding working-directory code at any depth is unkeyable -- storing it would let a *different* tab,
+            // one with no working directory at all, hit the same key and run this tab's project code.
+            // Fire-and-forget otherwise, exactly as the write-only population was: a run never waits on the cache,
+            // and a failed write only costs the next run a rebuild.
+            if (key && vendor.vendorCacheable) {
+              void deps.vendorCache.set(key, { code: vendor.code, map: vendor.map }).catch(() => {});
+            }
           }
         }
         code = joinVendorAndApp(vendorCode, app.code);

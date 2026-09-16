@@ -78,6 +78,30 @@ describe("vendorCacheKey", () => {
     expect(vendorCacheKey(lockHashB, ["react"])).not.toBe(baseline);
     expect(vendorCacheKey(lockHashA, ["react", "react-dom"])).not.toBe(baseline);
   });
+
+  /**
+   * Fix round 1 (C2). Task 6's write-only path stored the **whole unsplit bundle** under a key built from these
+   * same two inputs, and for a React tab those inputs are byte-identical across Task 8a's split: react contributes
+   * no transitive bare specifiers, so the old import set for `import React from "react"` was already `["react"]`.
+   * Serving such an entry as a vendor chunk leaves the registry unpopulated, every stub reading `undefined`, and
+   * the previous run's app code running -- reachable on any profile that ran an M4 canary. The format tag in the
+   * key makes an old entry unaddressable rather than merely unlikely.
+   */
+  test("an entry written under the pre-split key shape can never be read back through the current key", async () => {
+    const newline = String.fromCharCode(10);
+    const lockHash = hashBunLock('{"lockfileVersion":2}');
+    // Task 6's formula, verbatim: hash(lockHash + newline + sorted imports joined by newline).
+    const preSplitKey = String(Bun.hash(`${lockHash}${newline}react`));
+    const cache = new VendorCache({ cacheDir });
+    await cache.set(preSplitKey, { code: "WHOLE PREVIOUS RUN BUNDLE", map: "" });
+
+    const currentKey = vendorCacheKey(lockHash, ["react"]);
+    expect(currentKey).not.toBe(preSplitKey);
+    expect(await cache.get(currentKey)).toBeNull();
+    // The old entry stays where it was, under its own key and its own index entry, so the existing age and
+    // total-size sweeps still reclaim it -- it is unreachable, not orphaned.
+    expect(await cache.get(preSplitKey)).not.toBeNull();
+  });
 });
 
 describe("VendorCache", () => {

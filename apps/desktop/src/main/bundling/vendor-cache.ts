@@ -35,8 +35,27 @@ type VendorCacheIndex = Record<string, VendorCacheIndexEntry>;
  * means import order in the source file never changes the key.
  */
 export function vendorCacheKey(lockHash: string, imports: readonly string[]): string {
-  return String(Bun.hash(`${lockHash}\n${[...imports].sort().join("\n")}`));
+  return String(Bun.hash(`${VENDOR_CACHE_FORMAT}\n${lockHash}\n${[...imports].sort().join("\n")}`));
 }
+
+/**
+ * The stored chunk's **format**, mixed into every key (fix round 1, C2).
+ *
+ * Task 6 wrote the *whole unsplit bundle* under a key made of exactly the same two inputs this one uses. For a
+ * React tab those inputs are byte-identical across Task 8a's change -- react's own source uses only relative
+ * requires, so it contributes no transitive bare specifiers, and the old import set for `import React from "react"`
+ * was already `["react"]`. A post-split read would therefore have hit a pre-split entry, taken a previous run's
+ * entire app bundle as the "vendor" chunk, left the registry unpopulated (every stub reading `undefined`) and run
+ * that previous run's code -- reachable on any profile that ran an M4 canary.
+ *
+ * A version component in the key was chosen over a versioned subdirectory or a marker validated on read because it
+ * makes old entries **unaddressable** rather than merely rejected: the new code cannot compute an old key, so no
+ * amount of I/O ordering, index repair or rebuild-from-disk can serve one. It also leaves the old entries inside
+ * the existing `index.json`, where the age and total-size sweeps already reclaim them -- a versioned subdirectory
+ * would have stranded them outside every eviction path forever. Bump this whenever the meaning of a stored chunk
+ * changes.
+ */
+const VENDOR_CACHE_FORMAT = "vendor-chunk-v2";
 
 /**
  * Spec §5.12: the lockfile-pinning half of the key. Hashed rather than used raw so the key stays a fixed-length,

@@ -6,7 +6,12 @@ import { nodePolyfills } from "./polyfill-plugin";
 import { jslabResolve, VENDOR_REGISTRY_GLOBAL } from "./resolve-plugin";
 
 export interface BundleOptions {
-  /** Absolute path to the per-run entry file (already transpiled -- the bundler resolves and packages it). */
+  /**
+   * Absolute path to the per-run entry file (already transpiled -- the bundler resolves and packages it).
+   *
+   * The map returned beside the app chunk describes the chunk **before** `joinVendorAndApp` prepends the vendor
+   * half; see that function's note on the offset.
+   */
   entry: string;
   runtime: Runtime;
   /** The tab's working directory, or null when none is set (spec §5.3). */
@@ -49,13 +54,30 @@ export interface AppBundle {
   code: string;
   map: string;
   imports: string[];
+  /**
+   * Covers this build's own (direct) resolutions only. The transitive half is `VendorBundle.vendorCacheable`; a
+   * chunk is storable only when **both** say so (fix round 1, C1).
+   */
   vendorCacheable: boolean;
 }
 
 export type AppBundleResult = AppBundle | { error: BundleError };
 
-/** The third-party half: one chunk that publishes every package into the page-global registry. */
-export type VendorBundleResult = { code: string; map: string } | { error: BundleError };
+/**
+ * The third-party half: one chunk that publishes every package into the page-global registry.
+ *
+ * `vendorCacheable` answers the question `AppBundle.vendorCacheable` cannot: the app build only resolves a tab's
+ * **direct** imports, while this build resolves the whole transitive closure, and `resolveBareSpecifier` tries the
+ * working directory first in both. Fix round 1 (C1): a chunk whose *transitive* code came out of the working
+ * directory is just as unkeyable as one whose direct code did, and the caller must refuse to store either.
+ */
+export interface VendorBundle {
+  code: string;
+  map: string;
+  vendorCacheable: boolean;
+}
+
+export type VendorBundleResult = VendorBundle | { error: BundleError };
 
 interface BunResolveOrBuildMessage {
   name?: string;
@@ -113,7 +135,7 @@ export async function bundleAppForWeb(options: BundleOptions): Promise<AppBundle
           (error) => {
             capturedError ??= error;
           },
-          { workingDirectoryImports },
+          { workingDirectoryImports, vendorStubs: true },
         ),
         nodePolyfills(options.runtime, (error) => {
           capturedError ??= error;
@@ -190,7 +212,12 @@ function vendorEntrySource(imports: readonly string[]): string {
   return [
     ...names.map((name, index) => `import * as m${index} from ${JSON.stringify(name)};`),
     VENDOR_INTEROP_SOURCE,
-    `var __reg = (globalThis.${VENDOR_REGISTRY_GLOBAL} = globalThis.${VENDOR_REGISTRY_GLOBAL} || {});`,
+    // Fix round 1 (I1): assigned unconditionally, never `|| {}`. Today the page reloads before every run
+    // (`WebAdapter.start()` -> `waitForReady()` -> `host.reset()`), so the registry is always empty here anyway --
+    // but writing it fail-open made the split silently depend on that reload happening, two files away. If a future
+    // change ever reused a realm, `|| {}` would let a second run bind a first run's module instances. This makes
+    // the vendor chunk self-contained instead: whatever was there before is gone.
+    `var __reg = (globalThis.${VENDOR_REGISTRY_GLOBAL} = {});`,
     ...names.map((name, index) => `__reg[${JSON.stringify(name)}] = __jslabInterop(m${index});`),
     "",
   ].join("\n");
@@ -223,8 +250,9 @@ function vendorEntryPlugin(source: string, resolveDir: string): BunPlugin {
  * package is injected from the vendor chunk, not the app chunk.
  */
 export async function bundleVendorForWeb(options: VendorBundleOptions): Promise<VendorBundleResult> {
-  if (options.imports.length === 0) return { code: "", map: "" };
+  if (options.imports.length === 0) return { code: "", map: "", vendorCacheable: true };
   const resolvedImports = new Set<string>();
+  const workingDirectoryImports = new Set<string>();
   let capturedError: BundleError | null = null;
 
   try {
@@ -241,6 +269,9 @@ export async function bundleVendorForWeb(options: VendorBundleOptions): Promise<
           (error) => {
             capturedError ??= error;
           },
+          // Fix round 1 (C1): the transitive half of the provenance check -- every package this build pulls in,
+          // however deep, is checked against the working directory, not just the tab's direct imports.
+          { workingDirectoryImports },
         ),
         nodePolyfills(options.runtime, (error) => {
           capturedError ??= error;
@@ -251,7 +282,11 @@ export async function bundleVendorForWeb(options: VendorBundleOptions): Promise<
 
     const codeOutput = result.outputs.find((output) => output.kind === "entry-point");
     const mapOutput = result.outputs.find((output) => output.kind === "sourcemap");
-    return { code: codeOutput ? await codeOutput.text() : "", map: mapOutput ? await mapOutput.text() : "" };
+    return {
+      code: codeOutput ? await codeOutput.text() : "",
+      map: mapOutput ? await mapOutput.text() : "",
+      vendorCacheable: workingDirectoryImports.size === 0,
+    };
   } catch (error) {
     return { error: capturedError ?? fromBuildFailure(error) };
   }
@@ -268,6 +303,15 @@ export async function bundleVendorForWeb(options: VendorBundleOptions): Promise<
  *
  * The wrapper is `async` and awaited so that a package doing top-level `await` still settles before the app code
  * that imports it runs, exactly as it would have in an unsplit bundle.
+ *
+ * Wrapping the vendor half in a function is only legal because that half emits **no top-level `import`/`export`
+ * statements** -- its entry has no exports and every package is inlined into it. A future change that made the
+ * vendor build emit one would turn every run into a SyntaxError.
+ *
+ * **Source-map offset (M2).** The join pushes the app half down by the vendor half's line count plus one. Nothing
+ * consumes `AppBundle.map` today (the page maps user frames through the transform's own map), so no map is
+ * rewritten here; any future consumer of `AppBundle.map` must add that offset, or map against the app chunk before
+ * it was joined.
  */
 export function joinVendorAndApp(vendorCode: string | null, appCode: string): string {
   if (!vendorCode) return appCode;

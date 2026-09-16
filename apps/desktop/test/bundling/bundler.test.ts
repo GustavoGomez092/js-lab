@@ -364,6 +364,7 @@ describe("the vendor/app split", () => {
         "globalThis.__jlProbe = {",
         "  cTag: c.tag, cNamed, cNsDefaultTag: cNs.default.tag, cNsNamed: cNs.named,",
         "  eTag: e.tag, eNamed, eNsDefaultTag: eNs.default.tag, eNsNamed: eNs.named,",
+        "  cNsKeys: Object.keys(cNs).sort(), eNsKeys: Object.keys(eNs).sort(),",
         "};",
       ].join("\n"),
     );
@@ -383,6 +384,82 @@ describe("the vendor/app split", () => {
       eNsDefaultTag: "esm-default",
       eNsNamed: "esm-named",
     });
+
+    // Fix round 1 (M1): the enumeration behaviour, pinned rather than merely described.
+    // CommonJS is exact -- an unsplit build produces these same three keys, because the interop hands back
+    // `module.exports` itself and nothing is proxied.
+    expect(probe.cNsKeys).toEqual(["default", "named", "tag"]);
+    // The one measured divergence. An unsplit build gives `["default", "named"]` here; the split adds `"tag"`,
+    // the default export's own key, because an ES module with named exports absent from its default is served
+    // through a proxy that has to keep the default's keys reachable. Values are identical either way (asserted
+    // above); only enumeration differs. If this ever widens further, this assertion is what catches it.
+    expect(probe.eNsKeys).toEqual(["default", "named", "tag"]);
+  });
+
+  // Fix round 1 (C1). The app build resolves only the tab's DIRECT imports, so it cannot see this: a package from
+  // the shared folder whose own dependency resolves out of the working directory (the resolver tries the working
+  // directory first, in every build). The chunk is then full of working-directory code that `bun.lock` -- half the
+  // cache key -- knows nothing about. Only the vendor build can report it, so it must.
+  test("a dependency reached through another package, resolved from the working directory, makes the vendor chunk unkeyable", async () => {
+    await writePackage(
+      packagesNodeModules,
+      "shared-pkg",
+      "import dep from 'transitive-dep';\nexport default 'shared:' + dep;\n",
+    );
+    await writePackage(packagesNodeModules, "transitive-dep", "export default 'from-shared-folder';");
+    await writePackage(join(workingDirectory, "node_modules"), "transitive-dep", "export default 'from-wd';");
+    await writeFile(join(workingDirectory, "entry.js"), "import s from 'shared-pkg';\nglobalThis.__jlProbe = s;\n");
+
+    const app = await bundleAppForWeb({
+      entry: join(workingDirectory, "entry.js"),
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+    expect("error" in app).toBe(false);
+    if ("error" in app) return;
+    // The direct import really did come from the shared folder, so the app build has no objection of its own.
+    expect(app.imports).toEqual(["shared-pkg"]);
+    expect(app.vendorCacheable).toBe(true);
+
+    const vendor = await bundleVendorForWeb({
+      imports: app.imports,
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+    });
+    expect("error" in vendor).toBe(false);
+    if ("error" in vendor) return;
+    // The chunk genuinely contains the working-directory copy...
+    expect(vendor.code).toContain("from-wd");
+    expect(vendor.code).not.toContain("from-shared-folder");
+    // ...so it must not be storable under a key that cannot describe it.
+    expect(vendor.vendorCacheable).toBe(false);
+  });
+
+  // Fix round 1 (I1): the vendor chunk owns the registry outright. Today the page reloads before every run so
+  // there is never anything to inherit, but the chunk must not depend on that happening two files away.
+  test("the vendor chunk replaces a registry left behind by an earlier run rather than adopting it", async () => {
+    await writeFixturePackages();
+    await writeFile(
+      join(workingDirectory, "entry.js"),
+      [
+        "import c from 'cjs-pkg';",
+        "globalThis.__jlProbe = { stale: globalThis.__jslabVendor['stale-pkg'], tag: c.tag };",
+      ].join("\n"),
+    );
+    const g = globalThis as unknown as Record<string, unknown>;
+    g.__jslabVendor = { "stale-pkg": "A PREVIOUS RUN'S MODULE" };
+    try {
+      const probe = (await runJoinedModule(await bundleAndJoin(join(workingDirectory, "entry.js")))) as Record<
+        string,
+        unknown
+      >;
+      expect(probe.stale).toBeUndefined();
+      expect(probe.tag).toBe("cjs-default");
+    } finally {
+      delete g.__jslabVendor;
+    }
   });
 
   // The whole point of the split: this is the vendor chunk a cache hit would serve. Reusing a *previous* run's

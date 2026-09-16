@@ -145,7 +145,8 @@ async function createHarness(
       vendorCacheable: true,
     }));
   const bundleVendor =
-    overrides.bundleVendor ?? (async (): Promise<VendorBundleResult> => ({ code: "VENDOR", map: "VMAP" }));
+    overrides.bundleVendor ??
+    (async (): Promise<VendorBundleResult> => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }));
   const adapter = createWebAdapter({
     webviews,
     runtime: "browser",
@@ -236,7 +237,7 @@ describe("WebAdapter", () => {
         packagesNodeModules: join(h.dir, "node_modules"),
         bunLockPath: join(h.dir, "bun.lock"),
         vendorCache: { get: async () => null, set: async () => {} },
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => true,
         readBunLock: async () => LOCK_TEXT,
@@ -278,7 +279,7 @@ describe("WebAdapter", () => {
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
         vendorCache: { get: async () => null, set: async () => {} },
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => false,
         bundle: async () => {
@@ -330,7 +331,7 @@ describe("WebAdapter", () => {
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
         vendorCache: { get: async () => null, set: async () => {} },
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => !dirGone,
         bundle: async () => {
@@ -384,7 +385,7 @@ describe("WebAdapter", () => {
         packagesNodeModules: join(h.dir, "node_modules"),
         bunLockPath: join(h.dir, "bun.lock"),
         vendorCache: { get: async () => null, set: async () => {} },
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => true,
         readBunLock: async () => LOCK_TEXT,
@@ -511,7 +512,7 @@ describe("WebAdapter", () => {
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
         vendorCache: { get: async () => null, set: async () => {} },
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         runLock: { add: () => {}, remove: () => {} },
       });
       await adapter.prepare({ tabId: "t1", workingDirectory: null });
@@ -536,7 +537,7 @@ describe("WebAdapter", () => {
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
         vendorCache: { get: async () => null, set: async () => {} },
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         runLock: { add: () => {}, remove: () => {} },
         expandTimeoutMs: 30,
         bundle: async () => ({ code: "x", map: "", imports: [], vendorCacheable: true }),
@@ -580,7 +581,7 @@ describe("WebAdapter", () => {
         packagesNodeModules: join(dir, "node_modules"),
         bunLockPath: join(dir, "bun.lock"),
         vendorCache: { get: async () => null, set: async () => {} },
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         runLock: { add: () => {}, remove: () => {} },
         bundle: async () => ({ code: "x", map: "", imports: [], vendorCacheable: true }),
       });
@@ -628,7 +629,7 @@ describe("WebAdapter", () => {
         packagesNodeModules: join(h.dir, "node_modules"),
         bunLockPath: join(h.dir, "bun.lock"),
         vendorCache: { get: async () => null, set: async () => {} },
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => true,
         readBunLock: async () => LOCK_TEXT,
@@ -686,7 +687,7 @@ describe("WebAdapter", () => {
         packagesNodeModules: join(h.dir, "node_modules"),
         bunLockPath: join(h.dir, "bun.lock"),
         vendorCache: { get: async () => null, set: async () => {} },
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => true,
         readBunLock: async () => LOCK_TEXT,
@@ -747,7 +748,7 @@ describe("WebAdapter vendor cache read path (Task 8a)", () => {
       },
       bundleVendor: async () => {
         vendorBuilds++;
-        return { code: "FRESH-VENDOR", map: "VMAP" };
+        return { code: "FRESH-VENDOR", map: "VMAP", vendorCacheable: true };
       },
     });
     try {
@@ -778,7 +779,7 @@ describe("WebAdapter vendor cache read path (Task 8a)", () => {
     };
     const bundleVendor = async () => {
       vendorBuilds++;
-      return { code: `VENDOR-${vendorBuilds}`, map: "VMAP" };
+      return { code: `VENDOR-${vendorBuilds}`, map: "VMAP", vendorCacheable: true };
     };
     const h = await createHarness({
       vendorCache,
@@ -846,7 +847,7 @@ describe("WebAdapter vendor cache read path (Task 8a)", () => {
       bundle: async () => ({ code: "APP", map: "MAP", imports: ["wd-pkg"], vendorCacheable: false }),
       bundleVendor: async () => {
         vendorBuilds++;
-        return { code: "FRESH-VENDOR", map: "VMAP" };
+        return { code: "FRESH-VENDOR", map: "VMAP", vendorCacheable: true };
       },
     });
     try {
@@ -855,6 +856,25 @@ describe("WebAdapter vendor cache read path (Task 8a)", () => {
       expect(h.vendorSets).toEqual([]);
       expect(parseHostMessageCall(h.raw.executed.at(-1) as string).message).toMatchObject({
         code: joinVendorAndApp("FRESH-VENDOR", "APP"),
+      });
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
+  // Fix round 1 (C1), adapter half. The app build's verdict covers direct imports only; the vendor build sees the
+  // whole transitive closure. A chunk it reports as unkeyable must still RUN -- the user's code is fine -- but it
+  // must never be stored, or a different tab with no working directory could hit the same key and execute this
+  // tab's project code.
+  test("a vendor chunk the vendor build reports as unkeyable runs but is never stored", async () => {
+    const h = await createHarness({
+      bundle: async () => ({ code: "APP", map: "MAP", imports: ["shared-pkg"], vendorCacheable: true }),
+      bundleVendor: async () => ({ code: "VENDOR-WITH-WD-CODE", map: "VMAP", vendorCacheable: false }),
+    });
+    try {
+      expect(h.vendorSets).toEqual([]);
+      expect(parseHostMessageCall(h.raw.executed.at(-1) as string).message).toMatchObject({
+        code: joinVendorAndApp("VENDOR-WITH-WD-CODE", "APP"),
       });
     } finally {
       await rm(h.dir, { recursive: true, force: true });
@@ -907,7 +927,7 @@ describe("WebAdapter vendor cache read path (Task 8a)", () => {
         runLock: { add: () => {}, remove: () => {} },
         directoryExists: async () => true,
         readBunLock: async () => LOCK_TEXT,
-        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP" }),
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
         bundle: async () => {
           bundleReached();
           await bundleGate;
@@ -942,6 +962,62 @@ describe("WebAdapter vendor cache read path (Task 8a)", () => {
       expect(events.at(-1)).toMatchObject({ kind: "error", phase: "runner" });
       // The dead page is never asked to run anything.
       expect(raw.executed.some((js) => js.includes("__jslabHostMessage"))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Fix round 1 (M3). A crash landing while the working-directory check is in flight used to report a terminal
+  // state twice: the crash listener's `failed`, and then the coordinator's own `#failWorkingDirectory` after
+  // `start()` threw. The crash check now gates the throw, so the run reports once and `start()` returns a dead
+  // handle rather than throwing at a coordinator that has already been told.
+  test("M3: a crash during the working-directory check reports exactly one terminal state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
+    try {
+      const webviews = new FakeWebviewSource();
+      const raw = new FakeRawWebview();
+      webviews.raws.set("t1", raw);
+      webviews.hosts.set("t1", createSequencedWebviewHost(raw, BOOTSTRAP_SOURCE));
+      const states: { state: RunState; activeHandles?: number }[] = [];
+      const adapter = createWebAdapter({
+        webviews,
+        runtime: "browser",
+        runsDir: dir,
+        packagesNodeModules: join(dir, "node_modules"),
+        bunLockPath: join(dir, "bun.lock"),
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true }),
+        runLock: { add: () => {}, remove: () => {} },
+        // The page dies while we are asking the filesystem about the working directory, and the directory is gone.
+        directoryExists: async () => {
+          raw.crash();
+          return false;
+        },
+        readBunLock: async () => LOCK_TEXT,
+        bundle: async () => ({ code: "APP", map: "MAP", imports: [], vendorCacheable: true }),
+      });
+
+      const handle = await adapter.start(
+        {
+          runId: "run-1",
+          tabId: "t1",
+          code: "1 + 1",
+          maxEntries: 10_000,
+          workingDirectory: "/work",
+          mapEvent: identityMap,
+          isCancelled: () => false,
+        },
+        {
+          attached: () => {},
+          events: () => {},
+          state: (state, activeHandles) => states.push({ state, activeHandles }),
+          heartbeat: () => {},
+          exited: () => {},
+        },
+      );
+
+      expect(handle.runId).toBe("run-1");
+      expect(states).toEqual([{ state: "failed", activeHandles: undefined }]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

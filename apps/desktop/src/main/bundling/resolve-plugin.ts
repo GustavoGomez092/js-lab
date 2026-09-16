@@ -18,13 +18,25 @@ export const VENDOR_REGISTRY_GLOBAL = "__jslabVendor";
 /** The build namespace the app build's package stubs live in; nothing outside this file needs to name it. */
 const VENDOR_STUB_NAMESPACE = "jslab-vendor";
 
-export interface VendorStubOptions {
+export interface ResolveOptions {
   /**
-   * Collects every import that resolved out of the tab's own working directory rather than the shared packages
+   * Collects every specifier that resolved out of the tab's own working directory rather than the shared packages
    * folder. `bun.lock` describes only the packages folder, so a vendor chunk built from anything else cannot be
-   * keyed safely -- see `bundleAppForWeb`'s `vendorCacheable`.
+   * keyed safely -- see `AppBundle.vendorCacheable` and `VendorBundle.vendorCacheable`.
+   *
+   * Fix round 1 (C1): tracking used to be welded to stub mode, so only the *app* build reported provenance -- and
+   * the app build only ever resolves a tab's **direct** imports. `resolveBareSpecifier` tries the working
+   * directory first in every build, so a package resolved from the shared folder whose own dependency resolved out
+   * of the working directory produced a vendor chunk full of working-directory code that was still marked
+   * cacheable. Tracking is now independent of stub mode, so the vendor build -- the build where every transitive
+   * specifier is resolved -- reports provenance too.
    */
-  workingDirectoryImports: Set<string>;
+  workingDirectoryImports?: Set<string>;
+  /**
+   * App build only: resolve a package to a registry stub instead of to its own source, which is what keeps package
+   * code out of the app chunk (the vendor/app split).
+   */
+  vendorStubs?: boolean;
 }
 
 /**
@@ -130,12 +142,12 @@ export function jslabResolve(
   ctx: ResolveContext,
   resolvedImports: Set<string>,
   onError: (error: BundleError) => void,
-  vendorStubs?: VendorStubOptions,
+  options: ResolveOptions = {},
 ): BunPlugin {
   return {
     name: "jslab-resolve",
     setup(build) {
-      if (vendorStubs) {
+      if (options.vendorStubs) {
         build.onLoad({ filter: /.*/, namespace: VENDOR_STUB_NAMESPACE }, (args) => ({
           contents: vendorStubSource(args.path),
           loader: "js",
@@ -147,10 +159,11 @@ export function jslabResolve(
         const resolved = resolveBareSpecifier(args.path, ctx);
         if (resolved) {
           resolvedImports.add(args.path);
-          if (!vendorStubs) return { path: resolved };
+          // Fix round 1 (C1): recorded for every resolution in every build -- direct or transitive, stubbed or not.
           if (resolvedFromWorkingDirectory(resolved, ctx.workingDirectory)) {
-            vendorStubs.workingDirectoryImports.add(args.path);
+            options.workingDirectoryImports?.add(args.path);
           }
+          if (!options.vendorStubs) return { path: resolved };
           // The app build never reads a line of package code: the specifier becomes a stub that reads whatever the
           // vendor chunk published for it (Task 8a). The specifier itself is the stub's identity, so two imports of
           // the same package share one stub, exactly as they shared one module before the split.

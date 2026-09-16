@@ -195,6 +195,9 @@ export interface WebAdapterDeps {
   stopGraceMs?: number;
   /** How long `expand()` waits for a reply before resolving null. Defaults to 5 s. */
   expandTimeoutMs?: number;
+  /** How long `waitForReady` waits for the page's ready round trip before tearing the webview down and failing the
+   * run. Defaults to `WEBVIEW_READY_TIMEOUT_MS` (2 s) -- deliberately not `expandTimeoutMs` (see that constant). */
+  webviewReadyTimeoutMs?: number;
   /** Test seam; production always calls the real `bundleAppForWeb`. */
   bundle?(options: BundleOptions): Promise<AppBundleResult>;
   /** Test seam; production always calls the real `bundleVendorForWeb`. */
@@ -238,6 +241,18 @@ async function cleanupEntries(dir: string, keep: string): Promise<void> {
 }
 
 /**
+ * `waitForReady`'s own bound (M4 T9c, closes ledger ruling R-M4-T7-TIMEOUT-1). Previously it reused
+ * `expandTimeoutMs` (default 5 s) on the theory that both represent "how long do we wait for the page to respond
+ * to something" -- but they are the wrong kind of bound to share. `expand()` timing out just resolves `null`
+ * (`WebRunSession.expand`, harmless); this one tears the webview down (`webviews.destroy`) and fails the whole
+ * run. Sharing a tunable also meant the two would silently drift apart the instant anyone tuned `expand` for its
+ * own reason. Task 9a measured real `views://` ready time at 11-23 ms -- a 220-450x margin even against the old 5 s
+ * bound, so tightening costs nothing; 2 s keeps two full orders of magnitude of headroom while finally being a
+ * bound this call site owns outright.
+ */
+export const WEBVIEW_READY_TIMEOUT_MS = 2000;
+
+/**
  * Waits for the page's `ready` message after `host.reset()`'s reload, bounded so a page that never loads (the
  * bootstrap's own `ASSERT_HOST_HOOK_SNIPPET` throwing before it can send `ready`, or a real webview crash/load
  * failure) cannot hang `start()` forever (fix round 1, C2). Unbounded, this left the run permanently unkillable:
@@ -247,11 +262,21 @@ async function cleanupEntries(dir: string, keep: string): Promise<void> {
  * this window is reported the same way `WebRunSession#onCrash` reports one later, instead of being invisible until
  * the timeout fires.
  *
- * `timeoutMs` reuses `expandTimeoutMs` (default 5 s) rather than inventing a new tunable: both represent "how long
- * do we wait for the page to respond to something", and 5 s is comfortably longer than a real, local `views://`
- * page load (no network involved). On timeout, the stuck webview is discarded (`webviews.destroy`) so the tab's
- * *next* run gets a genuinely fresh one instead of reusing a realm that may still finish loading later and deliver
- * a very late, orphaned `ready`.
+ * `timeoutMs` is `WEBVIEW_READY_TIMEOUT_MS` by default (or `deps.webviewReadyTimeoutMs`) -- see that constant's own
+ * doc comment for why it is no longer `expandTimeoutMs`.
+ *
+ * M4 T9c (a CodeRabbit finding on PR #3, verified before acting on it): `host.onMessage` is deliberately NOT
+ * subscribed until `host.reset()` itself has resolved -- i.e., until *this* reload's own bootstrap injection has
+ * actually happened. An earlier version of this function subscribed before calling `reset()`, which let a `ready`
+ * left over from the tab's *previous* page -- still in flight across the UI<->Main RPC boundary at the exact
+ * moment this `reset()` reloads that page away -- satisfy a wait it does not belong to: `WebToHostMessage` carries
+ * no generation/epoch of its own, so nothing else distinguishes "this reload's ready" from "the last one's, delayed
+ * in transit". That is a real, if narrow, race: a persistent webview (Task 8's invariant) is reset()'d again on
+ * every run on the same tab, so an in-flight straggler from run N has a window to be mistaken for run N+1's ready.
+ * `reset()` resolving is the *earliest* moment a genuine ready for this generation could even have been sent (the
+ * bootstrap has only just been injected), so deferring the subscription until then closes the gap structurally --
+ * no generation token, no wire-format change, just not listening before there is anything genuine to hear. `onExit`
+ * and the timeout remain armed for the whole window, including while `reset()` itself is still in flight.
  */
 async function waitForReady(
   host: WebviewHost,
@@ -262,14 +287,7 @@ async function waitForReady(
 ): Promise<void> {
   let settled = false;
   await new Promise<void>((resolve, reject) => {
-    const unsubMessage = host.onMessage((message) => {
-      if (message.type !== "ready" || settled) return;
-      settled = true;
-      unsubMessage();
-      unsubExit();
-      clearTimeout(timer);
-      resolve();
-    });
+    let unsubMessage = () => {};
     const unsubExit = host.onExit(() => {
       if (settled) return;
       settled = true;
@@ -285,14 +303,27 @@ async function waitForReady(
       webviews.destroy(tabId);
       reject(new Error(`Web runner's webview never reported ready within ${timeoutMs}ms (tab ${tabId}).`));
     }, timeoutMs);
-    host.reset(runtime).catch((error: unknown) => {
-      if (settled) return;
-      settled = true;
-      unsubMessage();
-      unsubExit();
-      clearTimeout(timer);
-      reject(error instanceof Error ? error : new Error(String(error)));
-    });
+    host
+      .reset(runtime)
+      .then(() => {
+        if (settled) return; // onExit or the timeout already settled this while reset() was still in flight.
+        unsubMessage = host.onMessage((message) => {
+          if (message.type !== "ready" || settled) return;
+          settled = true;
+          unsubMessage();
+          unsubExit();
+          clearTimeout(timer);
+          resolve();
+        });
+      })
+      .catch((error: unknown) => {
+        if (settled) return;
+        settled = true;
+        unsubMessage();
+        unsubExit();
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
   });
 }
 
@@ -574,7 +605,13 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
       // Spec §5.12 steps 1-2 ("Main sends runner.reset... the page reloads"), decision 1: every run gets a fresh
       // realm/DOM via reload, not just Stop/Kill -- see the report for why this is safe without an uninstall path.
       // Fix round 1 (C2): bounded and crash-aware -- see `waitForReady`'s own doc comment.
-      await waitForReady(host, deps.webviews, run.tabId, deps.expandTimeoutMs ?? 5000, deps.runtime);
+      await waitForReady(
+        host,
+        deps.webviews,
+        run.tabId,
+        deps.webviewReadyTimeoutMs ?? WEBVIEW_READY_TIMEOUT_MS,
+        deps.runtime,
+      );
       if (run.isCancelled()) return deadHandle(run.runId);
 
       // Ledger ruling R-M4-T7-GAP-1 (from Task 7's re-review). From here until the session below wires its own

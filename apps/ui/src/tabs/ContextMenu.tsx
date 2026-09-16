@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useOverlayPresence } from "../shell/overlay-presence";
 
 export interface MenuEntry {
   id: string;
@@ -8,6 +9,9 @@ export interface MenuEntry {
 }
 
 export function ContextMenu(props: { x: number; y: number; items: MenuEntry[]; onClose(): void }) {
+  // M4 T9c: `TabBar` only renders this component while a tab's context menu is open (`{menu && <ContextMenu .../>}`),
+  // so its whole mount lifetime IS the open window -- see `overlay-presence.ts`.
+  useOverlayPresence(true);
   const menu = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: props.x, top: props.y });
 

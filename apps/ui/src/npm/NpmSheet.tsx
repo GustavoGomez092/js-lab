@@ -4,6 +4,7 @@ import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { writeSetting } from "../commands/settings-writer";
 import { copyEntriesToClipboard } from "../output/copy";
+import { useOverlayPresence } from "../shell/overlay-presence";
 import { useSheetFocus } from "../shell/sheet-focus";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
@@ -39,6 +40,9 @@ export function NpmSheet({ store, api }: { store: AppStore; api: NpmApi }) {
 }
 
 function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
+  // M4 T9c: this component only ever mounts while the sheet is open (`NpmSheet` above returns null otherwise),
+  // so its whole mount lifetime IS the open window -- see `overlay-presence.ts`.
+  useOverlayPresence(true);
   const npm = useStore(store, (s) => s.npm);
   const allowScripts = useStore(store, (s) => s.settings?.npm.allowInstallScripts ?? false);
   const [query, setQuery] = useState("");

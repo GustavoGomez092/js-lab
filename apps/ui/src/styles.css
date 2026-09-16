@@ -260,9 +260,10 @@ button:disabled {
 }
 
 /* The actual tile: always a child of `.webview-parking` (see below), positioned with `position: fixed` and
-   `top`/`left`/`width`/`height` set inline to track `.webview-tile-dock`'s box when docked, or collapsed to zero
-   size when not -- never `display: none`, which a native, compositor-level webview surface is not guaranteed to
-   honor, and never moved in the DOM (fix round 1, F1/F2). */
+   `top`/`left`/`width`/`height` set inline to track `.webview-tile-dock`'s box when docked, or collapsed to a 1x1
+   box when not (`WebViewTile.tsx`'s `COLLAPSED_STYLE` -- not literally 0x0, see that constant's own doc comment
+   for the native-layer reason why) -- never `display: none`, which a native, compositor-level webview surface is
+   not guaranteed to honor, and never moved in the DOM (fix round 1, F1/F2). */
 .webview-tile {
   overflow: hidden;
 }
@@ -283,12 +284,16 @@ button:disabled {
    `html`, `body`, `#root`, `.app` or `.app-main` would silently re-base every docked webview's coordinates to
    that ancestor's box instead of the viewport. None of them declare any of those today (checked repo-wide) --
    this holds by accident, not by contract, so anyone adding one of those properties to an ancestor here needs to
-   know this relies on their absence. Stacking is the same story: neither this rule nor `.webview-tile` sets
-   `z-index`, so both sit at the implicit 0 -- every overlay in this stylesheet declares a higher one
-   (`.dialog-backdrop` 50, `.context-menu` 60, `.palette-scrim` 70, `.palette` 71), which is why dialogs/menus/the
-   palette correctly paint over a docked webview without this rule needing its own z-index -- again, true only as
-   long as nothing here drops below it. Unverified (M4 T9): whether that CSS stacking claim holds against a real
-   native compositor surface at all, regardless of z-index -- see Task 9's report. */
+   know this relies on their absence. Stacking is NOT the same story, despite appearances: neither this rule nor
+   `.webview-tile` sets `z-index`, and every overlay in this stylesheet does declare a higher one than either's
+   implicit 0 (`.dialog-backdrop` 50, `.context-menu` 60, `.palette-scrim` 70, `.palette` 71) -- but M4 T9a's real
+   run (a screenshot, not a reading of this file) settled that CSS stacking does not arbitrate a native compositor
+   surface AT ALL: a docked `<electrobun-webview>` painted above the command palette regardless of any of these
+   numbers. `z-index` here is decorative among the HTML overlays themselves, not a defense against the webview.
+   The actual fix (M4 T9c) is not in this file: `WebViewHosts` collapses every docked tile -- to this same 1x1,
+   non-interactive box `.webview-tile` already uses while undocked -- for as long as any overlay is open
+   (`apps/ui/src/shell/overlay-presence.ts`), so there is effectively no native surface left in the rectangle for
+   these z-indexes to lose to. See `WebViewHosts.tsx`'s own doc comment for the mechanism and its cost. */
 .webview-parking {
   position: fixed;
   top: 0;

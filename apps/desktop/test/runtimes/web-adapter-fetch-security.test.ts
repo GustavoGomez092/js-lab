@@ -52,7 +52,12 @@ class FakeRawWebview implements RawWebview {
   }
   executeJavascript(js: string): void {
     this.executed.push(js);
-    if (js.includes(ASSERT_HOST_HOOK_SNIPPET)) this.emit(1, { type: "ready" });
+    // A real timer, not a same-tick microtask: M4 T9c's `waitForReady` deliberately does not subscribe to `ready`
+    // until `host.reset()` itself has resolved (closing a stale-ready race -- see that function's own doc comment
+    // in web-adapter.ts), and `reset()` resolves synchronously right after this call returns. Firing "ready" in
+    // the same microtask turn as that resolution would race it and lose (see `web-adapter.test.ts`'s identical fix
+    // to its own `FakeRawWebview` for the full reasoning).
+    if (js.includes(ASSERT_HOST_HOOK_SNIPPET)) setTimeout(() => this.emit(1, { type: "ready" }), 0);
   }
   onLoaded(listener: () => void): () => void {
     this.#loadedListeners.add(listener);

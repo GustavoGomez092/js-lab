@@ -50,7 +50,6 @@ import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
 import { createTypesHandlers } from "./rpc/types-handlers";
 import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
-import { createWebFetchHandlers } from "./rpc/web-fetch-handlers";
 import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
@@ -173,6 +172,7 @@ async function start(): Promise<void> {
     env: baseEnv,
     shiftHeld,
     log,
+    redact,
     onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
     onState: (tabId, runId, state, activeHandles) =>
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
@@ -332,25 +332,13 @@ async function start(): Promise<void> {
       }),
       appHandlers,
       createUiFlushHandlers(uiFlush, log),
-      // Task 12/13 (spec §5.12): `browser-node`'s fetch proxy. Registration was deliberately withheld until this
-      // task, because the fail-closed `runtimeOf` gate below is what makes it safe to register at all -- see
-      // web-fetch-handlers.ts's own doc comment. `runtimeOf` reads the tab's own configured runtime straight from
-      // Main's session store (never from anything a caller supplies), so an unknown or non-`browser-node` tab is
-      // refused regardless of what a `webFetch.request` payload claims. `send` mirrors `file.opened`/`file.saved`'s
-      // own precedent (a tab-scoped push the UI relays onward) rather than inventing a new channel; wiring the UI
-      // side of that relay into a specific tab's `<electrobun-webview>` is a later integration's job, the same way
-      // `RawWebview`'s real implementation was out of Task 7's scope until Task 8's tile existed to relay through.
-      createWebFetchHandlers({
-        send: {
-          head: (payload) => rpc.send["webFetch.head"](payload),
-          chunk: (payload) => rpc.send["webFetch.chunk"](payload),
-          end: (payload) => rpc.send["webFetch.end"](payload),
-          error: (payload) => rpc.send["webFetch.error"](payload),
-        },
-        runtimeOf: (tabId) => session.session.tabs[tabId]?.runtime,
-        redact,
-        log,
-      }),
+      // Task 12/13 (spec §5.12), fix round 1: `browser-node`'s fetch proxy is no longer an RPC handler group here.
+      // It used to take a page-supplied `tabId` in a flat payload, authorized by looking the tab's runtime up by
+      // that same id -- once registered, a `browser` tab could name a `browser-node` tab's id and get a CORS-free
+      // request issued on the user's session. It's now constructed per `WebRunSession`
+      // (`runtimes/web-adapter.ts`), which already knows its own tab and runtime from the `WebviewHost` the
+      // connection arrived on, never from anything the message claims -- see `rpc/web-fetch-handlers.ts`'s doc
+      // comment and `main-services.ts`'s `webAdapterDeps` for the wiring.
       createFileHandlers({
         files: new FileService(nodeFileSystem),
         session,

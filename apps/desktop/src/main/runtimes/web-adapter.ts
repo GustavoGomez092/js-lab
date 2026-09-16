@@ -13,6 +13,9 @@ import {
 } from "../bundling/bundler";
 import { resolveBareSpecifier, resolvedFromWorkingDirectory } from "../bundling/resolve-plugin";
 import { type CachedVendorChunk, hashBunLock, type VendorCache, vendorCacheKey } from "../bundling/vendor-cache";
+import type { Redactor } from "../logging/redact";
+import type { Log } from "../rpc/validate";
+import { createWebFetchRunner, type WebFetchRunner } from "../rpc/web-fetch-handlers";
 import {
   type PreparedRun,
   type RunEventSink,
@@ -176,6 +179,17 @@ export interface WebAdapterDeps {
   directoryExists?(path: string): Promise<boolean>;
   /** Test seam for reading `bunLockPath`. */
   readBunLock?(path: string): Promise<string>;
+  /**
+   * Fix round 1 (security): `WebRunSession` builds one `WebFetchRunner` (`../rpc/web-fetch-handlers.ts`) per
+   * session from these, only when `runtime` is `"browser-node"` -- see `#onMessage`'s `"fetchRequest"` case for
+   * why that check happens here rather than by looking a caller-supplied tab id up. Optional (a redact/log no-op
+   * default applies) so every existing fixture across this file's own large test suite -- almost none of which
+   * exercise `browser-node` fetch at all -- stays valid unchanged.
+   */
+  redact?: Redactor;
+  log?: Log;
+  /** Test seam; production always uses the runtime's own `fetch`. */
+  webFetch?(url: string, init?: RequestInit): Promise<Response>;
 }
 
 function deadHandle(runId: string): RunHandle {
@@ -288,6 +302,9 @@ class WebRunSession implements RunHandle {
   #unsubExit: () => void = () => {};
   #nextReqId = 1;
   readonly #pendingExpands = new Map<number, (value: EncodedValue | null) => void>();
+  /** Fix round 1 (security): built lazily, only the first time this session actually sees a `fetchRequest` -- most
+   *  runs (and every `"browser"` session, ever) never need one. */
+  #fetchRunner: WebFetchRunner | null = null;
 
   constructor(
     private readonly host: WebviewHost,
@@ -392,10 +409,36 @@ class WebRunSession implements RunHandle {
     clearTimeout(this.#stopTimer);
     for (const settle of [...this.#pendingExpands.values()]) settle(null);
     this.#pendingExpands.clear();
+    // Fix round 1: a run that retires mid-request must not leave Main still talking to a server on the user's
+    // behalf for a page nothing is listening to anymore.
+    this.#fetchRunner?.abortAll();
     this.#unsubMessage();
     this.#unsubExit();
     this.deps.runLock.remove(this.run.runId);
     this.sink.exited();
+  }
+
+  /**
+   * Fix round 1 (security): the fail-closed gate for `browser-node`'s fetch proxy, moved here from a `tabId`
+   * lookup a `browser` tab could forge. `this.deps.runtime` is fixed per `WebAdapter` instance (one adapter per
+   * runtime, `main-services.ts`'s `webAdapterDeps`) and this session belongs to exactly one tab's one webview
+   * connection -- there is no field to spoof, because nothing here is read from the message.
+   */
+  #fetchRunnerFor(): WebFetchRunner {
+    if (!this.#fetchRunner) {
+      this.#fetchRunner = createWebFetchRunner({
+        send: {
+          head: (payload) => this.host.send({ type: "fetchHead", ...payload }),
+          chunk: (payload) => this.host.send({ type: "fetchChunk", ...payload }),
+          end: (payload) => this.host.send({ type: "fetchEnd", ...payload }),
+          error: (payload) => this.host.send({ type: "fetchError", ...payload }),
+        },
+        redact: this.deps.redact ?? ((text: string) => text),
+        log: this.deps.log ?? (() => {}),
+        ...(this.deps.webFetch ? { fetch: this.deps.webFetch } : {}),
+      });
+    }
+    return this.#fetchRunner;
   }
 
   #onMessage(message: WebToHostMessage): void {
@@ -409,6 +452,33 @@ class WebRunSession implements RunHandle {
       case "events":
         if (this.#terminal) return;
         this.sink.events(message.events.map((event) => this.run.mapEvent(event)));
+        return;
+      case "fetchRequest":
+        // The defining refusal (fix round 1): enforced against `this.deps.runtime`, which this session's own
+        // `WebAdapter` was constructed with -- never against anything the message supplies. A `browser` tab's
+        // page (including one that forged this envelope directly over `__electrobunSendToHost`, bypassing
+        // `fetch-proxy.ts` entirely) is refused here exactly the same way, because there is no `tabId` left to
+        // forge: this session IS the tab.
+        if (this.deps.runtime !== "browser-node") {
+          const redact = this.deps.redact ?? ((text: string) => text);
+          this.host.send({
+            type: "fetchError",
+            id: message.id,
+            message: redact(
+              `Fetch is only routed through JSLab for the "browser-node" runtime; this tab is "${this.deps.runtime}".`,
+            ),
+          });
+          return;
+        }
+        this.#fetchRunnerFor().request(message.id, {
+          url: message.url,
+          method: message.method,
+          headers: message.headers,
+          body: message.body,
+        });
+        return;
+      case "fetchAbort":
+        this.#fetchRunner?.abort(message.id);
         return;
       case "state": {
         if (message.state === "stopped") {

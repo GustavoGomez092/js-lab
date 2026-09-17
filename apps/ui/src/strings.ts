@@ -263,6 +263,9 @@ export const strings = {
   },
   npm: {
     title: "NPM Packages",
+    // The sheet's own exit control, in the header. Deliberately distinct from `remove` below: that one is the
+    // destructive row action, and the two must never read as the same control.
+    close: "Close",
     searchLabel: "Search npm packages",
     searchPlaceholder: "Search npm, or type name@version",
     weekly: (count: number) => `${count.toLocaleString("en-US")} weekly downloads`,
@@ -275,9 +278,17 @@ export const strings = {
     name: "Name",
     version: "Installed",
     latest: "Latest",
+    // Shown in a Latest cell once an outdated check has succeeded and found nothing newer, so the cell reports a
+    // real state instead of rendering blank.
+    upToDate: "Up to date",
+    // Shown in a Latest cell when no outdated check has succeeded yet, so "is there a newer one" is simply unknown.
+    latestUnknown: "—",
     update: (name: string) => `Update ${name}`,
     updateButton: "Update",
     remove: (name: string) => `Remove ${name}`,
+    // The row's destructive action carries a word, not a glyph: an unlabelled × under a blank column header was
+    // being mistaken for the sheet's (previously missing) close control.
+    removeButton: "Remove",
     updateAll: "Update All",
     // R26-1: the toolbar's Update All tooltip, distinct from its (unchanged) accessible name.
     updateAllTitle: (count: number, majors: number) =>

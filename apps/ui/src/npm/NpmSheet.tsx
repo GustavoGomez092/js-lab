@@ -56,8 +56,6 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
   const search = useRef<HTMLInputElement>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
-  const queryRef = useRef(query);
-  queryRef.current = query;
   // R25 pattern: a synchronous guard, since a second click in the same tick must not fire Allow Scripts and
   // Retry twice (writeSetting is async, like EnvVarsSheet's save()).
   const allowScriptsRetrying = useRef(false);
@@ -123,19 +121,22 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
   useSheetFocus(true, sheetRef);
 
   // R25 pattern: document capture-phase Escape, gated on the modal kind, so it works even when focus has left
-  // the sheet's inputs. R26-2's own carve-out: when the search field is focused with a non-empty query, this
-  // handler steps aside so the field's own onKeyDown can clear the query first instead of closing the sheet.
+  // the sheet's inputs. Ruling 1 (supersedes R26-2): Escape's only effect is closing. R26-2 used to carve out a
+  // focused search field holding a non-empty query so the field could clear it first, which cost the sheet its
+  // only discoverable exit -- the first press appeared to do nothing. A type="search" input already carries a
+  // native clear control, and install()/a fresh session reset the query on every other path.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (store.getState().modal?.kind !== "npm") return;
       if (event.key !== "Escape") return;
-      if (document.activeElement === search.current && queryRef.current.trim() !== "") return;
       event.preventDefault();
       store.getState().closeModal();
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [store]);
+
+  const close = () => store.getState().closeModal();
 
   /** M-4: runs `action` unless `key` is already pending; marks it pending synchronously, before the API call. */
   const guarded = (key: string, action: () => void) => {
@@ -199,11 +200,34 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
   const updateAllPending = npm.operations.some(
     (op) => op.kind === "updateAll" && (op.status === "queued" || op.status === "running"),
   );
+  // A blank Latest cell said nothing, because `latest === null` has two meanings: nothing newer was published, or
+  // no outdated check has succeeded yet. Only a completed, error-free check tells them apart.
+  const outdatedKnown = npm.outdatedCheckedAt !== null && !npm.outdatedError;
 
   return (
-    <div className="dialog-backdrop">
+    // Ruling 3: pressing the backdrop dismisses the sheet, but only when the press lands on the backdrop itself --
+    // a press anywhere inside the sheet bubbles up to this same element. preventDefault follows CommandPalette's
+    // scrim (fix round 1, m-1): default mousedown focus handling on an about-to-unmount element can blur whatever
+    // useSheetFocus's cleanup just restored.
+    // biome-ignore lint/a11y/noStaticElementInteractions: pressing the backdrop is a pointer shortcut for Escape
+    <div
+      className="dialog-backdrop"
+      onMouseDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        event.preventDefault();
+        close();
+      }}
+    >
       <div ref={sheetRef} className="sheet npm-sheet" role="dialog" aria-modal="true" aria-label={strings.npm.title}>
-        <h2>{strings.npm.title}</h2>
+        <div className="sheet-header">
+          <h2>{strings.npm.title}</h2>
+          {/* Ruling 2: the sheet's visible exit. A real <button> keeps this clear of useAriaPropsSupportedByRole
+              and useSemanticElements, and its glyph is the only x-shaped mark left in the sheet now that the row's
+              destructive action carries the word "Remove". */}
+          <button type="button" className="sheet-close" aria-label={strings.npm.close} onClick={close}>
+            ✕
+          </button>
+        </div>
         <input
           ref={search}
           type="search"
@@ -228,18 +252,8 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
             }
           }}
           onKeyDown={(event) => {
-            if (event.key === "Escape" && query.trim() !== "") {
-              event.preventDefault();
-              event.stopPropagation();
-              setQuery("");
-              setResults([]);
-              setSearchError(null);
-              setSearchedFor(null);
-              setActive(null);
-              searchSeq.current += 1;
-              scheduler.cancel();
-              return;
-            }
+            // Ruling 1: no Escape branch here. It used to swallow the key (stopPropagation) to clear the query,
+            // which is why closing the sheet took two presses -- the first one looked like a no-op.
             if (event.key === "ArrowDown" && results.length > 0) {
               event.preventDefault();
               setActive((current) => (current === null ? 0 : Math.min(current + 1, results.length - 1)));
@@ -397,7 +411,7 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
                     <td>{pkg.name}</td>
                     <td>{pkg.version ?? "—"}</td>
                     <td>
-                      {pkg.latest ?? ""}
+                      {pkg.latest ?? (outdatedKnown ? strings.npm.upToDate : strings.npm.latestUnknown)}
                       {pkg.latest && isMajorUpdate(pkg.version, pkg.latest) && (
                         <span className="npm-major" title={strings.npm.majorTitle(pkg.name, pkg.version, pkg.latest)}>
                           {strings.npm.major}
@@ -420,13 +434,17 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
                       )}
                     </td>
                     <td>
+                      {/* The destructive action used to be a bare × directly under a blank column header, which a
+                          user looking for a way out of the sheet could easily take for a close control. It now
+                          says what it does, in its own colour. */}
                       <button
                         type="button"
+                        className="npm-remove"
                         aria-label={strings.npm.remove(pkg.name)}
                         disabled={Boolean(rowPending)}
                         onClick={() => guarded(`remove:${pkg.name}`, () => api.npmRemove(pkg.name))}
                       >
-                        ×
+                        {strings.npm.removeButton}
                       </button>
                     </td>
                   </tr>
@@ -437,10 +455,15 @@ function NpmPanel({ store, api }: { store: AppStore; api: NpmApi }) {
           {npm.loaded && npm.installed.length === 0 && <p className="sheet-status">{strings.npm.none}</p>}
           {allTypesHidden && <p className="sheet-status">{strings.npm.typesHidden(npm.installed.length)}</p>}
         </div>
-        <details className="npm-log">
-          <summary>{strings.npm.log}</summary>
-          <pre>{currentLogOp ? (npm.logs[currentLogOp.id] ?? "") : ""}</pre>
-        </details>
+        {/* The drawer was already collapsed by default (a bare <details>, no `open`), but it offered itself even
+            with nothing behind it and opened onto an empty <pre>. It now appears only once there is an operation
+            whose log it can actually show. */}
+        {currentLogOp && (
+          <details className="npm-log">
+            <summary>{strings.npm.log}</summary>
+            <pre>{npm.logs[currentLogOp.id] ?? ""}</pre>
+          </details>
+        )}
       </div>
     </div>
   );

@@ -83,6 +83,8 @@ Press <kbd>⌘⇧P</kbd> to search every command. Matches are highlighted, resul
 
 JSLab ships **Graphite**, a dark native theme, and **Graphite Light**, and can follow the macOS appearance. Other built-in themes include Dracula, One Dark, Monokai, Material Darker, Ayu Dark, Ayu Mirage, SynthWave '84, Shades of Purple, Nord, Night Owl, Catppuccin Mocha, GitHub Dark, Solarized Dark, Tomorrow Night, GitHub Light, Solarized Light, Catppuccin Latte, Ayu Light and Visual Studio Light.
 
+**Import a VS Code theme** with Import VS Code Theme… from a `.json` theme file or a `.vsix` extension. JSLab maps the TextMate scopes to the editor and derives the window's own colours from the theme, raising contrast where a theme leaves a surface unreadable. Imported themes are saved under your data folder's `themes/` and appear in the Themes menu, the command palette and the Appearance picker straight away.
+
 ### Formatting
 
 Prettier formats the current tab with <kbd>⌥⇧F</kbd> in a single undo step, keeping folds and scroll position. Turn on **Format on Run** or **Format on Save**, and set print width, quotes, semicolons, trailing commas and more under Settings → Formatting.
@@ -91,7 +93,9 @@ Prettier formats the current tab with <kbd>⌥⇧F</kbd> in a single undo step, 
 
 <img src="docs/images/settings-appearance.png" alt="The Settings window on the Appearance tab, with Theme, Follow System Appearance, Light Theme, Dark Theme, Font, Font Size and Font Ligatures" width="560">
 
-<kbd>⌘,</kbd> opens a searchable Settings window with General, Editor, Formatting, Appearance and Advanced tabs. Every field has help text, and changes apply live. The font picker lists six bundled coding fonts (JetBrains Mono, Fira Code, DejaVu Sans Mono, Hack, Ubuntu Mono and Source Code Pro), then your installed fonts.
+<kbd>⌘,</kbd> opens a searchable Settings window with General, Editor, Formatting, Appearance, Keybindings, NPM, Build and Advanced tabs. Every field has help text, and changes apply live. The font picker lists six bundled coding fonts (JetBrains Mono, Fira Code, DejaVu Sans Mono, Hack, Ubuntu Mono and Source Code Pro), then your installed fonts.
+
+**Keybindings** lists every JSLab command with the keys that run it, where it applies and whether the binding is yours or the default. Record a new shortcut by pressing the keys you want; JSLab warns when another command already answers to that chord, and offers a reset per command or for the whole keymap. Changes apply to the running app — including the shortcuts shown in the menu bar — without a relaunch, and you can still edit `keybindings.json` by hand.
 
 The Help menu can copy a redacted debug log, open the logs folder, or restart JSLab in Safe Mode.
 
@@ -165,7 +169,7 @@ Scripted launches must use a working directory on an internal disk. From an exte
 | M2 | Workspace: tabs, files, settings, themes, formatting, command palette | ✅ Done |
 | M3 | Language & packages: npm, types and autocomplete, working directory, env vars | ✅ Done (manual QA items pending user) |
 | M4 | Browser runtimes: DOM, canvas, React and a live web view | ✅ Done (manual QA items pending user) |
-| M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | 🚧 In progress — logpoints, Show Transpiled Output and the first-run welcome tab are done |
+| M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | 🚧 In progress — logpoints, Show Transpiled Output, the first-run welcome tab, the VS Code theme importer and the Keybindings editor are done |
 | M6 | Ship: signing, notarization, auto-update, 1.0 | Planned |
 
 Details are in the [roadmap](docs/superpowers/plans/2026-09-12-jslab-roadmap.md).

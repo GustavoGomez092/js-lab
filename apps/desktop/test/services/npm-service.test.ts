@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OperationQueue } from "@jslab/npm";
 import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
+import { MAX_NPMRC_BYTES } from "@jslab/rpc-schema";
 import { resolveAppPaths } from "../../src/main/app-paths";
 import {
   MAX_SEARCH_BODY_BYTES,
@@ -574,6 +575,30 @@ describe("NpmService (spec §11.3)", () => {
     const fallback = await service.search("zod");
     expect(fallback.error).toBeNull();
     expect(seen).toEqual(["https://registry.npmjs.org/-/v1/search?text=zod&size=25"]);
+  });
+
+  /**
+   * F2. `MAX_NPMRC_CHARS` was enforced on `npmrc.save` and never on this read, which runs on every search and
+   * every registry resolve -- and `npm config set`, `npm login` and any package's postinstall all write that
+   * file. An oversized .npmrc must fail the resolve rather than be read whole into Main, and it must not decay
+   * into an empty config, because an empty config is what sends the query to the public registry (FR-12 above).
+   */
+  test("an oversized .npmrc fails the registry resolve, naming the size, and never reaches the public registry", async () => {
+    const seen: string[] = [];
+    const fakeFetch = (async (input: string | URL | Request) => {
+      seen.push(String(input));
+      return Response.json({ objects: [] });
+    }) as typeof fetch;
+    const { service, paths } = await setup({ fetch: fakeFetch });
+
+    writeFileSync(paths.packagesNpmrc, "x".repeat(MAX_NPMRC_BYTES + 1));
+    const result = await service.search("acme-internal-tool");
+    expect(result.results).toEqual([]);
+    expect(result.error?.kind).toBe("disk");
+    // The failure names the size rather than blaming generic I/O.
+    expect(result.error?.log).toContain(String(MAX_NPMRC_BYTES + 1));
+    // The (possibly internal) query text must never reach the public registry.
+    expect(seen).toEqual([]);
   });
 
   test("with automatic types on, an untyped package gets @types/<name> when the registry has it", async () => {

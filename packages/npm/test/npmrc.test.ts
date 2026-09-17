@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MAX_NPMRC_CHARS } from "@jslab/rpc-schema";
 import { authTokenFor, parseNpmrc, redactRegistryUrl, registryFor } from "../src/npmrc";
 
 describe(".npmrc (spec §11.3, §11.5)", () => {
@@ -62,5 +63,19 @@ describe(".npmrc (spec §11.3, §11.5)", () => {
     expect(redactRegistryUrl("https://user:pass@npm.corp.example/")).toBe("https://npm.corp.example/");
     expect(redactRegistryUrl("http://127.0.0.1:4873/")).toBe("http://127.0.0.1:4873/");
     expect(redactRegistryUrl("not a url")).toBe("not a url");
+  });
+
+  /**
+   * F2. The defensive cap `parseDotenv` already carried and this parser did not. It is a backstop only: Main's
+   * one production caller reads the file through `readBoundedText`, which throws before text this large can get
+   * here. That ordering is the point -- an empty config is exactly what makes `registryFor` fall back to the
+   * public registry, so this cap must never be the only bound on the path.
+   */
+  test("ignores text larger than MAX_NPMRC_CHARS", () => {
+    const oversized = `registry=https://npm.acme.test/\n${"x".repeat(MAX_NPMRC_CHARS)}`;
+    expect(oversized.length).toBeGreaterThan(MAX_NPMRC_CHARS);
+    expect([...parseNpmrc(oversized)]).toEqual([]);
+    // The same content under the cap still parses, so the bound is the cap and not something narrower.
+    expect([...parseNpmrc("registry=https://npm.acme.test/")]).toEqual([["registry", "https://npm.acme.test/"]]);
   });
 });

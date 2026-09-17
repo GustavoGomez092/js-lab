@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   envSaveParamsSchema,
   localTypesParamsSchema,
+  MAX_NPMRC_BYTES,
   MAX_NPMRC_CHARS,
   npmInstallParamsSchema,
   npmNameSchema,
@@ -74,5 +75,18 @@ describe("M3 contracts", () => {
   test(".npmrc content is capped", () => {
     expect(ok(npmrcSaveParamsSchema, { content: "registry=http://127.0.0.1:4873/\n" })).toBe(true);
     expect(ok(npmrcSaveParamsSchema, { content: "x".repeat(MAX_NPMRC_CHARS + 1) })).toBe(false);
+  });
+
+  /**
+   * F2. The test above is the whole reason this one exists: it is named ".npmrc content is capped" but asserts
+   * only the *save* schema, and nothing ever capped the read -- which is the side third parties control, since
+   * `npm config set`, `npm login` and any package's postinstall write that file. The cap that matters is the
+   * byte cap Main reads with; this pins that it exists and that it cannot be narrower than what save accepts,
+   * so a file the user legitimately saved can never become unreadable.
+   */
+  test(".npmrc has a read-side byte cap that covers everything the save cap accepts", () => {
+    expect(MAX_NPMRC_BYTES).toBeGreaterThanOrEqual(MAX_NPMRC_CHARS);
+    // UTF-8's worst case is four bytes per char, so a string at the char cap must still fit the byte cap.
+    expect(MAX_NPMRC_BYTES).toBeGreaterThanOrEqual(MAX_NPMRC_CHARS * 4);
   });
 });

@@ -24,8 +24,10 @@ import type {
   NpmOpKind,
   NpmSearchResponse,
 } from "@jslab/rpc-schema";
+import { MAX_NPMRC_BYTES } from "@jslab/rpc-schema";
 import { defaultPackagesManifest, type PackagesManifest } from "@jslab/shared";
 import type { AppPaths } from "../app-paths";
+import { FileTooLargeError, readBoundedText } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 import { strings } from "../strings";
 import type { NpmSpawn, NpmSpawnResult } from "./npm-spawn";
@@ -542,9 +544,15 @@ export class NpmService {
    */
   async #readNpmrc(): Promise<string> {
     try {
-      return await readFile(this.deps.paths.packagesNpmrc, "utf8");
+      // F2: `MAX_NPMRC_CHARS` was enforced on save and never here, though this runs on every search and every
+      // registry resolve, and `npm config set`, `npm login` and any package's postinstall all write this file.
+      return await readBoundedText(this.deps.paths.packagesNpmrc, MAX_NPMRC_BYTES);
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "";
+      // An oversized .npmrc reports its size rather than borrowing the generic "could not be read" wording.
+      if (error instanceof FileTooLargeError) {
+        throw new Error(strings.log.npmNpmrcTooLarge(error.path, error.size, error.maxBytes), { cause: error });
+      }
       throw new Error(strings.log.npmNpmrcUnreadable(this.deps.paths.packagesNpmrc), { cause: error });
     }
   }

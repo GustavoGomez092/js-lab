@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { emptyParamsSchema, npmrcSaveParamsSchema, type SaveResult } from "@jslab/rpc-schema";
+import { emptyParamsSchema, MAX_NPMRC_BYTES, npmrcSaveParamsSchema, type SaveResult } from "@jslab/rpc-schema";
 import { DEFAULT_NPMRC } from "@jslab/shared";
+import { readBoundedText } from "../fs/bounded-read";
 import { type AtomicWriteOptions, writeFileAtomic } from "../persistence/atomic-write";
 import { createValidators, type Log } from "./validate";
 
@@ -20,12 +20,18 @@ export function createNpmrcHandlers(deps: NpmrcHandlerDeps) {
   const write = (content: string) => (deps.write ?? writeFileAtomic)(deps.path, content, { mode: 0o600 });
   return {
     requests: {
-      "npmrc.get": (input: unknown): Promise<{ content: string }> => {
+      "npmrc.get": async (input: unknown): Promise<{ content: string }> => {
         parse(emptyParamsSchema, "npmrc.get", input);
-        return readFile(deps.path, "utf8").then(
-          (content) => ({ content }),
-          () => ({ content: DEFAULT_NPMRC }),
-        );
+        try {
+          // F2: this shipped the whole file over RPC with no cap at all. Only a missing file is the default now:
+          // the same rule FR-12 already applied to npm-service's #readNpmrc, so an oversized or unreadable
+          // .npmrc surfaces as a failure instead of silently offering the default to be saved over the user's
+          // real file.
+          return { content: await readBoundedText(deps.path, MAX_NPMRC_BYTES) };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { content: DEFAULT_NPMRC };
+          throw error;
+        }
       },
       "npmrc.save": (input: unknown): Promise<SaveResult> => {
         const { content } = parse(npmrcSaveParamsSchema, "npmrc.save", input);

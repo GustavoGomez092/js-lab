@@ -30,6 +30,9 @@ export const strings = {
     npmManifestUnreadable: (path: string) => `npm's package.json at ${path} could not be read as JSON`,
     /** FR-12 (fix round 2): the same anti-pattern as npmManifestUnreadable, in the registry-selection path. */
     npmNpmrcUnreadable: (path: string) => `npm's .npmrc at ${path} could not be read`,
+    /** Names the size, so an oversized .npmrc never surfaces as a generic I/O or parse failure. */
+    npmNpmrcTooLarge: (path: string, size: number, maxBytes: number) =>
+      `npm's .npmrc at ${path} is ${size} bytes, over the ${maxBytes}-byte limit, and was not read`,
     /** Fix round 1 (M-1): an onOperation subscriber threw; the queue's own bookkeeping must still proceed. */
     npmOperationEventFailed: "npm operation event could not be delivered",
     /** M4: the vendor cache's post-npm-change wipe (spec §11.3) failed; the cache may now serve a stale chunk. */

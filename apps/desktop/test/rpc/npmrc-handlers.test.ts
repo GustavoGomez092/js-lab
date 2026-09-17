@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MAX_NPMRC_BYTES } from "@jslab/rpc-schema";
 import { DEFAULT_NPMRC } from "@jslab/shared";
+import { FileTooLargeError, NotARegularFileError } from "../../src/main/fs/bounded-read";
 import { createNpmrcHandlers } from "../../src/main/rpc/npmrc-handlers";
 import { InvalidPayloadError } from "../../src/main/rpc/validate";
 
@@ -48,5 +50,35 @@ describe(".npmrc handlers (spec §11.5)", () => {
       error: "EROFS: read-only file system",
     });
     expect(logged.join(NL)).not.toContain("npm_secret_token");
+  });
+
+  /**
+   * F2. `npmrc.get` shipped the whole file over RPC with no cap: `MAX_NPMRC_CHARS` was enforced on save and never
+   * on read, and this is the third-party-writable side (`npm config set`, `npm login`, any postinstall). Refusing
+   * is deliberately not the same as returning the default -- the default would be offered to the user as the
+   * current contents and then saved straight over their real file.
+   */
+  test("get refuses an oversized .npmrc, naming the size, instead of returning the default", async () => {
+    const path = join(dir, ".npmrc");
+    await writeFile(path, "x".repeat(MAX_NPMRC_BYTES + 1));
+    const handlers = createNpmrcHandlers({ path, onSaved: () => {}, log: () => {} });
+
+    const error = (await handlers.requests["npmrc.get"]({}).catch((reason: unknown) => reason)) as FileTooLargeError;
+    expect(error).toBeInstanceOf(FileTooLargeError);
+    expect(error.message).toContain(String(MAX_NPMRC_BYTES + 1));
+    expect(error.message).not.toBe(DEFAULT_NPMRC);
+  });
+
+  test("get refuses a FIFO .npmrc rather than blocking on it", async () => {
+    const path = join(dir, ".npmrc");
+    expect(await Bun.spawn(["mkfifo", path]).exited).toBe(0);
+    const handlers = createNpmrcHandlers({ path, onSaved: () => {}, log: () => {} });
+    // Without O_NONBLOCK this open parks on a threadpool thread until a writer appears and the test times out.
+    await expect(handlers.requests["npmrc.get"]({})).rejects.toBeInstanceOf(NotARegularFileError);
+  }, 5000);
+
+  test("get still returns the default when there is simply no .npmrc yet", async () => {
+    const handlers = createNpmrcHandlers({ path: join(dir, "absent", ".npmrc"), onSaved: () => {}, log: () => {} });
+    expect(await handlers.requests["npmrc.get"]({})).toEqual({ content: DEFAULT_NPMRC });
   });
 });

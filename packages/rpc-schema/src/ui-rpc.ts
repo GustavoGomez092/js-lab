@@ -192,6 +192,13 @@ export const npmSpecSchema = z
   );
 
 export const MAX_NPMRC_CHARS = 65_536;
+/**
+ * The cap the *read* side enforces. `MAX_NPMRC_CHARS` bounded `npmrc.save` and nothing ever bounded the read, so
+ * a `.npmrc` grown by `npm config set`, `npm login` or any package's postinstall was read whole on every search
+ * and every registry resolve. Four bytes per char is UTF-8's worst case, so everything `npmrc.save` accepts stays
+ * readable while a multi-GB file is still refused before it is allocated.
+ */
+export const MAX_NPMRC_BYTES = 4 * MAX_NPMRC_CHARS;
 
 export const npmInstallParamsSchema = z.object({ spec: npmSpecSchema });
 export const npmNameParamsSchema = z.object({ name: npmNameSchema });

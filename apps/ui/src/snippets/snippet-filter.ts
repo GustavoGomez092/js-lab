@@ -5,6 +5,12 @@ export interface RankedSnippet {
   snippet: Snippet;
   /** Character ranges of the query inside the name, for highlighting. Empty when only the description matched. */
   nameRanges: [number, number][];
+  /**
+   * The same, inside the description (R-M5b-DESC-1). Empty whenever the name matched: the name is why the row
+   * ranked, so highlighting the description too would credit it for a decision it did not make. Without this the
+   * panel cannot show why a description-only match is in the results at all.
+   */
+  descriptionRanges: [number, number][];
 }
 
 /**
@@ -36,12 +42,14 @@ export function filterSnippets(snippets: readonly Snippet[], query: string): Ran
     // The description is consulted only when the name misses, which is both the ranking rule and half the work.
     const name = matchTitle(query, snippet.name);
     if (name) {
-      scored.push({ snippet, nameRanges: name.ranges, score: name.score + NAME_BONUS });
+      scored.push({ snippet, nameRanges: name.ranges, descriptionRanges: [], score: name.score + NAME_BONUS });
       continue;
     }
     const description = matchTitle(query, snippet.description);
-    if (description) scored.push({ snippet, nameRanges: [], score: description.score });
+    if (description) {
+      scored.push({ snippet, nameRanges: [], descriptionRanges: description.ranges, score: description.score });
+    }
   }
   scored.sort((a, b) => b.score - a.score || byName(a.snippet, b.snippet));
-  return scored.map(({ snippet, nameRanges }) => ({ snippet, nameRanges }));
+  return scored.map(({ snippet, nameRanges, descriptionRanges }) => ({ snippet, nameRanges, descriptionRanges }));
 }

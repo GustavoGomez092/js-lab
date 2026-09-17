@@ -14,7 +14,8 @@ const snippet = (name: string, description = ""): Snippet => ({
 });
 
 const FETCHJSON = snippet("fetchjson", "Fetch + parse JSON");
-const LIBRARY = [snippet("log", "print a value"), FETCHJSON, snippet("arrow", "an arrow function")];
+const LOG = snippet("log", "print a value");
+const LIBRARY = [LOG, FETCHJSON, snippet("arrow", "an arrow function")];
 const names = (library: readonly Snippet[], query: string) =>
   filterSnippets(library, query).map((ranked) => ranked.snippet.name);
 
@@ -56,11 +57,20 @@ describe("snippet search (spec §13.1)", () => {
     expect(names(tied, "even")).toEqual(["abe", "zed"]);
   });
 
-  test("a ranked entry carries the name's ranges and nothing else", () => {
-    const expected: RankedSnippet[] = [{ snippet: FETCHJSON, nameRanges: [[0, 5]] }];
+  test("a ranked entry carries the ranges of whichever field matched, and nothing else", () => {
+    // R-M5b-DESC-1: the panel highlights why a row matched, so a description-only match must carry its ranges too --
+    // otherwise a row matched on text the user cannot see shows no indication of why it is there.
+    // "fetch" hits this snippet's name AND its description ("Fetch + parse JSON"), and only the name is ranged:
+    // the name is why it ranked, and highlighting both would claim the description decided something it did not.
+    const expected: RankedSnippet[] = [{ snippet: FETCHJSON, nameRanges: [[0, 5]], descriptionRanges: [] }];
     expect(filterSnippets(LIBRARY, "fetch")).toEqual(expected);
-    const [byDescription] = filterSnippets(LIBRARY, "print");
-    expect([byDescription?.snippet.name, byDescription?.nameRanges]).toEqual(["log", []]);
+    // The mirror image: the name misses entirely, so the description's ranges are the only ones there are.
+    expect(filterSnippets(LIBRARY, "print")).toEqual([{ snippet: LOG, nameRanges: [], descriptionRanges: [[0, 5]] }]);
+  });
+
+  test("a description match's ranges point into the description, not back at the name", () => {
+    // Offset 8 of "print a value", not 0 -- a range hardcoded to the start of the string would highlight "print".
+    expect(filterSnippets(LIBRARY, "value")).toEqual([{ snippet: LOG, nameRanges: [], descriptionRanges: [[8, 13]] }]);
   });
 
   test("an unmatched query returns nothing, and an empty library returns nothing", () => {

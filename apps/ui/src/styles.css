@@ -915,6 +915,109 @@ button:disabled {
   text-transform: uppercase;
 }
 
+/* ---------- snippets panel (spec §13.1) ---------- */
+.snippets-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.snippets-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.snippets-header h2 {
+  margin: 0;
+  margin-right: auto;
+}
+
+.snippets-search {
+  width: 100%;
+}
+
+.snippets-scroller {
+  flex: 1 1 auto;
+  min-height: 80px;
+  overflow: auto;
+}
+
+.snippets-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  cursor: default;
+  color: var(--fg-default);
+}
+
+.snippets-row[aria-selected="true"] {
+  background: var(--bg-activeRow);
+}
+
+/* Why the row matched, marked in the name or the description. Mirrors `.palette-item mark`. */
+.snippets-row mark {
+  background: none;
+  color: var(--fg-accent);
+  font-weight: 600;
+}
+
+.snippets-description,
+.snippets-empty,
+.snippets-status,
+.snippets-detail-text {
+  color: var(--fg-muted);
+}
+
+.snippets-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snippets-empty {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+
+.snippets-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border-default);
+  padding-top: 8px;
+}
+
+.snippets-preview {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre;
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1.5 var(--code-font-family, var(--mono));
+  color: var(--fg-default);
+}
+
+.snippets-actions,
+.snippets-conflicts .dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.snippets-undo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* ---------- status bar parts ---------- */
 .status-left,
 .status-right {

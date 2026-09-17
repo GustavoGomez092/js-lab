@@ -6,6 +6,7 @@ import { strings } from "../strings";
 import { applyThemeVariables } from "../themes/apply";
 import { BUNDLED_FONTS } from "../themes/fonts";
 import { coerceFieldValue, type FieldDef, fieldsFor, SETTINGS_TABS, type SettingsTab } from "./fields";
+import { KeybindingsPane, type KeybindingsPaneHandle } from "./KeybindingsPane";
 import { type CreateTextEditor, NpmrcEditor, type NpmrcEditorHandle } from "./NpmrcEditor";
 import { createSettingsAgent } from "./settings-agent";
 import type { SettingsApi } from "./settings-rpc";
@@ -30,6 +31,7 @@ export function SettingsApp({
   const [fonts, setFonts] = useState<FontsState>({ fonts: null, refreshing: true });
   const [confirmReset, setConfirmReset] = useState(false);
   const npmrc = useRef<NpmrcEditorHandle | null>(null);
+  const keys = useRef<KeybindingsPaneHandle | null>(null);
   const snapshot = useRef({ settings, tab, query, fonts });
   snapshot.current = { settings, tab, query, fonts };
 
@@ -97,6 +99,9 @@ export function SettingsApp({
         npmrc: npmrc.current
           ? { content: npmrc.current.content(), dirty: npmrc.current.dirty(), status: npmrc.current.status() }
           : null,
+        keybindings: keys.current
+          ? { rowCount: keys.current.rows().length, query: keys.current.query(), status: keys.current.status() }
+          : null,
       }),
       execute: (id, args) => {
         if (id === "settings.set") {
@@ -122,6 +127,10 @@ export function SettingsApp({
         }
         if (id === "npmrc.reset" && npmrc.current) {
           void npmrc.current.reset();
+          return true;
+        }
+        if (id === "keybindings.search" && keys.current) {
+          keys.current.setQuery(String((args as { query?: unknown }).query ?? ""));
           return true;
         }
         return false;
@@ -177,6 +186,14 @@ export function SettingsApp({
             {...(npmrcEditorFactory ? { createEditor: npmrcEditorFactory } : {})}
             onReady={(handle) => {
               npmrc.current = handle;
+            }}
+          />
+        )}
+        {!query && tab === "keybindings" && (
+          <KeybindingsPane
+            api={api}
+            onReady={(handle) => {
+              keys.current = handle;
             }}
           />
         )}

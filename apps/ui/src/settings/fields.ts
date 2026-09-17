@@ -1,10 +1,18 @@
 import { DECORATOR_MODES, LANGUAGES, RUNTIMES, type SettingKey, UI_LANGUAGES } from "@jslab/shared";
 import { strings } from "../strings";
 
-export type SettingsTab = "general" | "editor" | "formatting" | "appearance" | "npm" | "build" | "advanced";
+export type SettingsTab =
+  | "general"
+  | "editor"
+  | "formatting"
+  | "appearance"
+  | "keybindings"
+  | "npm"
+  | "build"
+  | "advanced";
 
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = (
-  ["general", "editor", "formatting", "appearance", "npm", "build", "advanced"] as const
+  ["general", "editor", "formatting", "appearance", "keybindings", "npm", "build", "advanced"] as const
 ).map((id) => ({ id, label: strings.settings.tabs[id] }));
 
 export type FieldKind =

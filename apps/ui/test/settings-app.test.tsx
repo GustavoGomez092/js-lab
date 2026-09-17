@@ -184,6 +184,7 @@ describe("SettingsApp", () => {
         fontOptions: [],
         settings: null,
         npmrc: null,
+        keybindings: null,
       }),
       execute,
       target: () => input,
@@ -222,5 +223,18 @@ describe("SettingsApp", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Build" }));
     expect(screen.getByLabelText("Pipeline Operator")).toBeTruthy();
     expect(screen.queryByRole("button", { name: strings.settings.npmrc.reset })).toBeNull();
+  });
+
+  test("the Keybindings tab mounts the command table and its Open keybindings.json action (spec §6.5)", async () => {
+    const { api } = fakeSettingsApi();
+    render(<SettingsApp api={api} initial={defaultSettings()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Keybindings" }));
+    expect(await screen.findByRole("button", { name: strings.settings.keybindings.openFile })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: strings.settings.keybindings.columns.keybinding })).toBeTruthy();
+    expect(api.commandCatalog).toHaveBeenCalledTimes(1);
+    expect(api.getKeybindings).toHaveBeenCalledTimes(1);
+    // The pane is field-driven nowhere: switching away leaves no stray table behind.
+    fireEvent.click(screen.getByRole("tab", { name: "Build" }));
+    expect(screen.queryByRole("columnheader", { name: strings.settings.keybindings.columns.keybinding })).toBeNull();
   });
 });

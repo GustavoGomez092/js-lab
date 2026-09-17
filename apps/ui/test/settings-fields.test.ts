@@ -20,6 +20,8 @@ describe("settings fields", () => {
       "editor",
       "formatting",
       "appearance",
+      // Spec §8: "General · Editor · Formatting · Appearance · Keybindings · AI · NPM · Build · Advanced".
+      "keybindings",
       "npm",
       "build",
       "advanced",

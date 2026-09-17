@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
 import { createRpcHandlers, InvalidPayloadError, type RpcHandlerDeps, RunRefusedError } from "../src/main/rpc-handlers";
+import { strings } from "../src/main/strings";
 
 function setup(safeMode: RpcHandlerDeps["safeMode"] = { active: false, reason: null }) {
   const session = defaultSession(() => createTab({ id: "t1" }));
@@ -17,6 +18,7 @@ function setup(safeMode: RpcHandlerDeps["safeMode"] = { active: false, reason: n
     session: {
       session,
       readBuffers: mock(async () => ({ t1: "1 + 1" })),
+      readBuffer: mock(async (_tabId: string) => "1 + 1"),
       setBuffer: mock(() => {}),
       patchTab: mock(async () => {}),
     },
@@ -40,6 +42,49 @@ describe("requests", () => {
       safeMode: { active: false, reason: null },
       versions: { app: "0.0.1", bun: "1.3.13" },
     });
+  });
+
+  /**
+   * F1: `readBuffers()` throws on the first tab whose buffer exists but can't be read, which failed the whole
+   * bootstrap and left the UI on a failure screen whose only control re-ran the identical request. Bootstrap now
+   * reads per tab, so one bad file costs one tab's contents instead of the whole app.
+   */
+  test("app.bootstrap opens with the tabs that loaded when one buffer can't be read", async () => {
+    const t1 = createTab({ id: "t1" });
+    const t2 = createTab({ id: "t2" });
+    const base = defaultSession(() => t1);
+    const session = { ...base, tabs: { t1, t2 }, tabOrder: ["t1", "t2"], activeTabId: "t1" };
+    const logged: string[] = [];
+    const handlers = createRpcHandlers({
+      coordinator: setup().deps.coordinator,
+      settings: { current: defaultSettings() },
+      session: {
+        session,
+        readBuffers: mock(async () => {
+          throw new Error("readBuffers must not be used by bootstrap");
+        }),
+        readBuffer: mock(async (tabId: string) => {
+          if (tabId === "t2") throw new Error(`Couldn't read the buffer for tab ${tabId}: EACCES`);
+          return "const a = 1";
+        }),
+        setBuffer: mock(() => {}),
+        patchTab: mock(async () => {}),
+      },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0.0.1", bun: "1.3.13" },
+      log: (message) => logged.push(message),
+      onUiHeartbeat: () => {},
+    });
+
+    const payload = await handlers.requests["app.bootstrap"]();
+    // The readable tab still arrives; the unreadable one is simply absent rather than invented as empty.
+    expect(payload.buffers).toEqual({ t1: "const a = 1" });
+    // B1: and it is NAMED, not merely counted. The UI cannot preserve the distinction above from a count alone --
+    // without these ids it filled the gap with `""`, which then read as an unsaved edit and offered to save it
+    // over the user's real file. The ids are exactly the tabOrder entries missing from `buffers`.
+    expect(payload.unreadableBuffers).toEqual(["t2"]);
+    expect(payload.notices).toEqual([{ id: "buffersUnreadable", message: strings.notices.buffersUnreadable(1) }]);
+    expect(logged).toContain("Couldn't read a tab's buffer at startup");
   });
 
   test("run.start validates and forwards only the run fields", () => {

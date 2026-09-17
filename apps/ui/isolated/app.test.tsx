@@ -54,13 +54,15 @@ function renderApp(
   safeMode: BootstrapPayload["safeMode"] = { active: false, reason: null },
   keybindings: KeybindingRule[] = [],
   scheduleFrame: (callback: () => void) => void = (callback) => callback(),
-  options: { formatter?: Formatter; settings?: Settings } = {},
+  options: { formatter?: Formatter; settings?: Settings; unreadable?: boolean } = {},
 ) {
   const store = createAppStore();
   store.getState().hydrate({
     settings: options.settings ?? defaultSettings(),
     session: defaultSession(() => createTab({ id: "t1" })),
-    buffers: { t1: "1 + 1" },
+    // B1: Main leaves a tab whose buffer it couldn't read absent from `buffers` rather than inventing it as empty.
+    buffers: options.unreadable ? {} : { t1: "1 + 1" },
+    unreadableBuffers: options.unreadable ? ["t1"] : [],
     safeMode,
     keybindings,
     versions: { app: "0.0.1", bun: "1.3.13" },
@@ -256,6 +258,23 @@ describe("App shell", () => {
     renderApp({ active: true, reason: "crashLoop" });
     expect(screen.getByTestId("safe-mode-banner").textContent).toBe(strings.shell.safeModeBanner.crashLoop);
     expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.safeModePaused("⌘R"));
+  });
+
+  /**
+   * B1: this banner is the only thing that tells an empty editor apart from a genuinely empty file -- which is the
+   * precondition of the truncation trap. It is not dismissible and not a count: it stands for exactly as long as
+   * the ACTIVE tab is showing a placeholder, so it must follow the active tab rather than the session.
+   */
+  test("a tab whose buffer couldn't be read shows a banner, which goes away on switching to a readable tab", () => {
+    const { store } = renderApp(undefined, [], undefined, { unreadable: true });
+    expect(screen.getByTestId("unreadable-buffer-banner").textContent).toBe(strings.shell.unreadableBuffer);
+    act(() => store.getState().openTab(createTab({ id: "t2" }), "2 + 2", true));
+    expect(screen.queryByTestId("unreadable-buffer-banner")).toBeNull();
+  });
+
+  test("an ordinary readable tab shows no unreadable-buffer banner", () => {
+    renderApp();
+    expect(screen.queryByTestId("unreadable-buffer-banner")).toBeNull();
   });
 
   test("edits are sent to Main once per coalescing delay, and language changes at once (X5)", async () => {

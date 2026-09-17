@@ -51,6 +51,11 @@ export const strings = {
     confirmExpired: "That save request expired. Save again.",
     tabGone: "That tab is no longer open.",
     openInAnotherTab: (name: string) => `${name} is already open in another tab.`,
+    /**
+     * B1: refused rather than written. The tab is showing an empty editor because its buffer file couldn't be
+     * read, so saving it would replace the user's real file with text JSLab invented.
+     */
+    bufferUnreadable: "JSLab couldn't read this tab's contents, so it won't save over the file on disk.",
   },
   notices: {
     copySaved: (file: string) => ` A copy was saved as ${file}`,
@@ -76,6 +81,19 @@ export const strings = {
       `session.json was written by a newer version of JSLab (version ${version}). Tab changes in this window won't be saved to it.`,
     tabsDropped: (count: number) =>
       `${count} ${count === 1 ? "tab" : "tabs"} in session.json couldn't be read and were skipped. Their buffer files were kept.`,
+    /**
+     * F1: one unreadable buffer used to fail the whole `app.bootstrap`, leaving a failure screen whose only
+     * control re-ran the same request. Those tabs now open without their contents instead.
+     *
+     * B1: the previous wording claimed "The file on disk won't be overwritten." That was false for a file-backed
+     * tab -- and it was the sentence most likely to make the user press Save on ⌘W's prompt, which truncated the
+     * file. It is true now (`file.save` and Save As both refuse such a tab, and the tab opens read-only), so the
+     * notice describes what the user can see, and promises only what is actually enforced.
+     */
+    buffersUnreadable: (count: number) =>
+      count === 1
+        ? "1 tab's contents couldn't be read, so it opened empty and read-only. JSLab won't save it over its file."
+        : `${count} tabs' contents couldn't be read, so they opened empty and read-only. JSLab won't save them over their files.`,
   },
   runs: {
     /** Spec §12.2. */

@@ -82,6 +82,11 @@ export const strings = {
     locationTitle: "Save to this location?",
     location: (path: string) => `Save as ${path}?`,
     notText: (name: string) => `${name} isn't a text file.`,
+    /**
+     * B1: ⌘S / Save As on a tab whose contents Main couldn't read. The UI refuses before asking Main, so the
+     * empty placeholder can never be written over the user's real file. (Main refuses it again, independently.)
+     */
+    unreadableBuffer: "JSLab couldn't read this tab's contents, so it won't save over the file on disk.",
     tooLarge: (name: string) => `${name} is larger than 50 MB and can't be opened.`,
     // Branch B (R-M3-SPIKE-1 NO-GO): a dropped folder can't carry its path into the webview on Electrobun 2.0.1.
     folderDrop:
@@ -137,6 +142,14 @@ export const strings = {
       wait: "Wait",
       kill: "Kill",
     },
+    /**
+     * B1: shown above the editor whenever the ACTIVE tab is one of these, for as long as it is. The startup
+     * notice alone was not enough -- it is dismissible and names a count, while this says which tab the user is
+     * looking at right now is not showing its file. Without it an empty editor is indistinguishable from a
+     * genuinely empty file, which is the trap that made saving look reasonable.
+     */
+    unreadableBuffer:
+      "JSLab couldn't read this tab's contents. It's shown empty and read-only, so the file on disk isn't overwritten.",
     safeModeBanner: {
       crashLoop: "JSLab didn't shut down cleanly while running code. Auto Run is paused for this session.",
       manual: "Safe Mode: restarted from Help → Restart in Safe Mode. Auto Run is paused for this session.",
@@ -161,6 +174,13 @@ export const strings = {
   startup: {
     failed: (message: string) => `JSLab failed to start: ${message}`,
     retry: "Try Again",
+    /**
+     * F1: Try Again re-runs the identical bootstrap, so on its own it is an infinite loop for any failure that
+     * isn't transient. These give the user somewhere else to go -- the tab files themselves, and a report.
+     */
+    stuck: "If Try Again keeps failing, one of your tab files may be unreadable.",
+    openDataFolder: "Open Data Folder",
+    copyDebugLog: "Copy Debug Log",
   },
   palette: {
     label: "Command palette",

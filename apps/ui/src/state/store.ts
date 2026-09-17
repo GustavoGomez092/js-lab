@@ -167,6 +167,15 @@ export interface AppState {
   tabOrder: string[];
   activeTabId: string | null;
   buffers: Record<string, string>;
+  /**
+   * B1: tabs whose buffer file Main could not read, so JSLab does not know their text.
+   *
+   * `buffers` still holds `""` for these, because every consumer downstream expects a string -- but that `""` is
+   * a placeholder, not the file's content, and this is what says so. Without it the placeholder was
+   * indistinguishable from a genuinely empty file: `isDirty` compared it against the real file's
+   * `lastSavedHash`, said "modified", and ⌘S (or the Save button on ⌘W's prompt) wrote it over the user's file.
+   */
+  unreadableBuffers: string[];
   runtimes: Record<string, TabRuntime>;
   closedCount: number;
 
@@ -284,6 +293,25 @@ export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "a
 
 const NO_DIAGNOSTICS: DiagnosticPayload[] = [];
 
+/**
+ * B1: which tabs the bootstrap payload could not supply text for.
+ *
+ * Two sources, unioned on purpose. Main names them explicitly (`unreadableBuffers`), and a tab missing from
+ * `buffers` is unreadable by construction -- Main's per-tab read either returns the text or omits the tab, and
+ * ENOENT (never written yet) returns `""` rather than being omitted. Deriving the second half means a future
+ * Main that forgets to send the ids still cannot make the UI invent content silently.
+ */
+function unreadableFrom(payload: BootstrapPayload): string[] {
+  const named = payload.unreadableBuffers ?? [];
+  const missing = payload.session.tabOrder.filter((id) => !(id in payload.buffers));
+  return payload.session.tabOrder.filter((id) => named.includes(id) || missing.includes(id));
+}
+
+/** B1: true when this tab is showing a placeholder rather than its real contents. */
+export function isBufferUnreadable(state: Pick<AppState, "unreadableBuffers">, tabId: string | null): boolean {
+  return tabId !== null && state.unreadableBuffers.includes(tabId);
+}
+
 /** Most notices shown at once; the oldest is dropped first (FA-I3). */
 export const MAX_NOTICES = 5;
 
@@ -371,6 +399,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       tabOrder: [],
       activeTabId: null,
       buffers: {},
+      unreadableBuffers: [],
       runtimes: {},
       closedCount: 0,
       focus: "editor",
@@ -409,6 +438,12 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           tabs: session.tabs,
           tabOrder: session.tabOrder,
           activeTabId,
+          // B1: `?? ""` no longer erases what Main preserved. Main omits a tab it could not read (never
+          // inventing "") and names it in `unreadableBuffers`; the placeholder below is still written, so every
+          // consumer keeps getting a string, but `unreadableBuffers` records that it is a placeholder. The
+          // missing-from-`buffers` half is derived rather than trusted, so the two can never drift apart: a tab
+          // cannot be quietly filled in with "" without also being marked unreadable.
+          unreadableBuffers: unreadableFrom(payload),
           buffers: Object.fromEntries(session.tabOrder.map((id) => [id, payload.buffers[id] ?? ""])),
           runtimes: Object.fromEntries(session.tabOrder.map((id) => [id, newRuntime()])),
           closedCount: session.closedStack.length,
@@ -431,6 +466,10 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           set({ code, autoRunArmed: true });
           return;
         }
+        // B1: the editor is read-only for these tabs, so this should be unreachable from the keyboard -- but an
+        // edit arriving any other way (the E2E agent, a format action, a paste handler) must not turn the
+        // placeholder into "real" content that then looks saveable.
+        if (get().unreadableBuffers.includes(id)) return;
         get().clearTransientStatus();
         commit({
           buffers: { ...get().buffers, [id]: code },
@@ -604,6 +643,9 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           tabs: { ...get().tabs, [tab.id]: tab },
           tabOrder: insertAfterActive(get().tabOrder, get().activeTabId, tab.id),
           buffers: { ...get().buffers, [tab.id]: content },
+          // Reopening the same id (Reopen Closed Tab, or opening the file again) delivers real content, so the
+          // tab is no longer unknown and becomes editable and savable again.
+          unreadableBuffers: get().unreadableBuffers.filter((id) => id !== tab.id),
           runtimes: { ...get().runtimes, [tab.id]: newRuntime() },
           activeTabId: activate || !get().activeTabId ? tab.id : get().activeTabId,
         });
@@ -617,7 +659,14 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
         const current = get().activeTabId;
         const fallback = current ? tabAfterClose(get().tabOrder, tabId, current) : null;
         const activeTabId = nextActiveId && tabs[nextActiveId] ? nextActiveId : fallback;
-        const patch = { tabs, buffers, runtimes, tabOrder: get().tabOrder.filter((id) => id !== tabId), activeTabId };
+        const patch = {
+          tabs,
+          buffers,
+          runtimes,
+          unreadableBuffers: get().unreadableBuffers.filter((id) => id !== tabId),
+          tabOrder: get().tabOrder.filter((id) => id !== tabId),
+          activeTabId,
+        };
         if (activeTabId) commit(patch);
         else set({ ...patch, ...mirrorOf(patch), hoveredLine: null });
       },

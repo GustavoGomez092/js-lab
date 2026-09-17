@@ -1,5 +1,15 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { LocalTypesResult, PackageTypesResult, TypeFile } from "@jslab/rpc-schema";
+import { readFileSync } from "node:fs";
+import {
+  type LocalTypesResult,
+  localTypesParamsSchema,
+  MAX_LOCAL_SPECIFIERS_PER_REQUEST,
+  MAX_PACKAGE_NAME_CHARS,
+  MAX_PACKAGES_PER_REQUEST,
+  type PackageTypesResult,
+  packageTypesParamsSchema,
+  type TypeFile,
+} from "@jslab/rpc-schema";
 import { createTypeFeeder, importSpecifiers } from "../src/editor/type-feeder";
 import type { TimerApi } from "../src/state/auto-run";
 
@@ -341,10 +351,93 @@ describe("type feeder (spec §6.2)", () => {
     expect(callCount).toBe(2);
 
     // A too-long name is never requested.
-    const longName = "a".repeat(215);
+    const longName = "a".repeat(MAX_PACKAGE_NAME_CHARS + 1);
     feeder.schedule("t1", `import x from "${longName}";`, false, { immediate: true });
     await Bun.sleep(5);
     const allNames = requestPackages.mock.calls.flatMap((call) => call[1] as string[]);
     expect(allNames).not.toContain(longName);
+  });
+});
+
+/**
+ * F3: `type-feeder.ts` used to re-declare `MAX_PACKAGES_PER_REQUEST` (50), `MAX_PACKAGE_NAME_CHARS` (214) and the
+ * `types.local` cap (200) as bare literals mirroring `@jslab/rpc-schema`'s inline `.max(...)` values. They agreed
+ * only by luck: the schema never exported them, so the UI *couldn't* import them. On drift Main answers with
+ * InvalidPayloadError, and `requestPackages`/`feed` only `deps.log?.(...)` the rejection -- so autocomplete and
+ * type hints would stop appearing with nothing user-visible. The schema now exports the limits and the UI imports
+ * the same ones, matching `packages/shared/src/env-vars.ts`.
+ *
+ * The first test fails if a duplicate literal is re-introduced; the rest fail if the UI ever chunks or truncates
+ * to a different number than the schema actually enforces.
+ */
+describe("type-feeder request limits are the schema's, not copies (F3)", () => {
+  const source = readFileSync(new URL("../src/editor/type-feeder.ts", import.meta.url), "utf8");
+
+  test("the UI imports the three limits and re-declares none of them", () => {
+    // A re-introduced `export const MAX_PACKAGES_PER_REQUEST = 50` (or any other value) fails here.
+    for (const name of ["MAX_PACKAGES_PER_REQUEST", "MAX_PACKAGE_NAME_CHARS", "MAX_LOCAL_SPECIFIERS_PER_REQUEST"]) {
+      expect(source).not.toMatch(new RegExp(`const\\s+${name}\\s*=`));
+      expect(source).toContain(name);
+    }
+    // ...and they come from the package that enforces them.
+    const importBlock = source.slice(0, source.indexOf('from "@jslab/rpc-schema"'));
+    expect(importBlock).toContain("MAX_PACKAGES_PER_REQUEST");
+    expect(importBlock).toContain("MAX_PACKAGE_NAME_CHARS");
+    expect(importBlock).toContain("MAX_LOCAL_SPECIFIERS_PER_REQUEST");
+  });
+
+  test("types.package is chunked at the schema's limit, and every chunk validates against it", async () => {
+    const names = Array.from({ length: MAX_PACKAGES_PER_REQUEST + 1 }, (_, i) => `pkg${i}`);
+    const { environment } = fakeEnvironment();
+    const requestPackages = mock(async (_tabId: string, chunk: string[]) => chunk.map((name) => result(name)));
+    const feeder = createTypeFeeder({
+      requestPackages,
+      requestLocal: async () => ({ files: [], packages: [], truncated: false }),
+      environment,
+    });
+    feeder.schedule("t1", names.map((name) => `import x from "${name}";`).join("\n"), false, { immediate: true });
+    await Bun.sleep(20);
+    const chunks = requestPackages.mock.calls.map((call) => call[1] as string[]);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([MAX_PACKAGES_PER_REQUEST, 1]);
+    for (const packages of chunks) {
+      expect(packageTypesParamsSchema.safeParse({ tabId: "t1", packages }).success).toBe(true);
+    }
+  });
+
+  test("types.local is truncated to the schema's limit, and what is sent validates against it", async () => {
+    const relative = Array.from({ length: MAX_LOCAL_SPECIFIERS_PER_REQUEST + 5 }, (_, i) => `./m${i}`);
+    const { environment } = fakeEnvironment();
+    const requestLocal = mock(
+      async (_tabId: string, _specifiers: string[]): Promise<LocalTypesResult> => ({
+        files: [],
+        packages: [],
+        truncated: false,
+      }),
+    );
+    const feeder = createTypeFeeder({
+      requestPackages: async () => [],
+      requestLocal,
+      environment,
+    });
+    feeder.schedule("t1", relative.map((spec) => `import y from "${spec}";`).join("\n"), true, { immediate: true });
+    await Bun.sleep(20);
+    const specifiers = requestLocal.mock.calls[0]?.[1] ?? [];
+    expect(specifiers).toHaveLength(MAX_LOCAL_SPECIFIERS_PER_REQUEST);
+    expect(localTypesParamsSchema.safeParse({ tabId: "t1", specifiers }).success).toBe(true);
+  });
+
+  test("a name exactly at the schema's length limit is still requested", async () => {
+    const atLimit = "a".repeat(MAX_PACKAGE_NAME_CHARS);
+    const { environment } = fakeEnvironment();
+    const requestPackages = mock(async (_tabId: string, chunk: string[]) => chunk.map((name) => result(name)));
+    const feeder = createTypeFeeder({
+      requestPackages,
+      requestLocal: async () => ({ files: [], packages: [], truncated: false }),
+      environment,
+    });
+    feeder.schedule("t1", `import x from "${atLimit}";`, false, { immediate: true });
+    await Bun.sleep(20);
+    expect(requestPackages.mock.calls.flatMap((call) => call[1] as string[])).toContain(atLimit);
+    expect(packageTypesParamsSchema.safeParse({ tabId: "t1", packages: [atLimit] }).success).toBe(true);
   });
 });

@@ -172,11 +172,25 @@ export type WebRunnerMessageParams = z.infer<typeof webRunnerMessageParamsSchema
 
 // ---------- M3: npm, environment variables, working directory, types and .npmrc (spec §6.2, §11, §12) ----------
 
+/**
+ * npm's own package-name length limit. Exported because the UI must not re-derive it: `type-feeder.ts` filters
+ * names against this before sending `types.package`, and a UI copy that drifted from the schema's would make
+ * Main reject the request -- which `type-feeder.ts` only logs, so autocomplete would silently stop appearing.
+ * Same rule as `packages/shared/src/env-vars.ts`: the limit is exported once and imported on both sides.
+ */
+export const MAX_PACKAGE_NAME_CHARS = 214;
+
+/** Most package names one `types.package` request may carry; the UI chunks its requests to this size. */
+export const MAX_PACKAGES_PER_REQUEST = 50;
+
+/** Most relative specifiers one `types.local` request may carry; the UI truncates to this length. */
+export const MAX_LOCAL_SPECIFIERS_PER_REQUEST = 200;
+
 /** npm package names: an optional @scope, lowercase URL-safe characters, at most 214 characters. */
 export const npmNameSchema = z
   .string()
   .min(1)
-  .max(214)
+  .max(MAX_PACKAGE_NAME_CHARS)
   .regex(/^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/);
 
 /** One `bun add` argument: a registry name with an optional range or tag, a git URL, or a tarball URL (spec §11.2, §18). */
@@ -202,11 +216,14 @@ export const MAX_NPMRC_BYTES = 4 * MAX_NPMRC_CHARS;
 
 export const npmInstallParamsSchema = z.object({ spec: npmSpecSchema });
 export const npmNameParamsSchema = z.object({ name: npmNameSchema });
-export const npmSearchParamsSchema = z.object({ query: z.string().trim().min(1).max(214) });
+export const npmSearchParamsSchema = z.object({ query: z.string().trim().min(1).max(MAX_PACKAGE_NAME_CHARS) });
 export const npmListParamsSchema = z.object({ refreshOutdated: z.boolean() });
 export const npmrcSaveParamsSchema = z.object({ content: z.string().max(MAX_NPMRC_CHARS) });
 export const envSaveParamsSchema = z.object({ variables: envVarsSchema });
-export const packageTypesParamsSchema = z.object({ tabId, packages: z.array(npmNameSchema).min(1).max(50) });
+export const packageTypesParamsSchema = z.object({
+  tabId,
+  packages: z.array(npmNameSchema).min(1).max(MAX_PACKAGES_PER_REQUEST),
+});
 export const localTypesParamsSchema = z.object({
   tabId,
   specifiers: z
@@ -219,7 +236,7 @@ export const localTypesParamsSchema = z.object({
         .regex(/^\.\.?\/[^\0-\x1f\\]*$/),
     )
     .min(1)
-    .max(200),
+    .max(MAX_LOCAL_SPECIFIERS_PER_REQUEST),
 });
 
 export type NpmOpKind = "install" | "remove" | "update" | "updateAll";
@@ -344,6 +361,9 @@ export const STARTUP_NOTICE_IDS = [
   "settingsNewer",
   "sessionNewer",
   "tabsDropped",
+  // F1: one tab whose buffer file can't be read no longer fails the whole `app.bootstrap`. The app opens with that
+  // tab empty (Main keeps it in its unreadable set, so nothing overwrites the file on disk) and says so here.
+  "buffersUnreadable",
   "unexpectedError",
   /**
    * D1: a settings change that cannot be written, because settings.json is large enough that JSLab's own rewrite of
@@ -429,6 +449,16 @@ export interface BootstrapPayload {
   settings: Settings;
   session: Session;
   buffers: Record<string, string>;
+  /**
+   * B1: the tabs whose buffer file exists but couldn't be read, by id -- not just how many.
+   *
+   * These ids are exactly the `session.tabOrder` entries missing from `buffers` above. Main deliberately omits
+   * them rather than inventing `""`, and the UI needs to know WHICH they are to preserve that distinction: with
+   * only a count it turned every absence into an empty buffer, which then read as an ordinary unsaved edit and
+   * offered to save it over the user's real file. A tab named here has unknown content, so the UI shows it
+   * read-only and never saves it.
+   */
+  unreadableBuffers?: string[];
   safeMode: { active: boolean; reason: "crashLoop" | "manual" | "shift" | null };
   versions: { app: string; bun: string };
   /** True only when the app was launched with JSLAB_E2E=1; the UI then installs the automation agent. */
@@ -455,6 +485,35 @@ export type MainRequests = {
   "env.get": { params: Record<string, never>; response: { variables: EnvVars } };
   "env.save": { params: { variables: EnvVars }; response: SaveResult };
 };
+
+/**
+ * Every `MainRequests` method paired with the schema Main validates its params against (spec §18).
+ *
+ * Exhaustive by type: a new entry in `MainRequests` fails to compile here until it is registered. That is what lets
+ * the UI's per-request timeout table (`apps/ui/src/rpc-timeouts.ts`) be checked against the *schema* rather than
+ * against a hand-written list -- a request whose params admit a `MAX_TEXT_CHARS` string is detected here instead of
+ * being remembered. `emptyParamsSchema` is the entry for requests that take no params.
+ */
+export const MAIN_REQUEST_PARAMS_SCHEMAS: Record<keyof MainRequests, z.ZodType> = {
+  "app.bootstrap": emptyParamsSchema,
+  "run.start": runStartParamsSchema,
+  "run.expand": runExpandParamsSchema,
+  "tab.create": tabCreateParamsSchema,
+  "tab.close": tabParamsSchema,
+  "tab.reopen": emptyParamsSchema,
+  "settings.get": emptyParamsSchema,
+  "settings.update": settingsUpdateParamsSchema,
+  "file.save": fileSaveParamsSchema,
+  "npm.list": npmListParamsSchema,
+  "npm.search": npmSearchParamsSchema,
+  "types.package": packageTypesParamsSchema,
+  "types.local": localTypesParamsSchema,
+  "env.get": emptyParamsSchema,
+  "env.save": envSaveParamsSchema,
+};
+
+/** The `MainRequests` method names at runtime, derived from the exhaustive table above so they cannot drift. */
+export const MAIN_REQUEST_NAMES = Object.keys(MAIN_REQUEST_PARAMS_SCHEMAS) as (keyof MainRequests)[];
 
 /** Messages received by Main, sent by the UI. */
 export type MainMessages = {

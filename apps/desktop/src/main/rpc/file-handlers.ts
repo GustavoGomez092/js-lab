@@ -18,7 +18,10 @@ import { createValidators, type Log } from "./validate";
 
 export interface FileHandlerDeps {
   files: Pick<FileService, "prepareOpen" | "confirmLarge" | "write" | "issueSaveAsToken" | "takeSaveAsToken">;
-  session: Pick<SessionStore, "session" | "createTab" | "patchTab" | "findTabByPath" | "setLastDirectory">;
+  session: Pick<
+    SessionStore,
+    "session" | "createTab" | "patchTab" | "findTabByPath" | "setLastDirectory" | "isBufferUnreadable"
+  >;
   openDialog(options: { startingFolder: string }): Promise<string[]>;
   saveDialog(options: { defaultName: string; defaultDir: string }): Promise<string | null>;
   documentsDir: string;
@@ -114,6 +117,11 @@ export function createFileHandlers(deps: FileHandlerDeps) {
       deps.send.saveFailed({ tabId, error: strings.files.openInAnotherTab(baseName(path)) });
       return;
     }
+    // B1: same rule as `file.save` below -- the text this would write is not the tab's real content.
+    if (deps.session.isBufferUnreadable(tabId)) {
+      deps.send.saveFailed({ tabId, error: strings.files.bufferUnreadable });
+      return;
+    }
     try {
       const hash = await deps.files.write(path, content);
       await deps.session.patchTab(tabId, {
@@ -137,6 +145,14 @@ export function createFileHandlers(deps: FileHandlerDeps) {
         return (async (): Promise<FileSaveResult> => {
           const tab = deps.session.session.tabs[tabId];
           if (!tab) return { ok: false, error: strings.files.tabGone };
+          /**
+           * B1: this tab's buffer file couldn't be read, so JSLab does not know its text -- whatever `content`
+           * says. Before this guard, the UI turned that unknown into `""` and a plain ⌘S truncated the user's
+           * real file to zero bytes, with no `.bak` (FileService.write takes no `backup` option). The UI now
+           * refuses to ask, but the file is guarded here too, where it is actually written: this holds no matter
+           * what any UI -- a stale renderer, a future one, the E2E agent -- sends.
+           */
+          if (deps.session.isBufferUnreadable(tabId)) return { ok: false, error: strings.files.bufferUnreadable };
           if (!tab.filePath) return { needsSaveAs: true };
           try {
             const hash = await deps.files.write(tab.filePath, content);

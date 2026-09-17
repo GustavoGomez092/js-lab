@@ -33,6 +33,18 @@ export function SafeModeBanner({ reason }: { reason: "crashLoop" | "manual" | "s
   );
 }
 
+/**
+ * B1: the active tab is showing a placeholder, not its file. Rendered for as long as that is true, unlike the
+ * dismissible startup notice, so the user can always tell this editor is not their code.
+ */
+export function UnreadableBufferBanner() {
+  return (
+    <output className="banner banner-warning" data-testid="unreadable-buffer-banner">
+      {strings.shell.unreadableBuffer}
+    </output>
+  );
+}
+
 /** A button a notice offers next to its message, such as Copy Debug Log (spec §20, R-M2-FINAL-5). */
 export interface NoticeAction {
   label: string;

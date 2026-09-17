@@ -1,4 +1,5 @@
 import { dlopen, FFIType, type Pointer, ptr } from "bun:ffi";
+import { MAX_SHORT_SUBPROCESS_OUTPUT_BYTES } from "./subprocess-output";
 
 /**
  * Window-only screenshots for E2E runs.
@@ -55,7 +56,14 @@ export async function captureWindow(
   hasAccess: () => boolean,
 ): Promise<CaptureResult> {
   if (!hasAccess()) return { skipped: SCREEN_RECORDING_SKIP };
-  const proc = Bun.spawn(screencaptureArgs(windowNumber ?? 0, outPath), { stdout: "ignore", stderr: "pipe" });
+  // Awaiting `exited` before reading stderr does NOT bound the read: Bun drains the pipe eagerly, so a child that
+  // floods stderr still exits normally and leaves every byte of it buffered in Main (measured: a child that wrote
+  // 512 MiB to stderr exited cleanly and cost +1537 MB to read). maxBuffer is what bounds it.
+  const proc = Bun.spawn(screencaptureArgs(windowNumber ?? 0, outPath), {
+    stdout: "ignore",
+    stderr: "pipe",
+    maxBuffer: MAX_SHORT_SUBPROCESS_OUTPUT_BYTES,
+  });
   const code = await proc.exited;
   if (code !== 0) throw new Error(`screencapture exited with ${code}: ${await new Response(proc.stderr).text()}`);
   return { path: outPath };

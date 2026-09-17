@@ -30,6 +30,7 @@ export interface TabSnapshot {
   runState: RunState | null;
   activeHandles: number;
   autoRunArmed: boolean;
+  logpoints: number[];
   entryCount: number;
   stale: boolean;
   truncated: number;
@@ -46,6 +47,8 @@ export interface UiSnapshot {
   diagnostics: number;
   focus: AppState["focus"];
   modal: string | null;
+  /** Which panel the side bar is showing, so a scenario can assert Show Transpiled Output switched it (spec §7.4). */
+  sideBarPanel: AppState["sideBarPanel"];
   outputFilter: AppState["outputFilter"];
   outputCounts: Record<AppState["outputFilter"], number>;
   statusMessage: string | null;
@@ -54,6 +57,8 @@ export interface UiSnapshot {
   themeId: string;
   vimMode: string | null;
   fontFallback: boolean;
+  /** Spec §13: how many snippets the library holds, so a scenario can watch an import or an export land. */
+  snippetCount: number;
   npm: {
     installed: { name: string; version: string | null; latest: string | null }[];
     operations: { kind: string; target: string; status: string; errorKind: string | null; notice: string | null }[];
@@ -94,6 +99,7 @@ export function snapshotState(state: AppState): UiSnapshot {
         runState: output.runState,
         activeHandles: output.activeHandles,
         autoRunArmed: state.runtimes[id]?.autoRunArmed ?? false,
+        logpoints: state.runtimes[id]?.logpoints ?? [],
         entryCount: output.entries.length,
         stale: output.stale,
         truncated: output.truncated,
@@ -111,6 +117,7 @@ export function snapshotState(state: AppState): UiSnapshot {
     diagnostics: state.diagnostics.length,
     focus: state.focus,
     modal: state.modal?.kind ?? null,
+    sideBarPanel: state.sideBarPanel,
     outputFilter: state.outputFilter,
     outputCounts: filterCounts(
       visibleEntries(state.output, { showUndefined: state.settings?.run.showUndefined ?? false }),
@@ -121,6 +128,7 @@ export function snapshotState(state: AppState): UiSnapshot {
     themeId: state.themeId,
     vimMode: state.vimMode,
     fontFallback: state.fontFallback,
+    snippetCount: state.snippets.length,
     npm: {
       installed: state.npm.installed.map(({ name, version, latest }) => ({ name, version, latest })),
       operations: state.npm.operations.map((op) => ({

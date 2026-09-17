@@ -1,5 +1,6 @@
 import { readBoundedText } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
+import { MAX_SYSTEM_PROFILER_OUTPUT_BYTES } from "./subprocess-output";
 
 /**
  * The font cache's byte cap. JSLab writes this file itself, from its own parse of `system_profiler` output, so its
@@ -58,7 +59,13 @@ export function parseSystemFonts(json: string): SystemFontList {
 }
 
 export async function runSystemProfiler(timeoutMs = 60_000): Promise<string> {
-  const proc = Bun.spawn(["system_profiler", "SPFontsDataType", "-json"], { stdout: "pipe", stderr: "ignore" });
+  // The 60 s kill below bounds how LONG this runs, never how much it buffers: 60 s of a flooding child is many
+  // gigabytes of Main's heap. maxBuffer is what bounds the memory, by ending the child (see subprocess-output).
+  const proc = Bun.spawn(["system_profiler", "SPFontsDataType", "-json"], {
+    stdout: "pipe",
+    stderr: "ignore",
+    maxBuffer: MAX_SYSTEM_PROFILER_OUTPUT_BYTES,
+  });
   const timer = setTimeout(() => proc.kill(), timeoutMs);
   try {
     const [output, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);

@@ -22,6 +22,7 @@ describe("resolveAppPaths", () => {
       npmHome: "/Users/me/Library/Application Support/dev.jslab.app/stable/npm-home",
       vendorCacheDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/cache/vendor",
       envFile: "/Users/me/Library/Application Support/dev.jslab.app/stable/env.json",
+      snippetsFile: "/Users/me/Library/Application Support/dev.jslab.app/stable/snippets.json",
       socketPath: "/Users/me/Library/Application Support/dev.jslab.app/stable/jslab.sock",
       screenshotsDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/e2e-screenshots",
       runnerBootstrap: "/Applications/JSLab.app/Contents/Resources/app/runner/bootstrap.js",

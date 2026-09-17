@@ -41,4 +41,54 @@ describe("command catalogue", () => {
       { key: "alt+cmd+w", command: "view.toggleWebView" },
     ]);
   });
+
+  test("M5a adds the logpoint commands with the spec's chords (spec §6.3, §6.5)", () => {
+    expect(commandMeta("edit.toggleLogpoint")).toMatchObject({
+      title: "Toggle Logpoint",
+      category: "edit",
+      context: "editor",
+    });
+    expect(commandMeta("edit.clearLogpoints")).toMatchObject({
+      title: "Clear All Logpoints",
+      category: "edit",
+      context: "editor",
+    });
+    expect(
+      DEFAULT_KEYBINDINGS.filter((rule) => rule.command.endsWith("Logpoint") || rule.command.endsWith("Logpoints")),
+    ).toEqual([
+      { key: "f9", command: "edit.toggleLogpoint", when: "editorFocus" },
+      { key: "cmd+shift+f9", command: "edit.clearLogpoints" },
+    ]);
+  });
+
+  test("M5a adds Show Transpiled Output with no default chord (spec §7.4)", () => {
+    expect(commandMeta("view.showTranspiled")).toMatchObject({
+      title: "Show Transpiled Output",
+      category: "view",
+    });
+    expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.command === "view.showTranspiled")).toEqual([]);
+  });
+
+  test("M5b adds the snippet commands, ⌘B and the Tab expansion (spec §13, §6.5)", () => {
+    expect(commandMeta("tools.snippets")).toMatchObject({ title: "Snippets…", category: "tools" });
+    expect(commandMeta("snippets.create")).toMatchObject({
+      title: "Create Snippet…",
+      category: "edit",
+      context: "editor",
+    });
+    expect(commandMeta("snippets.import")).toMatchObject({ title: "Import Snippets…", category: "tools" });
+    expect(commandMeta("snippets.export")).toMatchObject({ title: "Export Snippets…", category: "tools" });
+    // Hidden from the palette: it only means anything with a trigger word already typed.
+    expect(commandMeta("snippets.expand")).toMatchObject({ palette: false });
+    // The three palette-visible ones must NOT be hidden, which `palette: false` on the wrong entry would make them.
+    for (const id of ["tools.snippets", "snippets.create", "snippets.import", "snippets.export"]) {
+      expect([id, commandMeta(id)?.palette ?? true]).toEqual([id, true]);
+    }
+    expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.key === "cmd+b")).toEqual([
+      { key: "cmd+b", command: "tools.snippets" },
+    ]);
+    expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.key === "tab")).toEqual([
+      { key: "tab", command: "snippets.expand", when: "editorFocus" },
+    ]);
+  });
 });

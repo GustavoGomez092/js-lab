@@ -14,6 +14,23 @@ export const strings = {
     /** The detail line on an installed-package import suggestion: the version in node_modules (spec §6.1). */
     packageDetail: (version: string | null) => (version === null ? "installed" : `v${version}`),
   },
+  logpoints: {
+    /** Spec §6.3: the glyph-margin dot's tooltip. */
+    tooltip: "Logpoint — this line's value is shown in the output",
+    /** Spec §5.5: "A logpoint on a line with no loggable statement is shown hollow, with a tooltip." */
+    noValue: "Logpoint has no value to log on this line",
+    // The two command titles that used to sit here moved to the command catalogue (`packages/shared/src/commands.ts`)
+    // in M5a Task 5, where every other menu, palette and keybinding title lives; they were dead duplicates here.
+  },
+  transpiled: {
+    title: "Transpiled Output",
+    /** Spec §7.4: "a toggle hides the instrumentation calls". */
+    hideInstrumentation: "Hide instrumentation",
+    empty: "Run this tab to see its transpiled output.",
+    failed: "Couldn't read the transpiled output.",
+    /** R-M5a-7: shown while the editor's source differs from the source that produced the output on screen. */
+    stale: "Stale — run to refresh",
+  },
   commands: {
     failed: (title: string, error: unknown) =>
       `${title} failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -286,6 +303,66 @@ export const strings = {
       invalidKey: "Use letters, digits and _, and don't start with a digit.",
       duplicateKey: "Another row already uses this key.",
     },
+  },
+  snippets: {
+    title: "Snippets",
+    searchLabel: "Search snippets",
+    searchPlaceholder: "Search by name or description",
+    list: "Snippet library",
+    newSnippet: "New Snippet",
+    // Spec §13.1: the editor context menu's own entry. It deliberately reads the same as the `snippets.create`
+    // command title -- the command catalogue and the UI strings are separate surfaces (note for M5e Phase B).
+    createAction: "Create Snippet…",
+    // Spec §13.1 actions.
+    insert: "Insert",
+    insertInNewTab: "Insert in New Tab",
+    copy: "Copy",
+    edit: "Edit",
+    delete: "Delete",
+    deleteButton: "Delete",
+    cancel: "Cancel",
+    // Spec §13.1: the confirmation is worded exactly like this.
+    deleteTitle: (name: string) => `Delete snippet "${name}"?`,
+    deleteMessage: "You can undo this until you make another change.",
+    deleted: (name: string) => `Deleted "${name}".`,
+    undo: "Undo",
+    copied: "Copied",
+    copyFailed: "Couldn't copy",
+    preview: "Snippet preview",
+    // Empty states: 0 in the library, and 0 matching the query, say different things (M5 UI research §1).
+    empty: "No snippets yet. Create one, or import a library.",
+    noMatches: (query: string) => `No snippets match "${query}".`,
+    createNamed: (query: string) => `Create "${query}"`,
+    import: "Import…",
+    export: "Export…",
+    importFailed: "This file isn't a valid JSLab snippets file",
+    imported: (added: number, overwritten: number, skipped: number) =>
+      `Imported ${added} snippet${added === 1 ? "" : "s"}, replaced ${overwritten}, skipped ${skipped}.`,
+    conflicts: (conflicts: number, total: number) =>
+      `${total} snippet${total === 1 ? "" : "s"} to import, ${conflicts} with a name you already use.`,
+    overwrite: "Overwrite",
+    keepBoth: "Keep Both",
+    skip: "Skip",
+    exportedTo: (path: string) => `Exported to ${path}`,
+    exportCancelled: "Export cancelled.",
+    exportFailed: (error: string) => `Couldn't export: ${error}`,
+    loadFailed: "Couldn't read your snippets. Close and reopen the panel to try again.",
+    saveFailed: (error: string) => `Couldn't save your snippets (${error}). Nothing was changed.`,
+    // The New Snippet form (spec §13.1).
+    newTitle: "New Snippet",
+    editTitle: "Edit Snippet",
+    nameLabel: "Name",
+    nameHelp: "The word you type to insert this snippet. Letters, digits, _, $ and - only.",
+    descriptionLabel: "Description",
+    languageLabel: "Language hint",
+    languageNone: "Any",
+    bodyLabel: "Body",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal snippet syntax quoted to the user, not a template
+    bodyHelp: "$0 is where the cursor lands; ${1:name} and $1 are tab stops.",
+    save: "Save",
+    nameRequired: "A snippet needs a name.",
+    nameInvalid: "Use letters, digits, _, $ and - only.",
+    nameTaken: "Another snippet already uses this name.",
   },
   npm: {
     title: "NPM Packages",

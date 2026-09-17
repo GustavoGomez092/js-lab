@@ -35,6 +35,8 @@ export function createRpcApi(): MainApi {
     bootstrap: () => rpc.request["app.bootstrap"]({}, requestOptions("app.bootstrap")),
     startRun: (params) => rpc.request["run.start"](params, requestOptions("run.start")),
     expand: (params) => rpc.request["run.expand"](params, requestOptions("run.expand")),
+    transpiled: (tabId, hideInstrumentation) =>
+      rpc.request["run.transpiled"]({ tabId, hideInstrumentation }, requestOptions("run.transpiled")),
     stop: (tabId) => rpc.send["run.stop"]({ tabId }),
     kill: (tabId) => rpc.send["run.kill"]({ tabId }),
     wait: (tabId) => rpc.send["run.wait"]({ tabId }),
@@ -69,6 +71,13 @@ export function createRpcApi(): MainApi {
     localTypes: (tabId, specifiers) => rpc.request["types.local"]({ tabId, specifiers }, requestOptions("types.local")),
     getEnv: () => rpc.request["env.get"]({}, requestOptions("env.get")).then((reply) => reply.variables),
     saveEnv: (variables) => rpc.request["env.save"]({ variables }, requestOptions("env.save")),
+    snippetsList: () =>
+      rpc.request["snippets.list"]({}, requestOptions("snippets.list")).then((reply) => reply.snippets),
+    // A library save is an atomic write with a .bak, like a file save, so it gets the longer bound (FB-m11) --
+    // now decided in `rpc-timeouts.ts` with every other request, rather than spelled out at this one call site.
+    snippetsSave: (snippets) => rpc.request["snippets.save"]({ snippets }, requestOptions("snippets.save")),
+    snippetsImportDialog: () => rpc.send["snippets.importDialog"]({}),
+    snippetsExportDialog: (snippets) => rpc.send["snippets.exportDialog"]({ snippets }),
     pickWorkingDirectory: (tabId) => rpc.send["wd.pick"]({ tabId }),
     clearWorkingDirectory: (tabId) => rpc.send["wd.clear"]({ tabId }),
     appCommand: (action) => rpc.send["app.command"]({ action }),

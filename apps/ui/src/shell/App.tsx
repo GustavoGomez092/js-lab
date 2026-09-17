@@ -30,6 +30,8 @@ import { OutputTiles } from "../output/OutputTiles";
 import { WebViewHosts, type WebviewDock } from "../output/WebViewHosts";
 import { recordAppRender, webViewTileCounters } from "../output/WebViewTile";
 import { CommandPalette } from "../palette/CommandPalette";
+import { snippetBodyFactory, snippetColorize } from "../snippets/monaco-bridge";
+import { createSnippetActions, createSnippetCommands } from "../snippets/snippet-actions";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
 import { createEventCoalescer, createFrameScheduler } from "../state/event-coalescer";
@@ -187,7 +189,9 @@ export function App({
           tabId,
           code,
           language: freshTab.language,
-          logpoints: [],
+          // Spec §6.3 / §5.5: the tab's own logpoint lines, read at send time like `code` above, so a toggle
+          // that landed while a format was in flight is still included.
+          logpoints: fresh.runtimes[tabId]?.logpoints ?? [],
           reason,
           runtime: freshTab.runtime,
         });
@@ -253,15 +257,38 @@ export function App({
     [bindings],
   );
 
+  // Only `insert` / `insertInNewTab` reach the panel, and neither touches the side bar -- so this can be built
+  // before the registry exists. Side-bar control lives in the command deps below (ruling R-M5b-D3/D4-FIX-b).
+  const snippetActions = useMemo(() => createSnippetActions({ store, editor: getEditorHandle, tabs }), [store, tabs]);
+
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>
       store.getState().setStatusMessage(strings.commands.failed(commandMeta(id)?.title ?? id, error)),
     );
+    // `view.sideBar` keeps ONE writer -- the `view.toggleSideBar` command -- exactly as `view.showTranspiled` below
+    // does. A second mechanism writing the setting directly is what ruling R-M5b-D3/D4-FIX-a forbids.
+    const snippetDeps = {
+      store,
+      api,
+      editor: getEditorHandle,
+      tabs,
+      panelShowing: () =>
+        Boolean(store.getState().settings?.view.sideBar) && store.getState().sideBarPanel === "snippets",
+      openPanel: () => {
+        const state = store.getState();
+        state.setSideBarPanel("snippets");
+        if (!state.settings?.view.sideBar) created.execute("view.toggleSideBar");
+      },
+      closePanel: () => {
+        if (store.getState().settings?.view.sideBar) created.execute("view.toggleSideBar");
+      },
+    };
     created.register(
       ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle, keysFor }),
-      ...createEditorCommands(getEditorHandle),
+      ...createEditorCommands(getEditorHandle, store),
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
+      ...createSnippetCommands(snippetDeps),
       ...createFileCommands(flows, api),
       ...createOutputCommands(store),
       {
@@ -288,6 +315,18 @@ export function App({
           state.openModal({ kind: "palette", context });
         },
       },
+      // spec §7.4: Show Transpiled Output "opens a read-only side tab", so unlike the activity bar's `togglePanel`
+      // this only ever *opens* the panel -- invoking it while that panel is already showing must not close it.
+      // Opening goes through `view.toggleSideBar` rather than writing `view.sideBar` here, so the persisted setting
+      // keeps a single owner and a second invocation writes nothing.
+      {
+        id: "view.showTranspiled",
+        run: () => {
+          const state = store.getState();
+          state.setSideBarPanel("transpiled");
+          if (!state.settings?.view.sideBar) created.execute("view.toggleSideBar");
+        },
+      },
       {
         id: "format.document",
         isEnabled: () => format !== null,
@@ -305,6 +344,7 @@ export function App({
       stop: keysFor("run.stop"),
       settings: keysFor("app.settings"),
       npm: keysFor("tools.npmPackages"),
+      snippets: keysFor("tools.snippets"),
     }),
     [keysFor],
   );
@@ -408,6 +448,18 @@ export function App({
         outputPlain: document.querySelector(".output-plain") !== null,
         lineAnchors: document.querySelector(".entry-line") !== null,
         staleLabel: document.querySelector(".output-stale-label") !== null,
+        // M5a (spec §7.4): the read-only transpiled-output panel, so a scenario can tell it is on screen, and
+        // (R-M5a-7) whether it is currently admitting that what it shows is output for code that has since changed.
+        transpiledPanel: document.querySelector(".transpiled-panel") !== null,
+        transpiledStale: document.querySelector(".transpiled-stale-label") !== null,
+        // Spec §13.1: the snippets panel, so a scenario can tell it is on screen.
+        snippetsPanel: document.querySelector(".snippets-panel") !== null,
+        // Spec §13.4 / ruling R-M5b-8: the overwrite / keep both / skip chooser, and a refused import's alert. Both
+        // exist so an E2E scenario can wait for a POSITIVE signal that an import round trip landed. Without them the
+        // only observables are `snippetCount` and `snippets.json`, which are *already* at their expected values
+        // before the import is even dispatched -- so an assertion on those alone passes whether or not the import ran.
+        snippetsConflicts: document.querySelector(".snippets-conflicts") !== null,
+        snippetsError: document.querySelector('.snippets-status[role="alert"]') !== null,
         // M4 Task 16: the Web View tile's docking placeholder, which `OutputTiles` renders only for a runtime that
         // can host a webview and only while that tab's own Web View toggle is on -- so this is what an E2E
         // scenario reads to tell "the tile is on screen" from "a bun tab never gets one" (spec §7.1, parity WV-01).
@@ -571,6 +623,7 @@ export function App({
             settingsKeys={keycaps.settings}
             npmOpen={npmOpen}
             npmKeys={keycaps.npm}
+            snippetsKeys={keycaps.snippets}
             onRun={() => registry.execute("run.start")}
             onStop={() => registry.execute("run.stop")}
             onPanel={togglePanel}
@@ -578,7 +631,17 @@ export function App({
             onNpm={() => registry.execute("tools.npmPackages")}
           />
         )}
-        {settings.view.sideBar && <SideBar panel={sideBarPanel} />}
+        {settings.view.sideBar && (
+          <SideBar
+            panel={sideBarPanel}
+            store={store}
+            api={api}
+            dialogs={dialogs}
+            actions={snippetActions}
+            colorize={snippetColorize}
+            createBody={snippetBodyFactory}
+          />
+        )}
         <SplitPane
           orientation={orientation}
           size={editorSize}
@@ -591,6 +654,7 @@ export function App({
               api={api}
               onLargePaste={flows.confirmLargePaste}
               onInstall={install}
+              onCreateSnippet={() => registry.execute("snippets.create")}
               vimSlot={vimSlot}
             />
           }

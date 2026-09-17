@@ -72,8 +72,20 @@ describe("editor commands", () => {
     return handle as typeof handle & EditorHandle;
   };
 
+  const logpointStore = () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "const a = 1\nconst b = 2" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    return store;
+  };
+
   test("every editor command in the catalogue is implemented", () => {
-    const implemented = new Set(createEditorCommands(() => null).map((spec) => spec.id));
+    const implemented = new Set(createEditorCommands(() => null, logpointStore()).map((spec) => spec.id));
     const expected = COMMANDS.filter((c) => c.id.startsWith("edit.")).map((c) => c.id);
     expect(expected.filter((id) => !implemented.has(id))).toEqual([]);
     expect(Object.values(EDITOR_ACTIONS)).toContain("editor.action.marker.next");
@@ -81,14 +93,39 @@ describe("editor commands", () => {
 
   test("actions run through the handle, and line edits replace only what changed", () => {
     const handle = fakeHandle("b\nA\nc //?", { startLine: 2, endLine: 2 });
-    const specs = new Map(createEditorCommands(() => handle).map((spec) => [spec.id, spec]));
+    const specs = new Map(createEditorCommands(() => handle, logpointStore()).map((spec) => [spec.id, spec]));
     specs.get("edit.duplicateLine")?.run();
     expect(handle.runAction).toHaveBeenCalledWith("editor.action.copyLinesDownAction");
     specs.get("edit.toggleMagicComment")?.run();
     expect(handle.getValue()).toBe("b\nA //?\nc //?");
     specs.get("edit.sortLinesCaseInsensitive")?.run();
     expect(handle.getValue()).toBe("A //?\nb\nc //?");
-    expect(createEditorCommands(() => null)[0]?.isEnabled?.()).toBe(false);
+    expect(createEditorCommands(() => null, logpointStore())[0]?.isEnabled?.()).toBe(false);
+  });
+
+  test("F9's command toggles the cursor's line, and Clear All drops every logpoint (spec §6.3)", () => {
+    const store = logpointStore();
+    let cursorLine: number | null = 2;
+    const handle = { getCursorLine: () => cursorLine } as unknown as EditorHandle;
+    const registry = new CommandRegistry();
+    registry.register(...createEditorCommands(() => handle, store));
+
+    expect(registry.execute("edit.toggleLogpoint")).toBe("executed");
+    expect(store.getState().logpoints).toEqual([2]);
+    registry.execute("edit.toggleLogpoint");
+    expect(store.getState().logpoints).toEqual([]);
+
+    store.getState().toggleLogpoint(1);
+    store.getState().toggleLogpoint(2);
+    registry.execute("edit.clearLogpoints");
+    expect(store.getState().logpoints).toEqual([]);
+
+    // With no cursor (no editor mounted) the toggle runs but touches nothing, rather than guessing a line.
+    cursorLine = null;
+    expect(registry.execute("edit.toggleLogpoint")).toBe("executed");
+    expect(store.getState().logpoints).toEqual([]);
+    // Clear All is offered only when there is something to clear, so the palette greys it out.
+    expect(registry.execute("edit.clearLogpoints")).toBe("disabled");
   });
 });
 

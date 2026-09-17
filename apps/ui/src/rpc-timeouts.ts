@@ -54,6 +54,16 @@ export const REQUEST_PAYLOAD_CLASS: Record<keyof MainRequests, RequestPayloadCla
   "types.local": "small",
   "env.get": "small",
   "env.save": "small",
+  // Both `code` and `source` are a tab's text run through Babel, each bounded by MAX_TEXT_CHARS -- so the reply is
+  // up to two buffers wide, and the panel asks for it on every run.
+  "run.transpiled": "buffer",
+  // The whole snippet library, both ways: MAX_SNIPPETS (2000) entries whose bodies alone reach
+  // MAX_SNIPPET_BODY_CHARS (20,000) each. That is buffer-class transport however small a typical library is, and
+  // `snippets.save` additionally does the atomic write plus `.bak` the 60 s bound was written for (FB-m11).
+  // Classified by payload rather than by how long Main is expected to take: a bound that is too short reports a
+  // failure for work that in fact completed, which is exactly the F1 failure this table exists to prevent.
+  "snippets.list": "buffer",
+  "snippets.save": "buffer",
 };
 
 export function maxRequestTimeFor(method: keyof MainRequests): number {

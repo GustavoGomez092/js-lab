@@ -57,6 +57,9 @@ export const strings = {
      */
     bufferUnreadable: "JSLab couldn't read this tab's contents, so it won't save over the file on disk.",
   },
+  snippets: {
+    tooLarge: "That file is larger than 5 MB, so it isn't a snippet library.",
+  },
   notices: {
     copySaved: (file: string) => ` A copy was saved as ${file}`,
     settingsReset: "Settings were reset because the file was unreadable.",

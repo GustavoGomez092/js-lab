@@ -177,6 +177,19 @@ export function createWebNodeRunner(deps: WebNodeRunnerDeps): WebNodeRunner {
       case "readFile": {
         // The returned body is NOT redacted (see this module's header): these are the exact bytes the user's
         // program asked for, and a file whose contents merely look like a credential must come back byte-identical.
+        //
+        // **Deliberately unbounded, and the reason is parity, not convenience.** Every other whole-file read in
+        // Main is JSLab reading a file for its own purposes, so JSLab gets to say how big it may be. This one is
+        // the user's own program calling `fs.readFile`, forwarded. The same script under the `bun` runtime reads
+        // the file with no cap at all, so any cap here would make `browser-node` silently refuse a read that
+        // `bun` completes -- the exact parity break `docs/parity.md` exists to track, and the one this module's
+        // header already rejected confinement for. A user who asks for a 3 GB file has asked for it.
+        //
+        // What that costs is stated rather than waved away: the read is `node:fs/promises`, so an oversized file
+        // or a FIFO occupies a libuv threadpool slot and this one call's memory -- it does not block Main's event
+        // loop the way the `readFileSync` sites in `../bundling/` would. That is the hazard being accepted, and
+        // it is accepted because the alternative is breaking the runtime's contract, not because a try/catch
+        // somewhere makes it recoverable.
         deps.send.result({ id, value: (await fs.readFile(resolvePath(args[0] as string))).toString("base64") });
         return;
       }

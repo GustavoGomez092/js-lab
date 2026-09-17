@@ -111,6 +111,12 @@ async function directoryExists(path: string): Promise<boolean> {
 
 export class RunCoordinator {
   readonly #runs = new Map<string, ActiveRun>();
+  /**
+   * Spec §7.4: the source and options of each tab's most recent **successful** transform, so Show Transpiled
+   * Output can hand back that run's Babel output, and can re-derive it without instrumentation (R-M5a-3).
+   * One entry per tab, replaced on every successful transform and dropped with the tab.
+   */
+  readonly #transpiled = new Map<string, { source: string; options: TransformOptions; code: string }>();
   readonly #registry: RuntimeRegistry;
   readonly #watchdog: ReturnType<typeof setInterval>;
 
@@ -192,6 +198,27 @@ export class RunCoordinator {
   }
 
   /**
+   * Spec §7.4: the latest Babel output for a tab. `hideInstrumentation` re-runs the same transform with Auto Log,
+   * logpoints and loop protection off (R-M5a-3) rather than stripping `__jl` calls out of generated code, which
+   * cannot be done correctly. The transform host is LRU-cached, so the second call is cheap and repeatable.
+   */
+  async transpiled(tabId: string, hideInstrumentation: boolean): Promise<{ code: string; source: string } | null> {
+    const entry = this.#transpiled.get(tabId);
+    if (!entry) return null;
+    // R-M5a-7: the caller gets the source this output was produced from, either way -- the uninstrumented view is
+    // the same program, transformed again with the instrumentation off, so it is stale under exactly the same
+    // condition. Nothing here mutates the cached entry.
+    if (!hideInstrumentation) return { code: entry.code, source: entry.source };
+    const plain = await this.deps.transform(entry.source, {
+      ...entry.options,
+      autoLog: false,
+      logpoints: [],
+      loopProtection: false,
+    });
+    return plain.ok ? { code: plain.code, source: entry.source } : null;
+  }
+
+  /**
    * Task 15 (spec §5.12, EX-35): live-toggles mute for whatever is currently running on this tab. A harmless no-op
    * when nothing is running, or when the running adapter has no concept of mute (`RunHandle.mute` is optional) --
    * the tab's saved preference still applies at the *start* of its next run either way (`#execute`'s `muted`).
@@ -203,6 +230,7 @@ export class RunCoordinator {
   disposeTab(tabId: string): void {
     this.#supersede(tabId);
     this.#runs.delete(tabId);
+    this.#transpiled.delete(tabId);
     // Every registered adapter, not just Bun's. `#registry.get(undefined)` always resolves to the Bun adapter by
     // design, so this used to call `BunAdapter.dispose` even for a browser tab and never `WebAdapter.dispose` --
     // the tab's webview was never destroyed on close and Main's own entry was never dropped (leaking
@@ -230,7 +258,7 @@ export class RunCoordinator {
         return;
       }
       const settings = this.deps.settings();
-      const result = await this.deps.transform(request.code, {
+      const transformOptions: TransformOptions = {
         language: request.language,
         autoLog: settings.autoLog,
         loopProtection: settings.loopProtection,
@@ -245,8 +273,12 @@ export class RunCoordinator {
               },
             }
           : {}),
-      });
+      };
+      const result = await this.deps.transform(request.code, transformOptions);
       if (!this.#isCurrent(run)) return;
+      if (result.ok) {
+        this.#transpiled.set(run.tabId, { source: request.code, options: transformOptions, code: result.code });
+      }
       this.deps.onDiagnostics(run.tabId, run.runId, result.diagnostics);
 
       if (!result.ok) {

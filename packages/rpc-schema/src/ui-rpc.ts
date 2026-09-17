@@ -4,10 +4,13 @@ import {
   type EnvVars,
   envVarsSchema,
   LANGUAGES,
+  MAX_SNIPPETS,
   RUNTIMES,
   SETTINGS_SECTIONS,
   type Session,
   type Settings,
+  type Snippet,
+  snippetSchema,
 } from "@jslab/shared";
 import { z } from "zod";
 import type { RunEvent, RunState } from "./events";
@@ -55,6 +58,9 @@ export const runExpandParamsSchema = z.object({
   runId: z.uuid(),
   handleId: z.string().regex(/^h\d+$/),
 });
+
+/** Spec §7.4 / Appendix A: the latest Babel output for a tab, optionally without the instrumentation calls. */
+export const runTranspiledParamsSchema = z.object({ tabId, hideInstrumentation: z.boolean() });
 
 export const bufferChangedSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });
 
@@ -220,6 +226,16 @@ export const npmSearchParamsSchema = z.object({ query: z.string().trim().min(1).
 export const npmListParamsSchema = z.object({ refreshOutdated: z.boolean() });
 export const npmrcSaveParamsSchema = z.object({ content: z.string().max(MAX_NPMRC_CHARS) });
 export const envSaveParamsSchema = z.object({ variables: envVarsSchema });
+
+/** Spec §13.4: the largest snippets file an import will read. Bigger files are refused without being parsed. */
+export const MAX_SNIPPETS_FILE_BYTES = 5 * 1024 * 1024;
+export const snippetsSaveParamsSchema = z.object({ snippets: z.array(snippetSchema).max(MAX_SNIPPETS) });
+export const snippetsExportParamsSchema = snippetsSaveParamsSchema;
+
+/** The result of `snippets.importDialog`: parsed records, or the reason the file was refused (spec §13.4). */
+export type SnippetsImported = { ok: true; snippets: Snippet[] } | { ok: false; reason: string; detail: string };
+export type SnippetsExported = { ok: true; path: string } | { ok: false; error: string } | { cancelled: true };
+export type { Snippet };
 export const packageTypesParamsSchema = z.object({
   tabId,
   packages: z.array(npmNameSchema).min(1).max(MAX_PACKAGES_PER_REQUEST),
@@ -427,6 +443,7 @@ export type E2EResponse = z.infer<typeof e2eResponseSchema>;
 export type RunStartParams = z.infer<typeof runStartParamsSchema>;
 export type TabParams = z.infer<typeof tabParamsSchema>;
 export type RunExpandParams = z.infer<typeof runExpandParamsSchema>;
+export type RunTranspiledParams = z.infer<typeof runTranspiledParamsSchema>;
 export type BufferChanged = z.infer<typeof bufferChangedSchema>;
 export type TabPatch = z.infer<typeof tabPatchSchema>;
 export type TabCreateParams = z.infer<typeof tabCreateParamsSchema>;
@@ -472,6 +489,12 @@ export type MainRequests = {
   "app.bootstrap": { params: Record<string, never>; response: BootstrapPayload };
   "run.start": { params: RunStartParams; response: { runId: string } };
   "run.expand": { params: RunExpandParams; response: EncodedValue | null };
+  /**
+   * R-M5a-7: `source` is the exact source Main transpiled to produce `code`, so the panel can say when what it
+   * shows is output for code the user has since edited. Re-deriving that UI-side from the last `run.start` payload
+   * is unsound -- after a run that fails to transpile, Main still serves the previous successful transform.
+   */
+  "run.transpiled": { params: RunTranspiledParams; response: { code: string; source: string } | null };
   "tab.create": { params: TabCreateParams; response: { tab: TabState } };
   "tab.close": { params: TabParams; response: TabCloseResult };
   "tab.reopen": { params: Record<string, never>; response: TabWithContent | null };
@@ -484,6 +507,8 @@ export type MainRequests = {
   "types.local": { params: { tabId: string; specifiers: string[] }; response: LocalTypesResult };
   "env.get": { params: Record<string, never>; response: { variables: EnvVars } };
   "env.save": { params: { variables: EnvVars }; response: SaveResult };
+  "snippets.list": { params: Record<string, never>; response: { snippets: Snippet[] } };
+  "snippets.save": { params: { snippets: Snippet[] }; response: SaveResult };
 };
 
 /**
@@ -510,6 +535,9 @@ export const MAIN_REQUEST_PARAMS_SCHEMAS: Record<keyof MainRequests, z.ZodType> 
   "types.local": localTypesParamsSchema,
   "env.get": emptyParamsSchema,
   "env.save": envSaveParamsSchema,
+  "run.transpiled": runTranspiledParamsSchema,
+  "snippets.list": emptyParamsSchema,
+  "snippets.save": snippetsSaveParamsSchema,
 };
 
 /** The `MainRequests` method names at runtime, derived from the exhaustive table above so they cannot drift. */
@@ -540,6 +568,10 @@ export type MainMessages = {
   "npm.updateAll": Record<string, never>;
   "wd.pick": TabParams;
   "wd.clear": TabParams;
+  /** Spec §13.1 Options menu: opens the file dialog, parses the chosen file, and answers with `snippets.imported`. */
+  "snippets.importDialog": Record<string, never>;
+  /** Spec §13.1 Options menu: saveDialog with the default name `jslab-snippets.json`; answers `snippets.exported`. */
+  "snippets.exportDialog": { snippets: Snippet[] };
   "ui.stateFlushed": Record<string, never>;
   /**
    * M4 §5.12 / T9e: the tab's page reached `dom-ready` -- it is safe to inject script into it now. `generation`
@@ -586,6 +618,8 @@ export type ViewMessages = {
   "npm.log": { opId: string; text: string };
   "npm.changed": NpmListResult;
   "wd.changed": { tabId: string; tab: TabState };
+  "snippets.imported": SnippetsImported;
+  "snippets.exported": SnippetsExported;
   "app.flushState": Record<string, never>;
   /**
    * M4 §5.12: make sure this tab has a live `<electrobun-webview>`, creating one if the tab's own Web View toggle

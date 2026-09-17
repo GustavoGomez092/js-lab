@@ -13,6 +13,7 @@ import type {
   RunStartParams,
   SaveResult,
   SettingsUpdateParams,
+  Snippet,
   TabCloseResult,
   TabCreateParams,
   TabPatch,
@@ -29,6 +30,11 @@ export interface MainApi {
   bootstrap(): Promise<BootstrapPayload>;
   startRun(params: RunStartParams): Promise<{ runId: string }>;
   expand(params: RunExpandParams): Promise<EncodedValue | null>;
+  /**
+   * Spec §7.4: the latest Babel output for a tab, or null when it has never transpiled successfully. `source` is
+   * the source Main transpiled to produce `code`, which is what "stale" is judged against (R-M5a-7).
+   */
+  transpiled(tabId: string, hideInstrumentation: boolean): Promise<{ code: string; source: string } | null>;
   stop(tabId: string): void;
   kill(tabId: string): void;
   wait(tabId: string): void;
@@ -66,6 +72,13 @@ export interface MainApi {
 
   getEnv(): Promise<EnvVars>;
   saveEnv(variables: EnvVars): Promise<SaveResult>;
+
+  /** Spec §13: the snippet library. The UI holds it whole and writes it back on every mutation (R-M5b-6). */
+  snippetsList(): Promise<Snippet[]>;
+  snippetsSave(snippets: Snippet[]): Promise<SaveResult>;
+  /** Spec §13.1 Options menu. Answered by the `snippets.imported` / `snippets.exported` messages, never inline. */
+  snippetsImportDialog(): void;
+  snippetsExportDialog(snippets: Snippet[]): void;
 
   pickWorkingDirectory(tabId: string): void;
   clearWorkingDirectory(tabId: string): void;

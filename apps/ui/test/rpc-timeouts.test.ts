@@ -56,6 +56,14 @@ const BIG_PAYLOAD_PROBE: Record<keyof MainRequests, Probe> = {
   "types.local": { kind: "big", params: { tabId: "t1", specifiers: [`./${BIG}`] } },
   "env.get": { kind: "none", why: "no params" },
   "env.save": { kind: "big", params: { variables: { KEY: BIG } } },
+  // Params are a tab id and a flag; the MAX_TEXT_CHARS-class payload is `code` and `source` in the RESPONSE, which
+  // no params probe can reveal -- the named list in the last test is what covers it.
+  "run.transpiled": { kind: "big", params: { tabId: BIG, hideInstrumentation: false } },
+  "snippets.list": { kind: "none", why: "no params; the whole library is in the response" },
+  // Accepted but not retained at this size: snippetSchema caps a body at MAX_SNIPPET_BODY_CHARS (20 kB), so a 1 MB
+  // body is rejected outright. The library is still buffer-class in aggregate -- MAX_SNIPPETS (2000) entries -- which
+  // is a total no per-field probe can express, so this one is classified by the named list below too.
+  "snippets.save": { kind: "big", params: { snippets: [{ id: "s1", name: "s", description: "", body: BIG }] } },
 };
 
 /** The requests that move `MAX_TEXT_CHARS`-class data, in either direction. */
@@ -111,6 +119,12 @@ describe("per-request RPC timeouts (F1)", () => {
       "app.bootstrap",
       "file.save",
       "run.start",
+      // Response-side: `code` and `source` are each a tab's text run through Babel, so up to two buffers wide.
+      "run.transpiled",
+      // Response- and request-side: the whole snippet library, up to MAX_SNIPPETS entries of MAX_SNIPPET_BODY_CHARS
+      // each, and `snippets.save` additionally does the atomic write plus `.bak` the long bound was written for.
+      "snippets.list",
+      "snippets.save",
       "tab.close",
       "tab.create",
       "tab.reopen",

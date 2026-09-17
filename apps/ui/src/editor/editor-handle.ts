@@ -26,6 +26,18 @@ export interface EditorHandle {
   getCursorOffset(): number;
   /** The 1-based lines covered by the primary selection (a selection ending at column 1 excludes that line). */
   getSelectedLineRange(): { startLine: number; endLine: number } | null;
+  /** The 1-based line the caret is on, or null when nothing is mounted (spec §6.3: `F9` toggles the current line). */
+  getCursorLine(): number | null;
+  /** The text of the current line before the caret (spec §13.3's trigger detection). */
+  textBeforeCursor(): string;
+  /**
+   * Inserts a Monaco snippet template at the caret, first deleting `deleteBefore` characters before it, and
+   * replacing the selection. Returns false when this Monaco build exposes no snippet controller, so the caller can
+   * insert plain text instead.
+   */
+  insertSnippet(template: string, deleteBefore?: number): boolean;
+  /** Spec §13.1 Create Snippet…: the selected text, or the whole buffer when nothing is selected. */
+  selectedTextOrAll(): string;
   getLines(startLine: number, endLine: number): string[];
   /** Replaces whole lines as one undoable edit, keeping the model's line ending. */
   replaceLines(startLine: number, endLine: number, lines: string[]): void;

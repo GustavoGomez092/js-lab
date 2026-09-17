@@ -124,8 +124,10 @@ export function createFileFlows(deps: {
       if (!tab) return true;
       const code = state.buffers[tabId] ?? "";
       const title = deriveTitle(tab, code);
-      // TF-21: ⌘W on the only, empty, fileless tab closes the window and keeps the tab.
-      if (state.tabOrder.length === 1 && !tab.filePath && code === "") {
+      // TF-21: ⌘W on the only, untouched, fileless tab closes the window and keeps the tab. "Untouched" means empty
+      // OR still holding exactly the first-run welcome sample (R-M5a-REGRESSION-2) -- before that sample existed the
+      // two were the same thing, and testing emptiness alone leaves a first-run user staring at an empty window.
+      if (state.tabOrder.length === 1 && !tab.filePath && (code === "" || tab.pristine)) {
         api.appCommand("closeWindow");
         return false;
       }

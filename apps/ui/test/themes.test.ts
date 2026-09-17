@@ -67,6 +67,17 @@ describe("first-paint fallback (FB-m8)", () => {
     const rule = /\.entry-level-error:hover\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(rule.trim()).toBe("background: var(--bg-errorRowHover);");
   });
+
+  test("every variable styles.css uses without a fallback is one it also defines (D13)", () => {
+    // M5b's plan specified `background: var(--bg-default)` for the snippet body field. That token has never
+    // existed in this file, so the field would have rendered transparent -- and nothing caught it: CSS variables
+    // fail silently, and neither tsc, biome nor any test read this file for undefined references. Only the three
+    // editor tokens injected at runtime from settings may be referenced without being defined here, and each of
+    // those carries a fallback, so requiring a definition for every BARE reference is the exact right rule.
+    const defined = new Set([...css.matchAll(/(--[A-Za-z0-9-]+)\s*:/g)].map((match) => match[1] ?? ""));
+    const bare = [...new Set([...css.matchAll(/var\(\s*(--[A-Za-z0-9-]+)\s*\)/g)].map((match) => match[1] ?? ""))];
+    expect(bare.filter((name) => !defined.has(name))).toEqual([]);
+  });
 });
 
 describe("theme application", () => {

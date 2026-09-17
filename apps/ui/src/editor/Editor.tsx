@@ -2,11 +2,17 @@ import { getTheme } from "@jslab/themes";
 import type * as Monaco from "monaco-editor";
 import { type RefObject, useEffect, useRef } from "react";
 import type { MainApi } from "../api";
+import { createMonacoBody } from "../snippets/body-editor";
+import { registerCreateSnippetAction } from "../snippets/create-snippet-action";
+import { setSnippetMonaco } from "../snippets/monaco-bridge";
+import { registerSnippetCompletions } from "../snippets/snippet-completions";
 import type { AppState, AppStore } from "../state/store";
 import { setEditorHandle } from "./editor-handle";
 import { type EditorOptions, editorOptionsFor } from "./editor-options";
 import { registerImportCompletions } from "./import-completions";
 import { installActionsFor, registerInstallAssist } from "./install-assist";
+import { attachLogpointGutter } from "./logpoint-gutter";
+import { hollowLogpointLines } from "./logpoints";
 import { createMarkerTracker, type EditorMarker, markersFor } from "./markers";
 import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
@@ -26,6 +32,8 @@ interface EditorProps {
   onLargePaste?(bytes: number): Promise<boolean>;
   /** R23-1: routed through the npm.install command by the caller, not called on api directly. */
   onInstall?(spec: string): void;
+  /** Spec §13.1: the editor context menu's Create Snippet…, routed through the snippets.create command. */
+  onCreateSnippet?(): void;
   /** The React-owned `.vim-slot` before the status bar, where the Vim status node goes (T16-rr1). */
   vimSlot?: RefObject<HTMLElement | null>;
 }
@@ -41,7 +49,7 @@ function toMonacoOptions(options: EditorOptions): Omit<Monaco.editor.IEditorOpti
   return { ...options, hover: { enabled: options.hover.enabled ? "on" : "off", delay: options.hover.delay } };
 }
 
-export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorProps) {
+export function Editor({ store, api, onLargePaste, onInstall, onCreateSnippet, vimSlot }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   // FB-m10: the paste confirm is read through a ref, so a new callback identity (for example `flows` rebuilt after a
   // formatter change) never disposes and recreates Monaco, which would lose undo history and Vim state.
@@ -50,6 +58,10 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
   // R23-1: same latest-props ref pattern, so a new onInstall identity from App never tears down Monaco.
   const install = useRef(onInstall);
   install.current = onInstall;
+  // Same reason: the context-menu action is registered once per mount, so it must read the current callback rather
+  // than the identity captured at registration.
+  const createSnippet = useRef(onCreateSnippet);
+  createSnippet.current = onCreateSnippet;
 
   useEffect(() => {
     const monaco = setupMonaco();
@@ -126,6 +138,18 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
     const importCompletions = registerImportCompletions(monaco, {
       installed: () => store.getState().npm.installed,
     });
+    // Spec §13.3: the snippet suggest channel. The library is read from the store at completion time, so a snippet
+    // created a moment ago is suggested without re-registering anything.
+    const snippetCompletions = registerSnippetCompletions(monaco, {
+      snippets: () => store.getState().snippets,
+    });
+    const createSnippetAction = registerCreateSnippetAction(editor, { run: () => createSnippet.current?.() });
+    // Spec §13.1: the panel's preview highlighting and the form's body editor both need Monaco; publish them the
+    // same way the editor handle itself is published, so App keeps no import path to monaco-editor.
+    setSnippetMonaco({
+      colorize: (code, language) => monaco.editor.colorize(code, languageId(language ?? "typescript"), {}),
+      createBody: createMonacoBody(monaco, (language) => languageId(language ?? "typescript")),
+    });
 
     const applyMonacoTheme = (themeId: string) => {
       const theme = getTheme(themeId);
@@ -156,6 +180,16 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
 
     let contentSubscription: Monaco.IDisposable | null = null;
     const hover = editor.createDecorationsCollection();
+
+    // Spec §6.3: the logpoint glyph margin. `glyphMargin: true` is already set in the editor options above.
+    // Every dep reads through `store.getState()` at call time rather than closing over a snapshot, so a render
+    // driven by the subscription below always draws the state that triggered it.
+    const logpoints = attachLogpointGutter(monaco, editor, {
+      lines: () => store.getState().logpoints,
+      hollow: () => hollowLogpointLines(store.getState().diagnostics),
+      toggle: (line) => store.getState().toggleLogpoint(line),
+      reconcile: (lines) => store.getState().setLogpoints(lines),
+    });
 
     const applyHover = (line: number | null) => {
       hover.set(
@@ -238,6 +272,9 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
         reportCursor();
         // A new model starts with no markers or decorations (as built in M1): reapply both.
         applyMarkers(store.getState());
+        // The decorations collection still holds the previous model's ids here; rendering re-seeds it against the
+        // model just attached, so the next edit reconciles from this tab's dots rather than the old tab's.
+        logpoints.render();
         applyHover(store.getState().hoveredLine);
         applyTypeScript(store.getState());
         feed(tabId, model);
@@ -278,6 +315,38 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
         const model = editor.getModel();
         const position = editor.getPosition();
         return model && position ? model.getOffsetAt(position) : 0;
+      },
+      getCursorLine: () => editor.getPosition()?.lineNumber ?? null,
+      textBeforeCursor: () => {
+        const model = editor.getModel();
+        const position = editor.getPosition();
+        if (!model || !position) return "";
+        return model.getValueInRange(new monaco.Range(position.lineNumber, 1, position.lineNumber, position.column));
+      },
+      insertSnippet: (template, deleteBefore = 0) => {
+        const model = editor.getModel();
+        const position = editor.getPosition();
+        if (!model || !position) return false;
+        // `snippetController2` is Monaco's own snippet-insertion contribution; it is what the suggest widget uses
+        // for an InsertAsSnippet completion. A build without it still gets plain text from the caller.
+        const controller = editor.getContribution("snippetController2") as { insert?(template: string): void } | null;
+        if (!controller || typeof controller.insert !== "function") return false;
+        if (deleteBefore > 0) {
+          const offset = model.getOffsetAt(position);
+          const start = model.getPositionAt(Math.max(0, offset - deleteBefore));
+          editor.pushUndoStop();
+          editor.executeEdits("snippets", [{ range: monaco.Range.fromPositions(start, position), text: "" }]);
+        }
+        editor.focus();
+        controller.insert(template);
+        return true;
+      },
+      selectedTextOrAll: () => {
+        const model = editor.getModel();
+        if (!model) return "";
+        const selection = editor.getSelection();
+        if (!selection || selection.isEmpty()) return model.getValue();
+        return model.getValueInRange(selection);
       },
       getSelectedLineRange: () => {
         const selection = editor.getSelection();
@@ -455,6 +524,11 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
         applyReadOnly(state);
       }
       if (state.hoveredLine !== previous.hoveredLine) applyHover(state.hoveredLine);
+      // A logpoint set change (a toggle, a clear, a tab switch) or a new run's diagnostics (which decide
+      // filled vs hollow) both change what the margin should draw.
+      if (state.logpoints !== previous.logpoints || state.diagnostics !== previous.diagnostics) {
+        logpoints.render();
+      }
       if (state.revealRequest && state.revealRequest !== previous.revealRequest) {
         const { line } = state.revealRequest;
         editor.revealLineInCenterIfOutsideViewport(line);
@@ -473,6 +547,7 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
     return () => {
       setEditorHandle(null);
       removePasteGuard();
+      logpoints.dispose();
       unsubscribe();
       view.saveActive();
       view.flush();
@@ -485,6 +560,11 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
       feeder.dispose();
       installAssist.dispose();
       importCompletions.dispose();
+      snippetCompletions.dispose();
+      createSnippetAction.dispose();
+      // Before `editor.dispose()`: the panel must stop reaching into a Monaco that is going away, and fall back to
+      // its plain-text preview rather than colorizing through a disposed editor.
+      setSnippetMonaco(null);
       // Before `editor.dispose()`: releases any presence still held, so a tile can't stay collapsed because the
       // editor was torn down while a hover was showing over it.
       stopWidgetOcclusion();

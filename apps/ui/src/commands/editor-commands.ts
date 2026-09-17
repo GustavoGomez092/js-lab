@@ -1,5 +1,6 @@
 import type { CommandId } from "@jslab/shared";
 import type { EditorHandle } from "../editor/editor-handle";
+import type { AppStore } from "../state/store";
 import type { CommandSpec } from "./registry";
 import { sortLinesCaseInsensitive, toggleMagicCommentLines } from "./text-edits";
 
@@ -34,7 +35,7 @@ export const EDITOR_ACTIONS = {
   "edit.showDiagnostic": "editor.action.marker.next",
 } as const satisfies Partial<Record<CommandId, string>>;
 
-export function createEditorCommands(editor: () => EditorHandle | null): CommandSpec[] {
+export function createEditorCommands(editor: () => EditorHandle | null, store: AppStore): CommandSpec[] {
   const isEnabled = () => editor() !== null;
 
   const lineEdit = (
@@ -75,6 +76,22 @@ export function createEditorCommands(editor: () => EditorHandle | null): Command
       }),
     ),
     lineEdit("edit.toggleMagicComment", toggleMagicCommentLines, false),
+    // Spec §6.3: "`F9` toggles the current line, and `Cmd+Shift+F9` clears all." These go through the registry
+    // rather than an ad-hoc key listener, so the palette, the Edit menu, E2E and a user `keybindings.json` all
+    // reach them, and `isEnabled` is honoured on every one of those routes.
+    {
+      id: "edit.toggleLogpoint",
+      isEnabled,
+      run: () => {
+        const line = editor()?.getCursorLine();
+        if (line !== null && line !== undefined) store.getState().toggleLogpoint(line);
+      },
+    },
+    {
+      id: "edit.clearLogpoints",
+      isEnabled: () => store.getState().logpoints.length > 0,
+      run: () => store.getState().clearLogpoints(),
+    },
     lineEdit("edit.sortLinesCaseInsensitive", (lines) => sortLinesCaseInsensitive(lines, false), true),
     lineEdit("edit.reverseLinesCaseInsensitive", (lines) => sortLinesCaseInsensitive(lines, true), true),
   ];

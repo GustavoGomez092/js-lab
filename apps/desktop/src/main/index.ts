@@ -28,6 +28,7 @@ import { E2EBridge } from "./cli/e2e-bridge";
 import { createSocketMethods } from "./cli/socket-methods";
 import { type SocketServer, startSocketServer } from "./cli/socket-server";
 import { createErrorPolicy } from "./error-policy";
+import { readBoundedText } from "./fs/bounded-read";
 import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-service";
 import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
@@ -39,6 +40,7 @@ import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
 import { mergeLoginEnv, readLoginShellEnv } from "./platform/login-shell-env";
 import { relaunchApp } from "./platform/relaunch";
 import { saveDialog } from "./platform/save-dialog";
+import { MAX_SHORT_SUBPROCESS_OUTPUT_BYTES } from "./platform/subprocess-output";
 import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
@@ -49,6 +51,7 @@ import { createFontHandlers } from "./rpc/font-handlers";
 import { createNpmHandlers } from "./rpc/npm-handlers";
 import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
+import { createSnippetHandlers } from "./rpc/snippet-handlers";
 import { createTypesHandlers } from "./rpc/types-handlers";
 import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
@@ -159,7 +162,12 @@ async function start(): Promise<void> {
   const osInfo = {
     get macOS(): string {
       if (macOSVersionCache === null) {
-        macOSVersionCache = Bun.spawnSync(["sw_vers", "-productVersion"]).stdout.toString().trim() || "unknown";
+        // The only SYNCHRONOUS subprocess read in Main, so an unbounded one would grow the heap on the event-loop
+        // thread itself. `sw_vers -productVersion` prints 7 bytes (measured); the cap ends a child that doesn't.
+        macOSVersionCache =
+          Bun.spawnSync(["sw_vers", "-productVersion"], { maxBuffer: MAX_SHORT_SUBPROCESS_OUTPUT_BYTES })
+            .stdout.toString()
+            .trim() || "unknown";
       }
       return macOSVersionCache;
     },
@@ -325,6 +333,31 @@ async function start(): Promise<void> {
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createNpmHandlers({ npm, log }),
       createEnvHandlers({ env, log }),
+      createSnippetHandlers({
+        snippets: services.snippets,
+        // The same adapters the file handlers use, so E2E scripts snippet dialogs exactly like Open and Save As.
+        openDialog: ({ startingFolder }) =>
+          e2eEnabled
+            ? readE2EOpenDialog(paths.dataDir)
+            : Utils.openFileDialog({
+                startingFolder,
+                allowedFileTypes: "json",
+                canChooseFiles: true,
+                canChooseDirectory: false,
+                allowsMultipleSelection: false,
+              }),
+        saveDialog: (options) => (e2eEnabled ? readE2ESaveDialog(paths.dataDir) : saveDialog(options)),
+        // Not `Bun.file(path).text()`: that reads the whole file before anything can refuse it, and cannot get
+        // the `O_NONBLOCK` that keeps a FIFO from parking Main (R-M5b-S2).
+        readBoundedFile: readBoundedText,
+        writeFile: (path, content) => Bun.write(path, content).then(() => undefined),
+        documentsDir: Utils.paths.documents,
+        send: {
+          imported: (payload) => rpc.send["snippets.imported"](payload),
+          exported: (payload) => rpc.send["snippets.exported"](payload),
+        },
+        log,
+      }),
       createTypesHandlers({ types, log }),
       createWorkingDirectoryHandlers({
         session,

@@ -200,14 +200,6 @@ const WORKSPACE_SPECIFIER = /"@jslab\/([a-z0-9-]+)/g;
  * -- or state plainly which of the two it waives and why that is acceptable at this call site.
  */
 const ALLOWED: Record<string, { reads: number; why: string }> = {
-  [`${MAIN_ROOT}/files/file-service.ts`]: {
-    reads: 1,
-    why: "reads via an injected FileSystem seam; paths come from Main's own dialogs and FileService size-checks them. F3 (reading every open tab whole) is tracked separately and is NOT closed by this gate",
-  },
-  [`${MAIN_ROOT}/platform/e2e-dialogs.ts`]: {
-    reads: 1,
-    why: "JSLAB_E2E=1 only: dialog answers the E2E harness itself writes. This reason is about REACHABILITY, not about the file being JSLab's -- the read is genuinely unbounded and would block on a FIFO like any other, but the path only exists under the harness's own run, and the harness is not a user who can be attacked through it",
-  },
   [`${MAIN_ROOT}/rpc/web-node-handlers.ts`]: {
     reads: 3,
     why: "F1, deliberately out of scope: the browser-node bridge's fs.readFile carries the user's own permissions, and bounding it needs a Main-vs-subprocess blast-radius decision first. One of the three is an interface signature, not a call",
@@ -260,6 +252,10 @@ const SIZE_EXEMPT: Record<string, { reads: number; why: string }> = {
   [`${MAIN_ROOT}/main-services.ts`]: {
     reads: 1,
     why: "the shipped web-runner bootstrap, whose size is whatever the build produced, so no cap applies. An app bundle is user-writable and JSLAB_WEB_RUNNER_BOOTSTRAP can repoint it anyway. Only the size is waived -- a FIFO there is refused instead of hanging the first browser-mode run forever",
+  },
+  [`${MAIN_ROOT}/platform/e2e-dialogs.ts`]: {
+    reads: 1,
+    why: "JSLAB_E2E=1 only: dialog answers the E2E harness itself writes, bounded by no schema, so there is no number to derive a cap from. Moved here from ALLOWED when the bare read became readRegularFileText: the reachability reason it carried there -- the path only exists under the harness's own run -- answers the SIZE hazard alone, and said nothing about a FIFO at the path, which blocks Main with nothing for a try/catch to rescue. Only the size is waived now; the O_NONBLOCK open and isFile check refuse a non-regular file, and every failure here already means 'no answer'",
   },
   [`${MAIN_ROOT}/bundling/polyfill-plugin.ts`]: {
     reads: 1,

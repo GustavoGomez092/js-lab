@@ -23,4 +23,20 @@ describe("the i18next dependency (spec §2 D1, §2 D8, §22.5)", () => {
     // §22.5 denies GPL anywhere in the dependency tree; i18next declares no runtime dependencies of its own.
     expect(installed.dependencies ?? {}).toEqual({});
   });
+
+  test("actually loads: a truncated install (manifest present, dist/ missing) must fail this gate", async () => {
+    // The two tests above only read package.json metadata. An aborted `bun install` can leave a
+    // package "present and resolvable" by that measure — package.json intact, version/license
+    // correct — while the file its "main"/"module"/"exports" point at (dist/) never landed. A
+    // metadata-only check reports healthy in that truncated state too, which defeats the whole
+    // point of gating on i18next: the dependency the app actually needs at runtime is missing.
+    //
+    // A dynamic `import()` is used instead of `require.resolve()` because resolution proves only
+    // that a path exists on disk, whereas `import()` must additionally load and evaluate that file
+    // and hand back real bindings. Asserting the shape of what comes back (not just that the
+    // promise resolved) confirms the module is genuinely usable, not merely present.
+    const installed: unknown = await import("i18next");
+    const namedExport = (installed as { createInstance?: unknown }).createInstance;
+    expect(typeof namedExport).toBe("function");
+  });
 });

@@ -394,7 +394,7 @@ describe("openZip", () => {
     // The header understates the size, so nothing refuses this entry up front. maxOutputLength has to stop the
     // inflate itself: without it the 3 MiB would be allocated in full and only then fail the size comparison.
     const understated = buildZip([
-      { name: "extension/a.json", data: text(" ".repeat(3 * 1024 * 1024)), declaredSize: 100 },
+      { name: "extension/a.json", data: text("\x00".repeat(3 * 1024 * 1024)), declaredSize: 100 },
     ]);
     expect(() => openZip(understated).read("extension/a.json")).toThrow("That .vsix archive is damaged.");
   });

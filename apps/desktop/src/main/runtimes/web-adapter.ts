@@ -583,10 +583,31 @@ class WebRunSession implements RunHandle {
       case "heartbeat":
         this.sink.heartbeat();
         return;
-      case "events":
+      case "events": {
+        // The same defect `case "state"` was fixed for below, in the same message loop and for the same structural
+        // reason: the page stamps every batch with the run it belongs to (`bootstrap.ts`'s `EventBuffer` sink sends
+        // `{ type: "events", runId: message.runId, events }`), but this session used to ignore that field and relay
+        // whatever arrived. The webview is persistent (Task 8's invariant) and a session only unwires itself once it
+        // reaches `stopped`, so a run that finished `idle`/`settled` is still listening when the next run starts and
+        // *both* sessions see every batch -- a stray console line from a superseded run lands in the live run's
+        // output. Under Auto Run, where runs overlap on every keystroke, that is a console that shows output the
+        // code being edited never produced.
+        //
+        // Dropped ahead of every side effect in the case, checked one by one the way `case "state"`'s gate was:
+        //   * `this.#terminal` is a guard, not a side effect -- but the identity check goes first anyway, so this
+        //     case reads the same way as `state` below (compare identity, then act).
+        //   * `this.run.mapEvent(event)` remaps a raw, generated-position event through *this* run's source map.
+        //     A stranger's event mapped through it reports line numbers from the wrong bundle -- so the drop has to
+        //     precede the mapping, not merely the relay.
+        //   * `this.sink.events(...)` is the relay itself: the user-visible half of the defect.
+        // Unlike `state`, nothing here releases a lock, settles a pending `stop()` or retires a handle, so the drop
+        // cannot wedge a live run the way a too-eager guard on `state` would. Nothing is stranded either: the run
+        // the batch really belongs to is wired to this same host and relays it on its own session.
+        if (message.runId !== this.run.runId) return;
         if (this.#terminal) return;
         this.sink.events(message.events.map((event) => this.run.mapEvent(event)));
         return;
+      }
       case "fetchRequest":
         // The defining refusal (fix round 1): enforced against `this.deps.runtime`, which this session's own
         // `WebAdapter` was constructed with -- never against anything the message supplies. A `browser` tab's

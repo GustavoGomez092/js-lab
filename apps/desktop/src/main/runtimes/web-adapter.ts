@@ -932,7 +932,8 @@ function vendorChunkFitsTab(
   return !cached.closure.some((specifier) => {
     const resolved = resolveBareSpecifier(specifier, { workingDirectory, packagesNodeModules });
     // Unresolvable now means the rebuild below will fail and report it properly; it is not a shadowing case.
-    return resolved !== undefined && resolvedFromWorkingDirectory(resolved, workingDirectory);
+    // A package excluded by a `browser` map still carries the path it resolved from, so provenance stays exact.
+    return resolved !== undefined && resolvedFromWorkingDirectory(resolved.path, workingDirectory);
   });
 }
 

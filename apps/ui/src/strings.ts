@@ -10,6 +10,14 @@ export const strings = {
     started: (spec: string, keys: string | null) =>
       keys ? `Installing ${spec}… ${keys} shows progress.` : `Installing ${spec}…`,
   },
+  logpoints: {
+    /** Spec §6.3: the glyph-margin dot's tooltip. */
+    tooltip: "Logpoint — this line's value is shown in the output",
+    /** Spec §5.5: "A logpoint on a line with no loggable statement is shown hollow, with a tooltip." */
+    noValue: "Logpoint has no value to log on this line",
+    toggle: "Toggle Logpoint",
+    clearAll: "Clear All Logpoints",
+  },
   commands: {
     failed: (title: string, error: unknown) =>
       `${title} failed: ${error instanceof Error ? error.message : String(error)}`,

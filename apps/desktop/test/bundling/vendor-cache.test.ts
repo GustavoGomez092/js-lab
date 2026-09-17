@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   hashBunLock,
+  VENDOR_CACHE_FORMAT,
   VENDOR_CACHE_MAX_AGE_MS,
   VENDOR_CACHE_MAX_TOTAL_BYTES,
   VendorCache,
@@ -117,6 +118,40 @@ describe("vendorCacheKey", () => {
 
     expect(vendorCacheKey(lockHashB, ["react"], "browser", null)).not.toBe(baseline);
     expect(vendorCacheKey(lockHashA, ["react", "react-dom"], "browser", null)).not.toBe(baseline);
+  });
+
+  /**
+   * The format tag is the **only** key input a resolver change can move. The other four describe what was bundled
+   * (lockfile hash, import set, runtime, working directory) and stay byte-identical when only the *resolution* of
+   * those same imports changes -- so without a bump the old key stays computable and the stale chunk wins forever.
+   *
+   * This pins that the tag actually participates in the key, which is what makes a bump able to invalidate at all.
+   */
+  test("changes with the format tag, so a resolver change can invalidate every stored chunk", () => {
+    const lockHash = hashBunLock('{"lockfileVersion":2}');
+    const current = vendorCacheKey(lockHash, ["react"], "browser", null);
+    const older = vendorCacheKey(lockHash, ["react"], "browser", null, "vendor-chunk-v4");
+    const newer = vendorCacheKey(lockHash, ["react"], "browser", null, "vendor-chunk-v6");
+
+    expect(older).not.toBe(current);
+    expect(newer).not.toBe(current);
+    expect(older).not.toBe(newer);
+    // The default really is the production constant, so the seam above cannot drift from what ships.
+    expect(vendorCacheKey(lockHash, ["react"], "browser", null, VENDOR_CACHE_FORMAT)).toBe(current);
+  });
+
+  /**
+   * A deliberate tripwire, and the only form that pins the *rule* rather than a value: changing how a vendor chunk
+   * is resolved or shaped without bumping `VENDOR_CACHE_FORMAT` leaves every already-cached chunk addressable, and
+   * users keep running the old one with no way to tell. That is not hypothetical -- it is what happened to the
+   * commit that first fixed the `browser` export condition, where the corrected resolver shipped and the page kept
+   * throwing `ReferenceError: Can't find variable: Buffer` from a chunk built weeks earlier.
+   *
+   * If this test fails, decide which you are doing and do it on purpose: bump the constant and update the literal
+   * here (a chunk's resolution or shape changed), or restore the constant (it changed by accident).
+   */
+  test("names the current format tag, so a resolution-affecting change cannot skip the bump unnoticed", () => {
+    expect(VENDOR_CACHE_FORMAT).toBe("vendor-chunk-v5");
   });
 
   /**

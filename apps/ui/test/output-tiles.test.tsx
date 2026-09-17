@@ -27,8 +27,6 @@ function tabWith(id: string, overrides: { runtime?: Runtime; tiles?: Partial<Tab
       editorSize: 55,
       outputVisible: true,
       tiles: {
-        arrangement: "stacked",
-        order: ["console", "webview"],
         webviewVisible: false,
         consoleSize: 55,
         ...overrides.tiles,
@@ -286,8 +284,8 @@ describe("OutputTiles / WebViewHosts", () => {
     // A plain mutable holder, not two separate `let`s: TypeScript can't see that `renderTiles` below (via React's
     // effects) is what invokes `FakeResizeObserver`'s constructor/`observe`, so a bare `let` narrows to its
     // initializer's literal type (`null`) at every read after -- a property on an object isn't narrowed that way.
-    const captured: { observedTarget: Element | null; fire: (() => void) | null } = {
-      observedTarget: null,
+    const captured: { observedTargets: Element[]; fire: (() => void) | null } = {
+      observedTargets: [],
       fire: null,
     };
     class FakeResizeObserver {
@@ -295,7 +293,7 @@ describe("OutputTiles / WebViewHosts", () => {
         captured.fire = callback;
       }
       observe(target: Element) {
-        captured.observedTarget = target;
+        captured.observedTargets.push(target);
       }
       unobserve() {}
       disconnect() {}
@@ -310,7 +308,9 @@ describe("OutputTiles / WebViewHosts", () => {
 
       const dockNode = document.querySelector(".webview-tile-dock");
       expect(dockNode).toBeTruthy();
-      expect(captured.observedTarget).toBe(dockNode); // the real dock node, not some other element
+      // The dock node itself is observed -- along with each of its ancestors, so a size change anywhere in the
+      // chain that positions it re-measures too (pinned by `webview-tile-tracking.test.tsx`).
+      expect(captured.observedTargets).toContain(dockNode as Element);
       expect(captured.fire).toBeTruthy();
 
       const tile = screen.getByTestId("webview-tile-t1");
@@ -394,17 +394,35 @@ describe("OutputTiles / WebViewHosts", () => {
     expect(webviewAfter).not.toBe(webviewBefore);
   });
 
-  test("an order swap while docked re-targets the host onto the new, connected dock node (fix round 2, N1)", () => {
-    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true, order: ["console", "webview"] } });
+  /**
+   * R-WEBVIEW-TAB-1's central mechanism, and the one most likely to fail silently: there is exactly ONE
+   * `<electrobun-webview>` per tab, and exactly one dock node it is pointed at. Full screen and the preview strip
+   * cannot each render their own dock -- two would leave the host tracking one while the other sat blank, with no
+   * error anywhere. So the single node has to MOVE, which is a React remount (a different parent), which is
+   * exactly what `OutputTiles`'s callback ref exists to survive.
+   *
+   * This is the successor to fix round 2's `order`-swap test: the same remount, now reached through the UI rather
+   * than only a hand-edited session.json.
+   */
+  test("the Web View tab moves the ONE dock node into the output panel and back, never duplicating or orphaning it", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
     const { api } = createFakeApi();
     renderTiles(store, api);
 
+    const docks = () => document.querySelectorAll(".webview-tile-dock");
+    const region = `[aria-label="${strings.output.region}"]`;
     const webviewBefore = screen.getByTestId("webview-tile-t1").querySelector("electrobun-webview");
-    const dockBefore = document.querySelector(".webview-tile-dock");
-    expect(dockBefore).toBeTruthy();
+    expect(webviewBefore).toBeTruthy();
 
-    // Records which elements actually get measured, without changing jsdom's own (zero-rect) behavior -- the
-    // fix's observable signature is that the NEW dock node gets measured after the swap, not just the old one.
+    // The preview: one dock, in the split's second pane, below the console, with the divider on screen.
+    expect(docks().length).toBe(1);
+    const dockBefore = docks()[0] as Element;
+    expect(dockBefore.closest(".split-pane")).toBeTruthy();
+    expect(dockBefore.closest(region)).toBeNull();
+    expect(screen.getByRole("separator")).toBeTruthy();
+
+    // Records which elements actually get measured, without changing happy-dom's own (zero-rect) behaviour -- the
+    // observable signature of a correct move is that the NEW node gets measured, not just the old one.
     const measured = new Set<Element>();
     const original = Element.prototype.getBoundingClientRect;
     const spy = spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
@@ -412,33 +430,43 @@ describe("OutputTiles / WebViewHosts", () => {
       return original.call(this);
     });
     try {
-      // No `order` control exists in the UI yet (Task 15 adds one) -- drive the swap directly through the store,
-      // the same shape a hand-edited session.json or a future arrangement control would produce.
-      act(() => {
-        const tab = store.getState().tab as TabState;
-        store.getState().applyTabUpdate({
-          ...tab,
-          layout: { ...tab.layout, tiles: { ...tab.layout.tiles, order: ["webview", "console"] } },
-        });
-      });
+      act(() => store.getState().setOutputView("webview"));
     } finally {
       spy.mockRestore();
     }
 
-    const dockAfter = document.querySelector(".webview-tile-dock");
-    expect(dockAfter).toBeTruthy();
-    // Confirms the swap genuinely remounted the placeholder (SplitPane sees a different element type at that
-    // position) -- the trigger this test exists to exercise, not just a no-op re-render.
+    // Still exactly ONE dock -- the assertion the whole design turns on.
+    expect(docks().length).toBe(1);
+    const dockAfter = docks()[0] as Element;
+    // A genuine remount, not a re-render: it moved to a different parent, so React built a new node and really
+    // discarded the old one (a detached-but-still-referenced node is the failure mode being excluded here).
     expect(dockAfter).not.toBe(dockBefore);
+    expect(document.body.contains(dockBefore)).toBe(false);
     expect(document.body.contains(dockAfter)).toBe(true);
-    // The old, pre-fix bug: WebViewHosts kept reporting `dockBefore` (now detached) forever, because the
-    // reporting effect's deps didn't include `order`. The fix: a callback ref reports on every attach, so the
-    // host re-measures against whatever node is actually in the tree now.
-    expect(measured.has(dockAfter as Element)).toBe(true);
-
+    // It now fills the output panel; the split and its divider are gone, and the log list is hidden behind it.
+    expect(dockAfter.closest(region)).toBeTruthy();
+    expect(screen.queryByRole("separator")).toBeNull();
+    expect(document.querySelector(".output-scroller")).toBeNull();
+    // WebViewHosts was told about the NEW node. Were it still holding the detached old one, `dockAfter` would
+    // never be measured and the webview would track a node that is no longer in the tree (it silently collapses
+    // to 0x0 at the viewport origin).
+    expect(measured.has(dockAfter)).toBe(true);
+    // ...and the host itself was never destroyed and rebuilt on the way there.
     const tile = screen.getByTestId("webview-tile-t1");
-    expect(tile.querySelector("electrobun-webview")).toBe(webviewBefore); // still the same host, never recreated
-    expect(exposed(tile)).toBe(true); // still genuinely docked, not silently orphaned
+    expect(tile.querySelector("electrobun-webview")).toBe(webviewBefore);
+    expect(exposed(tile)).toBe(true);
+
+    // ...and back again by choosing a filter, since the row behaves as one tab strip.
+    act(() => store.getState().setOutputFilter("errors"));
+    expect(docks().length).toBe(1);
+    const dockBack = docks()[0] as Element;
+    expect(dockBack).not.toBe(dockAfter);
+    expect(dockBack.closest(".split-pane")).toBeTruthy();
+    expect(screen.getByRole("separator")).toBeTruthy();
+    expect(document.querySelector(".output-scroller")).toBeTruthy();
+    const tileBack = screen.getByTestId("webview-tile-t1");
+    expect(tileBack.querySelector("electrobun-webview")).toBe(webviewBefore);
+    expect(exposed(tileBack)).toBe(true);
   });
 
   test("resetConsoleSize resets to the tiles schema default (55), not editorSize's own reset value (fix round 1, F8)", () => {
@@ -447,52 +475,123 @@ describe("OutputTiles / WebViewHosts", () => {
     expect(store.getState().tab?.layout.tiles.consoleSize).toBe(55);
   });
 
-  test("arrangement maps to the split's orientation, and order controls which tile's dock renders first", () => {
-    const stacked = hydrated({ runtime: "browser", tiles: { webviewVisible: true, arrangement: "stacked" } });
+  // R-WEBVIEW-TAB-1 retired `arrangement`/`order`: the preview has exactly one shape now, so this pins that shape
+  // rather than the mapping from two fields that no longer exist.
+  test("the preview is always the bottom pane: a vertical split, Console first (R-WEBVIEW-TAB-1)", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
     const { api } = createFakeApi();
-    const { container, rerender } = render(<OutputTiles store={stacked} api={api} onWebviewDock={() => {}} />);
+    const { container } = render(<OutputTiles store={store} api={api} onWebviewDock={() => {}} />);
+    // "vertical" is SplitPane's stacked orientation (it measures clientY): the Web View sits below the console,
+    // which is the "new area at the bottom" the design asks for -- never beside it.
     expect(container.querySelector(".split-vertical")).toBeTruthy();
-
-    const sideBySide = hydrated({ runtime: "browser", tiles: { webviewVisible: true, arrangement: "side-by-side" } });
-    rerender(<OutputTiles store={sideBySide} api={api} onWebviewDock={() => {}} />);
-    expect(container.querySelector(".split-horizontal")).toBeTruthy();
-
-    // Default order (["console", "webview"]): the Console region is the first, sized pane.
+    expect(container.querySelector(".split-horizontal")).toBeNull();
     const panes = container.querySelectorAll(".split-pane");
     expect(panes[0]?.querySelector(`[aria-label="${strings.output.region}"]`)).toBeTruthy();
-
-    // Reversed order: the webview's dock renders first instead.
-    const reversed = hydrated({
-      runtime: "browser",
-      tiles: { webviewVisible: true, order: ["webview", "console"] },
-    });
-    rerender(<OutputTiles store={reversed} api={api} onWebviewDock={() => {}} />);
-    const reversedPanes = container.querySelectorAll(".split-pane");
-    expect(reversedPanes[0]?.querySelector(".webview-tile-dock")).toBeTruthy();
+    expect(panes[1]?.querySelector(".webview-tile-dock")).toBeTruthy();
   });
 
-  test("dragging the split updates consoleSize, converted for which side Console renders on", () => {
-    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true, order: ["console", "webview"] } });
+  test("the preview keeps its draggable divider, and consoleSize is stored without conversion", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
     const { api } = createFakeApi();
     const { rerender } = render(<OutputTiles store={store} api={api} onWebviewDock={() => {}} />);
     fireEvent.pointerDown(screen.getByRole("separator"));
     fireEvent.pointerMove(window, { clientX: 999999, clientY: 999999 });
     fireEvent.pointerUp(window);
-    // jsdom's layout rect is all zeros, so the ratio is +Infinity; setConsoleSize's own clamp (10-90) is what
+    // happy-dom's layout rect is all zeros, so the ratio is +Infinity; setConsoleSize's own clamp (10-90) is what
     // turns that into a deterministic, in-range value.
     expect(store.getState().tab?.layout.tiles.consoleSize).toBe(90);
 
-    // With Console second, the same onResize(size) call must convert to the other side before storing.
-    const reversed = hydrated({
-      runtime: "browser",
-      tiles: { webviewVisible: true, order: ["webview", "console"], consoleSize: 55 },
-    });
-    rerender(<OutputTiles store={reversed} api={api} onWebviewDock={() => {}} />);
+    // Console is always `first` now, so an ArrowRight step lands on the Console's own share unconverted. The
+    // retired `order: ["webview", "console"]` would have made this 53 instead of 57 -- the conversion is gone
+    // along with the field that could demand it.
+    const stepped = hydrated({ runtime: "browser", tiles: { webviewVisible: true, consoleSize: 55 } });
+    rerender(<OutputTiles store={stepped} api={api} onWebviewDock={() => {}} />);
     act(() => {
       fireEvent.keyDown(screen.getByRole("separator"), { key: "ArrowRight" });
     });
-    // ArrowRight steps `first`'s size (webview's share) up by 2, so Console's own share goes down by 2.
-    expect(reversed.getState().tab?.layout.tiles.consoleSize).toBe(53);
+    expect(stepped.getState().tab?.layout.tiles.consoleSize).toBe(57);
+  });
+
+  test("a bun tab gets no Web View control at all (spec §7.1)", () => {
+    const store = hydrated({ runtime: "bun" });
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+    expect(screen.queryByRole("button", { name: strings.output.webViewTab })).toBeNull();
+    // ...and the filter row is still exactly its four filters, untouched by the Web View's absence.
+    expect(screen.getAllByRole("radio")).toHaveLength(4);
+  });
+
+  /**
+   * The accessibility decision, pinned. The row is NOT one five-member group: the four chips filter one list that
+   * stays on screen, while the Web View control swaps the panel body. Modelling all five as radios (or as tabs)
+   * would describe a structure that does not exist and would make the one control that changes the body
+   * indistinguishable from the four that don't.
+   */
+  test("the filter row stays one radiogroup of four filters, with the Web View a separate pressed-state button", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+
+    const group = screen.getByRole("radiogroup", { name: strings.output.filterLabel });
+    expect(group.querySelectorAll('[role="radio"]')).toHaveLength(4);
+    const webView = screen.getByRole("button", { name: strings.output.webViewTab });
+    // Outside the group -- which is what keeps "Output filter" an honest name for it.
+    expect(group.contains(webView)).toBe(false);
+    expect(webView.getAttribute("aria-pressed")).toBe("false");
+
+    act(() => {
+      fireEvent.click(webView);
+    });
+    expect(screen.getByRole("button", { name: strings.output.webViewTab }).getAttribute("aria-pressed")).toBe("true");
+    // While the Web View is up, no filter reads as checked: the list it would filter is not on screen.
+    expect(screen.getAllByRole("radio").map((radio) => radio.getAttribute("aria-checked"))).toEqual([
+      "false",
+      "false",
+      "false",
+      "false",
+    ]);
+  });
+
+  test("selecting the Web View tab while the preview is hidden shows the Web View, full screen", () => {
+    const store = hydrated({ runtime: "browser" }); // webviewVisible: false -- no preview, no dock
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+    expect(document.querySelector(".webview-tile-dock")).toBeNull();
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: strings.output.webViewTab }));
+    });
+
+    // "Shown" stays ONE fact -- the tab's own toggle, which the status bar and View menu read, and which arms
+    // WebViewHosts' lazy element creation. Without it the dock would be on screen and the webview never built.
+    expect(store.getState().tab?.layout.tiles.webviewVisible).toBe(true);
+    expect(store.getState().outputView).toBe("webview");
+    const dock = document.querySelector(".webview-tile-dock");
+    expect(dock?.closest(`[aria-label="${strings.output.region}"]`)).toBeTruthy();
+    expect(screen.queryByRole("separator")).toBeNull();
+    expect(screen.getByTestId("webview-tile-t1").querySelector("electrobun-webview")).toBeTruthy();
+  });
+
+  test("toggling the Web View off while its tab is selected returns to the log list (the two must not fight)", () => {
+    const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
+    const registry = viewRegistry(store);
+    const { api } = createFakeApi();
+    renderTiles(store, api);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: strings.output.webViewTab }));
+    });
+    expect(document.querySelector(".output-scroller")).toBeNull();
+
+    act(() => {
+      registry.execute("view.toggleWebView");
+    });
+
+    // Hidden means hidden: no dock anywhere, the log list is back, and the view choice went with it -- otherwise
+    // the panel would go on showing a Web View the status bar has just started calling "Show Web View".
+    expect(store.getState().tab?.layout.tiles.webviewVisible).toBe(false);
+    expect(store.getState().outputView).toBe("console");
+    expect(document.querySelector(".webview-tile-dock")).toBeNull();
+    expect(document.querySelector(".output-scroller")).toBeTruthy();
   });
 
   test("the status bar's Web View toggle is disabled with a reason for the Bun runtime (R-M4-T8-DISABLED-1)", () => {
@@ -566,12 +665,7 @@ describe("OutputTiles / WebViewHosts", () => {
     // The real Main-side validator (packages/rpc-schema): if `tiles` were missing from its `layout` whitelist, it
     // would be stripped here silently -- this assertion is what would have caught that.
     const parsed = tabPatchSchema.parse({ tabId: before.id, patch });
-    expect(parsed.patch.layout?.tiles).toEqual({
-      arrangement: "stacked",
-      order: ["console", "webview"],
-      webviewVisible: true,
-      consoleSize: 40,
-    });
+    expect(parsed.patch.layout?.tiles).toEqual({ webviewVisible: true, consoleSize: 40 });
     expect(computeTabPatch(before, before)).toBeNull();
   });
 

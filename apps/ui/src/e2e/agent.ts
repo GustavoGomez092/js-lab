@@ -7,6 +7,50 @@ import { typeIntoField } from "./fields";
 import { keyEventInit } from "./keys";
 import { snapshotOutput, snapshotState } from "./snapshot";
 
+/** A DOM element's viewport box, in CSS pixels -- which are also Electrobun DIPs (`overlaySync.ts`). */
+export interface RectSnapshot {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * M4 diagnostics for the "the Web View paints over the console" user report -- measurement, not a feature.
+ *
+ * A native `<electrobun-webview>` surface paints above all HTML regardless of `z-index`, so CSS cannot arbitrate
+ * it and the console rows it covers are a *paint* defect, not a data defect. The open question these numbers
+ * answer is whether the frame JS ships to the native layer is itself wrong: `OverlaySyncController.sync()`
+ * (`apps/desktop/.hutch/devkit/api/preload/overlaySync.ts`) measures the `<electrobun-webview>` element's own
+ * `getBoundingClientRect()` and sends exactly that as the native frame. If that rect does NOT overlap `.output`,
+ * the frame requested is correct and the defect is below the JS boundary (native placement/scale/inset); if it
+ * DOES overlap, the defect is in this app's own rect plumbing.
+ */
+export interface OverlayDiagnostics {
+  /** Keyed by role: the docked tile, the native surface element, and the console pane. `null` when absent. */
+  rects: Record<string, RectSnapshot | null>;
+  /** How many `<electrobun-webview>` elements exist, so a single-tab reading is unambiguous. */
+  webviewCount: number;
+  /** The window's inner box, so a degenerate rect can be read against the space it had available. */
+  viewport: { width: number; height: number };
+  /**
+   * The re-measure/re-render counters (see `webViewTileCounters`): the tile's own `measures`/`renders`, plus
+   * `hosts`/`app` render counts and `appInputs` -- how often each of `App`'s own subscriptions changed identity.
+   * Together these say where an idle-window re-render loop starts, not just that one exists.
+   */
+  counters: {
+    measures: number;
+    /** How many of those `measures` got past the rect equality guard and actually committed new state. */
+    rectCommits: number;
+    renders: number;
+    hosts: number;
+    app: number;
+    appInputs: Record<string, number>;
+    /** The most recent `runState` transitions as `"<previous>-><next>"`, naming the values a count alone cannot. */
+    runStateTrail: string[];
+  };
+}
+
 export interface E2EAgentDeps {
   store: AppStore;
   /** Runs a command id through the registry. */
@@ -19,6 +63,8 @@ export interface E2EAgentDeps {
   editorOptions?(): Record<string, unknown> | null;
   /** Which layout regions are currently mounted, keyed by name (verification step, Task 16). */
   regions?(): Record<string, boolean>;
+  /** M4 diagnostics: live geometry of the console/webview surfaces plus the Web View tile's re-measure counters. */
+  overlayDiagnostics?(): OverlayDiagnostics;
   /** Every command id registered in the UI command registry (Task 22 verification: every menu action is dispatchable). */
   registeredCommands?(): string[];
   /** Monaco's TypeScript markers for the shown tab (Task 21). */
@@ -90,6 +136,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
           missingEditorActions: deps.missingEditorActions?.() ?? [],
           editorOptions: deps.editorOptions?.() ?? null,
           regions: deps.regions?.() ?? {},
+          overlayDiagnostics: deps.overlayDiagnostics?.() ?? null,
           registeredCommands: deps.registeredCommands?.() ?? [],
           tsDiagnostics: (await deps.tsDiagnostics?.()) ?? [],
         };

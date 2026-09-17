@@ -113,7 +113,7 @@ describe("application menu", () => {
         orientation: "vertical",
         editorSize: 55,
         outputVisible: false,
-        tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+        tiles: { webviewVisible: false, consoleSize: 55 },
         muted: false,
       },
     });

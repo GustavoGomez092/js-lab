@@ -18,7 +18,7 @@ import {
   type WebRuntime,
 } from "./fetch-proxy";
 import { AudioController, HandleTracker, handleCountAction, installHandleTracking } from "./handles";
-import { createHostBridge, type HostBridgeGlobal } from "./host-bridge";
+import { createHostBridge, type HostBridge, type HostBridgeGlobal } from "./host-bridge";
 import { installNodeBridge, type NodeBridgeGlobal, type NodeHostEvent, type NodeTransport } from "./node-bridge";
 
 // Same limits as packages/runner-bun/src/bootstrap.ts (spec §5.9, R-M1-17(a)): an error event's text sits beside
@@ -357,7 +357,25 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
   g.addEventListener("error", onError);
   g.addEventListener("unhandledrejection", onRejection);
 
-  const bridge = createHostBridge(handleHostMessage, g);
+  /**
+   * The host transport, with every outbound message sent under `tracker.untracked` (see its doc comment for the
+   * full mechanism and the user-visible defect).
+   *
+   * Sending a message is JSLab's own infrastructure, never the run's activity — but the page does not own the
+   * channel: Electrobun's preload installs `__electrobunSendToHost`, and it defers each emission through a global
+   * `setTimeout` it resolves at call time, so every message was registering a tracked handle. Since one of the
+   * things sent is the run state itself, that closed a self-sustaining loop which strobed an idle tab between
+   * `idle` and `settled` forever.
+   *
+   * Wrapped here, at the single point every outbound message passes through, rather than at each of the dozen
+   * `bridge.send` call sites — `state`, `events`, `heartbeat`, `ready`, `audio`, `expanded`, the `fetch*` and
+   * `node*` messages — so a message added later cannot reintroduce the loop by forgetting to opt in.
+   */
+  const hostBridge = createHostBridge(handleHostMessage, g);
+  const bridge: HostBridge = {
+    send: (message) => tracker.untracked(() => hostBridge.send(message)),
+    dispose: () => hostBridge.dispose(),
+  };
 
   async function startRun(message: Extract<HostToWebMessage, { type: "run" }>): Promise<void> {
     if (run) return;

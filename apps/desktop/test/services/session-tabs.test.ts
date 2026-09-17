@@ -34,7 +34,7 @@ describe("SessionStore tabs", () => {
           orientation: "vertical",
           editorSize: 55,
           outputVisible: true,
-          tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+          tiles: { webviewVisible: false, consoleSize: 55 },
           muted: false,
         },
       }),
@@ -168,14 +168,11 @@ describe("SessionStore tabs", () => {
   // replacing the whole object and silently resetting every field the patch didn't mention to its schema default.
   test("patchTab merges a partial layout.tiles patch onto the tab's existing tiles instead of replacing it", async () => {
     const store = await open();
-    await store.patchTab("t1", { layout: { tiles: { arrangement: "side-by-side", consoleSize: 70 } } });
+    await store.patchTab("t1", { layout: { tiles: { consoleSize: 70 } } });
     await store.patchTab("t1", { layout: { tiles: { webviewVisible: true } } });
-    expect(store.session.tabs.t1?.layout.tiles).toEqual({
-      arrangement: "side-by-side",
-      order: ["console", "webview"],
-      webviewVisible: true,
-      consoleSize: 70,
-    });
+    // The second patch names only `webviewVisible`, so `consoleSize` must still be the 70 the first one set --
+    // a wholesale replace would have reset it to the schema default of 55.
+    expect(store.session.tabs.t1?.layout.tiles).toEqual({ webviewVisible: true, consoleSize: 70 });
   });
 
   test("setWorkingDirectory updates a known tab, persists it, and returns null for an unknown tab", async () => {

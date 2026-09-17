@@ -44,8 +44,6 @@ function tabWith(id: string, overrides: { runtime?: Runtime; webviewVisible?: bo
       editorSize: 55,
       outputVisible: true,
       tiles: {
-        arrangement: "stacked",
-        order: ["console", "webview"],
         webviewVisible: overrides.webviewVisible ?? false,
         consoleSize: 55,
       },

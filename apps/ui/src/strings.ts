@@ -10,6 +10,10 @@ export const strings = {
     started: (spec: string, keys: string | null) =>
       keys ? `Installing ${spec}… ${keys} shows progress.` : `Installing ${spec}…`,
   },
+  completions: {
+    /** The detail line on an installed-package import suggestion: the version in node_modules (spec §6.1). */
+    packageDetail: (version: string | null) => (version === null ? "installed" : `v${version}`),
+  },
   commands: {
     failed: (title: string, error: unknown) =>
       `${title} failed: ${error instanceof Error ? error.message : String(error)}`,

@@ -5,6 +5,7 @@ import type { MainApi } from "../api";
 import type { AppState, AppStore } from "../state/store";
 import { setEditorHandle } from "./editor-handle";
 import { type EditorOptions, editorOptionsFor } from "./editor-options";
+import { registerImportCompletions } from "./import-completions";
 import { installActionsFor, registerInstallAssist } from "./install-assist";
 import { createMarkerTracker, type EditorMarker, markersFor } from "./markers";
 import { ModelCache } from "./models";
@@ -118,6 +119,12 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
     const installAssist = registerInstallAssist(monaco, {
       untyped: () => feeder.untyped(),
       install: (spec) => install.current?.(spec),
+    });
+    // Installed packages offered inside an import/require specifier. Registered here in the same mount-scoped
+    // effect as the install assist above -- never in a render path, which would stack a duplicate provider on
+    // every re-render -- and read from the store per keystroke, so an install or remove needs no re-registration.
+    const importCompletions = registerImportCompletions(monaco, {
+      installed: () => store.getState().npm.installed,
     });
 
     const applyMonacoTheme = (themeId: string) => {
@@ -461,6 +468,7 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
       vimStatus?.remove();
       feeder.dispose();
       installAssist.dispose();
+      importCompletions.dispose();
       // Before `editor.dispose()`: releases any presence still held, so a tile can't stay collapsed because the
       // editor was torn down while a hover was showing over it.
       stopWidgetOcclusion();

@@ -26,6 +26,8 @@ export interface AppPaths {
   envFile: string;
   socketPath: string;
   screenshotsDir: string;
+  /** Spec §4.5: user-imported themes (`*.jslab-theme.json`), written by the VS Code importer (§9.3). */
+  themesDir: string;
   runnerBootstrap: string;
   /**
    * M4 §5.12: the bundled runner-web bootstrap Main injects into a browser-mode tab's page. The page itself is
@@ -59,6 +61,7 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     envFile: join(dataDir, "env.json"),
     socketPath: join(dataDir, "jslab.sock"),
     screenshotsDir: join(dataDir, "e2e-screenshots"),
+    themesDir: join(dataDir, "themes"),
     runnerBootstrap: input.env.JSLAB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "bootstrap.js"),
     webRunnerBootstrap: input.env.JSLAB_WEB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "web-bootstrap.js"),
     transformWorker: input.env.JSLAB_TRANSFORM_WORKER ?? join(appDir, "workers", "transform-worker.js"),

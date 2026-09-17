@@ -165,6 +165,9 @@ const ALLOWED: Record<string, { reads: number; why: string }> = {
  * ALLOWED excused as "best-effort inside try/catch", which is a *recoverability* argument and answers neither
  * hazard. Measured: `readFileSync` on a FIFO blocks, so no try/catch can rescue it, and both hooks were driven with
  * a FIFO importer and had to be killed by a hard alarm.
+ *
+ * What belongs here is any read with **no meaningful byte cap**, however that is spelled -- not merely a call to
+ * one particular reader. `UNBOUNDED_SIZE` below matches both spellings for exactly that reason.
  */
 const SIZE_EXEMPT: Record<string, { reads: number; why: string }> = {
   [`${MAIN_ROOT}/bundling/css-plugin.ts`]: {
@@ -181,8 +184,22 @@ const SIZE_EXEMPT: Record<string, { reads: number; why: string }> = {
   },
 };
 
-/** The size-waiving readers. Anything calling one must carry a SIZE_EXEMPT reason. */
-const UNBOUNDED_SIZE = [/readRegularFileText(?:Sync)?\s*\(/];
+/**
+ * The size-waiving reads. Anything matching one must carry a SIZE_EXEMPT reason.
+ *
+ * The named readers are not the only way to waive a cap, which is why the second pattern exists: passing
+ * `Number.POSITIVE_INFINITY` (or `Infinity`) as the `maxBytes` argument of any bounded reader waives it just as
+ * completely, while naming none of them. Mutant M7 called `readBoundedText(p, Number.POSITIVE_INFINITY)` from a
+ * file with no SIZE_EXEMPT entry at all and the gate stayed at 9 pass / 0 fail -- the ledger was exhaustive over
+ * one function name rather than over "reads with no meaningful cap", which is what it claims to record.
+ */
+const UNBOUNDED_SIZE = [
+  /readRegularFileText(?:Sync)?\s*\(/,
+  // Both spellings, and they are *not* the same token: `Number.POSITIVE_INFINITY` carries `INFINITY` in caps, so a
+  // pattern written as `(?:POSITIVE_)?Infinity` matches only the bare `Infinity` and silently misses the commoner
+  // form -- measured, with M7 passing 9/0 against exactly that mistake.
+  /readBounded[A-Za-z]*\s*\([^;]*?(?:POSITIVE_INFINITY|Infinity)/,
+];
 
 function sourceFilesUnder(root: string): string[] {
   const absolute = join(REPO, root);

@@ -14,6 +14,20 @@ export type TileWebview = HTMLElement & WebviewElement;
 type Rect = { top: number; left: number; width: number; height: number };
 
 /**
+ * M4 diagnostics only -- not a feature, and nothing in the app reads these but the E2E agent.
+ *
+ * Counts how often a docked tile re-measures (`measure()` below, every call of which sets React state) and how
+ * often it renders, so an E2E scenario can tell a tile that measures once at dock time from one that re-measures
+ * continuously while the app sits idle with nothing running. A user report ("not running the web view gets rid of
+ * the reload error") pointed at the Web View tile itself as a re-render driver independent of run state; these two
+ * numbers, sampled twice across a fixed idle window, are what turns that into a measurement instead of a guess.
+ */
+const counters = { measures: 0, renders: 0 };
+
+/** A snapshot of the diagnostics counters above, for `e2e.state`. */
+export const webViewTileCounters = (): { measures: number; renders: number } => ({ ...counters });
+
+/**
  * The collapsed (not-docked) style, deliberately 1x1 rather than 0x0 -- confirmed necessary by a live run, not a
  * theoretical worry. `apps/desktop/.hutch/devkit/api/preload/overlaySync.ts`'s `OverlaySyncController.sync()`
  * (the thing that tells the native layer this element's box changed) has its own early return: `if
@@ -113,6 +127,12 @@ export function WebViewTile({
 }) {
   const container = useRef<HTMLDivElement>(null);
 
+  // M4 diagnostics (see `counters` above): an effect with no dependency array runs after every render, so this
+  // counts renders without doing side-effect work during the render phase itself.
+  useEffect(() => {
+    counters.renders += 1;
+  });
+
   // `generation` is deliberately a dependency this effect never reads. It is the *reason* the effect re-runs:
   // Main destroying a tab's webview and asking for another (Kill, a timed-out reset) must tear the old element
   // down and build a new one, and a value the body ignores is exactly how that request is expressed. Removing it
@@ -141,6 +161,7 @@ export function WebViewTile({
       return;
     }
     const measure = () => {
+      counters.measures += 1;
       const box = dockNode.getBoundingClientRect();
       setRect({ top: box.top, left: box.left, width: box.width, height: box.height });
     };

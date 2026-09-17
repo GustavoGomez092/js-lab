@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { SnippetsExported, SnippetsImported } from "@jslab/rpc-schema";
+import { MAX_SNIPPETS_FILE_BYTES, type SnippetsExported, type SnippetsImported } from "@jslab/rpc-schema";
 import { SNIPPETS_FORMAT, SNIPPETS_VERSION, type Snippet } from "@jslab/shared";
+import { FileTooLargeError } from "../../src/main/files/bounded-read";
 import { createSnippetHandlers } from "../../src/main/rpc/snippet-handlers";
 import { InvalidPayloadError } from "../../src/main/rpc/validate";
 import { strings } from "../../src/main/strings";
@@ -30,6 +31,17 @@ function setup(options: { file?: string; chosen?: string[]; savePath?: string | 
   const imported: SnippetsImported[] = [];
   const exported: SnippetsExported[] = [];
   const written: { path: string; content: string }[] = [];
+  /**
+   * The real reader (src/main/files/bounded-read.ts) refuses from the opened handle's `fstat`, before it
+   * allocates anything. This fake refuses on the same rule, at whatever cap the handler hands it -- so a handler
+   * that widened the cap, or stopped passing one, imports a file the product refuses.
+   */
+  const readFile = mock(async (path: string, maxBytes: number) => {
+    const text = options.file ?? "";
+    const size = Buffer.byteLength(text);
+    if (size > maxBytes) throw new FileTooLargeError(path, size, maxBytes);
+    return text;
+  });
   const handlers = createSnippetHandlers({
     snippets: {
       get snippets() {
@@ -42,13 +54,13 @@ function setup(options: { file?: string; chosen?: string[]; savePath?: string | 
     },
     openDialog: mock(async () => options.chosen ?? ["/tmp/library.json"]),
     saveDialog: mock(async () => (options.savePath === undefined ? "/tmp/out.json" : options.savePath)),
-    readFile: mock(async () => options.file ?? ""),
+    readFile,
     writeFile: mock(async (path: string, content: string) => void written.push({ path, content })),
     documentsDir: "/docs",
     send: { imported: (p) => imported.push(p), exported: (p) => exported.push(p) },
     log: () => {},
   });
-  return { handlers, imported, exported, written, current: () => stored };
+  return { handlers, imported, exported, written, readFile, current: () => stored };
 }
 
 const library = (snippets: Snippet[]) =>
@@ -156,14 +168,17 @@ describe("snippet handlers (spec §13.1, §13.4, §18)", () => {
   // The four branches the eight cases above leave unexercised. Each is a path an ordinary user reaches (a huge
   // file, an unreadable one, a dialog that errors, a disk that refuses the write), so each gets its own test.
 
-  test("a file too large to be a library is refused before it is parsed", async () => {
-    // Valid JSON, and a valid library, but padded past the cap: only the size check can refuse it, so deleting
-    // that check makes this file import successfully instead of failing.
+  test("a file too large to be a library is refused, at the documented cap", async () => {
+    // Valid JSON, and a valid library, but padded past the cap. R-M5b-S2: the refusal is the *reader's* now, so
+    // this asserts the cap the handler hands it as well as the outcome -- widening that cap, or dropping it,
+    // imports this file instead of refusing it. That the refusal costs no read is proved against the real reader
+    // in test/files/bounded-read.test.ts, which this fake cannot show.
     const padded = `${library([record({ id: "i1", name: "brandnew" })])}${" ".repeat(5 * 1024 * 1024)}`;
-    const { handlers, imported, current } = setup({ file: padded });
+    const { handlers, imported, current, readFile } = setup({ file: padded });
     handlers.messages["snippets.importDialog"]({});
     await flush();
     expect(imported).toEqual([{ ok: false, reason: "tooLarge", detail: strings.snippets.tooLarge }]);
+    expect(readFile.mock.calls[0]).toEqual(["/tmp/library.json", MAX_SNIPPETS_FILE_BYTES]);
     expect(current()).toEqual([record()]);
   });
 

@@ -11,6 +11,7 @@ import {
   snippetsSaveParamsSchema,
 } from "@jslab/rpc-schema";
 import { parseSnippetsFile, snippetsFileContent } from "@jslab/shared";
+import { FileTooLargeError } from "../files/bounded-read";
 import type { SnippetStore } from "../services/snippet-store";
 import { strings } from "../strings";
 import { createValidators, type Log } from "./validate";
@@ -22,7 +23,8 @@ export interface SnippetHandlerDeps {
   snippets: Pick<SnippetStore, "snippets" | "save">;
   openDialog(options: { startingFolder: string }): Promise<string[]>;
   saveDialog(options: { defaultName: string; defaultDir: string }): Promise<string | null>;
-  readFile(path: string): Promise<string>;
+  /** Bounded at the *read*: refuses past `maxBytes` before allocating, never by measuring what it already read. */
+  readFile(path: string, maxBytes: number): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
   documentsDir: string;
   send: { imported(payload: SnippetsImported): void; exported(payload: SnippetsExported): void };
@@ -60,19 +62,21 @@ export function createSnippetHandlers(deps: SnippetHandlerDeps) {
         if (!path) return;
         let text: string;
         try {
-          text = await deps.readFile(path);
+          // R-M5b-S2: the cap belongs to the read. `readFile` refuses from the opened handle's `fstat`, before it
+          // allocates, so a multi-gigabyte file -- or a FIFO -- never reaches Main's heap at all. The shape this
+          // replaced read the whole file and *then* measured the string, which bounded the parse and not the
+          // read: by the time that check ran, the hazard the cap exists for had already happened.
+          text = await deps.readFile(path, MAX_SNIPPETS_FILE_BYTES);
         } catch (error) {
+          if (error instanceof FileTooLargeError) {
+            deps.send.imported({ ok: false, reason: "tooLarge", detail: strings.snippets.tooLarge });
+            return;
+          }
           deps.send.imported({
             ok: false,
             reason: "unreadable",
             detail: error instanceof Error ? error.message : String(error),
           });
-          return;
-        }
-        // A conservative cap: UTF-16 units, never more than the file's UTF-8 byte count, so nothing under the
-        // documented 5 MB is ever refused for being too large.
-        if (text.length > MAX_SNIPPETS_FILE_BYTES) {
-          deps.send.imported({ ok: false, reason: "tooLarge", detail: strings.snippets.tooLarge });
           return;
         }
         const parsed = ((): SnippetsImported => {

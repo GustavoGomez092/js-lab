@@ -27,6 +27,7 @@ import { E2EBridge } from "./cli/e2e-bridge";
 import { createSocketMethods } from "./cli/socket-methods";
 import { type SocketServer, startSocketServer } from "./cli/socket-server";
 import { createErrorPolicy } from "./error-policy";
+import { readBoundedText } from "./files/bounded-read";
 import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-service";
 import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
@@ -320,7 +321,9 @@ async function start(): Promise<void> {
                 allowsMultipleSelection: false,
               }),
         saveDialog: (options) => (e2eEnabled ? readE2ESaveDialog(paths.dataDir) : saveDialog(options)),
-        readFile: (path) => Bun.file(path).text(),
+        // Not `Bun.file(path).text()`: that reads the whole file before anything can refuse it, and cannot get
+        // the `O_NONBLOCK` that keeps a FIFO from parking Main (R-M5b-S2).
+        readFile: readBoundedText,
         writeFile: (path, content) => Bun.write(path, content).then(() => undefined),
         documentsDir: Utils.paths.documents,
         send: {

@@ -36,6 +36,7 @@ import {
   NODE_BRIDGE_GLOBAL,
   NODE_BRIDGE_MISSING_MESSAGE,
   UNSUPPORTED_ERROR_NAME,
+  UNSUPPORTED_MODULE_DATA_EXPORTS,
   UNSUPPORTED_MODULE_EXPORTS,
   UNSUPPORTED_MODULES,
   unsupportedModuleMessage,
@@ -324,6 +325,9 @@ function childProcessModuleSource(): string {
  */
 function unsupportedModuleSource(moduleName: string): string {
   const names = UNSUPPORTED_MODULE_EXPORTS[moduleName] ?? [];
+  // The data-valued names get a different shape from the callable ones -- see `UNSUPPORTED_MODULE_DATA_EXPORTS`
+  // for the audit and for why a thrower function was the wrong binding for them.
+  const dataValued = new Set(UNSUPPORTED_MODULE_DATA_EXPORTS[moduleName] ?? []);
   return [
     `var __jslabMessage = ${JSON.stringify(unsupportedModuleMessage(moduleName))};`,
     "var __jslabRefuse = function () {",
@@ -331,8 +335,27 @@ function unsupportedModuleSource(moduleName: string): string {
     `  error.name = ${JSON.stringify(UNSUPPORTED_ERROR_NAME)};`,
     "  throw error;",
     "};",
-    ...names.map((name) => `export var ${name} = function () { return __jslabRefuse(); };`),
     'var __jslabInterop = ["__esModule", "default", "then", "constructor", "prototype"];',
+    // A data-valued export is bound to the same refusing `Proxy` shape the default export uses, so that a
+    // *property read* (`STATUS_CODES[200]`, `parentPort.postMessage`) throws `JSLabUnsupportedError` instead of
+    // handing back `undefined`. The interop allowlist and the symbol rule are copied from the default export
+    // deliberately: that policy is the one measured safe against Bun's own ESM/CommonJS interop (see this
+    // function's doc comment), and a named export has no reason to be stricter than the namespace it came from.
+    "var __jslabRefusingValue = function () {",
+    "  return new Proxy(function () { return __jslabRefuse(); }, {",
+    "    get: function (_target, key) {",
+    '      if (typeof key === "symbol" || __jslabInterop.indexOf(key) >= 0) return undefined;',
+    "      return __jslabRefuse();",
+    "    },",
+    "    apply: __jslabRefuse,",
+    "    construct: __jslabRefuse,",
+    "  });",
+    "};",
+    ...names.map((name) =>
+      dataValued.has(name)
+        ? `export var ${name} = __jslabRefusingValue();`
+        : `export var ${name} = function () { return __jslabRefuse(); };`,
+    ),
     "export default new Proxy(function () { return __jslabRefuse(); }, {",
     "  get: function (_target, key) {",
     '    if (typeof key === "symbol" || __jslabInterop.indexOf(key) >= 0) return undefined;',

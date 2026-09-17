@@ -1,5 +1,6 @@
 import type { CommandId, KeybindingRule, TabState } from "@jslab/shared";
 import {
+  DEFAULT_RUNTIME,
   type EnvVars,
   envVarsSchema,
   LANGUAGES,
@@ -67,7 +68,14 @@ export const tabPatchSchema = z.object({
       title: z.string().max(200),
       titleIsCustom: z.boolean(),
       language: languageSchema,
-      runtime: runtimeSchema,
+      // Final review (E): `.catch` for the same reason `tiles` is `.partial()` and `muted` degrades -- every field
+      // inside this patch object must fail on its own or not at all. Without it an unrecognised runtime (a
+      // version-skewed renderer mid-auto-update, a future build naming a runtime this Main doesn't know) failed the
+      // whole `safeParse`, so Main silently dropped the ENTIRE patch -- a legitimate simultaneous title or language
+      // change with it -- logging only "Rejected invalid tab.patch payload" with nothing user-visible. Matches
+      // `runStartParamsSchema.runtime` (`.catch("bun")`) and `tabStateSchema.runtime` (`.catch(DEFAULT_RUNTIME)`).
+      // Applied here rather than on the shared `runtimeSchema`, so `tabCreateParamsSchema` keeps rejecting outright.
+      runtime: runtimeSchema.catch(DEFAULT_RUNTIME),
       layout: z
         .object({
           orientation: z.enum(["horizontal", "vertical"]),

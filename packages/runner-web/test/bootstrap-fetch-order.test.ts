@@ -22,13 +22,30 @@ function bucket<K, V>(map: Map<K, Set<V>>, key: K): Set<V> {
   return set;
 }
 
-function fakeGlobal(): RunnerWebGlobal {
+/**
+ * The interval fakes record what is still live, rather than handing out the raw `setInterval`.
+ *
+ * CodeRabbit finding 3: `startRunnerWeb` starts a 500 ms heartbeat, and this file's fake global used to pass the
+ * **real** `setInterval` straight through -- so a test that never disposed its runner left that heartbeat firing
+ * for the rest of the process. The real timer cannot be asked whether it is still scheduled, so recording live
+ * ids here is what lets the tests below assert the absence of a leak instead of merely hoping for it.
+ */
+function fakeGlobal(): RunnerWebGlobal & { liveIntervals: Set<unknown> } {
   const listeners = new Map<string, Set<(event: unknown) => void>>();
+  const liveIntervals = new Set<unknown>();
   return {
+    liveIntervals,
     setTimeout: setTimeout as unknown as RunnerWebGlobal["setTimeout"],
     clearTimeout: clearTimeout as unknown as RunnerWebGlobal["clearTimeout"],
-    setInterval: setInterval as unknown as RunnerWebGlobal["setInterval"],
-    clearInterval: clearInterval as unknown as RunnerWebGlobal["clearInterval"],
+    setInterval: ((handler: () => void, ms?: number) => {
+      const id = setInterval(handler, ms);
+      liveIntervals.add(id);
+      return id;
+    }) as unknown as RunnerWebGlobal["setInterval"],
+    clearInterval: ((id: unknown) => {
+      liveIntervals.delete(id);
+      clearInterval(id as ReturnType<typeof setInterval>);
+    }) as unknown as RunnerWebGlobal["clearInterval"],
     addEventListener: (type: string, cb: (event: unknown) => void) => bucket(listeners, type).add(cb),
     removeEventListener: (type: string, cb: (event: unknown) => void) => listeners.get(type)?.delete(cb),
     // `installConsole` (installed after this file's fake `g.console`) only ever *adds* methods via
@@ -36,7 +53,7 @@ function fakeGlobal(): RunnerWebGlobal {
     console: {},
     // `installFetchProxy`'s own "native" fallback, for a `data:`/`blob:` url this file's test never exercises.
     fetch: (() => Promise.reject(new Error("no native fetch in this fake"))) as unknown as RunnerWebGlobal["fetch"],
-  } as unknown as RunnerWebGlobal;
+  } as unknown as RunnerWebGlobal & { liveIntervals: Set<unknown> };
 }
 
 /** A transport that records every `request`/`abort` call and never itself replies -- this file only needs to prove
@@ -90,7 +107,7 @@ test("installFetchProxy is a no-op for the browser runtime -- installHandleTrack
   const g = fakeGlobal();
   const nativeFetch = g.fetch;
   const transport = fakeTransport();
-  startRunnerWeb({ global: g, runtime: "browser", fetchTransport: transport });
+  const handle = startRunnerWeb({ global: g, runtime: "browser", fetchTransport: transport });
 
   // Never called for "browser" (spec §5.12: true browser semantics, CORS enforced, is the point) -- proven by
   // calling `g.fetch` and seeing the transport untouched, while `g.fetch` itself is still a *different* function
@@ -98,4 +115,10 @@ test("installFetchProxy is a no-op for the browser runtime -- installHandleTrack
   expect(g.fetch).not.toBe(nativeFetch);
   void (g.fetch as typeof fetch)("https://example.com/").catch(() => {});
   expect(transport.requested).toEqual([]);
+
+  // CodeRabbit finding 3: this test started a runner and never disposed it, so its 500 ms heartbeat outlived the
+  // test on the real `setInterval`. Every other `startRunnerWeb` in this file disposes; this one was an omission.
+  expect(g.liveIntervals.size).toBe(1);
+  handle.dispose();
+  expect(g.liveIntervals.size).toBe(0);
 });

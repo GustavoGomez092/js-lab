@@ -318,6 +318,19 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       return id && get().tabs[id] ? id : null;
     };
 
+    /**
+     * Whether the caller named a tab that no longer exists.
+     *
+     * `resolve` answers `null` for two entirely different requests: "no tabId given, so act on the active tab"
+     * and "this tabId names a tab that is gone". Any caller that writes the active-tab mirror (`get().output`)
+     * on the `null` branch must tell them apart, because collapsing the two applies a dead tab's operation to
+     * whichever tab is live -- a late `clearOutput` for a tab the user just closed would wipe the output they
+     * are actually looking at, and a stale `dismissWebDialog` would clear a dialog the live tab still needs
+     * answered. `updateTab` above never had this bug: it re-checks `get().tabs[id]` and bails.
+     */
+    const namesMissingTab = (tabId?: string | null): boolean =>
+      tabId !== undefined && tabId !== null && resolve(tabId) === null;
+
     const updateTab = (tabId: string | null | undefined, update: (tab: TabState) => TabState) => {
       const id = resolve(tabId);
       const tab = id ? get().tabs[id] : undefined;
@@ -532,12 +545,16 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           dialogs: [],
           workingDirectoryMissing: false,
         });
+        // A tabId naming a tab that has since closed is not a request to clear the ACTIVE tab's output.
+        if (namesMissingTab(tabId)) return;
         const id = resolve(tabId);
         if (!id) set({ output: clear(get().output) });
         else updateRuntime(id, (runtime) => ({ ...runtime, output: clear(runtime.output) }));
       },
 
       dismissWebDialog(key, tabId) {
+        // Same guard as `clearOutput` above: dismissing a dead tab's dialog must not dismiss the live tab's.
+        if (namesMissingTab(tabId)) return;
         const id = resolve(tabId);
         // `dismissWebDialog` (./output) is typed against the runtime-agnostic `OutputState`, so its result is
         // merged back onto the full `TabRuntime["output"]` here rather than replacing it outright -- the same

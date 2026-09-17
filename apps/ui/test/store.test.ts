@@ -54,6 +54,59 @@ describe("app store", () => {
     expect(full.getState().notices.map((n) => n.id)).toEqual([...ids.slice(1), "unexpectedError"]);
   });
 
+  /**
+   * CodeRabbit finding 5, at BOTH sites. `resolve(tabId)` returns `null` for two entirely different situations:
+   * "the caller named no tab, so use the active one" and "the caller named a tab that no longer exists". The
+   * `!id` branch then applied the change to `get().output`, which mirrors the **active** tab -- so an operation
+   * aimed at a dead tab silently hit the live one instead. A late `clearOutput` for a tab the user just closed
+   * would wipe the output they are actually looking at.
+   *
+   * CodeRabbit flagged only `dismissWebDialog`; `clearOutput` directly above it has the identical shape and is
+   * covered here too.
+   */
+  test("clearOutput aimed at a tab that no longer exists leaves the live tab's output alone (CodeRabbit 5)", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    store.getState().receiveState("r1", "transpiling", 0, "t1");
+    store.getState().receiveEvents("r1", [log(1)], "t1");
+    expect(store.getState().output.entries).toHaveLength(1);
+
+    store.getState().clearOutput("a-tab-that-was-closed");
+
+    // Untouched: an explicit but unknown tabId is not the same request as "no tabId given".
+    expect(store.getState().output.entries).toHaveLength(1);
+  });
+
+  test("dismissWebDialog aimed at a tab that no longer exists leaves the live tab's dialog alone (CodeRabbit 5)", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    // "transpiling" specifically: `applyRunState` adopts a new runId only from that state (every run announces it
+    // first), and treats any other state for an unknown run as a stale message -- so a dialog sent after, say,
+    // "evaluating" would never reach the queue at all.
+    store.getState().receiveState("r1", "transpiling", 0, "t1");
+    store.getState().receiveEvents("r1", [{ kind: "dialog", text: "hi", seq: 1, t: 0 } as unknown as RunEvent], "t1");
+    const shown = store.getState().output.dialogs;
+    expect(shown).toHaveLength(1);
+
+    store.getState().dismissWebDialog(String(shown[0]?.key), "a-tab-that-was-closed");
+
+    expect(store.getState().output.dialogs).toHaveLength(1);
+  });
+
+  // The legitimate "no tabId given, act on the active tab" case must keep working -- the fix distinguishes the
+  // two meanings `resolve` used to collapse together, rather than refusing whenever it returns null.
+  test("clearOutput with no tabId still clears the active tab", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    store.getState().receiveState("r1", "transpiling", 0, "t1");
+    store.getState().receiveEvents("r1", [log(1)], "t1");
+    expect(store.getState().output.entries).toHaveLength(1);
+
+    store.getState().clearOutput();
+
+    expect(store.getState().output.entries).toEqual([]);
+  });
+
   test("the first edit arms auto-run", () => {
     const store = createAppStore();
     store.getState().hydrate(payload());

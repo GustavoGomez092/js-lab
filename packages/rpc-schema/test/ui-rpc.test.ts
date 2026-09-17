@@ -118,6 +118,32 @@ describe("inbound validators", () => {
   // Task 15: `muted` is a sibling field of `tiles` in `tabLayoutSchema` (packages/shared), so it must be named here
   // too -- the same whitelist gotcha F5 documents for `tiles` above (an unlisted field is silently stripped in
   // transit: the UI updates, nothing persists, no error anywhere).
+  /**
+   * Final review, finding E. `runtime` was the one field in `tab.patch`'s patch object left without a fallback,
+   * while its siblings `tiles`/`muted` and both `runStartParamsSchema.runtime` (`.catch("bun")`) and
+   * `tabStateSchema.runtime` (`.catch(DEFAULT_RUNTIME)`) all degrade on their own. An unrecognised runtime
+   * therefore failed the whole `safeParse`, so Main silently dropped the ENTIRE patch -- a legitimate simultaneous
+   * title or language change included -- logging only "Rejected invalid tab.patch payload" with nothing
+   * user-visible. That is the exact failure mode fix round 1's F5 was written to eliminate.
+   */
+  test("tab.patch survives an unrecognised runtime instead of dropping the whole patch (final review, E)", () => {
+    const parsed = tabPatchSchema.parse({
+      tabId: "t1",
+      patch: { title: "Renamed", language: "javascript", runtime: "deno" },
+    });
+
+    // The rest of the patch survives -- this is the half that was being silently lost.
+    expect(parsed.patch.title).toBe("Renamed");
+    expect(parsed.patch.language).toBe("javascript");
+    // The unrecognised value degrades to the default rather than failing the object.
+    expect(parsed.patch.runtime).toBe("bun");
+
+    // A patch naming only a bad runtime still parses, rather than being rejected outright.
+    expect(tabPatchSchema.safeParse({ tabId: "t1", patch: { runtime: "deno" } }).success).toBe(true);
+    // A well-formed runtime is still carried through untouched.
+    expect(tabPatchSchema.parse({ tabId: "t1", patch: { runtime: "browser" } }).patch.runtime).toBe("browser");
+  });
+
   test("tab.patch's layout.muted accepts a bare patch without the rest of layout", () => {
     const parsed = tabPatchSchema.parse({ tabId: "t1", patch: { layout: { muted: true } } });
     expect(parsed.patch.layout).toEqual({ muted: true });

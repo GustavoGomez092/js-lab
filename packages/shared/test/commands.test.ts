@@ -41,4 +41,16 @@ describe("command catalogue", () => {
       { key: "alt+cmd+w", command: "view.toggleWebView" },
     ]);
   });
+
+  // M5c §16.1: the menu shows exactly one of the pair, so only the install half is offered in the palette --
+  // otherwise the palette would advertise "Uninstall" to someone who has never installed it.
+  test("M5c adds the jslab install pair, with uninstall kept out of the palette", () => {
+    expect(commandMeta("help.installCli")).toMatchObject({ title: "Install jslab Command…", category: "help" });
+    expect(commandMeta("help.uninstallCli")).toMatchObject({
+      title: "Uninstall jslab Command…",
+      category: "help",
+      palette: false,
+    });
+    expect(commandMeta("help.installCli")?.palette).toBeUndefined();
+  });
 });

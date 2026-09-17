@@ -25,6 +25,7 @@ const model = (overrides: Partial<Parameters<typeof buildMenu>[0]> = {}) => ({
   bindings,
   themes: listThemes(),
   canReopen: false,
+  cliInstalled: false,
   ...overrides,
 });
 const byLabel = (items: MenuItem[], prefix: string) => flatten(items).find((item) => item.label?.startsWith(prefix));
@@ -211,5 +212,15 @@ describe("application menu", () => {
     expect(byLabel(withWd, "Clear Working Directory")?.enabled).toBe(true);
     expect(byLabel(withWd, "NPM Packages…")?.label).toBe("NPM Packages…    ⌘I");
     expect(byLabel(withWd, "Environment Variables…")?.action).toBe(menuAction("tools.environmentVariables"));
+  });
+
+  test("the Help menu offers one install slot whose label follows the installed state (§16.1)", () => {
+    const fresh = buildMenu(model());
+    expect(byLabel(fresh, "Install jslab Command")).toMatchObject({ action: menuAction("help.installCli") });
+    expect(byLabel(fresh, "Uninstall jslab Command")).toBeUndefined();
+
+    const installed = buildMenu(model({ cliInstalled: true }));
+    expect(byLabel(installed, "Uninstall jslab Command")).toMatchObject({ action: menuAction("help.uninstallCli") });
+    expect(byLabel(installed, "Install jslab Command")).toBeUndefined();
   });
 });

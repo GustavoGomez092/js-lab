@@ -130,6 +130,8 @@ export const APP_ACTIONS = [
   "toggleFullScreen",
   "closeWindow",
   "openSettings",
+  "installCli",
+  "uninstallCli",
 ] as const;
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });
@@ -340,6 +342,11 @@ export const STARTUP_NOTICE_IDS = [
   "sessionNewer",
   "tabsDropped",
   "unexpectedError",
+  /**
+   * Spec §16.1: the result of Help → Install/Uninstall `jslab` Command…. `app.notice` is the one Main → UI message
+   * the UI re-validates before showing (FA-I3), so this id has to be listed here or the install result is dropped.
+   */
+  "cliInstall",
 ] as const;
 
 /**

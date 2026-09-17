@@ -24,6 +24,7 @@ import Electrobun, {
 } from "electrobun/main";
 import { e2eBunCacheDir, resolveAppPaths } from "./app-paths";
 import { E2EBridge } from "./cli/e2e-bridge";
+import { type CliInstallResult, cliStatus, installCli, nodeInstallFs, uninstallCli } from "./cli/install";
 import { createOpenService } from "./cli/open-service";
 import { createSocketMethods } from "./cli/socket-methods";
 import type { SocketServer } from "./cli/socket-server";
@@ -245,6 +246,27 @@ async function start(): Promise<void> {
   const writeClipboard = (text: string) =>
     e2eEnabled ? writeFileSync(join(paths.dataDir, "e2e-clipboard.txt"), text) : Utils.clipboardWriteText(text);
 
+  // Spec §16.1. Under E2E the "home" is this launch's private data folder, so a scenario can assert the symlink
+  // without ever writing into the real ~/.local/bin. `escalate` is deliberately omitted: the default install is
+  // ~/.local/bin and nothing in JSLab raises an administrator prompt on its own (see the M5c plan's ruling).
+  const cliInstallDeps = {
+    home: e2eEnabled ? paths.dataDir : homedir(),
+    path: baseEnv.PATH ?? "",
+    target: paths.cliBinary,
+    fs: nodeInstallFs,
+  };
+  let cliInstalled = false;
+  // `menu`, `mainWindow` and `rpc` are declared below; these bodies run only after startup has built them.
+  const refreshCliInstalled = async () => {
+    cliInstalled = (await cliStatus(cliInstallDeps)).installed;
+    menu.refresh();
+  };
+  const reportCliResult = (result: CliInstallResult) => {
+    log(result.message);
+    if (mainWindow.isOpen()) rpc.send["app.notice"]({ id: "cliInstall", message: result.message });
+    void refreshCliInstalled();
+  };
+
   // Shared by the main window and the Settings window (whose RPC accepts only its own actions, FA-m11). `mainWindow`
   // and `settingsWindow` are declared later; the handlers read them only when invoked, after startup.
   const appHandlerDeps: AppHandlerDeps = {
@@ -275,6 +297,14 @@ async function start(): Promise<void> {
     // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
     closeWindow: () => void afterUiFlush({ uiFlush, then: () => mainWindow.close() })(),
     openSettings: () => void settingsWindow.open(),
+    installCli: () =>
+      void installCli(cliInstallDeps, "user").then(reportCliResult, (error: unknown) =>
+        log(strings.cli.installFailed(String(error))),
+      ),
+    uninstallCli: () =>
+      void uninstallCli(cliInstallDeps).then(reportCliResult, (error: unknown) =>
+        log(strings.cli.installFailed(String(error))),
+      ),
   };
   const appHandlers = createAppHandlers(appHandlerDeps);
 
@@ -464,10 +494,12 @@ async function start(): Promise<void> {
         bindings: resolvedBindings,
         themes: listThemes(),
         canReopen: session.session.closedStack.length > 0,
+        cliInstalled,
       }),
     apply: (items) => ApplicationMenu.setApplicationMenu(items),
   });
   menu.refresh();
+  void refreshCliInstalled();
   settings.onChange(() => menu.refresh());
   session.onChange(() => menu.refresh());
   ApplicationMenu.on("application-menu-clicked", (event: unknown) => {

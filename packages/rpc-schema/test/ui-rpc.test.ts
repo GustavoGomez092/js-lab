@@ -213,6 +213,17 @@ describe("inbound validators", () => {
     }
   });
 
+  // M5c §16.1. The `cliInstall` notice id matters as much as the actions: `app.notice` is the one Main -> UI
+  // message the UI re-validates (App.tsx runs `appNoticeSchema` and silently drops anything that fails), so an id
+  // missing from STARTUP_NOTICE_IDS would mean the install result never reaches the user.
+  test("the main window can install the jslab CLI, the Settings window cannot, and its notice id is known", () => {
+    for (const action of ["installCli", "uninstallCli"]) {
+      expect(appCommandSchema.safeParse({ action }).success).toBe(true);
+      expect(settingsAppCommandSchema.safeParse({ action }).success).toBe(false);
+    }
+    expect(appNoticeSchema.safeParse({ id: "cliInstall", message: "jslab is installed." }).success).toBe(true);
+  });
+
   test("app.notice carries a known notice id and bounded text (FA-I3)", () => {
     expect(appNoticeSchema.safeParse({ id: "unexpectedError", message: "Something went wrong." }).success).toBe(true);
     expect(appNoticeSchema.safeParse({ id: "exec", message: "x" }).success).toBe(false);

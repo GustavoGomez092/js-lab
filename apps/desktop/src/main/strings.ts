@@ -69,6 +69,10 @@ export const strings = {
     tabsDropped: (count: number) =>
       `${count} ${count === 1 ? "tab" : "tabs"} in session.json couldn't be read and were skipped. Their buffer files were kept.`,
   },
+  cli: {
+    /** Shown as a notice after Help → Install/Uninstall `jslab` Command… (spec §16.1). */
+    installFailed: (message: string) => `Couldn't install the jslab command: ${message}`,
+  },
   runs: {
     /** Spec §12.2. */
     workingDirectoryNotFound: (path: string) => `Working directory not found: ${path}`,

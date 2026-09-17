@@ -154,6 +154,10 @@ export const COMMANDS = [
 
   { id: "help.copyDebugLog", title: "Copy Debug Log", category: "help" },
   { id: "help.openLogsFolder", title: "Open Logs Folder", category: "help" },
+  { id: "help.installCli", title: "Install jslab Command…", category: "help" },
+  // The menu shows exactly one of this pair (spec §16.1), so only the install half is offered in the palette;
+  // uninstall stays menu- and keybinding-dispatchable, the same way npm.install does.
+  { id: "help.uninstallCli", title: "Uninstall jslab Command…", category: "help", palette: false },
   { id: "help.restartSafeMode", title: "Restart in Safe Mode", category: "help" },
 
   { id: "app.settings", title: "Settings…", category: "app" },

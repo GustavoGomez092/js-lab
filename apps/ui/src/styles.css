@@ -255,12 +255,71 @@ button:disabled {
   z-index: 40;
 }
 
+/* ---------- logpoint gutter (spec §6.3) ---------- */
+/* Monaco sizes the glyph margin itself and applies this class to that line's margin cell; the dot is drawn with
+   a radial background so no pseudo-element is needed (Monaco owns the cell's own ::before/::after). */
+.logpoint-glyph {
+  background: radial-gradient(circle at center, var(--fg-accent) 0 4px, transparent 4px);
+  cursor: pointer;
+}
+
+/* Spec §5.5: a logpoint on a line with no loggable statement is hollow. Same specificity as `.logpoint-glyph`
+   (both classes are applied together), so this rule must stay after it to win on source order. */
+.logpoint-glyph-hollow {
+  background: radial-gradient(circle at center, transparent 0 2.5px, var(--fg-muted) 2.5px 4px, transparent 4px);
+}
+
 /* ---------- output ---------- */
 .output {
   display: flex;
   flex-direction: column;
   height: 100%;
   background: var(--bg-canvas);
+}
+
+/* ---------- transpiled output panel (spec §7.4) ---------- */
+.transpiled-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.transpiled-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.transpiled-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+}
+
+/* Same treatment as the output panel's own stale chip, for the same reason (R-M5a-7). */
+.transpiled-stale-label {
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font: 500 11px / 1 var(--ui);
+}
+
+.transpiled-code {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  white-space: pre;
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1.5 var(--code-font-family, var(--mono));
+  color: var(--fg-default);
+}
+
+.transpiled-empty {
+  color: var(--fg-muted);
 }
 
 /* ---------- web view tile (Task 8, fix round 1 F1-F3) ---------- */

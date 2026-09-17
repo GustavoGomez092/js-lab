@@ -9,6 +9,8 @@ export interface TabSnapshot {
   runState: string | null;
   activeHandles: number;
   autoRunArmed: boolean;
+  /** The tab's logpoint lines (spec §6.3); `apps/ui/src/e2e/snapshot.ts` has emitted these since M5a Task 1. */
+  logpoints: number[];
   entryCount: number;
   stale: boolean;
   truncated: number;

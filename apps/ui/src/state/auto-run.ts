@@ -11,7 +11,8 @@ const defaultTimers: TimerApi = {
 };
 
 /**
- * Debounces runs after code, language or runtime changes (spec §4.2, §5.2). Nothing runs until auto-run is armed --
+ * Debounces runs after code, language, runtime or logpoint changes (spec §4.2, §5.2, §6.3). Nothing runs until
+ * auto-run is armed --
  * by an edit, or (M4 Task 9) by the runtime switch itself, since spec §5.2 states a runtime change triggers a run
  * unconditionally, not only on an already-dirty tab -- and nothing runs in Safe Mode (spec §5.14). The guard is
  * re-checked both when scheduling and when the timer fires, and a pending timer is cancelled the moment the guard
@@ -45,7 +46,12 @@ export function startAutoRun(
     const changed =
       state.code !== previous.code ||
       state.tab?.language !== previous.tab?.language ||
-      state.tab?.runtime !== previous.tab?.runtime;
+      state.tab?.runtime !== previous.tab?.runtime ||
+      // Spec §6.3: "Any logpoint change triggers Auto Run." Like a runtime switch, the toggle arms auto-run
+      // itself (store.ts's toggleLogpoint/clearLogpoints), so this fires without a prior edit. Reconciling
+      // sticky lines after an edit keeps the previous array identity when the set is unchanged, so a plain
+      // edit does not reach this twice.
+      state.logpoints !== previous.logpoints;
     if (!changed) return;
     cancel();
     pending = timers.setTimeout(() => {

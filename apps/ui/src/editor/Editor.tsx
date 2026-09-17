@@ -7,6 +7,8 @@ import { setEditorHandle } from "./editor-handle";
 import { type EditorOptions, editorOptionsFor } from "./editor-options";
 import { registerImportCompletions } from "./import-completions";
 import { installActionsFor, registerInstallAssist } from "./install-assist";
+import { attachLogpointGutter } from "./logpoint-gutter";
+import { hollowLogpointLines } from "./logpoints";
 import { createMarkerTracker, type EditorMarker, markersFor } from "./markers";
 import { ModelCache } from "./models";
 import { languageId, modelUri, setupMonaco } from "./monaco-setup";
@@ -157,6 +159,16 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
     let contentSubscription: Monaco.IDisposable | null = null;
     const hover = editor.createDecorationsCollection();
 
+    // Spec §6.3: the logpoint glyph margin. `glyphMargin: true` is already set in the editor options above.
+    // Every dep reads through `store.getState()` at call time rather than closing over a snapshot, so a render
+    // driven by the subscription below always draws the state that triggered it.
+    const logpoints = attachLogpointGutter(monaco, editor, {
+      lines: () => store.getState().logpoints,
+      hollow: () => hollowLogpointLines(store.getState().diagnostics),
+      toggle: (line) => store.getState().toggleLogpoint(line),
+      reconcile: (lines) => store.getState().setLogpoints(lines),
+    });
+
     const applyHover = (line: number | null) => {
       hover.set(
         line
@@ -226,6 +238,9 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
         reportCursor();
         // A new model starts with no markers or decorations (as built in M1): reapply both.
         applyMarkers(store.getState());
+        // The decorations collection still holds the previous model's ids here; rendering re-seeds it against the
+        // model just attached, so the next edit reconciles from this tab's dots rather than the old tab's.
+        logpoints.render();
         applyHover(store.getState().hoveredLine);
         applyTypeScript(store.getState());
         feed(tabId, model);
@@ -267,6 +282,7 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
         const position = editor.getPosition();
         return model && position ? model.getOffsetAt(position) : 0;
       },
+      getCursorLine: () => editor.getPosition()?.lineNumber ?? null,
       getSelectedLineRange: () => {
         const selection = editor.getSelection();
         if (!selection) return null;
@@ -440,6 +456,11 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
         }
       }
       if (state.hoveredLine !== previous.hoveredLine) applyHover(state.hoveredLine);
+      // A logpoint set change (a toggle, a clear, a tab switch) or a new run's diagnostics (which decide
+      // filled vs hollow) both change what the margin should draw.
+      if (state.logpoints !== previous.logpoints || state.diagnostics !== previous.diagnostics) {
+        logpoints.render();
+      }
       if (state.revealRequest && state.revealRequest !== previous.revealRequest) {
         const { line } = state.revealRequest;
         editor.revealLineInCenterIfOutsideViewport(line);
@@ -457,6 +478,7 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
     return () => {
       setEditorHandle(null);
       removePasteGuard();
+      logpoints.dispose();
       unsubscribe();
       view.saveActive();
       view.flush();

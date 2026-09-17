@@ -56,6 +56,9 @@ export const runExpandParamsSchema = z.object({
   handleId: z.string().regex(/^h\d+$/),
 });
 
+/** Spec §7.4 / Appendix A: the latest Babel output for a tab, optionally without the instrumentation calls. */
+export const runTranspiledParamsSchema = z.object({ tabId, hideInstrumentation: z.boolean() });
+
 export const bufferChangedSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });
 
 const languageSchema = z.enum(LANGUAGES);
@@ -394,6 +397,7 @@ export type E2EResponse = z.infer<typeof e2eResponseSchema>;
 export type RunStartParams = z.infer<typeof runStartParamsSchema>;
 export type TabParams = z.infer<typeof tabParamsSchema>;
 export type RunExpandParams = z.infer<typeof runExpandParamsSchema>;
+export type RunTranspiledParams = z.infer<typeof runTranspiledParamsSchema>;
 export type BufferChanged = z.infer<typeof bufferChangedSchema>;
 export type TabPatch = z.infer<typeof tabPatchSchema>;
 export type TabCreateParams = z.infer<typeof tabCreateParamsSchema>;
@@ -429,6 +433,12 @@ export type MainRequests = {
   "app.bootstrap": { params: Record<string, never>; response: BootstrapPayload };
   "run.start": { params: RunStartParams; response: { runId: string } };
   "run.expand": { params: RunExpandParams; response: EncodedValue | null };
+  /**
+   * R-M5a-7: `source` is the exact source Main transpiled to produce `code`, so the panel can say when what it
+   * shows is output for code the user has since edited. Re-deriving that UI-side from the last `run.start` payload
+   * is unsound -- after a run that fails to transpile, Main still serves the previous successful transform.
+   */
+  "run.transpiled": { params: RunTranspiledParams; response: { code: string; source: string } | null };
   "tab.create": { params: TabCreateParams; response: { tab: TabState } };
   "tab.close": { params: TabParams; response: TabCloseResult };
   "tab.reopen": { params: Record<string, never>; response: TabWithContent | null };

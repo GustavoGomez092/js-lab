@@ -1,3 +1,4 @@
+import type { SideBarPanel } from "../state/store";
 import { strings } from "../strings";
 
 const ICONS = {
@@ -29,7 +30,9 @@ function Icon({ path }: { path: string }) {
 export function ActivityBar(props: {
   busy: boolean;
   sideBarOpen: boolean;
-  panel: "snippets" | "ai";
+  // Wider than the two buttons this bar owns: the side bar can also be showing Transpiled Output, which has no
+  // activity-bar button of its own (spec §7.4 puts it in the Actions menu), and then neither button is pressed.
+  panel: SideBarPanel;
   canOpenSettings: boolean;
   /** Keycap text from the effective keybindings, or null when the command is unbound (FB-m3). */
   runKeys: string | null;

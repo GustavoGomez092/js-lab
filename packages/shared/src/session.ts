@@ -63,6 +63,13 @@ export const tabStateSchema = z.object({
   id: z.string().min(1),
   title: z.string().catch("Untitled"),
   titleIsCustom: z.boolean().catch(false),
+  /**
+   * True only while the tab still holds exactly what JSLab put there itself -- today, the first-run welcome sample
+   * (spec §7.5). Main owns it: `SessionStore` sets it when it writes the welcome tab and clears it on the first
+   * buffer write whose content differs. It exists so ⌘W can tell "untouched" from "empty" (R-M5a-REGRESSION-2,
+   * `apps/ui/src/files/file-flows.ts`), which stopped being the same question when the welcome tab arrived.
+   */
+  pristine: z.boolean().catch(false),
   // As built by the M1 fix wave (final review M13): the settings defaults, so new tabs and repaired fields agree.
   language: z.enum(LANGUAGES).catch(DEFAULT_LANGUAGE),
   runtime: z.enum(RUNTIMES).catch(DEFAULT_RUNTIME),

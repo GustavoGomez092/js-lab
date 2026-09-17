@@ -15,7 +15,7 @@ import { join } from "node:path";
  * Pinning the count, rather than merely listing the file, is what makes this catch the realistic regression:
  * adding a tenth unbounded read to a file that already has a legitimate one.
  *
- * Four ways around the first version of this gate were found and are now closed, each of which still executed the
+ * Seven ways around the first version of this gate were found and are now closed, each of which still executed the
  * read in Main:
  *
  *   1. `import { readFile as slurp }` -- the call site says `slurp(p)` and matches no call pattern. Caught by
@@ -32,6 +32,16 @@ import { join } from "node:path";
  *      never run in Main, and sweeping them in would have meant allowlisting reads that are not the hazard.
  *   4. Splitting `Bun.file(p).text()` across three lines, because the patterns were matched per line. Lines are
  *      joined before matching, and the patterns tolerate whitespace between every token.
+ *   5. `import { readRegularFileText as slurp }` -- evasion 1 again, one ledger over, against the project's *own*
+ *      unbounded reader rather than `node:fs`. The call site says `slurp(p)`, which matches no call pattern, and
+ *      the waiver disappears from SIZE_EXEMPT entirely. Caught by `RENAMED_UNBOUNDED_READER`, in every file.
+ *   6. Hand-rolling the read from `openSync`/`fstatSync`/`readSync` inside an ALLOWLISTED file. `readSync` was in
+ *      the import check but in no call-level list, and the import check skips allowlisted files, so nothing looked
+ *      at it and no count moved. Caught by `FD_PRIMITIVE`, which only `THE_READER` may name.
+ *   7. Recording a genuine `readRegularFileText(p)` as a NOT_A_READ_CAP entry -- a ledger whose whole claim is
+ *      "no file is read here". The waiver test skipped those files wholesale while the pin only checked a total,
+ *      so the real read was excused by a ledger that cannot describe one. `UNBOUNDED_READER_CALL` is now split out
+ *      and applies to those files too; only `CAP_WAIVER_TOKEN` is theirs to classify.
  *
  * What is deliberately NOT done: lexing TypeScript. An early attempt stripped comments properly and broke on this
  * repo's own regex literals -- a backtick inside `/`/g` in css-plugin.ts flips a naive scanner into string mode and
@@ -49,6 +59,10 @@ import { join } from "node:path";
  *     rejects it at *error* severity, so it cannot land.
  *   - Only `node:fs` and `node:fs/promises` are matched. A whole-file read reached through some other builtin is
  *     not in scope.
+ *   - A cap waived as a plain number (`readBoundedText(p, Number.MAX_SAFE_INTEGER)`) is invisible to any textual
+ *     pattern, so this file cannot be the thing that closes it. It is closed in `bounded-read.ts` instead, which
+ *     refuses a finite `maxBytes` over `MAX_MEANINGFUL_CAP_BYTES`. That is the one limit here that is answered
+ *     elsewhere rather than admitted, and the ledger below is complete only because it is.
  *
  * To add a read here: use `src/main/fs/bounded-read.ts`. If the read genuinely cannot be bounded, add it below
  * with a reason -- the reason is the point, and "it seemed fine" is not one.
@@ -64,6 +78,22 @@ const THE_READER = `${MAIN_ROOT}/fs/bounded-read.ts`;
  * tokens is tolerated so the call cannot be split across lines to hide from the scan.
  */
 const BARE_READ = [/readFileSync\s*\(/, /readFile\s*\(/, /Bun\s*\.\s*file\s*\(/, /createReadStream\s*\(/];
+
+/**
+ * The fd primitives a whole-file read is hand-rolled from.
+ *
+ * These are not unbounded reads in themselves -- `bounded-read.ts` is built out of exactly this
+ * `openSync`/`fstatSync`/`readSync` shape -- which is precisely why no other file may name them: `openSync(path)`
+ * without `O_NONBLOCK` blocks on a FIFO exactly as `readFileSync` does, and a hand-rolled read loop bounds nothing
+ * unless its author remembered to bound it.
+ *
+ * `readSync` sat in `READ_BINDING` (the import check) but in `BARE_READ` not at all, and `fsReadImports` skips
+ * allowlisted files -- so this shape was invisible in exactly the files most likely to reach for it. Measured as a
+ * matched pair, identical code: in `services/npm-service.ts` (ALLOWED, pinned at 1) the gate stayed at
+ * 10 pass / 0 fail, while in `services/keybindings-store.ts` (not allowlisted) it failed 9 pass / 1 fail. Since the
+ * offence is the hand-rolling and not the count, this carries no allowlist exemption at all.
+ */
+const FD_PRIMITIVE = [/openSync\s*\(/, /readSync\s*\(/];
 
 /**
  * An `import ... from` **or `export ... from`** clause naming `node:fs` / `node:fs/promises`, whatever its shape.
@@ -101,6 +131,25 @@ function takesWholeModule(clause: string): boolean {
  * the gate at 8 pass / 0 fail.
  */
 const ALIASED_READ_BINDING = /\b(?:readFile|readFileSync|createReadStream|readSync)\s+as\s+/;
+
+/**
+ * One of the project's OWN unbounded readers, reached under another name.
+ *
+ * `UNBOUNDED_READER_CALL` matches `readRegularFileText(` as a *call*, so renaming the binding hides the waiver
+ * completely: `import { readRegularFileText as slurp }` leaves no `(` after the name, and `FS_IMPORT` /
+ * `ALIASED_READ_BINDING` police only `node:fs`. That is evasion 1 -- the `readFile as slurp` rename the header
+ * describes at length -- reappearing one ledger over, against JSLab's own reader; `cb9bf84` closed it for
+ * `node:fs` only.
+ *
+ * It is not a contrived spelling either. `runs/runner-config.ts` already writes
+ * `const readTextSync = readBoundedTextSyncOrNull`, so re-binding a reader to a local name is an established idiom
+ * in this tree, which is why the local-`const` form is refused alongside the import rename. Renaming these is never
+ * legitimate in any file: the waiver has to stay legible to SIZE_EXEMPT, and a renamed one is not.
+ */
+const RENAMED_UNBOUNDED_READER = [
+  /readRegularFileText(?:Sync)?\s+as\s+/,
+  /=\s*readRegularFileText(?:Sync)?\s*[;,)\]}]/,
+];
 
 /** Prose mentions these calls legitimately -- bounded-read.ts's own header explains why they are refused. */
 const COMMENT_LINE = /^\s*(\*|\/\/|\/\*)/;
@@ -184,7 +233,7 @@ const SIZE_EXEMPT: Record<string, { reads: number; why: string }> = {
   },
   [`${MAIN_ROOT}/logging/rotating-log.ts`]: {
     reads: 1,
-    why: "the log tail. Rotation bounds a ROTATED file at maxBytes, but the live file legitimately outgrows it exactly when rotation is failing -- when its contents matter most -- and maxBytes is a caller option, so there is no constant to cap at. This waiver is therefore real and stated: a huge main.log is still allocated whole. What it buys is the reachable hazard, since tail() is synchronous on Main's loop and existsSync is true for a FIFO: a FIFO at main.log blocked the Debug Report until a hard alarm killed the process. A refused file is now skipped, so the older rotated files behind it are still read",
+    why: "the log tail. The earlier reason given here -- 'maxBytes is a caller option, so there is no constant to cap at' -- is withdrawn: `this.options.maxBytes ?? 5 MB` is in scope in the same class, so a cap was always available and that was the weakest reason in this ledger. What is actually waived, stated plainly: the live file legitimately outgrows maxBytes exactly when rotation is FAILING, which is when its contents matter most, so capping there would discard the tail in the one case it is needed. The cost is bounded and named rather than hand-waved -- at most maxFiles (default 5) files allocated whole, synchronously, on Main's loop, when a Debug Report is generated. Bounding it honestly means reading backwards for the last `count` lines, which is a real change and is deliberately not made here. What the waiver buys is the reachable hazard: tail() is synchronous and existsSync is true for a FIFO, so a FIFO at main.log blocked the Debug Report until a hard alarm killed the process. A refused file is now skipped, so the older rotated files behind it are still read",
   },
   [`${MAIN_ROOT}/main-services.ts`]: {
     reads: 1,
@@ -209,42 +258,64 @@ const SIZE_EXEMPT: Record<string, { reads: number; why: string }> = {
 };
 
 /**
+ * A call to one of the project's OWN unbounded readers.
+ *
+ * This half is kept separate because it is never excusable by a NOT_A_READ_CAP entry: such an entry claims "no file
+ * is read here", and calling `readRegularFileText` *is* reading a file. Folding the two halves together is what let
+ * a genuine `readRegularFileText(p)` be laundered through a NOT_A_READ_CAP entry with `uses: 1` -- the hole
+ * SIZE_EXEMPT exists to close, reopened one ledger over.
+ */
+const UNBOUNDED_READER_CALL = [/readRegularFileText(?:Sync)?\s*\(/];
+
+/**
+ * Every OTHER way to waive a cap, reduced to the token that must appear in one.
+ *
+ * This began anchored to `readBounded...(`, because mutant M7 waived a cap by passing
+ * `Number.POSITIVE_INFINITY` to a bounded reader from a file carrying no SIZE_EXEMPT entry, and the gate stayed
+ * at 9 pass / 0 fail. That anchoring was still too narrow in the same way, one level up: a cap can be waived
+ * through a *wrapper* that names no reader at all. `services/session-store.ts` hands
+ * `Number.POSITIVE_INFINITY` to `loadJson`, and `loadJson` is the thing that reads -- a call the anchored
+ * pattern matched not at all, so the largest waiver in the tree would have gone unrecorded.
+ *
+ * Matching the bare token catches that, at the cost of also matching uses that have nothing to do with reading a
+ * file. Those are classified in NOT_A_READ_CAP below rather than quietly filtered out. A narrower "token as a
+ * call argument" pattern was tried first and is not viable: session-store's own waiver spans five lines with
+ * nested parens (`join(...)`, `() => ...`) between the opening call and the token, so every such pattern misses
+ * the real waiver while still matching an object property that merely holds the constant.
+ *
+ * Both spellings are listed because they are not the same token -- `Number.POSITIVE_INFINITY` carries `INFINITY`
+ * in caps, so a pattern written as `(?:POSITIVE_)?Infinity` matches only the bare form and silently misses the
+ * commoner one. That is not hypothetical, and it is not only a regex trap: the check that this token appeared
+ * nowhere else was first run as a case-sensitive grep for `Infinity`, which cannot see `POSITIVE_INFINITY`. It
+ * reported a clean tree while four uses sat in packages/serializer, and the claim "measured, zero occurrences"
+ * was written on the strength of it. The gate caught what the measurement missed, which is the whole point of
+ * pinning this in a test rather than trusting a one-off grep.
+ *
+ * These two are the ONLY spellings of "no cap" that can still reach a read, and that is enforced outside this
+ * file: `bounded-read.ts` refuses any finite `maxBytes` over `MAX_MEANINGFUL_CAP_BYTES`, so a waiver spelled as a
+ * large literal cannot land at all. Without that refusal this list could never have been complete, because no
+ * textual pattern can recognise an arbitrary large number as "not really a cap".
+ */
+const CAP_WAIVER_TOKEN = [/POSITIVE_INFINITY|Infinity/];
+
+/**
  * The size-waiving reads. Anything matching one must carry a SIZE_EXEMPT reason.
  */
-const UNBOUNDED_SIZE = [
-  /readRegularFileText(?:Sync)?\s*\(/,
-  // Every other way to waive a cap, reduced to the token that must appear in one.
-  //
-  // This began anchored to `readBounded...(`, because mutant M7 waived a cap by passing
-  // `Number.POSITIVE_INFINITY` to a bounded reader from a file carrying no SIZE_EXEMPT entry, and the gate stayed
-  // at 9 pass / 0 fail. That anchoring was still too narrow in the same way, one level up: a cap can be waived
-  // through a *wrapper* that names no reader at all. `services/session-store.ts` hands
-  // `Number.POSITIVE_INFINITY` to `loadJson`, and `loadJson` is the thing that reads -- a call the anchored
-  // pattern matched not at all, so the largest waiver in the tree would have gone unrecorded.
-  //
-  // Matching the bare token catches that, at the cost of also matching uses that have nothing to do with reading a
-  // file. Those are classified in NOT_A_READ_CAP below rather than quietly filtered out. A narrower "token as a
-  // call argument" pattern was tried first and is not viable: session-store's own waiver spans five lines with
-  // nested parens (`join(...)`, `() => ...`) between the opening call and the token, so every such pattern misses
-  // the real waiver while still matching an object property that merely holds the constant.
-  //
-  // Both spellings are listed because they are not the same token -- `Number.POSITIVE_INFINITY` carries `INFINITY`
-  // in caps, so a pattern written as `(?:POSITIVE_)?Infinity` matches only the bare form and silently misses the
-  // commoner one. That is not hypothetical, and it is not only a regex trap: the check that this token appeared
-  // nowhere else was first run as a case-sensitive grep for `Infinity`, which cannot see `POSITIVE_INFINITY`. It
-  // reported a clean tree while four uses sat in packages/serializer, and the claim "measured, zero occurrences"
-  // was written on the strength of it. The gate caught what the measurement missed, which is the whole point of
-  // pinning this in a test rather than trusting a one-off grep.
-  /POSITIVE_INFINITY|Infinity/,
-];
+const UNBOUNDED_SIZE = [...UNBOUNDED_READER_CALL, ...CAP_WAIVER_TOKEN];
 
 /**
  * Occurrences of the waiver token that are NOT a file read's byte cap, pinned by count with a reason.
  *
- * `UNBOUNDED_SIZE` matches a bare token, so it necessarily also matches uses that have nothing to do with reading a
- * file. Those are classified here rather than dropped silently, and the count is pinned exactly as ALLOWED pins a
+ * `CAP_WAIVER_TOKEN` matches a bare token, so it necessarily also matches uses that have nothing to do with reading
+ * a file. Those are classified here rather than dropped silently, and the count is pinned exactly as ALLOWED pins a
  * read count -- so a NEW occurrence in one of these files, which could perfectly well be a real read waiver, fails
  * the gate instead of hiding behind the ones already here.
+ *
+ * An entry here excuses the TOKEN and nothing else. It used to excuse the whole file, which made it a strictly
+ * better hiding place than SIZE_EXEMPT: a real `readRegularFileText(p)` added to a file listed here, with `uses: 1`
+ * and a plausible reason, left the gate at 10 pass / 0 fail, because the waiver test skipped the file entirely and
+ * the pin only compared a total. A call to an unbounded reader is a file being read, which is the one thing an
+ * entry here asserts is not happening, so `UNBOUNDED_READER_CALL` is checked in these files like any other.
  */
 const NOT_A_READ_CAP: Record<string, { uses: number; why: string }> = {
   "packages/serializer/src/encode.ts": {
@@ -472,10 +543,10 @@ describe("no unbounded reads in Main", () => {
   test("no file outside SIZE_EXEMPT waives the byte cap", () => {
     const offenders = scannedFiles()
       // bounded-read.ts *declares* readRegularFileText; it is the reader, not a caller reaching past it.
-      // NOT_A_READ_CAP files carry the token for a reason that is not a read at all; the test below pins their
-      // counts, so excluding them here cannot hide a real waiver added beside one.
-      .filter((file) => file !== THE_READER && !(file in SIZE_EXEMPT) && !(file in NOT_A_READ_CAP))
-      .flatMap((file) => matchesIn(file, UNBOUNDED_SIZE));
+      .filter((file) => file !== THE_READER && !(file in SIZE_EXEMPT))
+      // A NOT_A_READ_CAP file is excused the TOKEN only -- its count is pinned by the test below -- and is held to
+      // the reader call like every other file. Excusing it whole is what let a real read hide in that ledger.
+      .flatMap((file) => matchesIn(file, file in NOT_A_READ_CAP ? UNBOUNDED_READER_CALL : UNBOUNDED_SIZE));
 
     expect(offenders).toEqual([]);
   });
@@ -490,9 +561,36 @@ describe("no unbounded reads in Main", () => {
     for (const [file, entry] of Object.entries(NOT_A_READ_CAP)) {
       expect({ file, exists: files.has(file) }).toEqual({ file, exists: true });
       expect(entry.why.length).toBeGreaterThan(20);
-      actual[file] = matchesIn(file, UNBOUNDED_SIZE).length;
+      // The token only: a reader call in one of these files is an offence, not a classifiable use, and the test
+      // above refuses it there. Counting it here would let the pin absorb it.
+      actual[file] = matchesIn(file, CAP_WAIVER_TOKEN).length;
       pinned[file] = entry.uses;
     }
     expect(actual).toEqual(pinned);
+  });
+
+  test("no file reaches one of the project's own unbounded readers under another name", () => {
+    // Evasion 1 (`readFile as slurp`) reappearing against JSLab's own reader: the waiver is matched as a CALL, so
+    // an alias leaves nothing to match and the read vanishes from SIZE_EXEMPT altogether. Proven twice, with an
+    // aliased import and with the local-const rename `runner-config.ts` already uses: both left the gate fully
+    // green. Renaming these is never legitimate, so -- like the node:fs rename -- this carries no exemption.
+    //
+    // Deliberately no "N pass / N fail" figures in this comment: bun echoes the source around a failing assertion,
+    // so a probe script that scrapes totals out of the run reads them back out of THIS prose instead. That is not
+    // hypothetical -- it happened while proving this very test, and reported a caught evasion as an uncaught one.
+    const offenders = scannedFiles().flatMap((file) => matchesIn(file, RENAMED_UNBOUNDED_READER));
+
+    expect(offenders).toEqual([]);
+  });
+
+  test("no file but the shared reader hand-rolls a whole-file read out of fd primitives", () => {
+    // bounded-read.ts is written in exactly this openSync/fstatSync/readSync shape, which is what makes the shape
+    // the likeliest to be copied by someone doing the right thing badly -- and copying it is how an allowlisted
+    // file reads a whole file without moving the count that pins it.
+    const offenders = scannedFiles()
+      .filter((file) => file !== THE_READER)
+      .flatMap((file) => matchesIn(file, FD_PRIMITIVE));
+
+    expect(offenders).toEqual([]);
   });
 });

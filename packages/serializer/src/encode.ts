@@ -216,6 +216,8 @@ export class Encoder {
   #nextId = 1;
   readonly #ids = new WeakMap<object, number>();
   #remaining = Number.POSITIVE_INFINITY;
+  /** OU-02: where this expansion's root collection starts. Non-zero only inside `#encodeAt`. */
+  #rootOffset = 0;
 
   constructor(
     readonly registry: HandleRegistry,
@@ -255,8 +257,15 @@ export class Encoder {
     return out;
   }
 
-  /** Returns null when the handle is unknown (for example after the registry was cleared). */
-  expand(handle: string): EncodedValue | null {
+  /**
+   * Returns null when the handle is unknown (for example after the registry was cleared).
+   *
+   * `offset` (OU-02) is the index of the first collection entry to encode; the default, 0, is exactly the
+   * behaviour every caller had before this parameter existed. A `string` or `function` handle ignores it —
+   * neither has entries to page. A `getter` handle honours it, because the value a getter returns is a
+   * perfectly ordinary collection.
+   */
+  expand(handle: string, offset = 0): EncodedValue | null {
     const target = this.registry.get(handle);
     if (!target) return null;
     switch (target.kind) {
@@ -277,7 +286,7 @@ export class Encoder {
         } catch (error) {
           value = error;
         }
-        return this.#expandValue(value);
+        return this.#expandValue(value, offset);
       }
       case "value":
         if (typeof target.value === "function") {
@@ -287,7 +296,7 @@ export class Encoder {
           } catch {}
           return { t: "string", v: slicePairSafe(source, this.limits.maxFunctionSource) };
         }
-        return this.#expandValue(target.value);
+        return this.#expandValue(target.value, offset);
     }
   }
 
@@ -374,15 +383,25 @@ export class Encoder {
     }
   }
 
+  /** OU-02: the offset applies to the root value of one expansion only, never to nested children. */
+  #encodeAt(value: unknown, offset: number): EncodedValue {
+    this.#rootOffset = offset;
+    try {
+      return this.#encode(value, 0, new Set());
+    } finally {
+      this.#rootOffset = 0;
+    }
+  }
+
   /** One expansion level, halving the collection and string limits until the reply fits MAX_EXPAND_BYTES. */
-  #expandValue(value: unknown): EncodedValue {
+  #expandValue(value: unknown, offset = 0): EncodedValue {
     let limits: EncodeLimits = EXPANDED_LIMITS;
     for (;;) {
       const mark = this.registry.mark();
       const child = new Encoder(this.registry, limits, this.hooks);
       child.#remaining = MAX_EXPAND_BYTES;
       try {
-        const encoded = child.#encode(value, 0, new Set());
+        const encoded = child.#encodeAt(value, offset);
         if (jsonBytes(encoded) <= MAX_EXPAND_BYTES) return encoded;
       } catch (error) {
         if (error !== BUDGET_EXCEEDED) throw error;
@@ -544,7 +563,7 @@ export class Encoder {
     }
     if (Array.isArray(obj)) return this.#array(obj, depth, ancestors);
     if (ArrayBuffer.isView(obj) && !(obj instanceof DataView))
-      return this.#typedArray(obj as unknown as ArrayLike<number | bigint> & object);
+      return this.#typedArray(obj as unknown as ArrayLike<number | bigint> & object, depth);
     if (obj instanceof ArrayBuffer) {
       this.#charge(4 * 32);
       return {
@@ -640,11 +659,35 @@ export class Encoder {
     };
   }
 
+  /**
+   * OU-02: the half-open range of this collection to encode, and the paging fields to attach.
+   *
+   * Only the root of an expansion is ever offset. `#encode` recurses at depth > 0, so a nested collection inside
+   * the page starts at 0, exactly as it always has. (`#encodeAt`'s `finally` is what clears `#rootOffset`;
+   * clearing it here as well would be a second, unpinnable copy of the same guarantee.)
+   *
+   * `end` is never below `start`: an offset past the end must be an empty page, not a negative range — which
+   * would loop backwards here and *credit* the byte budget in `#typedArray`'s `#charge`.
+   */
+  #take(
+    total: number,
+    depth: number,
+  ): { start: number; end: number; page: { from?: number; next?: number; more?: number } } {
+    const start = depth === 0 ? this.#rootOffset : 0;
+    const end = Math.max(start, Math.min(total, start + this.limits.maxEntries));
+    const more = Math.max(0, total - end);
+    return {
+      start,
+      end,
+      page: { ...(start > 0 ? { from: start } : {}), ...(more > 0 ? { more, next: end } : {}) },
+    };
+  }
+
   #array(arr: unknown[], depth: number, ancestors: Set<object>): EncodedValue {
-    const limit = Math.min(arr.length, this.limits.maxEntries);
+    const { start, end, page } = this.#take(arr.length, depth);
     const items: ([number, EncodedValue] | { hole: number })[] = [];
     let holes = 0;
-    for (let i = 0; i < limit; i++) {
+    for (let i = start; i < end; i++) {
       if (!Object.hasOwn(arr, i)) {
         holes++;
         continue;
@@ -664,16 +707,15 @@ export class Encoder {
       ctor,
       length: arr.length,
       items,
-      ...(arr.length > limit
-        ? { more: arr.length - limit, handle: this.registry.register({ kind: "value", value: arr }) }
-        : {}),
+      ...page,
+      ...(page.more ? { handle: this.registry.register({ kind: "value", value: arr }) } : {}),
     };
   }
 
-  #typedArray(view: ArrayLike<number | bigint> & object): EncodedValue {
-    const limit = Math.min(view.length, this.limits.maxEntries);
+  #typedArray(view: ArrayLike<number | bigint> & object, depth: number): EncodedValue {
+    const { start, end, page } = this.#take(view.length, depth);
     const items: (number | string)[] = [];
-    for (let i = 0; i < limit; i++) {
+    for (let i = start; i < end; i++) {
       const x = view[i] as number | bigint;
       // JSON has no NaN, ±Infinity or -0, so those items are strings, like scalar numbers. The UI reads the
       // item type from `ctor` (Big* arrays hold bigints), never from typeof.
@@ -681,22 +723,24 @@ export class Encoder {
       else if (Number.isFinite(x) && !Object.is(x, -0)) items.push(x);
       else items.push(Object.is(x, -0) ? "-0" : String(x));
     }
-    this.#charge(limit * 24);
+    this.#charge((end - start) * 24);
     return {
       t: "typedArray",
       ctor: ctorName(view) ?? "TypedArray",
       length: view.length,
       items,
-      ...(view.length > limit
-        ? { more: view.length - limit, handle: this.registry.register({ kind: "value", value: view }) }
-        : {}),
+      ...page,
+      ...(page.more ? { handle: this.registry.register({ kind: "value", value: view }) } : {}),
     };
   }
 
   #map(map: Map<unknown, unknown>, depth: number, ancestors: Set<object>): EncodedValue {
+    const { start, end, page } = this.#take(map.size, depth);
     const entries: [EncodedValue, EncodedValue][] = [];
+    let index = 0;
     for (const [k, v] of map) {
-      if (entries.length >= this.limits.maxEntries) break;
+      if (index >= end) break;
+      if (index++ < start) continue;
       entries.push([this.#encode(k, depth + 1, ancestors), this.#encode(v, depth + 1, ancestors)]);
     }
     return {
@@ -704,16 +748,18 @@ export class Encoder {
       id: this.#id(map),
       size: map.size,
       entries,
-      ...(map.size > entries.length
-        ? { more: map.size - entries.length, handle: this.registry.register({ kind: "value", value: map }) }
-        : {}),
+      ...page,
+      ...(page.more ? { handle: this.registry.register({ kind: "value", value: map }) } : {}),
     };
   }
 
   #set(set: Set<unknown>, depth: number, ancestors: Set<object>): EncodedValue {
+    const { start, end, page } = this.#take(set.size, depth);
     const items: EncodedValue[] = [];
+    let index = 0;
     for (const v of set) {
-      if (items.length >= this.limits.maxEntries) break;
+      if (index >= end) break;
+      if (index++ < start) continue;
       items.push(this.#encode(v, depth + 1, ancestors));
     }
     return {
@@ -721,9 +767,8 @@ export class Encoder {
       id: this.#id(set),
       size: set.size,
       items,
-      ...(set.size > items.length
-        ? { more: set.size - items.length, handle: this.registry.register({ kind: "value", value: set }) }
-        : {}),
+      ...page,
+      ...(page.more ? { handle: this.registry.register({ kind: "value", value: set }) } : {}),
     };
   }
 

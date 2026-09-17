@@ -41,15 +41,51 @@ export type EncodedValue =
       items: ([number, EncodedValue] | { hole: number })[];
       more?: number;
       handle?: string;
+      /**
+       * OU-02. `from` is the index of this page's first entry (absent means 0) and `next` is the offset to pass
+       * to `run.expand` for the following page; `next` is present exactly when `more` is, and both are absent
+       * once the collection is exhausted. Objects carry neither: only collections are paged (spec §5.9,
+       * `docs/superpowers/specs/2026-09-12-jslab-design.md:443-444`, lists object properties and collection
+       * entries as two separate rows).
+       */
+      from?: number;
+      next?: number;
     }
-  | { t: "map"; id: number; size: number; entries: [EncodedValue, EncodedValue][]; more?: number; handle?: string }
-  | { t: "set"; id: number; size: number; items: EncodedValue[]; more?: number; handle?: string }
+  | {
+      t: "map";
+      id: number;
+      size: number;
+      entries: [EncodedValue, EncodedValue][];
+      more?: number;
+      handle?: string;
+      from?: number;
+      next?: number;
+    }
+  | {
+      t: "set";
+      id: number;
+      size: number;
+      items: EncodedValue[];
+      more?: number;
+      handle?: string;
+      from?: number;
+      next?: number;
+    }
   | { t: "weak"; kind: "WeakMap" | "WeakSet" | "WeakRef" }
   | { t: "promise"; id: number; state: "pending" | "fulfilled" | "rejected"; value?: EncodedValue }
   | { t: "error"; name: string; message: string; stack: StackFrame[]; cause?: EncodedValue }
   | { t: "date"; iso: string | null }
   | { t: "regexp"; source: string; flags: string }
-  | { t: "typedArray"; ctor: string; length: number; items: (number | string)[]; more?: number; handle?: string }
+  | {
+      t: "typedArray";
+      ctor: string;
+      length: number;
+      items: (number | string)[];
+      more?: number;
+      handle?: string;
+      from?: number;
+      next?: number;
+    }
   | { t: "arrayBuffer"; byteLength: number; preview: number[] }
   | { t: "url"; href: string }
   | { t: "headers"; entries: [string, string][] }

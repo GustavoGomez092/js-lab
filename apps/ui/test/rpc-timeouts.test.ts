@@ -9,8 +9,11 @@ import {
 import {
   BUFFER_REQUEST_TIME_MS,
   DEFAULT_REQUEST_TIME_MS,
+  INTERACTIVE_REQUEST_TIME_MS,
   maxRequestTimeFor,
+  REQUEST_CLASS_TIME_MS,
   REQUEST_PAYLOAD_CLASS,
+  type RequestPayloadClass,
 } from "../src/rpc-timeouts";
 
 /**
@@ -73,17 +76,43 @@ const BIG_PAYLOAD_PROBE: Record<keyof MainRequests, Probe> = {
 /** The requests that move `MAX_TEXT_CHARS`-class data, in either direction. */
 const BUFFER_REQUESTS = MAIN_REQUEST_NAMES.filter((name) => REQUEST_PAYLOAD_CLASS[name] === "buffer");
 
+/**
+ * R-DIALOG-TIMEOUT-1. The requests Main cannot answer until a *person* has finished with a native modal dialog.
+ *
+ * Named rather than derived, because what makes a request interactive lives in Main's handler -- `theme.import` is
+ * served by `createThemeHandlers`'s `openDialog` (apps/desktop/src/main/index.ts) -- and this package cannot import
+ * apps/desktop to ask. So the pin below is on the CONSEQUENCE, not the cause: whatever the class ends up being
+ * called and whatever number it carries, a request that waits on a human has to outlast a human.
+ */
+const HUMAN_INPUT_REQUESTS = ["theme.import"] as const satisfies readonly (keyof MainRequests)[];
+
+/**
+ * The near-miss: looks like part of a file import, opens nothing. `theme.importPick` is the second half of a
+ * multi-theme `.vsix` import and takes `{ token, path }` for an archive entry Main already holds, so the file is
+ * chosen before it is ever sent. It must NOT be swept into the interactive class along with its sibling.
+ */
+const NO_HUMAN_INPUT_REQUESTS = ["theme.importPick"] as const satisfies readonly (keyof MainRequests)[];
+
 describe("per-request RPC timeouts (F1)", () => {
   test("every request Main serves is classified, and only those", () => {
     expect(Object.keys(REQUEST_PAYLOAD_CLASS).sort()).toEqual([...MAIN_REQUEST_NAMES].sort());
   });
 
-  test("a buffer-class request gets the long bound and a small one the default", () => {
+  test("every request is bounded by the class it was given, and every class has its own bound", () => {
+    // Spelled out per class, not re-derived from `REQUEST_CLASS_TIME_MS`, so a bound that moved has to be moved
+    // here too rather than the table silently agreeing with itself.
+    expect(REQUEST_CLASS_TIME_MS).toEqual({
+      buffer: BUFFER_REQUEST_TIME_MS,
+      small: DEFAULT_REQUEST_TIME_MS,
+      interactive: INTERACTIVE_REQUEST_TIME_MS,
+    });
     for (const name of MAIN_REQUEST_NAMES) {
-      const expected = REQUEST_PAYLOAD_CLASS[name] === "buffer" ? BUFFER_REQUEST_TIME_MS : DEFAULT_REQUEST_TIME_MS;
-      expect(maxRequestTimeFor(name)).toBe(expected);
+      expect(maxRequestTimeFor(name)).toBe(REQUEST_CLASS_TIME_MS[REQUEST_PAYLOAD_CLASS[name]]);
     }
+    // Each class is a real widening of the one before it; two classes sharing a number would make one of them
+    // decorative and let a request be "reclassified" with no effect on what the UI actually waits.
     expect(BUFFER_REQUEST_TIME_MS).toBeGreaterThan(DEFAULT_REQUEST_TIME_MS);
+    expect(INTERACTIVE_REQUEST_TIME_MS).toBeGreaterThan(BUFFER_REQUEST_TIME_MS);
   });
 
   /**
@@ -134,5 +163,67 @@ describe("per-request RPC timeouts (F1)", () => {
       "tab.reopen",
     ]);
     for (const name of BUFFER_REQUESTS) expect(maxRequestTimeFor(name)).toBe(BUFFER_REQUEST_TIME_MS);
+  });
+});
+
+/**
+ * R-DIALOG-TIMEOUT-1. F1 was a request bounded as though it were small when its PAYLOAD was large. `theme.import`
+ * was the same bug on the other axis: its payload really is small, so it was classified `small` and inherited the
+ * 10 s default, but Main answers it only once the user has picked a file in a native dialog. Ten seconds is an
+ * ordinary amount of time to spend finding a `.vsix`, and on timeout the UI promise rejects while Main -- never
+ * told -- imports the theme anyway, so the user is told the import failed and then sees it succeed.
+ *
+ * These assert a floor in human terms rather than the constant's value: restating `INTERACTIVE_REQUEST_TIME_MS`
+ * would pass just as happily if the class were deleted and 10 s came back.
+ */
+describe("requests that block on a human (R-DIALOG-TIMEOUT-1)", () => {
+  /** Longer than anyone plausibly spends browsing for a file -- and far above both other classes' bounds. */
+  const PLAUSIBLE_BROWSE_MS = 5 * 60_000;
+
+  test("a request that waits on a file dialog outlasts a person browsing for a file", () => {
+    for (const name of HUMAN_INPUT_REQUESTS) {
+      // Fails at `small` (10 s), which is the bug, and fails at `buffer` (60 s) too: a minute is not a generous
+      // amount of time to locate a theme file, and `buffer` would be claiming this request moves 64 MB besides.
+      expect(maxRequestTimeFor(name)).toBeGreaterThanOrEqual(PLAUSIBLE_BROWSE_MS);
+      expect(maxRequestTimeFor(name)).toBeGreaterThan(DEFAULT_REQUEST_TIME_MS);
+    }
+    expect(PLAUSIBLE_BROWSE_MS).toBeGreaterThan(BUFFER_REQUEST_TIME_MS);
+  });
+
+  test("a request whose file is already chosen keeps the small-payload default", () => {
+    for (const name of NO_HUMAN_INPUT_REQUESTS) {
+      expect(REQUEST_PAYLOAD_CLASS[name]).toBe("small");
+      expect(maxRequestTimeFor(name)).toBe(DEFAULT_REQUEST_TIME_MS);
+    }
+    // The two halves of one `.vsix` import are deliberately bounded differently: the half with the dialog waits.
+    expect(maxRequestTimeFor("theme.import")).toBeGreaterThan(maxRequestTimeFor("theme.importPick"));
+  });
+
+  test("no request is left interactive-classified without being declared one here", () => {
+    const interactive = MAIN_REQUEST_NAMES.filter((name) => REQUEST_PAYLOAD_CLASS[name] === "interactive");
+    expect(interactive.sort()).toEqual([...HUMAN_INPUT_REQUESTS].sort());
+  });
+
+  /**
+   * Constraint 1: both tables stay exhaustive BY TYPE, so neither a new request nor a new class can ship
+   * unclassified. These are compile-time assertions -- `tsc --noEmit -p .` covers `test/` (apps/ui/tsconfig.json
+   * includes it), and a `@ts-expect-error` that stops being an error fails the typecheck just as loudly as one
+   * that starts being one, so this cannot rot in either direction.
+   */
+  test("the classification tables are exhaustive by type", () => {
+    const withoutARequest: Omit<typeof REQUEST_PAYLOAD_CLASS, "theme.import"> = REQUEST_PAYLOAD_CLASS;
+    // @ts-expect-error - a table missing one request must not satisfy the exhaustive Record. That omission is F1.
+    const missingRequest: Record<keyof MainRequests, RequestPayloadClass> = withoutARequest;
+
+    // @ts-expect-error - a payload class with no bound of its own must not compile; it would inherit 10 s in silence.
+    const missingClass: Record<RequestPayloadClass, number> = {
+      buffer: BUFFER_REQUEST_TIME_MS,
+      small: DEFAULT_REQUEST_TIME_MS,
+    };
+
+    // The runtime halves, so the type-level pins above are not the only thing standing here.
+    expect(missingRequest["run.start"]).toBe("buffer");
+    expect(missingClass.small).toBe(DEFAULT_REQUEST_TIME_MS);
+    expect(Object.keys(REQUEST_CLASS_TIME_MS).sort()).toEqual(["buffer", "interactive", "small"]);
   });
 });

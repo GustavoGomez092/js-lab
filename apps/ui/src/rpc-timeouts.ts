@@ -1,15 +1,23 @@
 import type { MainRequests } from "@jslab/rpc-schema";
 
 /**
- * How much data one request can move, and therefore how long the UI is willing to wait for it.
+ * What makes one request slow, and therefore how long the UI is willing to wait for it.
  *
  * - `buffer`: the request carries or returns tab text. One tab's text is capped at `MAX_TEXT_CHARS` (64 MB), and
  *   `app.bootstrap` is additionally unbounded in tab count. Main may be doing an atomic write, an fsync and a
  *   `.bak` of that much data, possibly on a slow or network volume; the transport of the payload alone is already
  *   the dominant cost, whatever Main does with it afterwards.
  * - `small`: bounded, small payloads -- ids, settings patches, package names.
+ * - `interactive`: the payload is small, but Main cannot reply until a *person* has finished with a native modal
+ *   dialog. What has to be outlasted is the user, not the bytes.
+ *
+ * `interactive` is a third class rather than a reuse of `buffer` (R-DIALOG-TIMEOUT-1). The 60 s bound would in
+ * fact be an improvement on 10 s, but `buffer` is a claim about size -- every comment in the table below justifies
+ * it with `MAX_TEXT_CHARS` -- and a dialog request moves nothing. Folding the two together would put two unrelated
+ * hazards on one axis, so the next reader could no longer tell a wide payload from a patient user, and 60 s would
+ * silently become the ceiling on how long someone may browse for a file.
  */
-export type RequestPayloadClass = "buffer" | "small";
+export type RequestPayloadClass = "buffer" | "small" | "interactive";
 
 /** Electrobun's bound for every `small` request on this window's RPC. */
 export const DEFAULT_REQUEST_TIME_MS = 10_000;
@@ -19,6 +27,36 @@ export const DEFAULT_REQUEST_TIME_MS = 10_000;
  * Ten seconds is not enough for a 64 MB atomic write plus fsync plus `.bak`, nor for reading every open tab back.
  */
 export const BUFFER_REQUEST_TIME_MS = 60_000;
+
+/**
+ * R-DIALOG-TIMEOUT-1: the bound for a request that blocks on a human rather than on I/O.
+ *
+ * `theme.import` sends no params and returns a colour map, but Main does not answer it until the user has found
+ * and chosen a `.vsix` or `.json` in a native file dialog -- scrolling through folders, changing their mind, or
+ * leaving to download the theme first. Ten seconds is an ordinary amount of time to spend on that. Ten minutes is
+ * picked to be far longer than any plausible browse rather than to be tight, because being *early* is the whole
+ * failure: on timeout the UI promise rejects and Main is never told, so Main imports the theme the user picked
+ * while the UI reports that the import failed.
+ *
+ * Finite rather than Electrobun's `Infinity` (`.hutch/devkit/api/shared/rpc.ts` accepts it and then starts no
+ * timer at all): a bound that never fires can never leak a pending request, but it can also never release one,
+ * and ten minutes already outlasts by a wide margin the only thing this bound exists to survive.
+ */
+export const INTERACTIVE_REQUEST_TIME_MS = 600_000;
+
+/**
+ * The bound each class gets.
+ *
+ * Exhaustive by type for the same reason `REQUEST_PAYLOAD_CLASS` is: adding a class to `RequestPayloadClass` is a
+ * compile error here until it has been given a bound. `maxRequestTimeFor` used to read
+ * `=== "buffer" ? BUFFER : DEFAULT`, which would have handed a brand-new class the 10 s default without a word --
+ * the same shape of omission as F1, one level up from it.
+ */
+export const REQUEST_CLASS_TIME_MS: Record<RequestPayloadClass, number> = {
+  buffer: BUFFER_REQUEST_TIME_MS,
+  small: DEFAULT_REQUEST_TIME_MS,
+  interactive: INTERACTIVE_REQUEST_TIME_MS,
+};
 
 /**
  * Exhaustive by type: adding a request to `MainRequests` is a compile error here until it is classified, so a new
@@ -64,16 +102,21 @@ export const REQUEST_PAYLOAD_CLASS: Record<keyof MainRequests, RequestPayloadCla
   // failure for work that in fact completed, which is exactly the F1 failure this table exists to prevent.
   "snippets.list": "buffer",
   "snippets.save": "buffer",
-  // Small both ways: no params at all, and the reply is one converted theme (a colour map) or a `.vsix` chooser
-  // list -- never tab text. `theme.import` does open a native file dialog, so the bound also has to outlast the
-  // user picking a file; it keeps the 10 s default M5d shipped and was green with rather than being widened here
-  // on a guess, since widening it is a behaviour change no test on either side asks for.
-  "theme.import": "small",
+  // Small both ways as a payload: no params at all, and the reply is one converted theme (a colour map) or a
+  // `.vsix` chooser list -- never tab text. What bounds it is the person. Main serves it by opening a native file
+  // dialog (`createThemeHandlers`'s `openDialog`, main/index.ts) and cannot reply until the user has chosen or
+  // cancelled, so at the 10 s default M5d shipped, anyone who browsed for longer than that was told the import
+  // failed for a theme Main went on to import anyway -- F1's failure mode exactly, on the duration axis instead
+  // of the size one (R-DIALOG-TIMEOUT-1).
+  "theme.import": "interactive",
+  // NOT interactive: by the time this is sent the file has already been chosen. It is the second half of a
+  // multi-theme `.vsix` import and takes `{ token, path }` naming an entry in an archive Main already holds --
+  // no dialog opens, and nobody is waited on, so the small-payload default is the right bound.
   "theme.importPick": "small",
 };
 
 export function maxRequestTimeFor(method: keyof MainRequests): number {
-  return REQUEST_PAYLOAD_CLASS[method] === "buffer" ? BUFFER_REQUEST_TIME_MS : DEFAULT_REQUEST_TIME_MS;
+  return REQUEST_CLASS_TIME_MS[REQUEST_PAYLOAD_CLASS[method]];
 }
 
 /**

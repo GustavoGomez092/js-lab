@@ -26,6 +26,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
+    "i18n:check": "bun scripts/i18n-check.ts --bootstrap",
     "test": "bun test ./test && bun test ./isolated",
     "typecheck": "bun ../desktop/scripts/devkit-tsconfig.ts && tsc --noEmit -p ."
   },

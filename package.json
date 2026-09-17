@@ -12,6 +12,7 @@
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "biome check .",
     "format": "biome check --write .",
+    "i18n:check": "bun run --cwd apps/ui i18n:check",
     "e2e": "bun run --cwd packages/e2e e2e",
     "e2e:npm": "bun run --cwd packages/e2e e2e:npm",
     "test:npm": "bun run --cwd packages/test-registry test:npm && bun run --cwd apps/desktop test:npm",

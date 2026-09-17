@@ -23,7 +23,27 @@
   },
   "linter": {
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "style": { "noJsxLiterals": "error" }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["**/test/**", "**/isolated/**"],
+      "linter": { "rules": { "style": { "noJsxLiterals": "off" } } }
+    },
+    {
+      "includes": [
+        "apps/ui/src/env/EnvVarsSheet.tsx",
+        "apps/ui/src/npm/NpmSheet.tsx",
+        "apps/ui/src/output/EntryRow.tsx",
+        "apps/ui/src/output/ValueView.tsx",
+        "apps/ui/src/shell/StatusBar.tsx",
+        "apps/ui/src/shell/Toolbar.tsx",
+        "apps/ui/src/shell/parts.tsx",
+        "apps/ui/src/tabs/TabBar.tsx"
+      ],
+      "linter": { "rules": { "style": { "noJsxLiterals": "off" } } }
+    }
+  ]
 }

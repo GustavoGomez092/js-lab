@@ -48,6 +48,7 @@ import { createFontHandlers } from "./rpc/font-handlers";
 import { createNpmHandlers } from "./rpc/npm-handlers";
 import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
+import { createSnippetHandlers } from "./rpc/snippet-handlers";
 import { createTypesHandlers } from "./rpc/types-handlers";
 import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
@@ -305,6 +306,29 @@ async function start(): Promise<void> {
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createNpmHandlers({ npm, log }),
       createEnvHandlers({ env, log }),
+      createSnippetHandlers({
+        snippets: services.snippets,
+        // The same adapters the file handlers use, so E2E scripts snippet dialogs exactly like Open and Save As.
+        openDialog: ({ startingFolder }) =>
+          e2eEnabled
+            ? readE2EOpenDialog(paths.dataDir)
+            : Utils.openFileDialog({
+                startingFolder,
+                allowedFileTypes: "json",
+                canChooseFiles: true,
+                canChooseDirectory: false,
+                allowsMultipleSelection: false,
+              }),
+        saveDialog: (options) => (e2eEnabled ? readE2ESaveDialog(paths.dataDir) : saveDialog(options)),
+        readFile: (path) => Bun.file(path).text(),
+        writeFile: (path, content) => Bun.write(path, content).then(() => undefined),
+        documentsDir: Utils.paths.documents,
+        send: {
+          imported: (payload) => rpc.send["snippets.imported"](payload),
+          exported: (payload) => rpc.send["snippets.exported"](payload),
+        },
+        log,
+      }),
       createTypesHandlers({ types, log }),
       createWorkingDirectoryHandlers({
         session,

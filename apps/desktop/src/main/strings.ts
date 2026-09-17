@@ -49,6 +49,9 @@ export const strings = {
     tabGone: "That tab is no longer open.",
     openInAnotherTab: (name: string) => `${name} is already open in another tab.`,
   },
+  snippets: {
+    tooLarge: "That file is larger than 5 MB, so it isn't a snippet library.",
+  },
   notices: {
     copySaved: (file: string) => ` A copy was saved as ${file}`,
     settingsReset: "Settings were reset because the file was unreadable.",

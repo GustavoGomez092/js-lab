@@ -4,10 +4,13 @@ import {
   type EnvVars,
   envVarsSchema,
   LANGUAGES,
+  MAX_SNIPPETS,
   RUNTIMES,
   SETTINGS_SECTIONS,
   type Session,
   type Settings,
+  type Snippet,
+  snippetSchema,
 } from "@jslab/shared";
 import { z } from "zod";
 import type { RunEvent, RunState } from "./events";
@@ -201,6 +204,16 @@ export const npmSearchParamsSchema = z.object({ query: z.string().trim().min(1).
 export const npmListParamsSchema = z.object({ refreshOutdated: z.boolean() });
 export const npmrcSaveParamsSchema = z.object({ content: z.string().max(MAX_NPMRC_CHARS) });
 export const envSaveParamsSchema = z.object({ variables: envVarsSchema });
+
+/** Spec §13.4: the largest snippets file an import will read. Bigger files are refused without being parsed. */
+export const MAX_SNIPPETS_FILE_BYTES = 5 * 1024 * 1024;
+export const snippetsSaveParamsSchema = z.object({ snippets: z.array(snippetSchema).max(MAX_SNIPPETS) });
+export const snippetsExportParamsSchema = snippetsSaveParamsSchema;
+
+/** The result of `snippets.importDialog`: parsed records, or the reason the file was refused (spec §13.4). */
+export type SnippetsImported = { ok: true; snippets: Snippet[] } | { ok: false; reason: string; detail: string };
+export type SnippetsExported = { ok: true; path: string } | { ok: false; error: string } | { cancelled: true };
+export type { Snippet };
 export const packageTypesParamsSchema = z.object({ tabId, packages: z.array(npmNameSchema).min(1).max(50) });
 export const localTypesParamsSchema = z.object({
   tabId,
@@ -443,6 +456,8 @@ export type MainRequests = {
   "types.local": { params: { tabId: string; specifiers: string[] }; response: LocalTypesResult };
   "env.get": { params: Record<string, never>; response: { variables: EnvVars } };
   "env.save": { params: { variables: EnvVars }; response: SaveResult };
+  "snippets.list": { params: Record<string, never>; response: { snippets: Snippet[] } };
+  "snippets.save": { params: { snippets: Snippet[] }; response: SaveResult };
 };
 
 /** Messages received by Main, sent by the UI. */
@@ -470,6 +485,10 @@ export type MainMessages = {
   "npm.updateAll": Record<string, never>;
   "wd.pick": TabParams;
   "wd.clear": TabParams;
+  /** Spec §13.1 Options menu: opens the file dialog, parses the chosen file, and answers with `snippets.imported`. */
+  "snippets.importDialog": Record<string, never>;
+  /** Spec §13.1 Options menu: saveDialog with the default name `jslab-snippets.json`; answers `snippets.exported`. */
+  "snippets.exportDialog": { snippets: Snippet[] };
   "ui.stateFlushed": Record<string, never>;
   /**
    * M4 §5.12 / T9e: the tab's page reached `dom-ready` -- it is safe to inject script into it now. `generation`
@@ -516,6 +535,8 @@ export type ViewMessages = {
   "npm.log": { opId: string; text: string };
   "npm.changed": NpmListResult;
   "wd.changed": { tabId: string; tab: TabState };
+  "snippets.imported": SnippetsImported;
+  "snippets.exported": SnippetsExported;
   "app.flushState": Record<string, never>;
   /**
    * M4 §5.12: make sure this tab has a live `<electrobun-webview>`, creating one if the tab's own Web View toggle

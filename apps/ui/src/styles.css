@@ -241,6 +241,20 @@ button:disabled {
   background: var(--bg-lineHover);
 }
 
+/* M4 (user report): the node Monaco is given as `overflowWidgetsDomNode` (`editor/Editor.tsx`), holding every
+   overflowing hover/suggest/parameter-hint widget. Contributes no box of its own -- each widget inside is
+   positioned by Monaco itself -- so it must not take part in layout. The `z-index` sits above the editor and the
+   output but below every shell overlay (`.dialog-backdrop` 50, `.context-menu` 60, `.palette-scrim` 70,
+   `.palette` 71), which is the correct order: a modal should cover an editor hover, not the other way round.
+   None of this arbitrates against a docked `<electrobun-webview>`, which paints above all HTML whatever its
+   `z-index` -- that is `widget-occlusion.ts`'s job, not this rule's. */
+.jslab-overflow-widgets {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 40;
+}
+
 /* ---------- output ---------- */
 .output {
   display: flex;

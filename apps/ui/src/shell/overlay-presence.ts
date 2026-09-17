@@ -67,6 +67,34 @@ export function useOverlayOpen(): boolean {
  * that's simply always `true` for a component that only ever mounts while open (the common case -- see each call
  * site's own comment).
  */
+/**
+ * Registers one occluding surface imperatively, for callers that are not React components, and returns its release.
+ *
+ * M4: the seven `useOverlayPresence` call sites are all components *we* render, which is exactly the hole the user's
+ * report found. Monaco renders its hover, suggest and parameter-hint widgets into its own DOM, from its own
+ * contributions -- there is no React component for them to be, so they can never call the hook, and (checked against
+ * Monaco 0.56's `editor.api.d.ts`) the editor exposes no public "a hover is showing" event to bridge them with
+ * either. `apps/ui/src/editor/widget-occlusion.ts` watches the DOM node Monaco puts those widgets into and calls
+ * this instead, so the widgets participate in the same counter as everything else rather than in a second,
+ * parallel mechanism.
+ *
+ * The release is idempotent: called twice it decrements once. An imperative caller has no React cleanup contract to
+ * lean on, and a double release would silently borrow a *different* overlay's count, un-collapsing a tile that
+ * something else still needs collapsed.
+ */
+export function acquireOverlayPresence(): () => void {
+  const s = state();
+  s.openCount += 1;
+  notify();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    s.openCount -= 1;
+    notify();
+  };
+}
+
 export function useOverlayPresence(open: boolean): void {
   /*
    * `useLayoutEffect`, NOT `useEffect` -- and that is a correctness requirement here, not a preference.
@@ -86,12 +114,8 @@ export function useOverlayPresence(open: boolean): void {
    */
   useLayoutEffect(() => {
     if (!open) return;
-    const s = state();
-    s.openCount += 1;
-    notify();
-    return () => {
-      s.openCount -= 1;
-      notify();
-    };
+    // One code path with `acquireOverlayPresence`: the layout-effect *timing* documented above is this hook's
+    // contribution, not a second way of counting.
+    return acquireOverlayPresence();
   }, [open]);
 }

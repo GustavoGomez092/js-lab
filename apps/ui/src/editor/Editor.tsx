@@ -17,6 +17,7 @@ import { createTypeFeeder } from "./type-feeder";
 import { loadRuntimePack } from "./type-libs";
 import { defineClipboardRegister, startVim, type VimController } from "./vim";
 import { createVimStatusNode } from "./vim-status";
+import { trackWidgetOcclusion } from "./widget-occlusion";
 
 interface EditorProps {
   store: AppStore;
@@ -57,15 +58,39 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
     const models = new ModelCache<Monaco.editor.ITextModel>((tabId, language, value) =>
       monaco.editor.createModel(value, languageId(language), monaco.Uri.parse(modelUri(tabId, language))),
     );
+    /**
+     * M4 (user report): "IntelliSense and console log are behind the DOM render".
+     *
+     * `fixedOverflowWidgets: true` below lets Monaco's hover, suggest and parameter-hint widgets escape the
+     * editor's own box -- including over the Output region, where a docked `<electrobun-webview>` paints above all
+     * HTML regardless of `z-index` (`../shell/overlay-presence.ts`). Those widgets are not components we render and
+     * Monaco 0.56 has no public widget-visibility event, so they cannot call `useOverlayPresence` the way the
+     * shell's seven overlays do. `overflowWidgetsDomNode` is the public option that closes the gap: Monaco puts
+     * every overflowing widget into this one node (`view.js` appends its overflowing content- and overlay-widget
+     * containers here), which `trackWidgetOcclusion` then watches.
+     *
+     * The `monaco-editor` class mirrors Monaco's own use of this option (`multiDiffEditorWidgetImpl.js`), so widget
+     * styling still resolves now that the widgets live outside the editor's own root.
+     */
+    const overflowWidgets = document.createElement("div");
+    overflowWidgets.className = "monaco-editor jslab-overflow-widgets";
+    document.body.appendChild(overflowWidgets);
+
     const editor = monaco.editor.create(host.current, {
       model: null,
       theme: getTheme(initial.themeId).id,
       automaticLayout: true,
       glyphMargin: true,
       fixedOverflowWidgets: true,
+      overflowWidgetsDomNode: overflowWidgets,
       scrollBeyondLastLine: false,
       ...toMonacoOptions(editorOptionsFor(initial.settings, initial.fontFallback)),
     });
+
+    // Registers overlay presence only while one of those widgets actually overlaps a docked Web View tile -- not
+    // for every hover, which would blink a running tab's Web View out on nearly every keystroke. See
+    // `widget-occlusion.ts`.
+    const stopWidgetOcclusion = trackWidgetOcclusion({ container: overflowWidgets });
 
     // Spec §6.1: Monaco's TypeScript defaults are global, so they follow the shown tab.
     const tsEnvironment = createTsEnvironment({
@@ -436,6 +461,10 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
       vimStatus?.remove();
       feeder.dispose();
       installAssist.dispose();
+      // Before `editor.dispose()`: releases any presence still held, so a tile can't stay collapsed because the
+      // editor was torn down while a hover was showing over it.
+      stopWidgetOcclusion();
+      overflowWidgets.remove();
       editor.dispose();
       // Task 21 fix round 1 (M-2): stop a pending apply from writing this environment's stale settings into
       // Monaco's globals after this Editor is gone, before the models it was applying local files for are disposed.

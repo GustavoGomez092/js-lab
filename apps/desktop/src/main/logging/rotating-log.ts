@@ -1,5 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { readRegularFileTextSync } from "../fs/bounded-read";
 import type { Redactor } from "./redact";
 
 export type LogLevel = "error" | "warn" | "info" | "debug";
@@ -105,7 +106,16 @@ export class RotatingLog {
       // A missing live file (deleted from under us, or not yet created) must not stop reading older rotated
       // files behind it (I-2): continue past it rather than breaking out of the loop.
       if (!existsSync(file)) continue;
-      const fileLines = readFileSync(file, "utf8").split("\n").filter(Boolean);
+      // Reading must never throw into Main (I-2), and that now covers the reader's own refusals as well as I/O
+      // errors: the logs folder is user-writable, so a FIFO can sit at main.log, and `existsSync` is true for one.
+      // A refused or unreadable file is skipped so the older rotated files behind it are still read, exactly as a
+      // missing one is -- losing one file's lines, never the whole tail.
+      let fileLines: string[];
+      try {
+        fileLines = readRegularFileTextSync(file).split("\n").filter(Boolean);
+      } catch {
+        continue;
+      }
       lines.unshift(...fileLines);
     }
     return lines.slice(-count);

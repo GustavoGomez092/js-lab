@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OperationQueue } from "@jslab/npm";
 import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
+import { MAX_NPMRC_BYTES } from "@jslab/rpc-schema";
 import { resolveAppPaths } from "../../src/main/app-paths";
+import { MAX_PACKAGE_JSON_BYTES } from "../../src/main/fs/bounded-read";
 import {
   MAX_SEARCH_BODY_BYTES,
   NpmService,
@@ -575,6 +577,71 @@ describe("NpmService (spec §11.3)", () => {
     expect(fallback.error).toBeNull();
     expect(seen).toEqual(["https://registry.npmjs.org/-/v1/search?text=zod&size=25"]);
   });
+
+  /**
+   * F2. `MAX_NPMRC_CHARS` was enforced on `npmrc.save` and never on this read, which runs on every search and
+   * every registry resolve -- and `npm config set`, `npm login` and any package's postinstall all write that
+   * file. An oversized .npmrc must fail the resolve rather than be read whole into Main, and it must not decay
+   * into an empty config, because an empty config is what sends the query to the public registry (FR-12 above).
+   */
+  test("an oversized .npmrc fails the registry resolve, naming the size, and never reaches the public registry", async () => {
+    const seen: string[] = [];
+    const fakeFetch = (async (input: string | URL | Request) => {
+      seen.push(String(input));
+      return Response.json({ objects: [] });
+    }) as typeof fetch;
+    const { service, paths } = await setup({ fetch: fakeFetch });
+
+    writeFileSync(paths.packagesNpmrc, "x".repeat(MAX_NPMRC_BYTES + 1));
+    const result = await service.search("acme-internal-tool");
+    expect(result.results).toEqual([]);
+    expect(result.error?.kind).toBe("disk");
+    // The failure names the size rather than blaming generic I/O.
+    expect(result.error?.log).toContain(String(MAX_NPMRC_BYTES + 1));
+    // The (possibly internal) query text must never reach the public registry.
+    expect(seen).toEqual([]);
+  });
+
+  /**
+   * F4. `installedVersion` and `#hasOwnTypes` read a third party's package.json -- whatever the registry served,
+   * plus whatever a postinstall rewrote. Unbounded, a crafted multi-GB manifest OOM'd Main and a FIFO hung
+   * npm.list forever, while types-service.ts already read the identical path bounded and its comment even cited
+   * "a crafted package.json". A bad manifest must degrade to an unknown version, never take the list down.
+   */
+  test("npm.list survives an oversized or FIFO package.json in node_modules", async () => {
+    const { service, paths } = await setup();
+    writeFileSync(
+      paths.packagesJson,
+      JSON.stringify({
+        name: "jslab-packages",
+        private: true,
+        dependencies: { fine: "1.0.0", huge: "1.0.0", piped: "1.0.0" },
+        trustedDependencies: [],
+      }),
+    );
+
+    await mkdir(join(paths.packagesNodeModules, "fine"), { recursive: true });
+    writeFileSync(join(paths.packagesNodeModules, "fine", "package.json"), JSON.stringify({ version: "1.0.0" }));
+
+    await mkdir(join(paths.packagesNodeModules, "huge"), { recursive: true });
+    // Valid JSON carrying a real version, padded past the cap. An unbounded read parses this happily and reports
+    // "9.9.9", so `null` below can only come from the bound -- a fixture of junk bytes would have failed to parse
+    // either way and proved nothing.
+    writeFileSync(
+      join(paths.packagesNodeModules, "huge", "package.json"),
+      JSON.stringify({ version: "9.9.9", pad: "x".repeat(MAX_PACKAGE_JSON_BYTES) }),
+    );
+
+    await mkdir(join(paths.packagesNodeModules, "piped"), { recursive: true });
+    expect(await Bun.spawn(["mkfifo", join(paths.packagesNodeModules, "piped", "package.json")]).exited).toBe(0);
+
+    // The FIFO is the hang case: this call never returned before the read was bounded.
+    expect((await service.list({ refreshOutdated: false })).installed).toEqual([
+      { name: "fine", version: "1.0.0", latest: null },
+      { name: "huge", version: null, latest: null },
+      { name: "piped", version: null, latest: null },
+    ]);
+  }, 15000);
 
   test("with automatic types on, an untyped package gets @types/<name> when the registry has it", async () => {
     const seenAccept: string[] = [];

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 /*
  * Task 10 (spec §5.13): every import below reads a `packages/runner-web/src/polyfills/**` file's raw text at
@@ -50,6 +49,7 @@ import processSrc from "@jslab/runner-web/polyfills/process.ts.txt" with { type:
 import type { Runtime } from "@jslab/shared";
 import type { BunPlugin } from "bun";
 import { runnerEnvironment } from "../app-paths";
+import { readRegularFileTextSync } from "../fs/bounded-read";
 import type { BundleError } from "./bundler";
 import { buildCodeFrame, locateImport } from "./locate-import";
 import { isNodeBuiltin, stripNodePrefix } from "./node-builtins";
@@ -439,7 +439,11 @@ export function nodePolyfills(
           if (!isNodeBuiltin(args.path)) return undefined;
           let location: ReturnType<typeof locateImport>;
           try {
-            location = locateImport(readFileSync(args.importer, "utf8"), args.path);
+            // F1: `args.importer` is third-party- or user-controlled, so a bare `readFileSync` here blocks Main's
+            // loop forever on a FIFO, and no try/catch can rescue a blocking syscall. The size stays deliberately
+            // unbounded (Bun has already read and parsed this very file to see the import), but the reader's
+            // `O_NONBLOCK` open and `isFile` check refuse a FIFO, falling through to the unpositioned error.
+            location = locateImport(readRegularFileTextSync(args.importer), args.path);
           } catch {
             // best effort only; fall back to an unpositioned error below
           }

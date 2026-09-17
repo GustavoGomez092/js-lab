@@ -396,7 +396,18 @@ export const strings = {
       saved: "Saved .npmrc",
       resetDone: "Restored the default registry",
       resetFailed: "Couldn't reset .npmrc.",
-      loadFailed: "Couldn't read .npmrc",
+      /**
+       * A failed load leaves `saved` null, which disables Save *and* Reset -- a `.npmrc` that is present but
+       * unreadable must never be written over sight unseen. So this message has to say that Reset is off because
+       * of this, and what the remedy is, since JSLab cannot repair the file itself. The code is best-effort:
+       * `saveFailed`'s arrives in the response payload, but a failed load arrives as a rejection.
+       */
+      loadFailed: (code: string | null) =>
+        code === "EFBIG"
+          ? "Couldn't read .npmrc: it's over the size limit. Save and Reset stay off until it can be read. Open the file and fix it by hand."
+          : code
+            ? `Couldn't read .npmrc (${code}). Save and Reset stay off until it can be read. Open the file and fix it by hand.`
+            : "Couldn't read .npmrc. Save and Reset stay off until it can be read. Open the file and fix it by hand.",
       saveFailed: (code: string | null) =>
         code
           ? `Couldn't save .npmrc (${code}). Your changes are still here.`

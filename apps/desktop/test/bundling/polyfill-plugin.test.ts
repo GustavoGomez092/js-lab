@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bundleAppForWeb, bundleVendorForWeb, joinVendorAndApp } from "../../src/main/bundling/bundler";
+import { nodePolyfills } from "../../src/main/bundling/polyfill-plugin";
 
 /**
  * Task 10 (spec §5.13): the `browser-node` module table `apps/desktop/src/main/bundling/polyfill-plugin.ts`
@@ -62,6 +63,49 @@ async function runJoinedModule(joined: string): Promise<unknown> {
   await import(file);
   return g.__jlProbe;
 }
+
+/**
+ * F1. The `browser` runtime's builtin-blocking hook re-reads `args.importer` to position its error. That read was a
+ * bare `readFileSync`, excused in the unbounded-reads allowlist as "best-effort inside try/catch" -- a
+ * recoverability argument that answers neither hazard, because `readFileSync` on a FIFO *blocks* and no try/catch
+ * can rescue a blocking syscall. Measured before the fix by driving this exact hook with a FIFO importer under a
+ * hard alarm: it never returned and had to be killed.
+ */
+describe("nodePolyfills: the importer re-read that positions a blocked-builtin error", () => {
+  /** Captures the onResolve callback the plugin registers, so the hook is driven without a full `Bun.build`. */
+  function driveResolve(onError: (error: { line?: number }) => void) {
+    let callback: ((args: Record<string, unknown>) => unknown) | null = null;
+    const builder = {
+      onResolve(_constraints: { filter: RegExp }, cb: typeof callback) {
+        callback = cb;
+      },
+      onLoad() {},
+    };
+    nodePolyfills("browser", onError as never).setup(builder as never);
+    return (importer: string) => {
+      if (!callback) throw new Error("onResolve was never registered");
+      return callback({ path: "fs", importer, namespace: "file", kind: "import-statement" });
+    };
+  }
+
+  test("positions the error from a regular importer, and refuses a FIFO one instead of hanging", async () => {
+    // Control first: without it, the FIFO assertion below would pass for a hook that never read the importer.
+    const real = join(root, "entry.js");
+    await writeFile(real, 'import fs from "fs";\n');
+    const positioned: Array<{ line?: number }> = [];
+    expect(() => driveResolve((error) => positioned.push(error))(real)).toThrow('blocked Node builtin "fs"');
+    expect(positioned[0]?.line).toBe(1);
+
+    // The same hook, with a FIFO importer. This read is synchronous: a regression does not time out, it parks the
+    // thread and hangs the whole run, which is exactly why the refusal belongs in the reader and not in a timeout.
+    const fifo = join(root, "fifo-entry.js");
+    expect(await Bun.spawn(["mkfifo", fifo]).exited).toBe(0);
+    const piped: Array<{ line?: number }> = [];
+    expect(() => driveResolve((error) => piped.push(error))(fifo)).toThrow('blocked Node builtin "fs"');
+    // The error still reports, just without a position -- the same fallback an unreadable importer already took.
+    expect(piped[0]?.line).toBeUndefined();
+  });
+});
 
 /**
  * Builds and runs one `browser-node` entry, returning whatever it left on `globalThis.__jlProbe`.

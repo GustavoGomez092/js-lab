@@ -1,7 +1,8 @@
-import { closeSync, constants, fstatSync, openSync, readSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { type EnvVars, MAX_DOTENV_BYTES, parseDotenv } from "@jslab/shared";
 import { type AppPaths, runnerEnvironment } from "../app-paths";
+import { readBoundedTextSyncOrNull } from "../fs/bounded-read";
 import type { RunnerSpawnConfig } from "./bun-runner-process";
 
 export function isDirectorySync(path: string): boolean {
@@ -13,38 +14,12 @@ export function isDirectorySync(path: string): boolean {
 }
 
 /**
- * A regular file's text when it is at most `maxBytes`, else null (a missing, oversized or non-regular .env is ignored).
- * Opens with O_NONBLOCK (R-M3-T14-FIX-1 I-1): prepare() is synchronous, so a FIFO .env must never block Main waiting
- * for a writer. Reads until EOF or the fstat size (N-2); a short final read returns only the bytes read.
+ * A regular file's text when it is at most `maxBytes`, else null (a missing, oversized or non-regular .env is
+ * ignored). The open-fstat-read sequence is `../fs/bounded-read`, shared with every other bounded read in Main;
+ * it opens with O_NONBLOCK (R-M3-T14-FIX-1 I-1) because prepare() is synchronous, so a FIFO .env must never block
+ * Main waiting for a writer.
  */
-function readTextSync(path: string, maxBytes: number): string | null {
-  let fd: number;
-  try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
-  } catch {
-    return null;
-  }
-  try {
-    const info = fstatSync(fd);
-    if (!info.isFile() || info.size > maxBytes) return null;
-    const buffer = Buffer.alloc(info.size);
-    let read = 0;
-    while (read < buffer.length) {
-      const bytesRead = readSync(fd, buffer, read, buffer.length - read, read);
-      if (bytesRead === 0) break;
-      read += bytesRead;
-    }
-    return buffer.subarray(0, read).toString("utf8");
-  } catch {
-    return null;
-  } finally {
-    try {
-      closeSync(fd);
-    } catch {
-      // Closing failed; the result above stands.
-    }
-  }
-}
+const readTextSync = readBoundedTextSyncOrNull;
 
 /** What computing a run's cwd and environment needs, independently of which runtime is going to use it. */
 export interface RunnerEnvironmentDeps {

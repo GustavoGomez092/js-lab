@@ -30,6 +30,9 @@ export const strings = {
     npmManifestUnreadable: (path: string) => `npm's package.json at ${path} could not be read as JSON`,
     /** FR-12 (fix round 2): the same anti-pattern as npmManifestUnreadable, in the registry-selection path. */
     npmNpmrcUnreadable: (path: string) => `npm's .npmrc at ${path} could not be read`,
+    /** Names the size, so an oversized .npmrc never surfaces as a generic I/O or parse failure. */
+    npmNpmrcTooLarge: (path: string, size: number, maxBytes: number) =>
+      `npm's .npmrc at ${path} is ${size} bytes, over the ${maxBytes}-byte limit, and was not read`,
     /** Fix round 1 (M-1): an onOperation subscriber threw; the queue's own bookkeeping must still proceed. */
     npmOperationEventFailed: "npm operation event could not be delivered",
     /** M4: the vendor cache's post-npm-change wipe (spec §11.3) failed; the cache may now serve a stale chunk. */
@@ -59,6 +62,14 @@ export const strings = {
     sessionRestoredMissing: "Your tabs were restored from the backup because session.json was missing.",
     /** Spec §20 "Unexpected Main exception": a non-blocking notice; the app keeps running (FA-I3). */
     unexpectedError: "Something went wrong. Choose Help → Copy Debug Log to report it.",
+    /**
+     * D1: a settings change that could not be written, because rewriting settings.json would exceed the cap its own
+     * reader applies. The user's question is "why can't I change my settings?", so this names the file and the
+     * reason rather than saying a write failed -- and says the change is lost on restart, which is the part they
+     * would otherwise discover only by losing it. Worded after `settingsNewer`, which is the same situation.
+     */
+    settingsTooLarge: (bytes: number, maxBytes: number) =>
+      `settings.json is too large for JSLab to save (${bytes} bytes; the limit is ${maxBytes}). Changes made in this window won't be saved to it and will be lost when JSLab restarts. Choose Help → Copy Debug Log to find the file.`,
     settingsNewer: (version: number) =>
       `settings.json was written by a newer version of JSLab (version ${version}). Changes made in this window won't be saved to it.`,
     sessionNewer: (version: number) =>

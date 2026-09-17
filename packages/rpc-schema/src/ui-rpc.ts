@@ -192,6 +192,13 @@ export const npmSpecSchema = z
   );
 
 export const MAX_NPMRC_CHARS = 65_536;
+/**
+ * The cap the *read* side enforces. `MAX_NPMRC_CHARS` bounded `npmrc.save` and nothing ever bounded the read, so
+ * a `.npmrc` grown by `npm config set`, `npm login` or any package's postinstall was read whole on every search
+ * and every registry resolve. Four bytes per char is UTF-8's worst case, so everything `npmrc.save` accepts stays
+ * readable while a multi-GB file is still refused before it is allocated.
+ */
+export const MAX_NPMRC_BYTES = 4 * MAX_NPMRC_CHARS;
 
 export const npmInstallParamsSchema = z.object({ spec: npmSpecSchema });
 export const npmNameParamsSchema = z.object({ name: npmNameSchema });
@@ -338,11 +345,17 @@ export const STARTUP_NOTICE_IDS = [
   "sessionNewer",
   "tabsDropped",
   "unexpectedError",
+  /**
+   * D1: a settings change that cannot be written, because settings.json is large enough that JSLab's own rewrite of
+   * it would exceed the cap its reader applies. Like `unexpectedError` this is raised after startup, not from
+   * `startupNotices`; unlike it, the condition persists, so it is raised once per session rather than per change.
+   */
+  "settingsTooLarge",
 ] as const;
 
 /**
  * Something Main wants the user to know (spec §20): at startup, recovered files, newer files and skipped tabs; later,
- * an unexpected Main error (FA-I3), sent as an `app.notice` message.
+ * an unexpected Main error (FA-I3) or a settings write refused as too large (D1), sent as an `app.notice` message.
  */
 export interface StartupNotice {
   id: (typeof STARTUP_NOTICE_IDS)[number];

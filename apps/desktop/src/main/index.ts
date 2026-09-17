@@ -8,6 +8,7 @@ import type {
   SettingsViewMessages,
   SettingsWindowMessages,
   SettingsWindowRequests,
+  StartupNotice,
   ViewMessages,
 } from "@jslab/rpc-schema";
 import { DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
@@ -95,6 +96,22 @@ let logError: (message: string, detail?: unknown) => void = (message, detail) =>
   console.error(`[jslab] ${message}`, detail ?? "");
 // Set once the main window and its RPC exist; until then there is nowhere to show a notice.
 let showUnexpectedErrorNotice: () => void = () => {};
+/**
+ * D1: the same late binding, for a notice Main raises from the composition root rather than from an error handler.
+ *
+ * It must be a `let` assigned later rather than a closure over `rpc`, unlike the run and npm callbacks passed to
+ * `createMainServices` below. Those are safe because none of them can run before `rpc` exists; this one can. A
+ * settings write is refused inside `createMainServices` itself when the recovery rewrite at open produces an
+ * over-cap snapshot, and that happens before `rpc` and `mainWindow` are declared -- so capturing them the way those
+ * callbacks do would turn a refused write into a TDZ crash during startup.
+ *
+ * Dropping a notice raised before the window exists is correct rather than merely tolerable: the condition is
+ * permanent, so the next settings change raises it again -- but that is only true because `main-services.ts`
+ * latches its once-per-session guard on DELIVERY rather than on the attempt. This sender therefore has to report
+ * whether the notice was actually shown. Returning void let an undelivered startup notice spend that guard, after
+ * which the user saw no banner at all, ever (D1/D3).
+ */
+let sendAppNotice: (notice: StartupNotice) => boolean = () => false;
 
 /**
  * Spec §20 (FA-I3, error-policy.ts). A rejection anywhere in `start()` -- a failing store recovery rewrite, for
@@ -173,6 +190,9 @@ async function start(): Promise<void> {
     shiftHeld,
     log,
     redact,
+    // D1: a settings write refused as too large is silent, permanent and repeats forever, so the log line it used
+    // to produce was not telling the user anything. `sendAppNotice` is bound once the window exists (see above).
+    notify: (notice) => sendAppNotice(notice),
     onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
     onState: (tabId, runId, state, activeHandles) =>
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
@@ -436,6 +456,14 @@ async function start(): Promise<void> {
   showUnexpectedErrorNotice = () => {
     if (mainWindow.isOpen())
       rpc.send["app.notice"]({ id: "unexpectedError", message: strings.notices.unexpectedError });
+  };
+  // D1: the same channel, for a notice raised by the composition root (a settings write refused as too large).
+  // The UI's `addNotice` shows one banner per id, and main-services raises this once per session anyway.
+  sendAppNotice = (notice) => {
+    // Reporting delivery, not attempting it: main-services spends its one telling only on a notice that landed.
+    if (!mainWindow.isOpen()) return false;
+    rpc.send["app.notice"](notice);
+    return true;
   };
 
   // `MenuItem` (menu.ts) is the devkit's own `ApplicationMenuItemConfig` shape at its source (final review T14),

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, unlink } from "node:fs/promises";
+import { mkdir, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   bufferFileName,
@@ -20,6 +20,7 @@ import {
   type WindowState,
   windowStateSchema,
 } from "@jslab/shared";
+import { readRegularFileText } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 import {
   createDebouncedWriter,
@@ -113,8 +114,16 @@ export class SessionStore {
         return parsed.report.session;
       },
     };
-    const { value, recovered, primary, corruptCopy } = await loadJson(join(dataDir, "session.json"), parser, () =>
-      defaultSession(newTab),
+    // The byte cap is waived here, and only the byte cap: session.json grows with the tab count and each tab's
+    // stored view state, so any number chosen would eventually discard a session the user really has. The reader
+    // still opens O_NONBLOCK and fstats the handle it will read, so a FIFO at session.json is refused instead of
+    // blocking Main forever -- reported as corrupt, recovered from the .bak or defaults, and then renamed over by
+    // the rewrite below, so the profile heals itself.
+    const { value, recovered, primary, corruptCopy } = await loadJson(
+      join(dataDir, "session.json"),
+      parser,
+      () => defaultSession(newTab),
+      Number.POSITIVE_INFINITY,
     );
     const report = parsed.report;
     const newerVersion = report?.newerThanBuild ? report.fileVersion : null;
@@ -175,7 +184,7 @@ export class SessionStore {
     if (!tab) return "";
     if (this.#repairErrors.has(tabId)) this.#failUnreadable(tabId, this.#repairErrors.get(tabId));
     try {
-      const content = await readFile(this.#bufferPath(tab), "utf8");
+      const content = await readRegularFileText(this.#bufferPath(tab));
       this.#unreadableBuffers.delete(tabId);
       return content;
     } catch (error) {
@@ -264,7 +273,7 @@ export class SessionStore {
     const { tab } = entry;
     const closedPath = join(this.dataDir, "buffers", closedBufferFileName(tab));
     // Same rule as readBuffer: a closed buffer that exists but can't be read is never replaced by an empty one.
-    const content = await readFile(closedPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    const content = await readRegularFileText(closedPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return "";
       throw error;
     });

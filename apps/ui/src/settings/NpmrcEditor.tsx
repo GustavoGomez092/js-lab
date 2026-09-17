@@ -99,7 +99,16 @@ export function NpmrcEditor({
           setStatus(next === latest.current.saved ? null : { kind: "ok", text: strings.tabs.unsaved });
         });
       },
-      () => setStatus({ kind: "error", text: strings.settings.npmrc.loadFailed }),
+      // F5: the load path used to discard the error entirely, so an oversized .npmrc and a permission-denied one
+      // were indistinguishable here. Only the leading code is ever shown, never the raw message, for the same
+      // reason a failed save shows only the code: an fs message can carry an absolute path.
+      (error: unknown) =>
+        setStatus({
+          kind: "error",
+          text: strings.settings.npmrc.loadFailed(
+            extractErrorCode(error instanceof Error ? error.message : String(error)),
+          ),
+        }),
     );
     return () => {
       disposed = true;
@@ -193,7 +202,10 @@ export function NpmrcEditor({
 
   const warnings = npmrcWarnings(text);
   const saveDisabled = busy !== null || saved === null || text === saved;
-  const resetAreaDisabled = busy !== null;
+  // F-NPMRC: a failed load leaves `saved` null, and Reset has to be as dead as Save is then. Otherwise its two
+  // clicks write the default over a `.npmrc` that is present but unreadable -- the one file whose contents the
+  // failed load deliberately refused to guess at.
+  const resetAreaDisabled = busy !== null || saved === null;
 
   return (
     <section className="npmrc">

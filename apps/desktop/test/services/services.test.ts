@@ -11,6 +11,7 @@ import {
   sessionSchema,
   settingsSchema,
 } from "@jslab/shared";
+import { FileTooLargeError } from "../../src/main/fs/bounded-read";
 import {
   consumeSafeModeFlag,
   detectSafeMode,
@@ -19,7 +20,7 @@ import {
   SHIFT_MASK,
 } from "../../src/main/services/safe-mode";
 import { SessionStore } from "../../src/main/services/session-store";
-import { SettingsStore } from "../../src/main/services/settings-store";
+import { MAX_SETTINGS_BYTES, SettingsStore } from "../../src/main/services/settings-store";
 
 let dir = "";
 // Tracks every SessionStore opened in a test so afterEach can flush its debounced writer before removing dir: an
@@ -157,6 +158,52 @@ describe("SettingsStore", () => {
     await firstWrite;
     expect(JSON.parse(await readFile(join(dir, "settings.json"), "utf8")).appearance.uiScale).toBe(1.5);
     expect(errors).toHaveLength(1);
+  });
+
+  test("never writes a settings.json its own reader would refuse (R-M4-BOUNDED-6)", async () => {
+    // `settingsSchema` is a `z.looseObject`, and so is every `section()` in it, deliberately: unknown keys from a
+    // newer build are passed through rather than discarded. They survive parse, survive mergeSettings, and reach
+    // the snapshot -- and the snapshot is pretty-printed, which EXPANDS (measured ~1.17x here). So a settings.json
+    // this reader ACCEPTS can be rewritten by JSLab itself at over the cap, after which the next launch reads it
+    // as corrupt and silently falls back, losing the change the user just made. A writer must not produce a file
+    // its own reader refuses.
+    const unknown: Record<string, unknown> = {};
+    for (let index = 0; index < 25_000; index++) unknown[`experimentalFeatureFlag${index}`] = index;
+    const base = defaultSettings();
+    const onDisk = JSON.stringify({ ...base, run: { ...base.run, ...unknown } });
+    // The premise: this file is one the reader accepts, so nothing is wrong with it at load.
+    expect(Buffer.byteLength(onDisk, "utf8")).toBeLessThanOrEqual(MAX_SETTINGS_BYTES);
+    await writeFile(join(dir, "settings.json"), onDisk);
+
+    const errors: unknown[] = [];
+    const store = await SettingsStore.open(dir, { onWriteError: (error) => errors.push(error) });
+    expect("experimentalFeatureFlag0" in (store.current.run as Record<string, unknown>)).toBe(true);
+
+    await store.update({ editor: { lineWrap: false } });
+    await store.flush();
+
+    // Refused, not truncated and not written anyway: what is on disk is still a file this app can load.
+    const written = await readFile(join(dir, "settings.json"), "utf8");
+    expect(Buffer.byteLength(written, "utf8")).toBeLessThanOrEqual(MAX_SETTINGS_BYTES);
+    // Refused loudly, through the same channel every other failed settings write already reports on -- and as a
+    // TYPED refusal carrying an errno-style code, because main-services.ts has to tell this failure apart from an
+    // ordinary write error to decide whether the user needs telling (D1). A plain Error here would compile, pass
+    // every other assertion in this test, and silently disable that notice.
+    expect(errors).toHaveLength(1);
+    const refusal = errors[0] as FileTooLargeError;
+    expect(refusal).toBeInstanceOf(FileTooLargeError);
+    expect(refusal.code).toBe("EFBIG");
+    expect(refusal.maxBytes).toBe(MAX_SETTINGS_BYTES);
+    expect(refusal.size).toBeGreaterThan(MAX_SETTINGS_BYTES);
+
+    // The next launch is an ordinary one, and the newer build's keys are still there.
+    const reopened = await SettingsStore.open(dir);
+    expect([reopened.recovered, reopened.primary]).toEqual(["none", "ok"]);
+    expect("experimentalFeatureFlag0" in (reopened.current.run as Record<string, unknown>)).toBe(true);
+    // D1, pinned deliberately rather than left implicit: the user's change does NOT survive the restart. That is
+    // the accepted cost of refusing the write -- the alternative lost more -- and it is exactly why the user has
+    // to be told at the time. main-services.test.ts pins the telling.
+    expect(reopened.current.editor.lineWrap).toBe(true);
   });
 });
 

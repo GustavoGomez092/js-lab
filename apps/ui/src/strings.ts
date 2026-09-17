@@ -182,6 +182,10 @@ export const strings = {
     context: { editor: "Editor", output: "Output" },
     themeItem: (name: string) => `Theme: ${name}`,
     empty: "No matching commands",
+    /** R-M4-PALETTE-HIDE-1: marks a listed-but-disabled command, so it reads as "exists, not right now" rather
+     * than as the typo that `empty` above describes. `CommandSpec.isEnabled` returns a bare boolean and carries
+     * no reason, so this is deliberately generic -- the per-command "why" would need an API that does not exist. */
+    unavailable: "Unavailable now",
     footer: {
       keys: { run: "↵", move: "↑↓", close: "esc" },
       run: "run",

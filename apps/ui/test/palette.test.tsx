@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { CommandRegistry } from "../src/commands/registry";
 import { type EditorHandle, setEditorHandle } from "../src/editor/editor-handle";
 import { CommandPalette } from "../src/palette/CommandPalette";
-import { buildSections, matchTitle, type PaletteItem } from "../src/palette/match";
+import { buildSections, firstEnabledIndex, matchTitle, type PaletteItem, stepEnabledIndex } from "../src/palette/match";
 import { createAppStore } from "../src/state/store";
 import { strings } from "../src/strings";
 
@@ -40,7 +40,10 @@ describe("palette matching", () => {
     expect(word).toBeGreaterThan(100);
   });
 
-  test("sections follow category order, hide disabled and editor-only items in output context, and rank by query", () => {
+  // R-M4-PALETTE-HIDE-1: this test used to assert that disabled items were *dropped* here. Dropping them meant
+  // "Kill" with nothing running rendered `strings.palette.empty` ("No matching commands") -- the same answer a
+  // typo gets. They now rank on score alone and render in place; only the selection skips them.
+  test("sections follow category order, keep disabled items in place, hide editor-only items in output context, and rank by query", () => {
     const item = (
       id: string,
       title: string,
@@ -64,9 +67,14 @@ describe("palette matching", () => {
       item("run.kill", "Kill", "run", { enabled: false }),
     ];
     expect(buildSections(items, "", "editor").map((s) => [s.label, s.items.map((i) => i.title)])).toEqual([
-      ["Run", ["Toggle Auto Run"]],
+      ["Run", ["Toggle Auto Run", "Kill"]],
       ["Edit", ["Duplicate Line", "Clear Output"]],
       ["View", ["Toggle Output Panel"]],
+    ]);
+    // A query matching only the disabled command returns it, carrying `enabled: false` through ranking -- that
+    // flag is what the renderer greys out and what the selection skips.
+    expect(buildSections(items, "kill", "editor").flatMap((s) => s.items.map((i) => [i.title, i.enabled]))).toEqual([
+      ["Kill", false],
     ]);
     expect(buildSections(items, "", "output").flatMap((s) => s.items.map((i) => i.title))).not.toContain(
       "Duplicate Line",
@@ -106,6 +114,26 @@ describe("palette matching", () => {
     expect(buildSections(items, "command", "editor").flatMap((section) => section.items)).toHaveLength(60);
   });
 
+  // R-M4-PALETTE-HIDE-1: the navigation half of the fix. Disabled rows are visible but never selectable, so
+  // `flat[selected]` is always runnable and Enter never becomes a silent no-op on a row the user can see.
+  test("selection helpers skip disabled rows, stop at the ends, and report when nothing can run", () => {
+    const rows = (...flags: boolean[]) => flags.map((enabled) => ({ enabled }));
+    expect(firstEnabledIndex(rows(false, false, true))).toBe(2);
+    expect(firstEnabledIndex(rows(true, false))).toBe(0);
+    expect(firstEnabledIndex(rows(false, false))).toBe(-1);
+    // Moving down off a disabled leading row lands on the first enabled row, not merely on the next index.
+    expect(stepEnabledIndex(rows(false, false, true), 0, 1)).toBe(2);
+    expect(stepEnabledIndex(rows(true, false, true), 0, 1)).toBe(2);
+    expect(stepEnabledIndex(rows(true, false, true), 2, -1)).toBe(0);
+    // Stops at the ends rather than wrapping, matching the Math.min/Math.max behaviour it replaced.
+    expect(stepEnabledIndex(rows(true, false, true), 2, 1)).toBe(2);
+    expect(stepEnabledIndex(rows(true, false, true), 0, -1)).toBe(0);
+    // A trailing run of disabled rows holds the current selection instead of moving onto one of them.
+    expect(stepEnabledIndex(rows(true, false, false), 0, 1)).toBe(0);
+    // Nothing enabled anywhere: -1, so the caller drops aria-activedescendant and Enter has no target.
+    expect(stepEnabledIndex(rows(false, false), 0, 1)).toBe(-1);
+  });
+
   // Fix round 1 (I-2): without the context bonus, both items tie on score and the earlier index (run.stop,
   // context "output") would win; the bonus must be what promotes run.start (context "editor") ahead of it.
   test("the context bonus, not array order, decides ties between equally scored matches", () => {
@@ -138,6 +166,24 @@ function setup(context: "editor" | "output" = "editor", options: { open?: boolea
   );
   render(<CommandPalette store={store} registry={registry} bindings={resolveKeybindings(DEFAULT_KEYBINDINGS, [])} />);
   if (options.open ?? true) act(() => store.getState().openModal({ kind: "palette", context }));
+  return { store, runs };
+}
+
+/** R-M4-PALETTE-HIDE-1: registers the audit's own measured cases -- `run.kill` ("Kill") disabled because nothing
+ * is running, and `tab.reopenClosed` ("Reopen Closed Tab") disabled on an empty stack. `CommandSpec.isEnabled`
+ * is a bare boolean, so neither can say *why*; the palette only has to say "exists, not right now". A separate
+ * setup from `setup()` above on purpose: adding a disabled row there would shift every other test's row 0. */
+function setupWithDisabled() {
+  const store = hydratedStore();
+  const runs = { kill: mock(() => {}), autoRun: mock(() => {}), reopen: mock(() => {}) };
+  const registry = new CommandRegistry();
+  registry.register(
+    { id: "run.kill", run: runs.kill, isEnabled: () => false },
+    { id: "run.toggleAutoRun", run: runs.autoRun },
+    { id: "tab.reopenClosed", run: runs.reopen, isEnabled: () => false },
+  );
+  render(<CommandPalette store={store} registry={registry} bindings={resolveKeybindings(DEFAULT_KEYBINDINGS, [])} />);
+  act(() => store.getState().openModal({ kind: "palette", context: "editor" }));
   return { store, runs };
 }
 
@@ -289,5 +335,75 @@ describe("CommandPalette", () => {
     expect(store.getState().modal).not.toBeNull();
     fireEvent.keyDown(input, { code: "KeyK", ctrlKey: true });
     expect(store.getState().modal).toBeNull();
+  });
+
+  // R-M4-PALETTE-HIDE-1, the defect itself: with nothing running, "Kill" returned "No matching commands" --
+  // byte-identical to what a typo or a misremembered name returns. The command now says it exists.
+  test("a search whose only match is disabled lists it, greyed and labelled, instead of 'No matching commands'", () => {
+    const { store, runs } = setupWithDisabled();
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "kill" } });
+    expect(screen.queryByText(strings.palette.empty)).toBeNull();
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(1);
+    const row = options[0];
+    if (!row) throw new Error("expected the disabled Kill row to be listed");
+    expect(row.querySelector(".palette-title")?.textContent).toBe("Kill");
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    expect(row.querySelector(".palette-unavailable")?.textContent).toBe(strings.palette.unavailable);
+    // Nothing listed can run, so the row never takes the selection, the combobox points at no option, and
+    // Enter is a genuine no-op that leaves the palette (and its explanation) open.
+    expect(row.getAttribute("aria-selected")).toBe("false");
+    expect(input.getAttribute("aria-activedescendant")).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(runs.kill).not.toHaveBeenCalled();
+    expect(store.getState().modal).not.toBeNull();
+  });
+
+  // The other half of the distinction: making a disabled command visible must not make the empty state
+  // unreachable, or the two answers collapse again from the opposite direction.
+  test("a query that genuinely matches nothing still says 'No matching commands'", () => {
+    setupWithDisabled();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "zzzz" } });
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(screen.getByText(strings.palette.empty)).toBeTruthy();
+  });
+
+  test("arrow keys skip disabled rows, so the selection and Enter always land on a runnable command", () => {
+    const { store, runs } = setupWithDisabled();
+    const input = screen.getByRole("combobox");
+    const titles = () => screen.getAllByRole("option").map((o) => o.querySelector(".palette-title")?.textContent);
+    const selectedTitle = () =>
+      screen
+        .getAllByRole("option")
+        .find((o) => o.getAttribute("aria-selected") === "true")
+        ?.querySelector(".palette-title")?.textContent;
+    // Both disabled commands are listed, in catalogue order, around the one enabled command.
+    expect(titles()).toEqual(["Kill", "Toggle Auto Run", "Reopen Closed Tab"]);
+    // Row 0 is disabled, so the initial selection is the first *enabled* row rather than index 0.
+    expect(selectedTitle()).toBe("Toggle Auto Run");
+    expect(input.getAttribute("aria-activedescendant")).toBe("palette-option-1");
+    // Down and up each find only a disabled neighbour, so the selection holds instead of landing on one.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(selectedTitle()).toBe("Toggle Auto Run");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(selectedTitle()).toBe("Toggle Auto Run");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(runs.autoRun).toHaveBeenCalledTimes(1);
+    expect(runs.kill).not.toHaveBeenCalled();
+    expect(runs.reopen).not.toHaveBeenCalled();
+    expect(store.getState().modal).toBeNull();
+  });
+
+  test("clicking or hovering a disabled row neither runs it nor closes the palette", () => {
+    const { store, runs } = setupWithDisabled();
+    const killRow = screen.getAllByRole("option")[0];
+    if (!killRow) throw new Error("expected the disabled Kill row to be listed");
+    fireEvent.click(killRow);
+    expect(runs.kill).not.toHaveBeenCalled();
+    // Closing here would dismiss the very explanation the user opened the palette to find.
+    expect(store.getState().modal).not.toBeNull();
+    fireEvent.mouseMove(killRow);
+    expect(killRow.getAttribute("aria-selected")).toBe("false");
   });
 });

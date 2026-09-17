@@ -48,6 +48,7 @@ type Diagnostics = {
     hosts: number;
     app: number;
     appInputs: Record<string, number>;
+    runStateTrail: string[];
   };
 };
 
@@ -192,6 +193,12 @@ describe("Web View / console overlap (user report: console rows invisible)", () 
       `App inputs that changed:  ${
         inputDeltas.length === 0 ? "NONE" : inputDeltas.map(([key, delta]) => `${key} +${delta}`).join(", ")
       }`,
+    );
+    // Round 3: every delta above is a change of VALUE (`runState` is a primitive), so these are the values
+    // themselves -- an `idle->settled`/`settled->idle` pair would be the already-fixed self-rescheduling-handle
+    // dip, and anything else is a defect those fixes do not cover.
+    console.log(
+      `runState transitions:     ${after.runStateTrail.length === 0 ? "NONE" : after.runStateTrail.join(" | ")}`,
     );
     console.log("======================================================\n");
 

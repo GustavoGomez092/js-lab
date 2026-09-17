@@ -653,3 +653,58 @@ test("handleCountAction disposes new handles after a stop, and tracks idle/settl
     expect(handleCountAction(state, exiting, count)).toBe(expected);
   }
 });
+
+/**
+ * `HandleTracker.untracked` -- the unit-level half of the idle-strobe fix whose end-to-end half is
+ * `host-bridge-churn.test.ts`. See the method's own doc comment for the mechanism it exists to close: JSLab's
+ * outbound host messages were registering tracked handles, because Electrobun's preload defers every emission
+ * through the page's (by then wrapped) global `setTimeout`.
+ */
+test("a handle created inside untracked is never tracked and emits no state messages", () => {
+  const { states, tracker, timers, g } = stateRecordingSandbox("idle");
+  tracker.untracked(() => {
+    g.setTimeout(() => {}, 0);
+  });
+
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: [], count: 0 });
+
+  // And firing it stays silent too -- a handle that was never added must not look like one retiring.
+  timers.fire();
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: [], count: 0 });
+});
+
+/**
+ * The property that keeps this from being a silencer: suspension applies to `add` only. A handle registered
+ * outside the scope still reports its retirement, so a genuine `idle` can never be swallowed by it.
+ */
+test("untracked does not suppress the idle for a handle created outside it", () => {
+  const { states, tracker, timers, g } = stateRecordingSandbox("idle");
+  g.setTimeout(() => {}, 16);
+  expect(states).toEqual(["settled"]);
+  states.length = 0;
+
+  // A JSLab message goes out while the run's own timer is still pending -- the ordinary case, since `setState`
+  // above sent one. It must change nothing.
+  tracker.untracked(() => {
+    g.setTimeout(() => {}, 0);
+  });
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: [], count: 1 });
+
+  timers.fire();
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: ["idle"], count: 0 });
+});
+
+/** Suspension is strictly scoped to the call, including when `body` throws -- otherwise one failed send would
+ * silently stop the page tracking anything at all for the rest of its life. */
+test("untracked restores tracking even when its body throws", () => {
+  const { states, tracker, g } = stateRecordingSandbox("idle");
+  expect(() =>
+    tracker.untracked(() => {
+      throw new Error("send failed");
+    }),
+  ).toThrow("send failed");
+  expect(tracker.suspended).toBe(false);
+
+  g.setTimeout(() => {}, 16);
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: ["settled"], count: 1 });
+});

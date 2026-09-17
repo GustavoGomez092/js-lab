@@ -20,6 +20,7 @@ export class HandleTracker {
   readonly #active = new Map<unknown, () => void>();
   #batchDepth = 0;
   #batchEntryCount = 0;
+  #untrackedDepth = 0;
 
   constructor(private readonly onChange: (count: number) => void) {}
 
@@ -67,8 +68,59 @@ export class HandleTracker {
     }
   }
 
+  /** Whether handle creation is currently suspended — see `untracked` below. */
+  get suspended(): boolean {
+    return this.#untrackedDepth > 0;
+  }
+
+  /**
+   * Runs `body` with handle *creation* suspended: anything it registers is JSLab's own infrastructure, not the
+   * run's activity, and must not keep the page "active" or move the run state.
+   *
+   * **Why this exists.** `bootstrap.ts` already takes care that JSLab's own scheduling is invisible to this
+   * tracker, by capturing `setTimeout`/`setInterval` *before* `installHandleTracking` replaces them (its `timers`
+   * and `rawInterval`), so the `EventBuffer` flush timer and the heartbeat are never counted. That covers the
+   * timers JSLab schedules itself. It does not cover the one it causes something *else* to schedule on its behalf.
+   *
+   * The host transport is exactly that case. Electrobun's preload owns the outbound channel: `initHostMessageBridge`
+   * (`apps/desktop/.hutch/devkit/api/preload/events.ts`) installs `window.__electrobunSendToHost` as a call to
+   * `emitWebviewEvent`, and `emitWebviewEvent` defers every single emission through a bare `setTimeout(...)`. That
+   * identifier is free, so it is resolved on the global **at call time** — which, by the time any message is sent,
+   * is the tracked wrapper this module installed. Every outbound message therefore registered a handle.
+   *
+   * That closes a feedback loop, because one of the things the page sends is the run state itself:
+   *
+   *   1. `setState` sends a `state` message → the preload schedules a timer → `add` → count 0 → 1.
+   *   2. `idle && count > 0` → `"settled"` → `setState` sends *another* message → another timer.
+   *   3. The timers fire and retire → count → 0 → `settled && count === 0` → `"idle"` → another message → …
+   *
+   * Steps 2 and 3 are each other's cause, so it never stops: with **no user code alive at all**, an idle browser
+   * tab put a perfectly alternating `idle`/`settled` pair on the wire for as long as the page lived. Because the
+   * UI's `BUSY_STATES` contains `settled` but not `idle`, its `busy` flag flipped with every pair, remounting the
+   * activity-bar spinner and restarting its CSS animation — the user's "reloading instead of animating", and why
+   * "not running the web view gets rid of the reload error" was an accurate bisection: no webview, no page, no loop.
+   *
+   * **Why suspension rather than `batch`.** `batch` suppresses a dip that is an artefact of retire-then-run within
+   * one tick. This dip is not an artefact: the count genuinely returns to 0 between two messages, with nothing
+   * pending, which is indistinguishable from a loop that really stopped. Widening `batch` across the gap would
+   * therefore have to suppress real `idle`s too. The handle should never have been counted in the first place.
+   *
+   * Only `add` is suspended. `remove` is not, so a handle registered *outside* this scope still reports its
+   * retirement from inside one — a genuine `idle` can never be swallowed by it. The scope is also lexically bound
+   * to `body`'s synchronous execution, and `bootstrap.ts` uses it around nothing but its own `bridge.send`, whose
+   * whole body is building a JSON envelope and handing it to the host hook.
+   */
+  untracked<T>(body: () => T): T {
+    this.#untrackedDepth += 1;
+    try {
+      return body();
+    } finally {
+      this.#untrackedDepth -= 1;
+    }
+  }
+
   add(key: unknown, dispose: () => void): void {
-    if (this.#active.has(key)) return;
+    if (this.suspended || this.#active.has(key)) return;
     this.#active.set(key, dispose);
     this.#notify();
   }

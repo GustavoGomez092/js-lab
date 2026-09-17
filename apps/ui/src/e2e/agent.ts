@@ -44,6 +44,8 @@ export interface OverlayDiagnostics {
     hosts: number;
     app: number;
     appInputs: Record<string, number>;
+    /** The most recent `runState` transitions as `"<previous>-><next>"`, naming the values a count alone cannot. */
+    runStateTrail: string[];
   };
 }
 

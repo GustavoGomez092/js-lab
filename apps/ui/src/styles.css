@@ -670,6 +670,35 @@ button:disabled {
   font-size: 14px;
 }
 
+/* Ruling 2: the header carries the title and the sheet's own exit, parked at the trailing edge. */
+.sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Quiet until hovered or focused, and shaped nothing like a package row's Remove button, so the two exits
+   (close the sheet / uninstall a dependency) can never be mistaken for each other. */
+.sheet-close {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+.sheet-close:hover {
+  background: var(--bg-hover);
+  color: var(--fg-default);
+}
+
+.sheet-close:focus-visible {
+  border-color: var(--border-default);
+  color: var(--fg-default);
+}
+
 .sheet-help,
 .sheet-status {
   margin: 0;
@@ -760,6 +789,32 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* "Update All" read as body text sitting beside the two checkboxes. It keeps its disabled logic and its title;
+   this only gives it a control's shape and parks it at the trailing edge, clear of the checkboxes. */
+.npm-toolbar button {
+  margin-left: auto;
+  padding: 3px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+}
+
+.npm-toolbar button:disabled {
+  color: var(--fg-muted);
+  opacity: 0.7;
+}
+
+/* The row's destructive action, set apart from the sheet's close control: a word, in the error colour. */
+.npm-remove {
+  padding: 2px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  color: var(--fg-error);
+}
+
+.npm-remove:hover:not(:disabled) {
+  background: var(--bg-errorRow);
 }
 
 .npm-installed {

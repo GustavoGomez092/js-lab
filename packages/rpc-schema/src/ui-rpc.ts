@@ -1,8 +1,9 @@
-import type { CommandId, KeybindingRule, TabState } from "@jslab/shared";
+import type { CommandCategory, CommandId, KeybindingRule, TabState } from "@jslab/shared";
 import {
   DEFAULT_RUNTIME,
   type EnvVars,
   envVarsSchema,
+  keybindingRuleSchema,
   LANGUAGES,
   RUNTIMES,
   SETTINGS_SECTIONS,
@@ -132,6 +133,7 @@ export const APP_ACTIONS = [
   "toggleFullScreen",
   "closeWindow",
   "openSettings",
+  "openKeybindingsFile",
 ] as const;
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });
@@ -141,6 +143,9 @@ export const SETTINGS_APP_ACTIONS = [
   "resetSettings",
   "openDataFolder",
   "restartSafeMode",
+  // Spec §6.5: Settings → Keybindings offers "Open keybindings.json", so this one is sent by the Settings window
+  // rather than the main window. It opens a file in the user's editor; it cannot touch the main window.
+  "openKeybindingsFile",
 ] as const satisfies readonly AppAction[];
 export type SettingsAppAction = (typeof SETTINGS_APP_ACTIONS)[number];
 export const settingsAppCommandSchema = z.object({ action: z.enum(SETTINGS_APP_ACTIONS) });
@@ -148,6 +153,39 @@ export const settingsAppCommandSchema = z.object({ action: z.enum(SETTINGS_APP_A
 export const fileSaveParamsSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });
 export const fileConfirmLargeSchema = z.object({ tokens: z.array(z.uuid()).min(1).max(100) });
 export const fileConfirmSaveAsSchema = z.object({ token: z.uuid(), confirmed: z.boolean() });
+
+// ---------- M5d Task 10: the command catalogue and keybindings on the Settings wire (spec §6.5) ----------
+
+/**
+ * One row of Settings → Keybindings.
+ *
+ * Rows are derived from `COMMANDS` in @jslab/shared -- the single list every milestone already extends, since
+ * `isCommandId` gates binding, dispatch and menu clicks -- so a command added by another milestone appears in the
+ * editor with no change to M5d's code (R-M5D-REGISTRY-1). Nothing here enumerates commands by hand.
+ */
+export interface CommandCatalogEntry {
+  id: CommandId;
+  title: string;
+  category: CommandCategory;
+  /** True when the running main window has this command registered. */
+  registered: boolean;
+}
+
+/**
+ * `commands.published` (UI → Main): the ids the main window's `CommandRegistry` actually holds. Validated because it
+ * crosses into Main (spec §18). The catalogue only ever *annotates* its rows with these, so an id Main does not
+ * recognise is harmless -- it simply matches no row.
+ */
+export const commandsPublishedSchema = z.object({ ids: z.array(z.string().min(1).max(100)).max(1000) });
+
+/**
+ * `keybindings.save`: the whole override set, replacing the file's contents rather than patching it.
+ * `keybindingRuleSchema` is the same per-rule validator the read path uses, so the Settings window cannot write a
+ * rule that a later launch would silently drop.
+ */
+export const keybindingsSaveParamsSchema = z.object({
+  rules: z.array(keybindingRuleSchema).max(500),
+});
 
 // ---------- M5d Task 8: Themes → Import VS Code Theme… (spec §9.3) ----------
 
@@ -357,6 +395,13 @@ export type SettingsWindowRequests = {
   "npmrc.get": { params: Record<string, never>; response: { content: string } };
   "npmrc.save": { params: { content: string }; response: SaveResult };
   "npmrc.reset": { params: Record<string, never>; response: { content: string } };
+  /** Every command in the shared catalogue, annotated with what the running main window registered (Finding S1). */
+  "commands.catalog": { params: Record<string, never>; response: { commands: CommandCatalogEntry[] } };
+  "keybindings.get": {
+    params: Record<string, never>;
+    response: { rules: KeybindingRule[]; defaults: KeybindingRule[]; path: string };
+  };
+  "keybindings.save": { params: { rules: KeybindingRule[] }; response: SaveResult };
 };
 
 export type SettingsWindowMessages = {
@@ -367,6 +412,12 @@ export type SettingsWindowMessages = {
 export type SettingsViewMessages = {
   "settings.changed": { settings: Settings };
   "e2e.request": E2ERequest;
+  /**
+   * Finding K1 on the Settings side: the whole override set after a save, never a delta. The main window gets the
+   * same push through `ViewMessages`; this is what keeps the Keybindings pane showing what is actually on disk when
+   * the file is changed by something other than the pane itself.
+   */
+  "keybindings.changed": { rules: KeybindingRule[] };
 };
 
 export const STARTUP_NOTICE_IDS = [
@@ -539,6 +590,12 @@ export type MainMessages = {
    * `webRunnerMessageParamsSchema` has validated it on Main's side.
    */
   "webRunner.message": { tabId: string; raw: unknown };
+  /**
+   * M5d Task 10: the ids the main window's `CommandRegistry` holds, published on every registry build. The registry
+   * lives in the main window's React tree and the keybindings editor lives in the *Settings* window (Finding S1), so
+   * this message is how the catalogue served to Settings can say which of its rows the running window really has.
+   */
+  "commands.published": { ids: string[] };
 };
 
 /** Messages received by the UI, sent by Main. */

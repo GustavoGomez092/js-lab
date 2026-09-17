@@ -45,6 +45,7 @@ import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } fro
 import { createEnvHandlers } from "./rpc/env-handlers";
 import { createFileHandlers } from "./rpc/file-handlers";
 import { createFontHandlers } from "./rpc/font-handlers";
+import { createCommandPublishHandlers, createKeybindingHandlers } from "./rpc/keybinding-handlers";
 import { createNpmHandlers } from "./rpc/npm-handlers";
 import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
@@ -247,6 +248,7 @@ async function start(): Promise<void> {
     logTail: (lines) => logger.tail(lines),
     settings,
     paths: { dataDir: paths.dataDir, logsDir },
+    keybindings,
     versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
     os: osInfo,
     redact,
@@ -283,6 +285,10 @@ async function start(): Promise<void> {
   // source exists, which is whenever a `webviewBridge` was passed above -- i.e. always, in a real app. Without
   // this group the UI's `webRunner.ready` / `.exit` / `.message` reach no handler at all, and a browser tab's run
   // hangs until `waitForReady` gives up rather than failing with anything a user could act on.
+  // Finding S1: the command registry lives in the MAIN window's React tree, which the Settings window cannot reach.
+  // Main holds the ids that window publishes and serves them to the Settings catalogue. Empty until its first
+  // publish, which is the honest answer when no main window is open.
+  let publishedCommands: readonly string[] = [];
   const webRunnerHandlers = services.webviews ? [createWebRunnerHandlers({ webviews: services.webviews, log })] : [];
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
@@ -308,6 +314,12 @@ async function start(): Promise<void> {
         themes,
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
+      createCommandPublishHandlers({
+        onPublished: (ids) => {
+          publishedCommands = ids;
+        },
+        log,
+      }),
       ...webRunnerHandlers,
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createNpmHandlers({ npm, log }),
@@ -510,6 +522,7 @@ async function start(): Promise<void> {
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createFontHandlers({ fonts: systemFonts, log }),
       createNpmrcHandlers({ path: paths.packagesNpmrc, onSaved: () => npm.resetOutdated(), log }),
+      createKeybindingHandlers({ store: keybindings, registeredCommands: () => publishedCommands, log }),
       createSettingsAppHandlers(appHandlerDeps),
       createE2EResponseHandler(settingsE2E, log),
     ),
@@ -552,13 +565,14 @@ async function start(): Promise<void> {
     if (settingsWindow.isOpen()) settingsRpc.send["settings.changed"]({ settings: next });
   });
   // Finding K1: a saved keybindings.json takes effect in the running app. The menu is rebuilt from the freshly
-  // resolved bindings and the main window is told, so its dispatcher, palette keycaps and chrome keycaps follow.
-  // The Settings window is deliberately not told here: `SettingsViewMessages` gains that entry in Task 10, which
-  // owns `settings-rpc.ts` and the Keybindings pane's wire.
+  // resolved bindings and BOTH windows are told, so the main window's dispatcher, palette keycaps and chrome keycaps
+  // follow -- and so does the Settings window's Keybindings pane, which must keep showing what is actually on disk
+  // even when the write came from somewhere other than the pane itself (Task 10 owns this second half).
   keybindings.onChange((rules) => {
     resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, rules);
     menu.refresh();
     if (mainWindow.isOpen()) rpc.send["keybindings.changed"]({ rules: [...rules] });
+    if (settingsWindow.isOpen()) settingsRpc.send["keybindings.changed"]({ rules: [...rules] });
   });
 
   if (e2eEnabled) {

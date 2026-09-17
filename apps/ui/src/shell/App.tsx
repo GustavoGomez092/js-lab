@@ -413,6 +413,14 @@ export function App({
     };
   }, [store, api, registry, flows, coalescer, bufferSync, keycaps]);
 
+  // R-M5D-REGISTRY-1 / Finding S1: Settings → Keybindings renders a catalogue derived from COMMANDS, annotated with
+  // what this window actually registered. The registry lives here, in the main window's React tree, and Settings is a
+  // separate window with its own narrower RPC -- so the ids travel through Main. Published on every registry build,
+  // which is precisely when a command could have appeared or gone away.
+  useEffect(() => {
+    api.publishCommands(registry.list().map((spec) => spec.id));
+  }, [api, registry]);
+
   useEffect(() => {
     if (!e2e) return;
     const agent = createE2EAgent({

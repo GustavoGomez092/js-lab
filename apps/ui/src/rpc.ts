@@ -73,6 +73,7 @@ export function createRpcApi(): MainApi {
     pickWorkingDirectory: (tabId) => rpc.send["wd.pick"]({ tabId }),
     clearWorkingDirectory: (tabId) => rpc.send["wd.clear"]({ tabId }),
     appCommand: (action) => rpc.send["app.command"]({ action }),
+    publishCommands: (ids) => rpc.send["commands.published"]({ ids }),
     e2eRespond: (response) => rpc.send["e2e.response"](response),
     webRunnerReady: (tabId, generation) => rpc.send["webRunner.ready"]({ tabId, generation }),
     webRunnerExit: (tabId, generation) => rpc.send["webRunner.exit"]({ tabId, generation }),

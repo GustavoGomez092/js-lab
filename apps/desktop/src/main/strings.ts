@@ -89,6 +89,10 @@ export const strings = {
     tabsDropped: (count: number) =>
       `${count} ${count === 1 ? "tab" : "tabs"} in session.json couldn't be read and were skipped. Their buffer files were kept.`,
   },
+  /** Settings → Keybindings (spec §6.5). Never quotes a path: the raw cause goes to the log instead (spec §18). */
+  keybindings: {
+    saveFailed: "Couldn't save your keybindings. Your changes are still here.",
+  },
   runs: {
     /** Spec §12.2. */
     workingDirectoryNotFound: (path: string) => `Working directory not found: ${path}`,

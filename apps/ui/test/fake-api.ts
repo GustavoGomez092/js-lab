@@ -91,6 +91,7 @@ export function createFakeApi() {
     pickWorkingDirectory: mock((_tabId: string) => {}),
     clearWorkingDirectory: mock((_tabId: string) => {}),
     appCommand: mock((_action: AppAction) => {}),
+    publishCommands: mock((_ids: string[]) => {}),
     e2eRespond: mock((_response: E2EResponse) => {}),
     webRunnerReady: mock((_tabId: string, _generation: number) => {}),
     webRunnerExit: mock((_tabId: string, _generation: number) => {}),

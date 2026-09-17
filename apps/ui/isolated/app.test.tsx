@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { type BootstrapPayload, MAX_TEXT_CHARS, type TabCloseResult } from "@jslab/rpc-schema";
 import {
+  COMMANDS,
   parseChord as chordOf,
   createTab,
   DEFAULT_KEYBINDINGS,
@@ -108,6 +109,20 @@ function fakeEditor(store: AppStore, tabId: string, focused = true) {
 }
 
 describe("App shell", () => {
+  // R-M5D-REGISTRY-1 / Finding S1: the keybindings editor lives in the Settings window, which cannot reach this
+  // window's registry, so the ids go to Main. Publishing the REGISTRY's own list rather than COMMANDS is what lets a
+  // catalogue row say that a command exists in the shared list but is not registered in the running window.
+  test("publishes the registry's command ids to Main, so Settings can annotate its catalogue", () => {
+    const { api } = renderApp();
+    expect(api.publishCommands).toHaveBeenCalled();
+    const ids = api.publishCommands.mock.calls.at(-1)?.[0] ?? [];
+    expect(ids).toContain("run.start");
+    expect(ids).toContain("view.commandPalette");
+    // Every published id is a real command id, and none is published twice.
+    for (const id of ids) expect(COMMANDS.some((command) => command.id === id)).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   test("theme.changed registers the imported themes, so every surface sees them (spec §9.3)", async () => {
     const converted = convertVsCodeTheme({ name: "Deep Dark", type: "dark", colors: {} });
     if (!converted.ok) throw new Error(converted.error);

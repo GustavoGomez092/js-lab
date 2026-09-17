@@ -82,6 +82,12 @@ export interface MainApi {
   clearWorkingDirectory(tabId: string): void;
 
   appCommand(action: AppAction): void;
+  /**
+   * The command ids this window's registry actually holds (spec §6.5). Settings → Keybindings annotates its
+   * catalogue with these: the registry lives in this window's React tree, so the Settings window -- a separate
+   * window with its own narrower RPC -- can only learn them through Main (Finding S1).
+   */
+  publishCommands(ids: string[]): void;
   e2eRespond(response: E2EResponse): void;
 
   // M4 §5.12: what this tab's `<electrobun-webview>` did, reported back to the runtime driving it in Main

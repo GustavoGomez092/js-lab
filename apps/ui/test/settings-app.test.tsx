@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { SettingsViewMessages } from "@jslab/rpc-schema";
-import { defaultSettings, mergeSettings, type Settings } from "@jslab/shared";
+import type { CommandCatalogEntry, SettingsViewMessages } from "@jslab/rpc-schema";
+import { defaultSettings, type KeybindingRule, mergeSettings, type Settings } from "@jslab/shared";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SettingsApp } from "../src/settings/SettingsApp";
 import { createSettingsAgent } from "../src/settings/settings-agent";
@@ -23,6 +23,13 @@ function fakeSettingsApi(fonts: Awaited<ReturnType<SettingsApi["listFonts"]>> = 
     getNpmrc: mock(async () => DEFAULT_REGISTRY_NPMRC),
     saveNpmrc: mock(async (_content: string) => ({ ok: true as const })),
     resetNpmrc: mock(async () => DEFAULT_REGISTRY_NPMRC),
+    commandCatalog: mock(async () => ({ commands: [] as CommandCatalogEntry[] })),
+    getKeybindings: mock(async () => ({
+      rules: [] as KeybindingRule[],
+      defaults: [] as KeybindingRule[],
+      path: "/data/keybindings.json",
+    })),
+    saveKeybindings: mock(async (_rules: KeybindingRule[]) => ({ ok: true as const })),
     appCommand: mock((_action: string) => {}),
     e2eRespond: mock(() => {}),
     on(name: string, listener: (payload: never) => void) {

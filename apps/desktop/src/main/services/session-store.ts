@@ -75,6 +75,8 @@ export class SessionStore {
   readonly #listeners = new Set<(session: Session) => void>();
   // As built by the M1 fix wave: tabs whose buffer file exists but couldn't be read are never written over.
   readonly #unreadableBuffers = new Set<string>();
+  /** The first-run content this launch was given, so `setBuffer` can tell an edit from a resend of the same bytes. */
+  #firstRunContent: string | null = null;
   // Repaired tab ids (R-M1-18) whose old buffer failed to move for a reason other than "nothing to move" (ENOENT):
   // the old file is left in place, and readBuffers surfaces this the same way as any other unreadable buffer
   // (R-M2-T4-1, commit ed16be9).
@@ -136,6 +138,9 @@ export class SessionStore {
       primary,
       corruptCopy,
     );
+    // Set on every launch, not only the first one: a welcome tab the user has not touched is still pristine after a
+    // relaunch, and `setBuffer` needs this to recognise the resend of those same bytes (R-M5a-REGRESSION-2).
+    store.#firstRunContent = options.firstRun?.content ?? null;
     // R-M5a-5: `loadJson` reports this exact pair only when neither session.json nor session.json.bak could be
     // read. A corrupt primary recovers to "defaults" and a good backup to "backup" -- neither is a first launch,
     // so a returning user's tabs are never replaced by the sample.
@@ -149,6 +154,8 @@ export class SessionStore {
           title: options.firstRun.title,
           titleIsCustom: true,
           language: options.firstRun.language,
+          // R-M5a-REGRESSION-2: nothing of the user's is here yet, so ⌘W should still close the window.
+          pristine: true,
         };
         // `store.session` is this same object graph, and nothing has been committed, scheduled or written yet, so
         // amending it here is equivalent to having created the tab this way -- true at this point and nowhere else.
@@ -219,7 +226,13 @@ export class SessionStore {
   }
 
   setBuffer(tabId: string, content: string): void {
-    if (!this.#session.tabs[tabId] || this.#unreadableBuffers.has(tabId)) return;
+    const tab = this.#session.tabs[tabId];
+    if (!tab || this.#unreadableBuffers.has(tabId)) return;
+    // R-M5a-REGRESSION-2: the welcome tab stops being pristine as soon as it no longer holds what JSLab wrote
+    // there. Comparing the content, rather than treating any write as an edit, keeps the UI's own flushes -- which
+    // resend identical bytes -- from retiring the flag behind the user's back.
+    if (tab.pristine && content !== this.#firstRunContent)
+      this.#commit({ ...this.#session, tabs: { ...this.#session.tabs, [tabId]: { ...tab, pristine: false } } });
     this.#writerFor(tabId).schedule(content);
   }
 

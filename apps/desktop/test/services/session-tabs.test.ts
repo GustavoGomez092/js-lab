@@ -247,20 +247,34 @@ describe("SessionStore tabs", () => {
     stores.push(store);
     const [onlyId] = store.session.tabOrder;
     if (!onlyId) throw new Error("expected one tab");
-    expect(store.session.tabs[onlyId]).toMatchObject({ title: "Welcome", titleIsCustom: true, language: "tsx" });
+    expect(store.session.tabs[onlyId]).toMatchObject({
+      title: "Welcome",
+      titleIsCustom: true,
+      language: "tsx",
+      // R-M5a-REGRESSION-2: what lets ⌘W tell an untouched welcome tab from a tab the user has made theirs.
+      pristine: true,
+    });
     expect(await store.readBuffer(onlyId)).toBe("// hello\n");
     await store.flush();
+
+    // A write of the very same bytes is not an edit. The UI flushes buffers on its own schedule, so trusting
+    // "a write happened" rather than comparing content would retire the flag without the user touching anything.
+    store.setBuffer(onlyId, "// hello\n");
+    expect(store.session.tabs[onlyId]?.pristine).toBe(true);
 
     // Second launch: a real session.json exists, so nothing is replaced. It is the user's own edit that has to
     // survive -- re-asserting the welcome text here would pass even if the welcome had been written over their
     // work, because the sample and the stored content would be byte-identical.
     store.setBuffer(onlyId, "// the user's own work\n");
+    expect(store.session.tabs[onlyId]?.pristine).toBe(false);
     await store.flush();
     const second = await SessionStore.open(dir, { delayMs: 10, firstRun });
     stores.push(second);
     expect(second.session.tabOrder).toEqual(store.session.tabOrder);
     expect(await second.readBuffer(onlyId)).toBe("// the user's own work\n");
     expect(second.session.tabs[onlyId]).toMatchObject({ title: "Welcome", titleIsCustom: true, language: "tsx" });
+    // The edit outlives the launch: a returning user's ⌘W must not close the window on work they can see.
+    expect(second.session.tabs[onlyId]?.pristine).toBe(false);
   });
 
   test("a corrupt session.json is not treated as a first run", async () => {

@@ -448,9 +448,13 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           return;
         }
         get().clearTransientStatus();
+        const edited = get().tabs[id];
         commit({
           buffers: { ...get().buffers, [id]: code },
           runtimes: { ...get().runtimes, [id]: { ...(get().runtimes[id] ?? newRuntime()), autoRunArmed: true } },
+          // R-M5a-REGRESSION-2: Main retires this flag too (`SessionStore.setBuffer`), but nothing pushes a tab
+          // update back to the UI, so the side that decides what ⌘W does has to retire it itself.
+          ...(edited?.pristine ? { tabs: { ...get().tabs, [id]: { ...edited, pristine: false } } } : {}),
         });
       },
 

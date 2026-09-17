@@ -34,7 +34,9 @@ const SECOND = "const a = 6\na * 2";
 
 describe("welcome tab and transpiled output", () => {
   test("a first launch opens one welcome tab, and a relaunch keeps what the user made of it (ST-12)", async () => {
-    const app = await launchApp();
+    // The harness suppresses the welcome tab by default (R-M5a-REGRESSION-1) -- it rewrites the first tab every
+    // other scenario assumes -- so the scenarios that are *about* it ask for it by name.
+    const app = await launchApp({ env: { JSLAB_E2E_WELCOME: "1" } });
     apps.push(app);
     const state = await app.state();
     expect(state.ui.tabOrder).toHaveLength(1);
@@ -56,7 +58,9 @@ describe("welcome tab and transpiled output", () => {
     const mine = await typeCode(app, "const mine = 1");
     await app.quit();
 
-    const again = await launchApp({ userData: app.userData });
+    // Opted in again on purpose: the user's work has to survive even on a launch that would happily write the
+    // sample, which is the half of R-M5a-5 that a suppressed relaunch could never prove.
+    const again = await launchApp({ userData: app.userData, env: { JSLAB_E2E_WELCOME: "1" } });
     apps.push(again);
     const restored = await again.state();
     expect(restored.ui.tabOrder).toHaveLength(1);
@@ -106,5 +110,32 @@ describe("welcome tab and transpiled output", () => {
     // ...and it refreshed in place: still the transpiled panel, still on screen.
     const after = await app.state();
     expect([after.ui.sideBarPanel, (after.ui.regions as Regions).transpiledPanel]).toEqual(["transpiled", true]);
+  });
+
+  /**
+   * R-M5a-REGRESSION-2, in the built app. `files.test.ts` covers TF-21 for an empty tab; this is the case the
+   * welcome tab created, where the only tab is untouched but full of sample code. Closing the tab here would leave
+   * a first-run user looking at an empty window, so ⌘W has to close the window exactly as it always did.
+   */
+  test("⌘W on the untouched welcome tab closes the window, not the tab (TF-21)", async () => {
+    const app = await launchApp({ env: { JSLAB_E2E_WELCOME: "1" } });
+    apps.push(app);
+    expect(activeTab(await app.state()).code).toContain("Welcome to JSLab");
+
+    await app.key("cmd+w");
+    const closed = await waitFor(
+      async () => {
+        const raw = await app.client.call<{ ui: unknown; main: { windowOpen: boolean } }>("e2e.state");
+        return raw.main.windowOpen === false && raw.ui === null ? raw : null;
+      },
+      { message: "⌘W never closed the window on the untouched welcome tab" },
+    );
+    expect(closed.main.windowOpen).toBe(false);
+
+    // The tab is kept, not closed: reopening the window brings the same single welcome tab back.
+    await app.reopenWindow();
+    const reopened = await app.state();
+    expect(reopened.ui.tabOrder).toHaveLength(1);
+    expect(activeTab(reopened).code).toContain("Welcome to JSLab");
   });
 });

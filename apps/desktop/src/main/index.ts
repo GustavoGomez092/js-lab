@@ -1,5 +1,5 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { arch, homedir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -24,8 +24,11 @@ import Electrobun, {
 } from "electrobun/main";
 import { e2eBunCacheDir, resolveAppPaths } from "./app-paths";
 import { E2EBridge } from "./cli/e2e-bridge";
+import { createOpenService } from "./cli/open-service";
 import { createSocketMethods } from "./cli/socket-methods";
-import { type SocketServer, startSocketServer } from "./cli/socket-server";
+import type { SocketServer } from "./cli/socket-server";
+import { startCliSocket } from "./cli/start-cli-socket";
+import { createUiDispatch } from "./cli/ui-dispatch";
 import { createErrorPolicy } from "./error-policy";
 import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-service";
 import { createRedactor } from "./logging/redact";
@@ -231,6 +234,13 @@ async function start(): Promise<void> {
   // The bridge sends through `rpc`, which is defined next; send runs only after startup.
   const e2eBridge = new E2EBridge((request) => rpc.send["e2e.request"](request));
   let socketServer: SocketServer | null = null;
+  // The CLI's UI command path (spec §16.3, `--run`). Like `e2eBridge` above, this reads `mainWindow` and `rpc`,
+  // both declared below, only from callbacks that never run before startup finishes.
+  const cliDispatch = createUiDispatch({
+    isOpen: () => mainWindow.isOpen(),
+    open: () => void mainWindow.open(),
+    send: (message) => rpc.send["menu.command"](message),
+  });
 
   const writeClipboard = (text: string) =>
     e2eEnabled ? writeFileSync(join(paths.dataDir, "e2e-clipboard.txt"), text) : Utils.clipboardWriteText(text);
@@ -296,6 +306,8 @@ async function start(): Promise<void> {
         onUiHeartbeat: () => {
           sawFirstHeartbeat = true;
           lastUiHeartbeat = Date.now();
+          // A CLI `--run` that arrived while the view was booting goes out as soon as it can receive it.
+          cliDispatch.markReady();
         },
         // The stores report what their own load found, including the corrupt copy saved this launch (FA-m4).
         notices: startupNotices({ settings, session }),
@@ -421,6 +433,8 @@ async function start(): Promise<void> {
     create: createWindow,
     onClosed: () => {
       e2eBridge.rejectAll("The JSLab window closed");
+      // Whatever view loads next has to report ready again before a queued CLI command can reach it.
+      cliDispatch.markClosed();
       // M4 final review (C): this window's UI owned every `<electrobun-webview>` Main was driving. Reopening from
       // the Dock builds a fresh view with an empty registry, so Main's own entries must go with the old one --
       // otherwise the next run on every browser tab hits a stale entry, skips `webRunner.ensure`, and fails after
@@ -518,40 +532,63 @@ async function start(): Promise<void> {
     if (settingsWindow.isOpen()) settingsRpc.send["settings.changed"]({ settings: next });
   });
 
-  if (e2eEnabled) {
-    socketServer = await startSocketServer({
-      path: paths.socketPath,
-      log,
-      methods: createSocketMethods({
-        e2eEnabled,
-        bridge: e2eBridge,
-        settingsBridge: settingsE2E,
-        mainState: () => ({
-          safeMode,
-          dataDir: paths.dataDir,
-          windowOpen: mainWindow.isOpen(),
-          pid: process.pid,
-          windowFrame: mainWindow.window?.getFrame() ?? null,
-          primaryWorkArea: Screen.getPrimaryDisplay().workArea,
-          menu: menu.current(),
-          settingsWindowOpen: settingsWindow.isOpen(),
-        }),
-        uiAvailable: (window = "main") => (window === "main" ? mainWindow.isOpen() : settingsWindow.isOpen()),
-        reopenWindow: () => void mainWindow.open(),
-        screenshot: async (name, window) => {
-          await mkdir(paths.screenshotsDir, { recursive: true });
-          const out = join(paths.screenshotsDir, `${name}.png`);
-          const target = window === "main" ? mainWindow.window : settingsWindow.window;
-          const result = await captureWindow(windowNumberOf(target?.ptr ?? null), out, () =>
-            Utils.screenCapture.hasAccess(),
-          );
-          if ("skipped" in result) log(`Screenshot ${name} skipped: ${result.skipped}`);
-          return result;
-        },
-        quit: () => Utils.quit(),
+  // Spec §16.3: `jslab` opens files and code through the same session path as File → Open, so a CLI-opened tab is
+  // indistinguishable from one the user opened themselves.
+  const openTabs = createOpenService({
+    session,
+    readFile: (path) => readFile(path, "utf8"),
+    defaults: () => ({ language: settings.current.run.defaultLanguage, runtime: settings.current.run.defaultRuntime }),
+    announce: (payload) => {
+      if (mainWindow.isOpen()) rpc.send["file.opened"](payload);
+    },
+    present: ({ run }) => {
+      // Focus (or reopen) the window first; a closed window's UI bootstraps the new tabs from the session it just
+      // joined, so nothing is lost when `file.opened` above was skipped.
+      mainWindow.open();
+      if (run) cliDispatch.dispatch("run.start");
+    },
+    log,
+  });
+
+  // Spec §16.3: the socket serves `open` in every launch, not only under JSLAB_E2E=1 -- without this there is no
+  // socket for `jslab` to connect to in a normal launch. `startCliSocket` is what keeps that from being a
+  // regression for the second JSLab a user opens: it finds this path already owned, and losing the CLI socket must
+  // never be a failed startup.
+  socketServer = await startCliSocket({
+    path: paths.socketPath,
+    log,
+    methods: createSocketMethods({
+      e2eEnabled,
+      open: openTabs,
+      bridge: e2eBridge,
+      settingsBridge: settingsE2E,
+      mainState: () => ({
+        safeMode,
+        dataDir: paths.dataDir,
+        windowOpen: mainWindow.isOpen(),
+        pid: process.pid,
+        windowFrame: mainWindow.window?.getFrame() ?? null,
+        primaryWorkArea: Screen.getPrimaryDisplay().workArea,
+        menu: menu.current(),
+        settingsWindowOpen: settingsWindow.isOpen(),
       }),
-    });
-    logger.info(strings.log.e2eEnabled(socketServer.path));
+      uiAvailable: (window = "main") => (window === "main" ? mainWindow.isOpen() : settingsWindow.isOpen()),
+      reopenWindow: () => void mainWindow.open(),
+      screenshot: async (name, window) => {
+        await mkdir(paths.screenshotsDir, { recursive: true });
+        const out = join(paths.screenshotsDir, `${name}.png`);
+        const target = window === "main" ? mainWindow.window : settingsWindow.window;
+        const result = await captureWindow(windowNumberOf(target?.ptr ?? null), out, () =>
+          Utils.screenCapture.hasAccess(),
+        );
+        if ("skipped" in result) log(`Screenshot ${name} skipped: ${result.skipped}`);
+        return result;
+      },
+      quit: () => Utils.quit(),
+    }),
+  });
+  if (socketServer) {
+    logger.info(e2eEnabled ? strings.log.e2eEnabled(socketServer.path) : strings.log.cliSocket(socketServer.path));
   }
 
   // Warm the first runner so the first run is fast (spec §5.3).

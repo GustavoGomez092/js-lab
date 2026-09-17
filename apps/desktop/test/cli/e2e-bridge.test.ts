@@ -32,6 +32,7 @@ describe("E2EBridge", () => {
 describe("createSocketMethods", () => {
   const deps = (e2eEnabled: boolean) => ({
     e2eEnabled,
+    open: mock(async (params: unknown) => ({ tabIds: ["t1"], params })),
     bridge: { request: mock(async (method: string, params: unknown) => ({ method, params })) },
     mainState: () => ({ windowOpen: true }),
     screenshot: mock(async (name: string, _window?: string) => ({ path: `/shots/${name}.png` })),
@@ -40,8 +41,8 @@ describe("createSocketMethods", () => {
     reopenWindow: mock(() => {}),
   });
 
-  test("exposes no e2e methods unless JSLAB_E2E=1", () => {
-    expect(Object.keys(createSocketMethods(deps(false)))).toEqual([]);
+  test("open is always available; e2e methods need JSLAB_E2E=1", () => {
+    expect(Object.keys(createSocketMethods(deps(false)))).toEqual(["open"]);
     expect(Object.keys(createSocketMethods(deps(true))).sort()).toEqual([
       "e2e.command",
       "e2e.key",
@@ -51,7 +52,19 @@ describe("createSocketMethods", () => {
       "e2e.screenshot",
       "e2e.state",
       "e2e.type",
+      "open",
     ]);
+  });
+
+  test("open validates its params and returns only tabIds, so it can't spoof the envelope", async () => {
+    const d = deps(false);
+    const methods = createSocketMethods(d);
+    expect(await methods.open?.({ code: "1 + 1", run: true })).toEqual({
+      tabIds: ["t1"],
+      params: { code: "1 + 1", run: true },
+    });
+    await expect(methods.open?.({ files: ["relative.ts"] }) ?? Promise.resolve()).rejects.toThrow();
+    await expect(methods.open?.({}) ?? Promise.resolve()).rejects.toThrow();
   });
 
   test("validates params, forwards to the UI and merges Main state", async () => {

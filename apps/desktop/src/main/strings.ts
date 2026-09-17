@@ -7,6 +7,9 @@ export const strings = {
     keybindingsInvalid: (path: string) => `keybindings.json at ${path} is not valid JSON; using the default keymap`,
     safeMode: (reason: string) => `starting in Safe Mode (${reason})`,
     e2eEnabled: (path: string) => `E2E automation enabled on ${path}`,
+    cliSocket: (path: string) => `jslab CLI socket listening on ${path}`,
+    /** A second instance: the first one owns the socket, so `jslab` reaches that one and this one just runs. */
+    cliSocketFailed: "Couldn't start the jslab CLI socket; the jslab command can't reach this instance",
     restartRequested: "Restart in Safe Mode requested",
     relaunchFailed: "Could not relaunch JSLab after Restart in Safe Mode; quitting without reopening",
     startupFailed: "startup failed",

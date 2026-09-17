@@ -5,6 +5,19 @@ import { activeTab, isAlive, type LaunchedApp, launchApp, waitFor } from "../src
 // Loop protection off, so `while (true) {}` really hangs (M1 QA Q11/Q12).
 const NO_LOOP_GUARD = { version: 1, run: { loopProtection: false } };
 
+/**
+ * The top-level await that Stop has to land inside (spec §5.8). It is deliberately far longer than the harness's
+ * own 100 ms poll period: at the 400 ms it used to be, the run passed through "evaluating" in about the time it
+ * took to poll for it twice, and a runner that stalled once anywhere in that window missed the state outright.
+ */
+const STOP_SLEEP_MS = 3_000;
+/**
+ * How long the run is watched after Stop. Code that wrongly resumed would create its interval STOP_SLEEP_MS after
+ * the run started and log every 50 ms from then on, so this has to outlast the whole sleep -- measured from Stop,
+ * which lands early in it -- with room for a run of those ticks to arrive.
+ */
+const AFTER_STOP_WINDOW_MS = 4_000;
+
 let apps: LaunchedApp[] = [];
 async function launch(...args: Parameters<typeof launchApp>) {
   const app = await launchApp(...args);
@@ -40,15 +53,23 @@ describe("M1 core", () => {
   test("Stop ends async work with no output afterwards, and Kill recovers a hung run and its children (EX-03, EX-04, EX-05)", async () => {
     const app = await launch({ settings: NO_LOOP_GUARD });
     // Final review I1: the interval is created after an await, so Stop arrives before any handle is tracked.
-    await app.type("await Bun.sleep(400)\nsetInterval(() => console.log(Date.now()), 50)");
-    await app.waitForRunState(["evaluating"]);
+    // The run announces itself before that await rather than being caught in the act of it: "evaluating" is a
+    // state this run passes through, not one it rests in, so waiting on it was a race against the sleep's own
+    // length. It lost on a clean CI runner -- feat/jslab-m5a and main both failed at this line on macos-14,
+    // before any Stop had run, with the state already "settled". A logged line is cumulative, so no poll can
+    // step over it, and the long sleep leaves Stop a wide margin to land inside the await on a slow machine.
+    await app.type(
+      `console.log("running")\nawait Bun.sleep(${STOP_SLEEP_MS})\nsetInterval(() => console.log(Date.now()), 50)`,
+    );
+    await app.waitForOutput((all) => all.some((e) => e.text === "running"));
     await app.command("run.stop");
     expect(await app.waitForRunState(["stopped"])).toBe("stopped");
     const afterStop = activeTab(await app.state()).entryCount;
-    // The resumed code would log from about 400 ms after the run started, every 50 ms, so this window is what the
-    // negative check is about. FA-m10 sentinel: a status bar toggle is answered by Main on the same channel as run
-    // events, so once it has applied, every event Main sent during the window has reached the UI too.
-    await Bun.sleep(1000);
+    // The resumed code would create its interval STOP_SLEEP_MS after the run started and log every 50 ms from
+    // then on, so the negative check has to outlast that sleep, not merely the 400 ms it once was. FA-m10
+    // sentinel: a status bar toggle is answered by Main on the same channel as run events, so once it has
+    // applied, every event Main sent during the window has reached the UI too.
+    await Bun.sleep(AFTER_STOP_WINDOW_MS);
     await app.command("view.toggleStatusBar");
     await waitFor(async () => ((await app.state()).ui.regions as Record<string, boolean>).statusBar === false || null, {
       message: "the status bar sentinel never applied",

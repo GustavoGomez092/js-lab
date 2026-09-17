@@ -10,7 +10,7 @@ import type {
   SettingsWindowRequests,
   ViewMessages,
 } from "@jslab/rpc-schema";
-import { DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
+import { DEFAULT_KEYBINDINGS, resolveKeybindings, resolveLocale } from "@jslab/shared";
 import { listThemes } from "@jslab/themes";
 import Electrobun, {
   ApplicationMenu,
@@ -31,7 +31,7 @@ import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-servi
 import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
 import { createMainServices } from "./main-services";
-import { resolveMainViewUrl } from "./main-view-url";
+import { resolveMainViewUrl, withLocale } from "./main-view-url";
 import { buildMenu, createMenuController, dispatchMenuAction } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
 import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
@@ -379,6 +379,12 @@ async function start(): Promise<void> {
     env: process.env,
     probe: (target, signal) => fetch(target, { method: "HEAD", signal }),
   });
+  // Spec §17: fixed for the life of this launch, which is what "changing the language needs a restart" means.
+  const locale = resolveLocale(
+    settings.current.app.uiLanguage,
+    Intl.DateTimeFormat().resolvedOptions().locale || process.env.LANG,
+  );
+  const localizedUrl = withLocale(url, locale);
   const displays = (): DisplayInfo[] => Screen.getAllDisplays();
   // A blocked web or mail link opens in the default browser; E2E runs record it instead (never the user's browser).
   const openExternal = (link: string) =>
@@ -388,7 +394,7 @@ async function start(): Promise<void> {
     const restored = restoreFrame(session.session.window, displays());
     const created = new BrowserWindow({
       title: "JSLab",
-      url,
+      url: localizedUrl,
       frame: restored.frame,
       titleBarStyle: "hiddenInset",
       rpc,
@@ -480,7 +486,10 @@ async function start(): Promise<void> {
       createE2EResponseHandler(settingsE2E, log),
     ),
   });
-  const settingsUrl = url.startsWith("views://") ? "views://mainview/settings.html" : `${url}/settings.html`;
+  const settingsUrl = withLocale(
+    url.startsWith("views://") ? "views://mainview/settings.html" : `${url}/settings.html`,
+    locale,
+  );
   const settingsWindow = createMainWindowController({
     create: () => {
       // The same display-aware restore as the main window (Task 18, spec §10.1).

@@ -58,7 +58,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | EX-34 | `fetch` works without CORS blocking | CL 2.7.5, #513 | `bun`: native; `browser-node`: proxied; `browser`: real CORS | §5.12 | M4 | E | 📝 `browser` runtime enforces CORS (true browser semantics) — verified both ways in one scenario: the same request succeeds in `browser-node` and is refused in `browser` (`packages/e2e/scenarios/web-runtime.test.ts`) |
 | EX-35 | Audio indicator + mute toggle | CL 1.9.0, Strings | Speaker icon on tab, click to mute | §5.12 | M4 | U, M | 🚧 **unit-verified, not yet seen on screen.** The indicator renders only while the runner reports audio, `aria-pressed` and its accessible name both track the muted state, the click doesn't also switch tabs, and muting zeroes a tracked context's gain without suspending it (`apps/ui/test/audio-indicator.test.tsx`, `packages/runner-web/test/handles.test.ts`); Web Audio really runs in a browser tab (`packages/e2e/scenarios/web-guides.test.ts`). **No scenario asserts the icon's on-screen state**, and an `OfflineAudioContext` render drives no indicator at all — pending user QA (docs/qa/m4-checklist.md Q11) |
 | EX-36 | Safe recovery from hanging code on launch (Edit → Clear workaround) | #252, #548, #6 | Restored tabs never auto-run; crash-loop Safe Mode; Clear Editor | §5.14 | M1 | E | ✅ `apps/desktop/test/services/services.test.ts`, `apps/ui/test/app.test.tsx`, `apps/ui/test/logic.test.ts` |
-| EX-37 | Show transpiled output | CL 1.3.0, 2.0.0 | Actions → Show Transpiled Output | §7.4 | M5 | E | ⬜ |
+| EX-37 | Show transpiled output | CL 1.3.0, 2.0.0 | Actions → Show Transpiled Output | §7.4 | M5 | E | ✅ `packages/e2e/scenarios/welcome.test.ts` — the command puts the panel on screen, and (R-M5a-7) its stale indicator appears after an edit and clears on the next run |
 
 ## 2. Languages & build
 
@@ -178,7 +178,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 | ST-09 | Auto Updates toggle; Check for Updates; Restart to Update | Docs, Strings | Same + canary channel | §19 | M6 | M | ⬜ |
 | ST-10 | Copy Debug Log to Clipboard | Strings | Help → Copy Debug Log (redacted) | §20 | M2 | I | ✅ `packages/e2e/scenarios/help.test.ts` |
 | ST-11 | Documentation / Report Issue / What's New | Strings | Help menu | §7.4 | M6 | M | ⬜ |
-| ST-12 | Welcome message on first run | CL 1.6.0 | Welcome tab with samples | §7.5 | M5 | E | ⬜ |
+| ST-12 | Welcome message on first run | CL 1.6.0 | Welcome tab with samples | §7.5 | M5 | E | ✅ `packages/e2e/scenarios/welcome.test.ts` — one TSX welcome tab on a first launch, nothing armed or run, and a relaunch keeps what the user made of it |
 
 ## 8. Tools
 

@@ -172,11 +172,25 @@ export type WebRunnerMessageParams = z.infer<typeof webRunnerMessageParamsSchema
 
 // ---------- M3: npm, environment variables, working directory, types and .npmrc (spec §6.2, §11, §12) ----------
 
+/**
+ * npm's own package-name length limit. Exported because the UI must not re-derive it: `type-feeder.ts` filters
+ * names against this before sending `types.package`, and a UI copy that drifted from the schema's would make
+ * Main reject the request -- which `type-feeder.ts` only logs, so autocomplete would silently stop appearing.
+ * Same rule as `packages/shared/src/env-vars.ts`: the limit is exported once and imported on both sides.
+ */
+export const MAX_PACKAGE_NAME_CHARS = 214;
+
+/** Most package names one `types.package` request may carry; the UI chunks its requests to this size. */
+export const MAX_PACKAGES_PER_REQUEST = 50;
+
+/** Most relative specifiers one `types.local` request may carry; the UI truncates to this length. */
+export const MAX_LOCAL_SPECIFIERS_PER_REQUEST = 200;
+
 /** npm package names: an optional @scope, lowercase URL-safe characters, at most 214 characters. */
 export const npmNameSchema = z
   .string()
   .min(1)
-  .max(214)
+  .max(MAX_PACKAGE_NAME_CHARS)
   .regex(/^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/);
 
 /** One `bun add` argument: a registry name with an optional range or tag, a git URL, or a tarball URL (spec §11.2, §18). */
@@ -195,11 +209,14 @@ export const MAX_NPMRC_CHARS = 65_536;
 
 export const npmInstallParamsSchema = z.object({ spec: npmSpecSchema });
 export const npmNameParamsSchema = z.object({ name: npmNameSchema });
-export const npmSearchParamsSchema = z.object({ query: z.string().trim().min(1).max(214) });
+export const npmSearchParamsSchema = z.object({ query: z.string().trim().min(1).max(MAX_PACKAGE_NAME_CHARS) });
 export const npmListParamsSchema = z.object({ refreshOutdated: z.boolean() });
 export const npmrcSaveParamsSchema = z.object({ content: z.string().max(MAX_NPMRC_CHARS) });
 export const envSaveParamsSchema = z.object({ variables: envVarsSchema });
-export const packageTypesParamsSchema = z.object({ tabId, packages: z.array(npmNameSchema).min(1).max(50) });
+export const packageTypesParamsSchema = z.object({
+  tabId,
+  packages: z.array(npmNameSchema).min(1).max(MAX_PACKAGES_PER_REQUEST),
+});
 export const localTypesParamsSchema = z.object({
   tabId,
   specifiers: z
@@ -212,7 +229,7 @@ export const localTypesParamsSchema = z.object({
         .regex(/^\.\.?\/[^\0-\x1f\\]*$/),
     )
     .min(1)
-    .max(200),
+    .max(MAX_LOCAL_SPECIFIERS_PER_REQUEST),
 });
 
 export type NpmOpKind = "install" | "remove" | "update" | "updateAll";

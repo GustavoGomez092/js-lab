@@ -1,16 +1,21 @@
 import { packageNameFromSpecifier } from "@jslab/npm/specifiers";
-import type { LocalTypesResult, PackageTypesResult } from "@jslab/rpc-schema";
+import {
+  type LocalTypesResult,
+  MAX_LOCAL_SPECIFIERS_PER_REQUEST,
+  MAX_PACKAGE_NAME_CHARS,
+  MAX_PACKAGES_PER_REQUEST,
+  type PackageTypesResult,
+} from "@jslab/rpc-schema";
 import type { TimerApi } from "../state/auto-run";
 import type { TsEnvironment } from "./ts-environment";
 
 /** Spec §6.2: the UI requests types for the imports in a model, debounced 500 ms. */
 export const TYPE_FEED_DELAY_MS = 500;
 
-/** Main's `packageTypesParamsSchema.packages` accepts at most this many names per request (Task 23 fix round 2, I-3). */
-export const MAX_PACKAGES_PER_REQUEST = 50;
-
-/** npm's package-name length limit; a longer name is never requested (Task 23 fix round 2, M-3). */
-export const MAX_PACKAGE_NAME_CHARS = 214;
+// The three request limits this module applies (`MAX_PACKAGES_PER_REQUEST`, `MAX_PACKAGE_NAME_CHARS` and
+// `MAX_LOCAL_SPECIFIERS_PER_REQUEST`) are imported from `@jslab/rpc-schema`, which is the side that enforces
+// them. They used to be re-declared here as bare literals that happened to agree; on drift Main would reject the
+// request with InvalidPayloadError, and the catch below only logs -- so type hints would silently stop appearing.
 
 /**
  * Above this many characters, only the first `MAX_IMPORT_SCAN_CHARS` of the buffer are scanned for imports (Task 23
@@ -157,7 +162,7 @@ export function createTypeFeeder(deps: TypeFeederDeps): TypeFeeder {
     let localPackages: string[] = [];
     if (relative.length > 0) {
       try {
-        const local = await deps.requestLocal(tabId, relative.slice(0, 200));
+        const local = await deps.requestLocal(tabId, relative.slice(0, MAX_LOCAL_SPECIFIERS_PER_REQUEST));
         if (disposed) return;
         // I-2: a response from an earlier feed for this tab is dropped whole, including its packages, rather than
         // overwriting the newer working directory's files.

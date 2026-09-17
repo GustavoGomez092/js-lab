@@ -20,6 +20,10 @@ import { join } from "node:path";
  *
  *   1. `import { readFile as slurp }` -- the call site says `slurp(p)` and matches no call pattern. Caught by
  *      matching the *import* instead: the alias is local, but the binding it renames is still spelled `readFile`.
+ *      The import check deliberately skips allowlisted files, because such a file legitimately imports the very
+ *      reader its pinned count covers -- so the rename is refused *separately, and in every file*. Without that,
+ *      the evasion simply moved inside the allowlist: mutant M5 added a renamed read to a file pinned at one read
+ *      and the gate stayed green, because `slurp(p)` never moves the count that pins it.
  *   2. `import * as FS` then `FS["readFile"]` -- a computed member access matches nothing either. A namespace
  *      import of `node:fs` hands over every reader at once, so the namespace import is itself the offence.
  *   3. Moving the read into `packages/npm/src`, outside the scan root, while Main still imports it and runs it.
@@ -56,6 +60,17 @@ const FS_IMPORT = /import\s+([^;]*?)\s+from\s+"node:fs(?:\/promises)?"/;
 const READ_BINDING = /\b(?:readFile|readFileSync|createReadStream|readSync)\b/;
 /** `import * as fs` -- one binding that reaches every reader above, including by computed access. */
 const NAMESPACE_IMPORT = /\*\s+as\s+/;
+/**
+ * A read binding renamed on the way in (`readFile as slurp`).
+ *
+ * The rename is the whole offence, and it is an offence in an allowlisted file as much as anywhere else. An
+ * allowlisted file is pinned by a *count* of bare reads, and that count matches call spellings (`readFile(`), so a
+ * plainly-imported reader stays fully covered by the pin -- a second plain `readFile(` moves the count and fails.
+ * A renamed one does not: `slurp(p)` matches no call pattern, the count stays pinned, and the import check skips
+ * allowlisted files entirely. Mutant M5 put exactly that into `services/settings-store.ts` (pinned at 1) and left
+ * the gate at 8 pass / 0 fail.
+ */
+const ALIASED_READ_BINDING = /\b(?:readFile|readFileSync|createReadStream|readSync)\s+as\s+/;
 
 /** Prose mentions these calls legitimately -- bounded-read.ts's own header explains why they are refused. */
 const COMMENT_LINE = /^\s*(\*|\/\/|\/\*)/;
@@ -234,6 +249,26 @@ function bareReads(relativePath: string): string[] {
   return matchesIn(relativePath, BARE_READ);
 }
 
+/**
+ * `node:fs` imports that escape an allowlisted file's pinned read count, and so must be refused in *every* file.
+ * A plainly-imported reader is not one of these: its call site is spelled the way `BARE_READ` matches, so the pin
+ * already covers it.
+ */
+function pinEscapingImports(relativePath: string): string[] {
+  const source = code(relativePath);
+  const global = new RegExp(FS_IMPORT.source, "g");
+  const found: string[] = [];
+  let match = global.exec(source.text);
+  while (match !== null) {
+    const clause = match[1] ?? "";
+    if (NAMESPACE_IMPORT.test(clause) || ALIASED_READ_BINDING.test(clause)) {
+      found.push(`${relativePath}:${source.lineOf(match.index)}: ${clause.replace(/\s+/g, " ").trim()}`);
+    }
+    match = global.exec(source.text);
+  }
+  return found;
+}
+
 /** `import`s of `node:fs` that hand the file a whole-file reader, under any alias or via a namespace. */
 function fsReadImports(relativePath: string): string[] {
   const source = code(relativePath);
@@ -286,10 +321,21 @@ describe("no unbounded reads in Main", () => {
 
   test("no file outside the allowlist even imports a whole-file reader from node:fs", () => {
     // The call site can be renamed (`readFile as slurp`) or computed (`FS["readFile"]`); the import cannot hide
-    // which binding it takes. A file already trusted with a bare read needs no second exemption here.
+    // which binding it takes. An allowlisted file is exempt *from this test only* -- it legitimately imports the
+    // reader its pinned count covers -- and the test below is what stops that exemption from being a hole.
     const offenders = scannedFiles()
       .filter((file) => file !== THE_READER && !(file in ALLOWED))
       .flatMap((file) => fsReadImports(file));
+
+    expect(offenders).toEqual([]);
+  });
+
+  test("no file -- allowlisted or not -- renames a read binding or takes node:fs whole", () => {
+    // The gate's stated primary purpose is catching "a tenth unbounded read added beside a legitimate one", and
+    // that is precisely the case the allowlist exemption above used to miss: a renamed read moves no count, and a
+    // whole-module import reaches every reader by computed access. Neither is ever legitimate, in any file, so
+    // neither carries an exemption. Mutant M5 is the regression this pins.
+    const offenders = scannedFiles().flatMap((file) => pinEscapingImports(file));
 
     expect(offenders).toEqual([]);
   });

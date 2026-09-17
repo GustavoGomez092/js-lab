@@ -422,6 +422,33 @@ export const UNSUPPORTED_MODULE_EXPORTS: Record<string, readonly string[]> = {
 };
 
 /**
+ * The subset of `UNSUPPORTED_MODULE_EXPORTS` that Node publishes as **data** rather than as something callable.
+ *
+ * This split exists because modelling every name as a function silently defeated the §5.13 refusal contract for
+ * exactly these names. `http.STATUS_CODES` is an object and `http.METHODS` an array in Node, so binding them to
+ * `function () { throw }` meant `STATUS_CODES[200]` read back as `undefined` and `METHODS.length` as `0`: a
+ * *property read* -- the only way anyone actually uses these -- never reached the thrower at all, and the user got
+ * a confusing `undefined` (or a bare `TypeError` one line later) instead of `JSLabUnsupportedError`.
+ *
+ * The list is the result of auditing the whole table, not just the two names the review happened to cite: the four
+ * `worker_threads` entries have the same shape, and `parentPort` is the most dangerous of all -- the idiomatic
+ * `if (parentPort) parentPort.postMessage(...)` would otherwise sail past the guard and die on a `TypeError`.
+ *
+ * Everything NOT listed here is genuinely callable (a function like `createServer`, or a constructor like `Worker`
+ * or `Script`), for which a thrower function is already the right shape.
+ *
+ * **The honest limit of this fix**: a data-valued binding is still *truthy*. `ToBoolean` has no interception point
+ * in JavaScript -- not a Proxy trap, not `Symbol.toPrimitive` -- so `if (parentPort)` necessarily takes the
+ * "present" branch. What is guaranteed is that the value cannot be silently *used*: every property read off it,
+ * and every call, throws `JSLabUnsupportedError`. See `unsupportedModuleSource` in
+ * `apps/desktop/src/main/bundling/polyfill-plugin.ts` for the emitted shape.
+ */
+export const UNSUPPORTED_MODULE_DATA_EXPORTS: Record<string, readonly string[]> = {
+  http: ["STATUS_CODES", "METHODS"],
+  worker_threads: ["isMainThread", "parentPort", "workerData", "threadId"],
+};
+
+/**
  * Builds a module object for one of `UNSUPPORTED_MODULES`: every property access throws the switch-to-Bun refusal.
  *
  * A `Proxy` rather than an object of thrower functions, so that a *property read* fails as loudly as a call does --

@@ -39,6 +39,17 @@ import { join } from "node:path";
  * as before, which leaves a read hidden in a trailing comment undetected. That is the accepted limit: this gate
  * exists to fail the accidental regression, not to defeat an author who is determined to smuggle one past it.
  *
+ * The limits that remain, stated honestly, because a limits list that claims completeness and isn't is worse than
+ * a shorter true one:
+ *
+ *   - A read hidden in a **trailing** comment is not seen (comment *lines* are skipped; see above).
+ *   - The scan is textual. A reader reached through a value -- stashed on an object, passed as a parameter,
+ *     retrieved via `await import("node:fs")` -- names no binding this can match.
+ *   - A **non-`node:` specifier** (`from "fs/promises"`) is invisible here. That is not a hole in practice: biome
+ *     rejects it at *error* severity, so it cannot land.
+ *   - Only `node:fs` and `node:fs/promises` are matched. A whole-file read reached through some other builtin is
+ *     not in scope.
+ *
  * To add a read here: use `src/main/fs/bounded-read.ts`. If the read genuinely cannot be bounded, add it below
  * with a reason -- the reason is the point, and "it seemed fine" is not one.
  */
@@ -54,12 +65,31 @@ const THE_READER = `${MAIN_ROOT}/fs/bounded-read.ts`;
  */
 const BARE_READ = [/readFileSync\s*\(/, /readFile\s*\(/, /Bun\s*\.\s*file\s*\(/, /createReadStream\s*\(/];
 
-/** An `import ... from "node:fs"` / `"node:fs/promises"` clause, whatever its shape. */
-const FS_IMPORT = /import\s+([^;]*?)\s+from\s+"node:fs(?:\/promises)?"/;
+/**
+ * An `import ... from` **or `export ... from`** clause naming `node:fs` / `node:fs/promises`, whatever its shape.
+ * Group 1 is the keyword, group 2 the clause.
+ *
+ * The `export` half is not decoration. This used to require the literal `import`, so
+ * `export { readFile } from "node:fs/promises"` inside a crawled `@jslab` package was invisible -- the package
+ * *is* crawled and the specifier *is* `@jslab`, so this was neither of the two limits the header admits to.
+ * Mutant M8 planted exactly that in `packages/npm/src/index.ts` and the gate stayed green.
+ */
+const FS_IMPORT = /(import|export)\s+([^;]*?)\s+from\s+"node:fs(?:\/promises)?"/;
 /** A binding that reads a whole file. An alias renames it locally; the name written here is still the giveaway. */
 const READ_BINDING = /\b(?:readFile|readFileSync|createReadStream|readSync)\b/;
-/** `import * as fs` -- one binding that reaches every reader above, including by computed access. */
-const NAMESPACE_IMPORT = /\*\s+as\s+/;
+/**
+ * A clause that takes the module *whole*: `* as fs`, a bare `*` (`export * from`), or a **default** import
+ * (`import fs from "node:fs"`). Each hands over every reader at once, reachable by computed access -- and
+ * `fs["readFile"]` matches no call pattern.
+ *
+ * Only `* as` was matched before. `import fs from "node:fs"` reaches every reader identically, and was invisible.
+ */
+const WHOLE_MODULE_IMPORT = [/\*/, /^\s*[A-Za-z_$][A-Za-z0-9_$]*\s*(?:,|$)/];
+
+/** Whether an import/export clause takes `node:fs` whole rather than naming individual bindings. */
+function takesWholeModule(clause: string): boolean {
+  return WHOLE_MODULE_IMPORT.some((pattern) => pattern.test(clause));
+}
 /**
  * A read binding renamed on the way in (`readFile as slurp`).
  *
@@ -260,8 +290,11 @@ function pinEscapingImports(relativePath: string): string[] {
   const found: string[] = [];
   let match = global.exec(source.text);
   while (match !== null) {
-    const clause = match[1] ?? "";
-    if (NAMESPACE_IMPORT.test(clause) || ALIASED_READ_BINDING.test(clause)) {
+    const clause = match[2] ?? "";
+    // A re-export escapes a pinned count for a different reason than a rename does: it hands the reader *out* of
+    // this file, so there is no local call site here for any count to pin. Refused wherever it appears.
+    const reExportsAReader = match[1] === "export" && READ_BINDING.test(clause);
+    if (takesWholeModule(clause) || ALIASED_READ_BINDING.test(clause) || reExportsAReader) {
       found.push(`${relativePath}:${source.lineOf(match.index)}: ${clause.replace(/\s+/g, " ").trim()}`);
     }
     match = global.exec(source.text);
@@ -276,8 +309,8 @@ function fsReadImports(relativePath: string): string[] {
   const found: string[] = [];
   let match = global.exec(source.text);
   while (match !== null) {
-    const clause = match[1] ?? "";
-    if (NAMESPACE_IMPORT.test(clause) || READ_BINDING.test(clause)) {
+    const clause = match[2] ?? "";
+    if (takesWholeModule(clause) || READ_BINDING.test(clause)) {
       found.push(`${relativePath}:${source.lineOf(match.index)}: ${clause.replace(/\s+/g, " ").trim()}`);
     }
     match = global.exec(source.text);
@@ -319,7 +352,7 @@ describe("no unbounded reads in Main", () => {
     expect(actual).toEqual(pinned);
   });
 
-  test("no file outside the allowlist even imports a whole-file reader from node:fs", () => {
+  test("no file outside the allowlist even imports or re-exports a whole-file reader from node:fs", () => {
     // The call site can be renamed (`readFile as slurp`) or computed (`FS["readFile"]`); the import cannot hide
     // which binding it takes. An allowlisted file is exempt *from this test only* -- it legitimately imports the
     // reader its pinned count covers -- and the test below is what stops that exemption from being a hole.

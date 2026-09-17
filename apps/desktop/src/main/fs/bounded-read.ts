@@ -85,6 +85,17 @@ export async function readBoundedText(path: string, maxBytes: number): Promise<s
 }
 
 /**
+ * The UTF-8 text of a regular file of **any** size. The byte cap is deliberately absent, for the one case where no
+ * useful bound exists (a stylesheet being bundled: a cap would refuse a legitimately large one). "Unbounded" must
+ * not also mean "unchecked", which is the confusion this function exists to prevent — the `O_NONBLOCK` open and the
+ * `isFile` check on the opened handle still apply, so a FIFO at the path is refused instead of parking the caller
+ * forever. Prefer `readBoundedText` unless a cap genuinely cannot be chosen.
+ */
+export async function readRegularFileText(path: string): Promise<string> {
+  return readBoundedText(path, Number.POSITIVE_INFINITY);
+}
+
+/**
  * The best-effort form: null for *any* failure — missing, oversized, a FIFO, unreadable. Use it only where the
  * caller genuinely cannot tell those apart; where "missing" and "broken" must differ, use `readBoundedText` and
  * classify the error.

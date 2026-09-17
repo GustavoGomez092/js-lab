@@ -33,10 +33,6 @@ const COMMENT_LINE = /^\s*(\*|\/\/|\/\*)/;
  * third-party controlled.
  */
 const ALLOWED: Record<string, { reads: number; why: string }> = {
-  "bundling/css-plugin.ts": {
-    reads: 1,
-    why: "loads a .css Bun already resolved for this build; a cap would break legitimately large stylesheets",
-  },
   "bundling/polyfill-plugin.ts": {
     reads: 1,
     why: "re-reads the importer's own source only to position an error message; best-effort inside try/catch",
@@ -76,6 +72,25 @@ const ALLOWED: Record<string, { reads: number; why: string }> = {
   "services/settings-store.ts": { reads: 1, why: "JSLab's own settings.json in its data dir" },
 };
 
+/**
+ * Reads that waive the *byte cap* and nothing else, via `readRegularFileText`.
+ *
+ * `bundling/css-plugin.ts` used to sit in ALLOWED above with the reason "a cap would break legitimately large
+ * stylesheets". That reason was true and incomplete: it justified waiving the size bound, but the call it excused
+ * (`Bun.file(path).text()`) also could not refuse a FIFO, and a `.css` resolved out of `node_modules` hung the
+ * build forever. Splitting the two exemptions apart is the point -- everything here still goes through the shared
+ * reader's `O_NONBLOCK` open and `isFile` check, so only the size is unbounded.
+ */
+const SIZE_EXEMPT: Record<string, { reads: number; why: string }> = {
+  "bundling/css-plugin.ts": {
+    reads: 1,
+    why: "a .css Bun already resolved for this build: no useful byte cap exists, since a legitimately large stylesheet must still bundle. Only the size bound is waived; a FIFO or directory is still refused",
+  },
+};
+
+/** The size-waiving reader. Anything calling it must carry a SIZE_EXEMPT reason. */
+const UNBOUNDED_SIZE = /readRegularFileText\s*\(/;
+
 function mainSourceFiles(): string[] {
   return readdirSync(MAIN_DIR, { recursive: true })
     .map((entry) => String(entry))
@@ -85,13 +100,17 @@ function mainSourceFiles(): string[] {
 }
 
 /** Matching lines that are not prose, as `line number: text`, so a failure says exactly what to fix. */
-function bareReads(relativePath: string): string[] {
+function matchingLines(relativePath: string, pattern: RegExp): string[] {
   const source = readFileSync(join(MAIN_DIR, relativePath), "utf8");
   return source
     .split("\n")
     .map((line, index) => ({ line, number: index + 1 }))
-    .filter(({ line }) => !COMMENT_LINE.test(line) && BARE_READ.test(line))
+    .filter(({ line }) => !COMMENT_LINE.test(line) && pattern.test(line))
     .map(({ line, number }) => `${relativePath}:${number}: ${line.trim()}`);
+}
+
+function bareReads(relativePath: string): string[] {
+  return matchingLines(relativePath, BARE_READ);
 }
 
 describe("no unbounded reads in Main", () => {
@@ -133,5 +152,27 @@ describe("no unbounded reads in Main", () => {
   test("the shared bounded reader is itself free of bare reads", () => {
     // It names them in its header prose, which is exactly why the scan skips comment lines.
     expect(bareReads("fs/bounded-read.ts")).toEqual([]);
+  });
+
+  test("each size-exempt file waives the cap exactly as often as it is pinned, and says why", () => {
+    const files = new Set(mainSourceFiles());
+    const actual: Record<string, number> = {};
+    const pinned: Record<string, number> = {};
+    for (const [file, entry] of Object.entries(SIZE_EXEMPT)) {
+      expect({ file, exists: files.has(file) }).toEqual({ file, exists: true });
+      expect(entry.why.length).toBeGreaterThan(20);
+      actual[file] = matchingLines(file, UNBOUNDED_SIZE).length;
+      pinned[file] = entry.reads;
+    }
+    expect(actual).toEqual(pinned);
+  });
+
+  test("no file outside SIZE_EXEMPT waives the byte cap", () => {
+    const offenders = mainSourceFiles()
+      // bounded-read.ts *declares* readRegularFileText; it is the reader, not a caller reaching past it.
+      .filter((file) => file !== "fs/bounded-read.ts" && !(file in SIZE_EXEMPT))
+      .flatMap((file) => matchingLines(file, UNBOUNDED_SIZE));
+
+    expect(offenders).toEqual([]);
   });
 });

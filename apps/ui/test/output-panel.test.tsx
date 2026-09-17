@@ -3,6 +3,8 @@ import type { RunEvent } from "@jslab/rpc-schema";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { OutputPanel } from "../src/output/OutputPanel";
+import { entryToText } from "../src/output/text";
+import type { DisplayEvent } from "../src/state/output";
 import { createAppStore } from "../src/state/store";
 import { strings } from "../src/strings";
 import { createFakeApi } from "./fake-api";
@@ -96,6 +98,34 @@ describe("OutputPanel", () => {
     act(() => store.getState().receiveEvents("r1", [log(4, 4)], "t1"));
     expect(rowLevels()).toEqual([]);
     expect([button("Copy All").disabled, button("Clear").disabled]).toEqual([true, false]);
+  });
+
+  // R-M2-T19A-1: what the button actually puts on the clipboard, not just whether it is enabled. The test above
+  // only ever asserted `disabled`, which is how the button and the `output.copyAll` command were able to copy
+  // different sets without any test noticing.
+  test("Copy All copies exactly the entries the chip leaves visible (R-M2-T19A-1)", async () => {
+    setup();
+    const writes: string[] = [];
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: (text: string) => {
+          writes.push(text);
+          return Promise.resolve();
+        },
+      },
+      configurable: true,
+    });
+    try {
+      fireEvent.click(screen.getByRole("radio", { name: "Errors 1" }));
+      fireEvent.click(button("Copy All"));
+      await act(async () => {
+        await Bun.sleep(1);
+      });
+      expect(writes).toEqual([entryToText(error as DisplayEvent)]);
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { value: originalClipboard, configurable: true });
+    }
   });
 
   // T19A-m3 / review rec 2: a filter that hides everything, and a tab that hasn't run, say so instead of a blank

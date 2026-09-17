@@ -5,12 +5,11 @@ import type { MainApi } from "../api";
 import { visibleEntries } from "../state/output";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
-import { copyEntriesToClipboard } from "./copy";
+import { copyAllText, copyEntriesToClipboard } from "./copy";
 import { EntryRow } from "./EntryRow";
 import { FilterChips } from "./FilterChips";
 import { applyFilter, filterCounts } from "./filters";
 import { entryIsStale, lastSuccessfulRunLabel } from "./stale";
-import { entryToText } from "./text";
 import { WebDialog } from "./WebDialog";
 
 const COPY_STATUS_DURATION_MS = 2000;
@@ -84,7 +83,9 @@ export function OutputPanel({
     tabId && output.runId ? api.expand({ tabId, runId: output.runId, handleId: handle }) : Promise.resolve(null);
 
   const copyAll = () => {
-    const text = entries.map((entry) => entryToText(entry.event)).join("\n");
+    // R-M2-T19A-1: the entries visible under the current filter chip -- the same owner the `output.copyAll`
+    // command uses, so the button and the palette can never copy different sets again.
+    const text = copyAllText(store.getState());
     void copyEntriesToClipboard(text).then((status) => {
       if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
       setCopyStatus(status);

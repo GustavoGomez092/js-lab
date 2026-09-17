@@ -198,6 +198,20 @@ export class SessionStore {
     this.#writerFor(tabId).schedule(content);
   }
 
+  /**
+   * True while this tab's buffer file exists but couldn't be read, so JSLab does not know the tab's real text.
+   *
+   * B1: `setBuffer` has always consulted this set, but it guards only the internal buffer file under
+   * `<dataDir>/buffers/`. The tab's `filePath` -- the user's own source file -- is written by `file-handlers.ts`
+   * through `FileService`, which never saw this. Exposing it lets that path refuse too, so the rule is the same
+   * wherever a tab's text gets written: a tab whose content JSLab couldn't read is never written anywhere.
+   *
+   * Cleared by a later successful `readBuffer` (the file was repaired) and by `closeTab`.
+   */
+  isBufferUnreadable(tabId: string): boolean {
+    return this.#unreadableBuffers.has(tabId);
+  }
+
   async createTab(options: CreateTabOptions = {}): Promise<TabState> {
     const { content = "", activate = true, ...fields } = options;
     const defined = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));

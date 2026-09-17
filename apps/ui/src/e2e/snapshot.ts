@@ -23,6 +23,8 @@ export interface TabSnapshot {
   runtime: Runtime;
   filePath: string | null;
   dirty: boolean;
+  /** B1: true when `code` below is a placeholder rather than the tab's real contents. */
+  unreadable: boolean;
   layout: TabLayout;
   code: string;
   runState: RunState | null;
@@ -83,7 +85,10 @@ export function snapshotState(state: AppState): UiSnapshot {
         language: tab.language,
         runtime: tab.runtime,
         filePath: tab.filePath,
-        dirty: isDirty(tab, code),
+        // B1: a placeholder is never "modified" -- comparing it against the real file's hash is exactly what
+        // made an unreadable tab look like an unsaved edit worth writing back.
+        unreadable: state.unreadableBuffers.includes(id),
+        dirty: !state.unreadableBuffers.includes(id) && isDirty(tab, code),
         layout: tab.layout,
         code,
         runState: output.runState,

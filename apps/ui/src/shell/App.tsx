@@ -46,7 +46,7 @@ import { ActivityBar } from "./ActivityBar";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { createDialogs } from "./dialogs";
 import { BUSY_STATES } from "./labels";
-import { SafeModeBanner, StartupNotices, UnresponsiveDialog } from "./parts";
+import { SafeModeBanner, StartupNotices, UnreadableBufferBanner, UnresponsiveDialog } from "./parts";
 import { SideBar } from "./SideBar";
 import { SplitPane } from "./SplitPane";
 import { StatusBar } from "./StatusBar";
@@ -97,6 +97,9 @@ export function App({
   const runState = useStore(store, (s) => s.output.runState);
   const safeMode = useStore(store, (s) => s.safeMode);
   const notices = useStore(store, (s) => s.notices);
+  // B1: whether the tab on screen right now is showing a placeholder instead of its file. A plain boolean, so
+  // this subscription only re-renders the shell when the answer actually flips.
+  const activeUnreadable = useStore(store, (s) => s.unreadableBuffers.includes(s.activeTabId ?? ""));
   const settings = useStore(store, (s) => s.settings);
   const sideBarPanel = useStore(store, (s) => s.sideBarPanel);
   const tabCount = useStore(store, (s) => s.tabOrder.length);
@@ -119,6 +122,7 @@ export function App({
       runState,
       safeMode,
       notices,
+      activeUnreadable,
       settings,
       sideBarPanel,
       tabCount,
@@ -552,6 +556,9 @@ export function App({
           unexpectedError: { label: strings.notices.copyDebugLog, run: () => api.appCommand("copyDebugLog") },
         }}
       />
+      {/* B1: not dismissible and not a count -- it stands for as long as THIS tab is showing a placeholder, so an
+          empty editor can never be mistaken for a genuinely empty file. */}
+      {activeUnreadable && <UnreadableBufferBanner />}
       <div className="app-main">
         {settings.view.activityBar && (
           <ActivityBar

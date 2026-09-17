@@ -53,8 +53,23 @@ export function createFileFlows(deps: {
     if (s().settings?.editor.formatOnSave && deps.beforeSave) await deps.beforeSave(tabId);
   };
 
+  /**
+   * B1: refuse every write path for a tab whose contents Main couldn't read.
+   *
+   * `state.buffers[tabId]` is a placeholder `""` for these, not the file's text. Saving it replaced the user's
+   * real source file with nothing -- and `FileService.write` keeps no `.bak`, so there was nothing to recover.
+   * Main refuses these independently; this stops the UI from ever asking, and gives the user a reason instead of
+   * a silent no-op.
+   */
+  const refuseUnreadable = (tabId: string): boolean => {
+    if (!s().unreadableBuffers.includes(tabId)) return false;
+    s().setStatusMessage(strings.files.unreadableBuffer);
+    return true;
+  };
+
   const saveAs = (tabId = s().activeTabId ?? undefined): Promise<boolean> => {
     if (!tabId || !s().tabs[tabId]) return Promise.resolve(false);
+    if (refuseUnreadable(tabId)) return Promise.resolve(false);
     finishSave(tabId, false);
     return formatForSave(tabId).then(
       () =>
@@ -72,6 +87,8 @@ export function createFileFlows(deps: {
 
   const save = async (tabId = s().activeTabId ?? undefined): Promise<boolean> => {
     if (!tabId || !s().tabs[tabId]) return false;
+    // Before formatForSave: formatting a placeholder is pointless, and the save is refused either way.
+    if (refuseUnreadable(tabId)) return false;
     await formatForSave(tabId);
     const result = await api.saveFile(tabId, s().buffers[tabId] ?? "");
     if ("needsSaveAs" in result) {
@@ -112,7 +129,10 @@ export function createFileFlows(deps: {
         api.appCommand("closeWindow");
         return false;
       }
-      if (isDirty(tab, code)) {
+      // B1: a placeholder is not an unsaved change. `isDirty` compares `""` against the real file's
+      // `lastSavedHash` and says "modified", which raised a "Save changes?" prompt whose PRIMARY button wrote
+      // that `""` over the file. Closing such a tab loses nothing, because nothing was ever read.
+      if (!state.unreadableBuffers.includes(tabId) && isDirty(tab, code)) {
         const choice = await dialogs.confirm({
           title: strings.files.saveChanges(title),
           message: strings.files.saveChangesDetail,

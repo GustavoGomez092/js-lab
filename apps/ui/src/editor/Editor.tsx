@@ -187,6 +187,18 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
     // Between model swaps, only entries appended since the previous batch are scanned.
     const markerTracker = createMarkerTracker();
 
+    /**
+     * B1: a tab whose buffer Main couldn't read shows an empty model that is NOT its file's content. Read-only
+     * is both the guard (no keystroke can turn the placeholder into something that looks like a real edit) and
+     * the signal the user actually feels when they try to type.
+     *
+     * Applied with `updateOptions` rather than through `editorOptionsFor`, which is the settings-driven option
+     * set and is pinned field-by-field by `appearance.test.ts` and the E2E `editorOptions` snapshot.
+     */
+    const applyReadOnly = (state: AppState) => {
+      editor.updateOptions({ readOnly: state.unreadableBuffers.includes(state.activeTabId ?? "") });
+    };
+
     // Tab switching, per-tab models and view state live in tab-view.ts, which has its own unit test (review C1).
     const view = createTabView<Monaco.editor.ITextModel, Monaco.editor.ICodeEditorViewState>({
       store,
@@ -439,6 +451,9 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
           feeder.forget(closed);
         }
       }
+      if (state.activeTabId !== previous.activeTabId || state.unreadableBuffers !== previous.unreadableBuffers) {
+        applyReadOnly(state);
+      }
       if (state.hoveredLine !== previous.hoveredLine) applyHover(state.hoveredLine);
       if (state.revealRequest && state.revealRequest !== previous.revealRequest) {
         const { line } = state.revealRequest;
@@ -453,6 +468,7 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
     });
 
     view.show(initial);
+    applyReadOnly(initial);
 
     return () => {
       setEditorHandle(null);

@@ -46,8 +46,10 @@ export class RunRefusedError extends Error {}
  * identical bootstrap -- an infinite loop the user could only escape by deleting files by hand. Reading per tab
  * keeps the app openable: the tabs that loaded are returned, and the ones that didn't are named in a notice.
  *
- * Skipping a tab here is safe because `readBuffer` has already put it in the store's unreadable set, so
- * `setBuffer` refuses to write it -- an edit in the empty tab can never overwrite the file that failed to read.
+ * `readBuffer` has already put each skipped tab in the store's unreadable set, so `setBuffer` refuses to write
+ * its buffer file. B1: that guard covers only the internal buffer file, NOT the tab's `filePath` -- so the ids
+ * are reported to the UI (`unreadableBuffers`) and `file.save`/Save As refuse them as well. Without that, the UI
+ * turned the omission into `""`, the tab read as dirty, and a plain ⌘S truncated the user's real file.
  * `readBuffers()` keeps its all-or-nothing contract for every other caller.
  */
 async function readBuffersPerTab(
@@ -83,6 +85,9 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
           settings: deps.settings.current,
           session: deps.session.session,
           buffers,
+          // B1: the ids, not just the count in the notice -- the UI must be able to tell these tabs apart from
+          // genuinely empty ones, or it invents `""` for them and offers to save that over their files.
+          ...(unreadable.length > 0 ? { unreadableBuffers: unreadable } : {}),
           safeMode: deps.safeMode,
           versions: deps.versions,
           ...(deps.e2e ? { e2e: true } : {}),

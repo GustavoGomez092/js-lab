@@ -79,6 +79,10 @@ describe("requests", () => {
     const payload = await handlers.requests["app.bootstrap"]();
     // The readable tab still arrives; the unreadable one is simply absent rather than invented as empty.
     expect(payload.buffers).toEqual({ t1: "const a = 1" });
+    // B1: and it is NAMED, not merely counted. The UI cannot preserve the distinction above from a count alone --
+    // without these ids it filled the gap with `""`, which then read as an unsaved edit and offered to save it
+    // over the user's real file. The ids are exactly the tabOrder entries missing from `buffers`.
+    expect(payload.unreadableBuffers).toEqual(["t2"]);
     expect(payload.notices).toEqual([{ id: "buffersUnreadable", message: strings.notices.buffersUnreadable(1) }]);
     expect(logged).toContain("Couldn't read a tab's buffer at startup");
   });

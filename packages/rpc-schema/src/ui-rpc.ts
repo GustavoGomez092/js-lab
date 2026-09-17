@@ -436,6 +436,16 @@ export interface BootstrapPayload {
   settings: Settings;
   session: Session;
   buffers: Record<string, string>;
+  /**
+   * B1: the tabs whose buffer file exists but couldn't be read, by id -- not just how many.
+   *
+   * These ids are exactly the `session.tabOrder` entries missing from `buffers` above. Main deliberately omits
+   * them rather than inventing `""`, and the UI needs to know WHICH they are to preserve that distinction: with
+   * only a count it turned every absence into an empty buffer, which then read as an ordinary unsaved edit and
+   * offered to save it over the user's real file. A tab named here has unknown content, so the UI shows it
+   * read-only and never saves it.
+   */
+  unreadableBuffers?: string[];
   safeMode: { active: boolean; reason: "crashLoop" | "manual" | "shift" | null };
   versions: { app: string; bun: string };
   /** True only when the app was launched with JSLAB_E2E=1; the UI then installs the automation agent. */

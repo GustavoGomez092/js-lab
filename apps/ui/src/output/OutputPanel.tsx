@@ -5,6 +5,7 @@ import type { MainApi } from "../api";
 import { visibleEntries } from "../state/output";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
+import { type AnnouncerState, EMPTY_ANNOUNCEMENT, nextAnnouncement } from "./announce";
 import { copyAllText, copyEntriesToClipboard } from "./copy";
 import { EntryRow } from "./EntryRow";
 import { FilterChips } from "./FilterChips";
@@ -56,6 +57,17 @@ export function OutputPanel({
   const counts = useMemo(() => filterCounts(visible), [visible]);
   const entries = useMemo(() => applyFilter(visible, filter), [visible, filter]);
   const staleLabel = lastSuccessfulRunLabel(output);
+
+  // Folded during render rather than in an effect, so the sentence lands in the same commit as the rows it
+  // describes instead of one render later. Safe because `nextAnnouncement` is idempotent (see its doc comment):
+  // React may render twice with the same inputs and must get the same answer.
+  const announcer = useRef<AnnouncerState>(EMPTY_ANNOUNCEMENT);
+  announcer.current = nextAnnouncement(announcer.current, {
+    runId: output.runId,
+    runState: output.runState,
+    entries: counts.all,
+    errors: counts.errors,
+  });
 
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
@@ -191,6 +203,27 @@ export function OutputPanel({
         dialogs={output.dialogs}
         onDismiss={(key) => store.getState().dismissWebDialog(key, tabId ?? undefined)}
       />
+      {/*
+        The output panel's only announcement to assistive tech. With Auto Run on, results appear with no user
+        action at all, which is precisely what a live region is for -- and precisely what floods one, hence the
+        per-run summary in `announce.ts` rather than a row-level log.
+
+        Three structural choices, not preferences:
+        - `<output>` carries an implicit `role="status"`, which is `aria-live="polite"` + `aria-atomic="true"`.
+          Polite, because an interruption per run under Auto Run would be worse than silence. It is also the
+          element `shell/parts.tsx` and `shell/ActivityBar.tsx` already use, and a `<div role="status">` would
+          trip Biome's `useSemanticElements` (see `FilterChips.tsx`'s note on the same rule).
+        - Rendered unconditionally, and OUTSIDE the `showingWebView` ternary below, so the region is in the markup
+          before it ever has content and is never torn down and rebuilt. A live region that is replaced rather
+          than mutated frequently announces nothing.
+        - `.visually-hidden` rather than new markup: the summary duplicates what the status bar already shows
+          sighted users, so it needs no pixels, and staying out of `.output`'s flex flow keeps layout unchanged.
+
+        What the tests can and cannot show: happy-dom has no accessibility tree and no layout, so `announce`'s
+        tests pin the element, its identity across re-renders, and the text that lands in it. That a screen reader
+        actually speaks it is manual QA and is not asserted anywhere.
+      */}
+      <output className="visually-hidden">{announcer.current.text}</output>
       {showingWebView ? webViewSlot : logList}
     </section>
   );

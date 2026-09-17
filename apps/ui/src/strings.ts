@@ -200,6 +200,18 @@ export const strings = {
     truncated: (dropped: number) =>
       `Output truncated: ${dropped} more entries were dropped. Raise the limit in Settings → Advanced.`,
     region: "Output",
+    /**
+     * The output panel's polite live region (`OutputPanel`'s `<output className="visually-hidden">`).
+     *
+     * Deliberately a per-run SUMMARY, not a per-row announcement: a tight loop can log thousands of rows, and
+     * reading each one aloud would make the app unusable with a screen reader rather than accessible.
+     *
+     * Phrased as labelled counts rather than "3 entries, 1 error" on purpose. It needs no plural rules, which keeps
+     * it honest in locales that have none (m5e's `t()` sweep) and keeps the line inside the 120-column budget.
+     */
+    announce: {
+      runFinished: (entries: number, errors: number) => `Run finished. Entries: ${entries}. Errors: ${errors}.`,
+    },
     lastSuccessfulRun: "Last successful run",
     copied: "Copied",
     copyFailed: "Couldn't copy",

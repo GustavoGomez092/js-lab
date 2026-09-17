@@ -152,6 +152,25 @@ describe("layout", () => {
     expect(screen.getByText("INSERT")).toBeTruthy();
   });
 
+  /**
+   * Audit entry 3: `.status-message` was a bare `<span>`, so every transient message routed through
+   * `setStatusMessage` -- "Couldn't format: …", "Installing zod…", the 64 MB refusal -- was shown only to users who
+   * could see it. `<output>` carries an implicit `role="status"` (polite + atomic).
+   *
+   * This pins the element and its role. It does NOT prove a screen reader speaks it: happy-dom has no accessibility
+   * tree, so that is manual QA.
+   */
+  test("a status message is an <output>, so it is exposed as a status region rather than a mute span", () => {
+    const store = hydrated();
+    act(() => store.getState().setStatusMessage("Couldn't format: SyntaxError"));
+    render(<StatusBar store={store} onToggleLayout={() => {}} onToggleWebView={() => {}} runKeys="⌘R" />);
+
+    const message = document.querySelector(".status-message") as HTMLElement | null;
+    expect(message?.textContent).toBe("Couldn't format: SyntaxError");
+    expect(message?.tagName).toBe("OUTPUT");
+    expect(screen.getByRole("status")).toBe(message as HTMLElement);
+  });
+
   test("view commands toggle app-wide settings through Main and per-tab layout locally", async () => {
     const store = hydrated();
     const { api } = createFakeApi();

@@ -194,4 +194,69 @@ describe("OutputPanel", () => {
     expect(onInstall).toHaveBeenCalledTimes(1);
     expect(onInstall).toHaveBeenCalledWith("zod");
   });
+
+  /**
+   * Audit entry 3: before this, `OutputPanel` and `EntryRow` carried no live region at all -- only `aria-label` and
+   * `aria-hidden` -- so with Auto Run on, results appeared with no user action and no announcement whatsoever.
+   *
+   * What these two tests can prove: the region is in the markup before it has content, it keeps its identity across
+   * re-renders (so it is mutated, not replaced), it exposes `role="status"` (implicitly, via `<output>`), and the
+   * text that lands in it. What they CANNOT prove: that any screen reader actually speaks it. happy-dom has no
+   * accessibility tree and no layout engine, so real AT behaviour is manual QA, asserted nowhere in this file.
+   */
+  const liveRegion = () => document.querySelector("output.visually-hidden") as HTMLElement | null;
+
+  test("a polite live region exists before it has anything to say, and is mutated rather than replaced", () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const { api } = createFakeApi();
+    render(<OutputPanel store={store} api={api} />);
+
+    const region = liveRegion();
+    expect(region).toBeTruthy();
+    expect(region?.tagName).toBe("OUTPUT");
+    // `<output>`'s implicit role is `status`, which is `aria-live="polite"` + `aria-atomic="true"`.
+    expect(screen.getByRole("status")).toBe(region as HTMLElement);
+    expect(region?.textContent).toBe("");
+
+    act(() => {
+      store.getState().receiveState("r1", "transpiling", undefined, "t1");
+      store.getState().receiveEvents("r1", [result, log(2, 2), error], "t1");
+    });
+    // Still silent while the run is in flight: the summary belongs to the outcome, not to each arriving row.
+    expect(liveRegion()?.textContent).toBe("");
+
+    act(() => store.getState().receiveState("r1", "idle", 0, "t1"));
+    expect(liveRegion()?.textContent).toBe(strings.output.announce.runFinished(3, 1));
+    // The same DOM node throughout. A live region that is torn down and rebuilt often announces nothing.
+    expect(liveRegion()).toBe(region as HTMLElement);
+  });
+
+  test("the region announces a per-run summary, not a row, and blanks between runs", () => {
+    const store = setup();
+    act(() => store.getState().receiveState("r1", "idle", 0, "t1"));
+    expect(liveRegion()?.textContent).toBe(strings.output.announce.runFinished(3, 1));
+
+    // A second run of the same code: the region must blank first, or an identical sentence would be a silent
+    // no-op in the DOM. This is the Auto Run case -- results with no user action at all.
+    act(() => store.getState().receiveState("r2", "transpiling", undefined, "t1"));
+    expect(liveRegion()?.textContent).toBe("");
+
+    act(() => {
+      store.getState().receiveState("r2", "evaluating", undefined, "t1");
+      store.getState().receiveEvents("r2", [log(1, 1), log(2, 2)], "t1");
+    });
+    expect(liveRegion()?.textContent).toBe("");
+
+    act(() => store.getState().receiveState("r2", "idle", 0, "t1"));
+    // Two log rows, no errors -- a summary of the run, not one announcement per row.
+    expect(liveRegion()?.textContent).toBe(strings.output.announce.runFinished(2, 0));
+    expect(screen.getAllByTestId("entry").length).toBe(2);
+  });
 });

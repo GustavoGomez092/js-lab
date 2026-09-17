@@ -203,9 +203,14 @@ export class RunCoordinator {
   disposeTab(tabId: string): void {
     this.#supersede(tabId);
     this.#runs.delete(tabId);
-    // Only "bun" is real in Task 2 (Task 7 registers a per-runtime `web` adapter); every tab's runtime resolves to
-    // it either way, so there's no runtime to route by here yet.
-    void this.#registry.get(undefined).dispose(tabId);
+    // Every registered adapter, not just Bun's. `#registry.get(undefined)` always resolves to the Bun adapter by
+    // design, so this used to call `BunAdapter.dispose` even for a browser tab and never `WebAdapter.dispose` --
+    // the tab's webview was never destroyed on close and Main's own entry was never dropped (leaking
+    // `nextGeneration` and leaving Main's teardown entirely dependent on the UI reporting an exit). The comment
+    // this replaces was stale: M4 *did* register per-runtime web adapters. There is no runtime to route by here --
+    // the run is already gone, and a tab can switch runtime mid-session, so one tabId may hold resources in more
+    // than one adapter -- so every adapter is told. Disposing a tab an adapter never saw is a no-op in all of them.
+    for (const adapter of this.#registry.all()) void adapter.dispose(tabId);
   }
 
   dispose(): void {

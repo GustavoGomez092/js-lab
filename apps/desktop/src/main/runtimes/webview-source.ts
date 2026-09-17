@@ -41,6 +41,21 @@ export interface UiWebviewSource extends WebviewSource {
    * already replaced must not tear down the replacement (T9e).
    */
   exit(tabId: string, generation: number): void;
+  /**
+   * The UI that owns every one of these elements has gone away: the watchdog reloaded the view after a post-sleep
+   * WKWebView freeze, or the user closed the window and reopened it from the Dock (both in `../index.ts`).
+   *
+   * Without this, Main's `entries` map outlived the elements it described. The next run's `ensure()` hit a stale
+   * entry, returned the old host and so never sent `webRunner.ensure` -- and the `webRunner.reload` that followed
+   * reached a UI whose own map was empty, where it is a no-op. No element was ever created, `onLoaded` never
+   * fired, and the run failed after 2 s with "never reported ready" on **every** browser tab, self-healing only
+   * from the second run once the ready timeout finally dropped the entry.
+   *
+   * Invalidating from Main rather than relying on the UI to report each teardown is deliberate: on a hard
+   * `loadURL` navigation the UI's React cleanup is not guaranteed to run at all, so its `webRunner.exit` cannot be
+   * counted on to arrive.
+   */
+  invalidateAll(): void;
 }
 
 interface Entry {
@@ -147,6 +162,17 @@ export function createUiWebviewSource(deps: UiWebviewSourceDeps): UiWebviewSourc
 
     receive(tabId: string, raw: unknown): void {
       for (const listener of [...(entries.get(tabId)?.messages ?? [])]) listener(raw);
+    },
+
+    invalidateAll(): void {
+      // The map is emptied *before* any listener runs: firing `crashed` re-enters this source (a session's own
+      // teardown path), and a re-entrant `ensure()` must build a fresh entry rather than find a discarded one.
+      const discarded = [...entries.values()];
+      entries.clear();
+      // No `bridge.destroy`: the UI those commands would be addressed to is the one that just went away, and its
+      // replacement has no such element. `nextGeneration` is deliberately kept, so a late event from a discarded
+      // entry can never pass as current again -- the same reason `teardown` leaves it alone.
+      for (const entry of discarded) fire(entry.crashed);
     },
 
     exit(tabId: string, generation: number): void {

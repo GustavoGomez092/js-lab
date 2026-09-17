@@ -16,7 +16,7 @@
 
 Write JavaScript or TypeScript and watch it run as you type. Each result, log and error appears beside the line that produced it. There's no project to set up and no build step: open a tab and start typing.
 
-> JSLab is under active development. Milestones M0–M3 (the core scratchpad, the workspace, and language & packages) are complete; browser runtimes and signed releases are next. See the [roadmap](#roadmap).
+> JSLab is under active development. Milestones M0–M4 (the core scratchpad, the workspace, language & packages, and browser runtimes) are complete; productivity features and signed releases are next. See the [roadmap](#roadmap).
 
 ## Why JSLab
 
@@ -49,6 +49,17 @@ Write JavaScript or TypeScript and watch it run as you type. Each result, log an
 - **Copy All** copies the entries the current filter shows.
 
 <img src="docs/images/output-errors-filter.png" alt="The same run with the Errors filter chip active, showing only the error row" width="820">
+
+### Browser runtimes and the web view
+
+Each tab picks a runtime. **Bun** (the default) runs your code in a real Bun process with the full Node API surface. **Browser** runs it in a WebKit page, and **Browser & Node APIs** gives you that page plus a Node compatibility layer — `fs/promises`, `child_process` and a CORS-free `fetch`, bridged out to JSLab.
+
+- Browser tabs render into a **Web View** tile beside the console: toggle it with <kbd>⌥⌘W</kbd>, View → Web View, or the status bar. The tile is per tab and comes back after a relaunch.
+- `document`, `canvas` and `requestAnimationFrame` work, so canvas animation, React, Three.js and Web Audio all run as they would in a browser. Packages you install are bundled into the page for you.
+- Logging a page element shows its opening tag, attributes and child count, and expands to its markup.
+- A tab playing audio shows a speaker icon; click it to mute that tab.
+
+See [Bun vs Node](docs/user/bun-vs-node.md) for what differs between the three.
 
 ### Command palette
 
@@ -119,6 +130,7 @@ apps/desktop       Electrobun main process (Bun): windows, menus, files, runs, s
 apps/ui            React + Monaco UI for the main and Settings windows
 packages/transform     Babel instrumentation: Auto Log, magic comments, loop protection
 packages/runner-bun    The Bun process that runs user code
+packages/runner-web    The page that runs user code in the browser runtimes
 packages/serializer    Encodes values for the output panel
 packages/rpc-schema    Typed, validated messages between the processes
 packages/shared        Settings, session, commands and keybindings
@@ -135,6 +147,9 @@ bun run e2e          # end-to-end scenarios against a dev build
 
 `bun run e2e` needs a dev build (`cd apps/desktop && hutch run build:dev`) and a logged-in macOS GUI session. The harness in `packages/e2e` launches JSLab with a private temporary data folder and drives it over a local socket.
 
+> [!IMPORTANT]
+> **`bun run e2e` does not build.** It drives whatever bundle is already on disk, so build first or you are testing old code — a stale bundle fails fast and confidently for reasons that have nothing to do with your change. Read the failure text, not the timings.
+
 `bun run readme:screenshots` regenerates the images in `docs/images/` through the same harness. Captures are window-only and need Screen Recording access for the JSLab dev app (System Settings → Privacy & Security → Screen Recording); the script never requests it.
 
 Scripted launches must use a working directory on an internal disk. From an external volume, macOS asks for removable-volume access, and a background launch can't show that prompt. The E2E harness handles this for you.
@@ -147,7 +162,7 @@ Scripted launches must use a working directory on an internal disk. From an exte
 | M1 | Core scratchpad: live results, console output, errors, recoverable hangs | ✅ Done |
 | M2 | Workspace: tabs, files, settings, themes, formatting, command palette | ✅ Done |
 | M3 | Language & packages: npm, types and autocomplete, working directory, env vars | ✅ Done (manual QA items pending user) |
-| M4 | Browser runtimes: DOM, canvas, React and a live web view | Planned |
+| M4 | Browser runtimes: DOM, canvas, React and a live web view | ✅ Done (manual QA items pending user) |
 | M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | Planned |
 | M6 | Ship: signing, notarization, auto-update, 1.0 | Planned |
 
@@ -160,6 +175,7 @@ Details are in the [roadmap](docs/superpowers/plans/2026-09-12-jslab-roadmap.md)
 - [M2 manual QA checklist](docs/qa/m2-checklist.md)
 - [Bun vs Node differences](docs/user/bun-vs-node.md)
 - [M3 manual QA checklist](docs/qa/m3-checklist.md)
+- [M4 manual QA checklist](docs/qa/m4-checklist.md)
 
 ## License
 

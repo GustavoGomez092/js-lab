@@ -266,9 +266,35 @@ class ChildProcessHandle extends Emitter implements BridgedChildProcess {
   readonly stdout: ChildStream = new Emitter();
   readonly stderr: ChildStream = new Emitter();
   #killed = false;
+  /**
+   * One **streaming** decoder per stream, for the whole life of the child.
+   *
+   * Main forwards raw byte chunks at whatever boundary Node's stream produced them (in practice the 64 KiB
+   * high-water mark), so a UTF-8 code point routinely straddles two chunks. Decoding each chunk with a fresh,
+   * non-streaming `TextDecoder` turned such a character into two U+FFFD replacement characters -- silently, and
+   * invisibly from inside the tab. A streaming decoder carries the partial sequence across the boundary instead,
+   * which is exactly what Node's own `setEncoding("utf8")` uses a `StringDecoder` for.
+   *
+   * `decodeBody` is left alone: it also serves one-shot callers (`fs.readFile`) that decode one complete body,
+   * where a fresh decoder is correct.
+   */
+  readonly #decoders: Record<"stdout" | "stderr", TextDecoder> = {
+    stdout: new TextDecoder(),
+    stderr: new TextDecoder(),
+  };
 
   constructor(private readonly onKill: () => void) {
     super();
+  }
+
+  /** Decodes one base64 chunk, holding back a partial trailing sequence for the next chunk to complete. */
+  decodeChunk(stream: "stdout" | "stderr", base64: string): string {
+    return this.#decoders[stream].decode(decodeBase64(base64), { stream: true });
+  }
+
+  /** Flushes whatever bytes are still held back when the child exits; a truly truncated sequence becomes U+FFFD. */
+  flushStream(stream: "stdout" | "stderr"): string {
+    return this.#decoders[stream].decode();
   }
 
   kill(): void {
@@ -396,6 +422,33 @@ export const UNSUPPORTED_MODULE_EXPORTS: Record<string, readonly string[]> = {
 };
 
 /**
+ * The subset of `UNSUPPORTED_MODULE_EXPORTS` that Node publishes as **data** rather than as something callable.
+ *
+ * This split exists because modelling every name as a function silently defeated the §5.13 refusal contract for
+ * exactly these names. `http.STATUS_CODES` is an object and `http.METHODS` an array in Node, so binding them to
+ * `function () { throw }` meant `STATUS_CODES[200]` read back as `undefined` and `METHODS.length` as `0`: a
+ * *property read* -- the only way anyone actually uses these -- never reached the thrower at all, and the user got
+ * a confusing `undefined` (or a bare `TypeError` one line later) instead of `JSLabUnsupportedError`.
+ *
+ * The list is the result of auditing the whole table, not just the two names the review happened to cite: the four
+ * `worker_threads` entries have the same shape, and `parentPort` is the most dangerous of all -- the idiomatic
+ * `if (parentPort) parentPort.postMessage(...)` would otherwise sail past the guard and die on a `TypeError`.
+ *
+ * Everything NOT listed here is genuinely callable (a function like `createServer`, or a constructor like `Worker`
+ * or `Script`), for which a thrower function is already the right shape.
+ *
+ * **The honest limit of this fix**: a data-valued binding is still *truthy*. `ToBoolean` has no interception point
+ * in JavaScript -- not a Proxy trap, not `Symbol.toPrimitive` -- so `if (parentPort)` necessarily takes the
+ * "present" branch. What is guaranteed is that the value cannot be silently *used*: every property read off it,
+ * and every call, throws `JSLabUnsupportedError`. See `unsupportedModuleSource` in
+ * `apps/desktop/src/main/bundling/polyfill-plugin.ts` for the emitted shape.
+ */
+export const UNSUPPORTED_MODULE_DATA_EXPORTS: Record<string, readonly string[]> = {
+  http: ["STATUS_CODES", "METHODS"],
+  worker_threads: ["isMainThread", "parentPort", "workerData", "threadId"],
+};
+
+/**
  * Builds a module object for one of `UNSUPPORTED_MODULES`: every property access throws the switch-to-Bun refusal.
  *
  * A `Proxy` rather than an object of thrower functions, so that a *property read* fails as loudly as a call does --
@@ -450,14 +503,19 @@ export function createNodeBridge(options: { transport: NodeTransport }): NodeBri
         return;
       }
       case "stdout":
-        child?.stdout.emit("data", decodeBody(event.data, "utf8"));
+        if (child) child.stdout.emit("data", child.decodeChunk("stdout", event.data));
         return;
       case "stderr":
-        child?.stderr.emit("data", decodeBody(event.data, "utf8"));
+        if (child) child.stderr.emit("data", child.decodeChunk("stderr", event.data));
         return;
       case "exit": {
         if (!child) return;
         children.delete(event.id);
+        // Anything the streaming decoders were still holding back belongs to the consumer before the stream ends.
+        const tailOut = child.flushStream("stdout");
+        if (tailOut) child.stdout.emit("data", tailOut);
+        const tailErr = child.flushStream("stderr");
+        if (tailErr) child.stderr.emit("data", tailErr);
         child.stdout.emit("end");
         child.stderr.emit("end");
         child.emit("exit", event.code, event.signal);

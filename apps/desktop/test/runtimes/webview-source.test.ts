@@ -201,6 +201,55 @@ describe("the production WebviewSource (Main ⇄ UI)", () => {
     });
   });
 
+  /**
+   * Final review, finding C. Main's `entries` map lived for the whole process and nothing invalidated it when the
+   * UI that owns the actual `<electrobun-webview>` elements went away -- the watchdog reloading the view after a
+   * post-sleep WKWebView freeze, or the user closing and reopening the window. The next run then hit the stale
+   * entry, skipped `webRunner.ensure` entirely, and sent `webRunner.reload` to a UI whose own map was empty: a
+   * no-op, so no element was ever created and the run failed after 2 s with "never reported ready", on every
+   * browser tab. It self-healed only from the second run, once the ready timeout finally dropped the entry.
+   */
+  describe("a UI teardown invalidates Main's entries (final review, C)", () => {
+    test("invalidateAll drops every entry, so the next run asks the UI for a fresh element", async () => {
+      const { bridge, source } = setup();
+      await source.ensure(tab("t1"));
+      await source.ensure(tab("t2"));
+      expect(bridge.ensure).toHaveBeenCalledTimes(2);
+
+      source.invalidateAll();
+
+      const replacement = await source.ensure(tab("t1"));
+      // A brand-new entry on a new generation -- the stale host must not be handed back, which is exactly what
+      // made the next run skip `webRunner.ensure` and leave the UI with nothing to create.
+      expect(bridge.ensure).toHaveBeenCalledWith("t1", 2);
+      expect(bridge.ensure).toHaveBeenCalledTimes(3);
+      expect(await source.ensure(tab("t1"))).toBe(replacement);
+    });
+
+    test("invalidateAll reports the webview as gone, so an in-flight run is not left waiting", async () => {
+      const { source } = setup();
+      const host = await source.ensure(tab("t1"));
+      const exits = mock(() => {});
+      host.onExit(exits);
+
+      source.invalidateAll();
+
+      // The element really is gone with the UI that owned it; a run still driving it must learn that rather than
+      // sit in `evaluating` until the user kills it.
+      expect(exits).toHaveBeenCalledTimes(1);
+    });
+
+    test("invalidateAll never asks the UI to destroy elements it no longer has", async () => {
+      const { bridge, source } = setup();
+      await source.ensure(tab("t1"));
+
+      source.invalidateAll();
+
+      // The UI this would be addressed to is the one that just went away; its replacement has no such element.
+      expect(bridge.destroy).not.toHaveBeenCalled();
+    });
+  });
+
   test("the bootstrap is read once and shared by every tab", async () => {
     const readBootstrap = mock(async () => BOOTSTRAP);
     const { source } = setup(readBootstrap);

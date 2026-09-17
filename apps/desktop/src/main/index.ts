@@ -39,6 +39,7 @@ import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
 import { mergeLoginEnv, readLoginShellEnv } from "./platform/login-shell-env";
 import { relaunchApp } from "./platform/relaunch";
 import { saveDialog } from "./platform/save-dialog";
+import { MAX_SHORT_SUBPROCESS_OUTPUT_BYTES } from "./platform/subprocess-output";
 import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
@@ -144,7 +145,12 @@ async function start(): Promise<void> {
   const osInfo = {
     get macOS(): string {
       if (macOSVersionCache === null) {
-        macOSVersionCache = Bun.spawnSync(["sw_vers", "-productVersion"]).stdout.toString().trim() || "unknown";
+        // The only SYNCHRONOUS subprocess read in Main, so an unbounded one would grow the heap on the event-loop
+        // thread itself. `sw_vers -productVersion` prints 7 bytes (measured); the cap ends a child that doesn't.
+        macOSVersionCache =
+          Bun.spawnSync(["sw_vers", "-productVersion"], { maxBuffer: MAX_SHORT_SUBPROCESS_OUTPUT_BYTES })
+            .stdout.toString()
+            .trim() || "unknown";
       }
       return macOSVersionCache;
     },

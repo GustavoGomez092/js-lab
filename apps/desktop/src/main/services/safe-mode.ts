@@ -1,5 +1,6 @@
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { MAX_SHORT_SUBPROCESS_OUTPUT_BYTES } from "../platform/subprocess-output";
 
 export type SafeModeReason = "crashLoop" | "manual" | "shift" | null;
 
@@ -11,16 +12,26 @@ export interface SafeModeState {
 /** NSEventModifierFlagShift */
 export const SHIFT_MASK = 1 << 17;
 
-/** Spawns osascript and kills it if it hasn't exited within `timeoutMs`, so a hung process is never orphaned. */
-async function readModifierFlags(timeoutMs?: number): Promise<string> {
+/**
+ * Spawns osascript and kills it if it hasn't exited within `timeoutMs`, so a hung process is never orphaned.
+ * Exported for the output-cap test: called directly, with no `timeoutMs`, only `maxBuffer` can end a flooding
+ * child, so the test measures the cap itself rather than isShiftHeld's kill timer.
+ */
+export async function readModifierFlags(timeoutMs?: number): Promise<string> {
   const proc = Bun.spawn(["osascript", "-l", "JavaScript", "-e", 'ObjC.import("AppKit"); $.NSEvent.modifierFlags'], {
     stdout: "pipe",
     stderr: "ignore",
+    // The whole legitimate answer is a decimal integer; the kill timer below bounds time, not bytes.
+    maxBuffer: MAX_SHORT_SUBPROCESS_OUTPUT_BYTES,
   });
   const timer = timeoutMs === undefined ? undefined : setTimeout(() => proc.kill(), timeoutMs);
   try {
     const output = await new Response(proc.stdout).text();
-    await proc.exited;
+    const code = await proc.exited;
+    // Previously the exit code was awaited and discarded, so a truncated read parsed as if it were the real
+    // answer. It matters now: hitting maxBuffer kills osascript, and the partial digits left behind could parse
+    // to a number with the Shift bit set. isShiftHeld() turns this throw into `false`, which is the safe answer.
+    if (code !== 0) throw new Error(`osascript exited with ${code}`);
     return output;
   } finally {
     clearTimeout(timer);

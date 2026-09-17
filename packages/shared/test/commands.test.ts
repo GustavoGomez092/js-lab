@@ -68,4 +68,25 @@ describe("command catalogue", () => {
     });
     expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.command === "view.showTranspiled")).toEqual([]);
   });
+
+  // UI item 2: the output scroller is focusable, but from Monaco Tab inserts a tab character, so nothing reached
+  // it from the keyboard. ⌥⌘ is this app's existing panel family (⌥⌘W Web View, ⌥⌘\ layout); ⌥⌘O and ⌥⌘E were
+  // both unused, in every context.
+  test("M5d adds the focus commands with free ⌥⌘ chords (UI item 2)", () => {
+    expect(commandMeta("view.focusOutput")).toMatchObject({ title: "Focus Output", category: "view" });
+    expect(commandMeta("view.focusEditor")).toMatchObject({ title: "Focus Editor", category: "view" });
+    // Neither declares a context: the palette drops editor-only commands when it is opened from the output, so a
+    // context of "editor" on Focus Editor would hide it from precisely the place it exists to escape.
+    expect(commandMeta("view.focusOutput")?.context).toBeUndefined();
+    expect(commandMeta("view.focusEditor")?.context).toBeUndefined();
+    expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.command.startsWith("view.focus"))).toEqual([
+      { key: "alt+cmd+o", command: "view.focusOutput" },
+      { key: "alt+cmd+e", command: "view.focusEditor" },
+    ]);
+    // Unconditional on purpose: a `when` clause is what would stop Focus Output working from the editor, and
+    // Focus Editor from the output -- the only two journeys either command has.
+    for (const rule of DEFAULT_KEYBINDINGS.filter((r) => r.command.startsWith("view.focus"))) {
+      expect(rule.when).toBeUndefined();
+    }
+  });
 });

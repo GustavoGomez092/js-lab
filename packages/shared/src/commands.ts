@@ -127,6 +127,12 @@ export const COMMANDS = [
   { id: "view.toggleOutput", title: "Toggle Output Panel", category: "view" },
   { id: "view.toggleWebView", title: "Toggle Web View", category: "view" },
   { id: "view.showTranspiled", title: "Show Transpiled Output", category: "view" },
+  // UI item 2: the only keyboard route between the two panes. The output scroller carries tabIndex={0}, but from
+  // Monaco `Tab` inserts a tab character, so nothing reached it from the keyboard. Neither command declares a
+  // `context`: the palette drops editor-only commands when it is opened from the output, which would hide Focus
+  // Editor from exactly the place it exists to escape.
+  { id: "view.focusOutput", title: "Focus Output", category: "view" },
+  { id: "view.focusEditor", title: "Focus Editor", category: "view" },
   { id: "view.toggleSideBar", title: "Toggle Side Bar", category: "view" },
   { id: "view.toggleActivityBar", title: "Toggle Activity Bar", category: "view" },
   { id: "view.toggleStatusBar", title: "Toggle Status Bar", category: "view" },

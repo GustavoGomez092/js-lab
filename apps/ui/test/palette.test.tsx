@@ -290,4 +290,32 @@ describe("CommandPalette", () => {
     fireEvent.keyDown(input, { code: "KeyK", ctrlKey: true });
     expect(store.getState().modal).toBeNull();
   });
+
+  // UI item 2: both focus commands have to be offered from BOTH sides (a command with context "editor" is dropped
+  // when the palette is opened from the output), and their keycaps come from the effective bindings -- this app
+  // renders keycaps from resolved bindings everywhere, so a rebind must show through here too.
+  test("the focus commands are listed from either side and show their effective, rebindable keycaps", () => {
+    const store = hydratedStore();
+    const registry = new CommandRegistry();
+    registry.register({ id: "view.focusOutput", run: () => {} }, { id: "view.focusEditor", run: () => {} });
+    // view.focusOutput is rebound; view.focusEditor keeps its default ⌥⌘E.
+    const bindings = resolveKeybindings(DEFAULT_KEYBINDINGS, [{ key: "cmd+shift+y", command: "view.focusOutput" }]);
+    render(<CommandPalette store={store} registry={registry} bindings={bindings} />);
+
+    const keysOf = (title: string) => {
+      const option = screen
+        .getAllByRole("option")
+        .find((candidate) => candidate.querySelector(".palette-title")?.textContent === title);
+      if (!option) throw new Error(`expected a "${title}" option`);
+      return [...option.querySelectorAll(".palette-keys b")].map((b) => b.textContent);
+    };
+
+    for (const context of ["editor", "output"] as const) {
+      act(() => store.getState().openModal({ kind: "palette", context }));
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "focus" } });
+      expect(keysOf("Focus Output")).toEqual(["⇧", "⌘", "Y"]);
+      expect(keysOf("Focus Editor")).toEqual(["⌥", "⌘", "E"]);
+      act(() => store.getState().closeModal());
+    }
+  });
 });

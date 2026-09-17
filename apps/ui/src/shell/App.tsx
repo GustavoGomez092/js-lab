@@ -31,6 +31,7 @@ import { OutputTiles } from "../output/OutputTiles";
 import { WebViewHosts, type WebviewDock } from "../output/WebViewHosts";
 import { recordAppRender, webViewTileCounters } from "../output/WebViewTile";
 import { CommandPalette } from "../palette/CommandPalette";
+import { paletteContext } from "../palette/context";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
 import { createEventCoalescer, createFrameScheduler } from "../state/event-coalescer";
@@ -276,20 +277,9 @@ export function App({
             state.closeModal();
             return;
           }
-          // Fix round 1 (m-5): store.focus is only updated by explicit focus-capture handlers (OutputPanel,
-          // Monaco) and is never reset when focus moves elsewhere (toolbar, tab bar, side bar, blur to body),
-          // so it can go stale. The live DOM focus (the same signal contextFromState uses for outputFocus) is
-          // the source of truth; state.focus is only a fallback when nothing meaningful has focus.
-          const active = document.activeElement;
-          const context =
-            active && active !== document.body
-              ? active.closest(".output")
-                ? "output"
-                : "editor"
-              : state.focus === "output"
-                ? "output"
-                : "editor";
-          state.openModal({ kind: "palette", context });
+          // Fix round 1 (m-5), now shared with the focus commands (UI item 2): live DOM focus is the source of
+          // truth and state.focus is only the fallback -- see palette/context.ts for why.
+          state.openModal({ kind: "palette", context: paletteContext(document.activeElement, state.focus) });
         },
       },
       // spec §7.4: Show Transpiled Output "opens a read-only side tab", so unlike the activity bar's `togglePanel`

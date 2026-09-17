@@ -9,6 +9,7 @@ import { copyEntriesToClipboard } from "./copy";
 import { EntryRow } from "./EntryRow";
 import { FilterChips } from "./FilterChips";
 import { applyFilter, filterCounts } from "./filters";
+import { setOutputHandle } from "./output-handle";
 import { entryIsStale, lastSuccessfulRunLabel } from "./stale";
 import { entryToText } from "./text";
 import { WebDialog } from "./WebDialog";
@@ -69,6 +70,18 @@ export function OutputPanel({
     },
     [],
   );
+  // UI item 2: `view.focusOutput` runs outside React, so it needs a way to reach this scroller. Registered only
+  // while the log list is the thing on screen -- when the Web View is docked here instead, `logList` isn't
+  // rendered at all, `scroller.current` is null, and the command reports itself disabled.
+  useEffect(() => {
+    // Read rather than merely depended on: when the Web View is docked here, `logList` -- and with it the
+    // scroller -- is not rendered, so re-running (and clearing the handle) as this flips is the whole point.
+    if (showingWebView) return;
+    const node = scroller.current;
+    if (!node) return;
+    setOutputHandle({ focus: () => node.focus() });
+    return () => setOutputHandle(null);
+  }, [showingWebView]);
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scroller.current,

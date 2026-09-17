@@ -1,8 +1,10 @@
 import type { EncodedValue } from "@jslab/rpc-schema";
 import { useRef, useState } from "react";
+import { strings } from "../strings";
 import { childrenOf, formatPrimitive, summarize } from "./format";
 
-export type ExpandHandle = (handle: string) => Promise<EncodedValue | null>;
+/** OU-02: `offset` asks for a page of a collection; omitted, it means the first page, exactly as before. */
+export type ExpandHandle = (handle: string, offset?: number) => Promise<EncodedValue | null>;
 
 interface ValueViewProps {
   value: EncodedValue;
@@ -19,6 +21,10 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
   const [loaded, setLoaded] = useState<EncodedValue | "expired" | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // OU-02: pages after the first, in order. The first page is `shown` itself, so this stays empty for every value
+  // small enough to arrive whole -- which is almost all of them.
+  const [pages, setPages] = useState<EncodedValue[]>([]);
+  const [pageError, setPageError] = useState<string | null>(null);
   // Guards against a second in-flight expand while the first hasn't settled yet (state updates
   // triggered by the first click aren't visible to a synchronous second click's render).
   const requestInFlight = useRef(false);
@@ -62,6 +68,37 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
   const children = childrenOf(shown);
   const expandable = lazyHandle !== null || (children !== null && children.length > 0);
 
+  // OU-02. The rows on screen are every page's children in order; the paging state comes from the last page
+  // loaded. `expandable` above deliberately still reads the first page's `children`, unchanged.
+  const lastPage = pages.at(-1) ?? shown;
+  const allChildren = children === null ? null : [...children, ...pages.flatMap((page) => childrenOf(page) ?? [])];
+  const remaining = "more" in lastPage ? (lastPage.more ?? 0) : 0;
+  // `next` and `handle` are written by the encoder exactly when `more` is, so a pageable remainder always has
+  // both. An object is the boundary case: it reports `more` and a `handle` but never a `next`, because object
+  // properties are not paged (spec §5.9 lists them as a row separate from collection entries).
+  const nextOffset = "next" in lastPage ? lastPage.next : undefined;
+  const nextHandle = "handle" in lastPage ? (lastPage.handle ?? null) : null;
+
+  const loadMore = async () => {
+    if (requestInFlight.current || nextOffset === undefined || nextHandle === null) return;
+    requestInFlight.current = true;
+    setLoading(true);
+    try {
+      const page = await expand(nextHandle, nextOffset);
+      // A null reply means the handle expired with the run; say so instead of leaving a button that does nothing.
+      if (page === null) setPageError(EXPIRED);
+      else {
+        setPages([...pages, page]);
+        setPageError(null);
+      }
+    } catch {
+      setPageError(EXPAND_FAILED);
+    } finally {
+      setLoading(false);
+      requestInFlight.current = false;
+    }
+  };
+
   if (primitive !== null && !(lazyHandle && !loaded)) {
     return (
       <span className={`v v-${shown.t}`}>
@@ -89,6 +126,12 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
       }
       return;
     }
+    if (open) {
+      // OU-02: collapsing drops the loaded pages, so re-expanding never shows a page fetched for a value that is
+      // no longer the one on screen -- a fresh run replaces `value` while this component stays mounted.
+      setPages([]);
+      setPageError(null);
+    }
     setOpen(!open);
   };
 
@@ -102,9 +145,9 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
       </button>
       {error && <div className="v-error">{error}</div>}
       {open && loaded === "expired" && <div className="v-expired">{EXPIRED}</div>}
-      {open && children && (
+      {open && allChildren && (
         <div className="v-children">
-          {children.map((child, index) =>
+          {allChildren.map((child, index) =>
             child.value ? (
               <ValueView
                 // biome-ignore lint/suspicious/noArrayIndexKey: sibling labels can repeat (map keys, holes)
@@ -124,7 +167,16 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
               </div>
             ),
           )}
-          {"more" in shown && shown.more ? <div className="v-hole">… {shown.more} more</div> : null}
+          {remaining > 0 && nextOffset !== undefined && nextHandle !== null ? (
+            <button type="button" className="v-more" onClick={loadMore}>
+              {strings.output.moreEntries(remaining)}
+            </button>
+          ) : remaining > 0 ? (
+            // An object's properties are not paged, so the count is still stated -- it just is not a button that
+            // could promise a page `run.expand` can never return.
+            <div className="v-hole">{strings.output.moreEntries(remaining)}</div>
+          ) : null}
+          {pageError && <div className="v-error">{pageError}</div>}
         </div>
       )}
     </div>

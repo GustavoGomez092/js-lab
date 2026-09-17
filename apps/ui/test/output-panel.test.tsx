@@ -164,4 +164,51 @@ describe("OutputPanel", () => {
     expect(onInstall).toHaveBeenCalledTimes(1);
     expect(onInstall).toHaveBeenCalledWith("zod");
   });
+
+  // OU-02 Task C: the only thing pinning the offset's last hop. `ValueView` can compute the right offset and
+  // still have it dropped here, which the user would see as "… more entries" returning page one forever. Kept
+  // inside this describe so the beforeEach that patches offsetHeight/offsetWidth applies -- without it the
+  // virtualizer renders zero rows and the test would pass vacuously.
+  test("the more-entries button carries the offset to run.expand (OU-02)", async () => {
+    const paged: RunEvent = {
+      kind: "result",
+      line: 1,
+      source: "autolog",
+      seq: 1,
+      t: 0,
+      value: {
+        t: "array",
+        id: 1,
+        ctor: "Array",
+        length: 5,
+        items: [[0, { t: "number", v: "0" }]],
+        more: 4,
+        next: 1,
+        handle: "h1",
+      },
+    };
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    act(() => {
+      store.getState().receiveState("r1", "transpiling", undefined, "t1");
+      store.getState().receiveEvents("r1", [paged], "t1");
+    });
+    // The file's own `setup()` discards the api it builds, so this test keeps its own.
+    const { api } = createFakeApi();
+    render(<OutputPanel store={store} api={api} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Array\(5\)/ }));
+    // `loadMore` settles its loading and page state on the microtask after the click, so the click is awaited
+    // inside act(...); otherwise that update escapes the test and React warns.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /more entries/ }));
+    });
+    expect(api.expand).toHaveBeenLastCalledWith({ tabId: "t1", runId: "r1", handleId: "h1", offset: 1 });
+  });
 });

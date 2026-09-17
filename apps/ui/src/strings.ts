@@ -199,6 +199,11 @@ export const strings = {
     jumpToLine: (line: number) => `Go to line ${line}`,
     truncated: (dropped: number) =>
       `Output truncated: ${dropped} more entries were dropped. Raise the limit in Settings → Advanced.`,
+    /**
+     * OU-02: the exact number of collection entries beyond the pages already loaded, never an unqualified
+     * ellipsis. Distinct from `truncated` above, which is about *console entries* dropped by the output cap.
+     */
+    moreEntries: (remaining: number) => `… ${remaining.toLocaleString("en-US")} more entries`,
     region: "Output",
     lastSuccessfulRun: "Last successful run",
     copied: "Copied",

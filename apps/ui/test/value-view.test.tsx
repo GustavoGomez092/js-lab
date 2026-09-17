@@ -140,6 +140,171 @@ describe("ValueView", () => {
     await waitFor(() => expect(screen.getByText(source)).toBeTruthy());
     expect(expand).toHaveBeenCalledWith("h3");
   });
+
+  /**
+   * OU-02 Task C. The collection overflow row was an inert `<div className="v-hole">… N more</div>`: Tasks A and
+   * B taught the wire to page, but nothing in the UI could ask for a page. These pin the control, the offset it
+   * sends, the append, and the identity that catches a page disagreeing with the remainder it advertises.
+   */
+  const collectionPage = (from: number, values: number[], more: number): EncodedValue => ({
+    t: "array",
+    id: 1,
+    ctor: "Array",
+    length: 5,
+    items: values.map((v, i): [number, EncodedValue] => [from + i, num(String(v))]),
+    // The first page carries no `from`; absent means 0 (`encode.ts` `#take`).
+    ...(from > 0 ? { from } : {}),
+    // `#array` writes `handle` exactly when `page.more` is set, so `more`, `next` and `handle` always travel together.
+    ...(more > 0 ? { more, next: from + values.length, handle: "h1" } : {}),
+  });
+
+  const moreButton = () => screen.queryByRole("button", { name: /more entries/ });
+  /** The remainder the affordance currently promises, or 0 when it is absent. */
+  const advertisedRemainder = () => {
+    const match = /([\d,]+) more entries/.exec(moreButton()?.textContent ?? "");
+    return match?.[1] ? Number(match[1].replace(/,/g, "")) : 0;
+  };
+
+  test("a collection past its page offers a button, not an inert div (OU-02)", () => {
+    const { container } = render(<ValueView value={collectionPage(0, [10, 11], 3)} expand={noExpand} />);
+    fireEvent.click(screen.getByRole("button", { name: /Array\(5\)/ }));
+    expect(moreButton()?.textContent).toContain("3 more entries");
+    // The overflow row is no longer one of the muted, unclickable hole divs.
+    expect([...container.querySelectorAll(".v-hole")].map((node) => node.textContent)).toEqual([]);
+  });
+
+  test("clicking it loads the next page at the right offset and appends rather than replaces (OU-02)", async () => {
+    const expand = mock(
+      async (_handle: string, offset = 0): Promise<EncodedValue | null> =>
+        offset === 2 ? collectionPage(2, [12, 13], 1) : collectionPage(4, [14], 0),
+    );
+    const { container } = render(<ValueView value={collectionPage(0, [10, 11], 3)} expand={expand} />);
+    fireEvent.click(screen.getByRole("button", { name: /Array\(5\)/ }));
+    const rows = () => [...container.querySelectorAll(".v-children > .v")].map((row) => row.textContent);
+
+    expect(rows()).toEqual(["0: 10", "1: 11"]);
+    // Task B's identity, read off the screen: rows loaded + remainder promised == the collection's true size, at
+    // every page. This is what catches a page and its `more`/`next` describing different edges.
+    expect(rows().length + advertisedRemainder()).toBe(5);
+
+    fireEvent.click(moreButton() as HTMLElement);
+    await waitFor(() => expect(container.textContent).toContain("2: 12"));
+    expect(expand).toHaveBeenLastCalledWith("h1", 2);
+    expect(rows()).toEqual(["0: 10", "1: 11", "2: 12", "3: 13"]);
+    expect(rows().length + advertisedRemainder()).toBe(5);
+
+    fireEvent.click(moreButton() as HTMLElement);
+    await waitFor(() => expect(container.textContent).toContain("4: 14"));
+    expect(expand).toHaveBeenLastCalledWith("h1", 4);
+    expect(rows()).toEqual(["0: 10", "1: 11", "2: 12", "3: 13", "4: 14"]);
+    expect(rows().length + advertisedRemainder()).toBe(5);
+  });
+
+  test("the last page shows no button, and an exhausted page omits `more` instead of sending 0 (OU-02)", async () => {
+    const final = collectionPage(2, [12, 13, 14], 0);
+    // Task B pinned `toBeUndefined()` on an exhausted page: absence, not a zero. Asserted here so the fixture is
+    // provably the shape the encoder emits, rather than one that would satisfy `remaining > 0` by accident.
+    expect(final.t === "array" && final.more).toBeUndefined();
+    const expand = mock(async (): Promise<EncodedValue | null> => final);
+    const { container } = render(<ValueView value={collectionPage(0, [10, 11], 3)} expand={expand} />);
+    fireEvent.click(screen.getByRole("button", { name: /Array\(5\)/ }));
+    expect(moreButton()).not.toBeNull();
+
+    fireEvent.click(moreButton() as HTMLElement);
+    await waitFor(() => expect(container.textContent).toContain("4: 14"));
+    expect(moreButton()).toBeNull();
+  });
+
+  test("an object's overflow states its count but is not a button (OU-02 boundary)", () => {
+    // Objects are deliberately not paged -- spec §5.9 lists object properties and collection entries as separate
+    // rows -- so an object carries `more` and a `handle` but never `next`. A button here would promise a page
+    // `run.expand` can never return. Kills the mutant "render a button whenever remaining > 0".
+    const { container } = render(
+      <ValueView
+        value={{ t: "object", id: 1, ctor: "Object", props: [[{ k: "a" }, num("1")]], more: 7, handle: "h4" }}
+        expand={noExpand}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Object/ }));
+    expect(moreButton()).toBeNull();
+    expect(container.querySelector(".v-hole")?.textContent).toContain("7 more entries");
+  });
+
+  test("collection rows are labelled with their real index once a later page is loaded (OU-02)", () => {
+    // `array` items carry true indices in their tuples and `map` labels by key, so only `set` and `typedArray`
+    // -- which label by position -- can restart at 0 on a later page.
+    const set = render(
+      <ValueView
+        value={{ t: "set", id: 1, size: 12_000, from: 10_000, items: [num("1"), num("2")] }}
+        expand={noExpand}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Set\(12000\)/ }));
+    expect([...set.container.querySelectorAll(".v-children > .v")].map((row) => row.textContent)).toEqual([
+      "10000: 1",
+      "10001: 2",
+    ]);
+
+    const typed = render(
+      <ValueView
+        value={{ t: "typedArray", ctor: "Uint8Array", length: 4, from: 2, items: [7, 8] }}
+        expand={noExpand}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Uint8Array\(4\)/ }));
+    expect([...typed.container.querySelectorAll(".v-children > .v")].map((row) => row.textContent)).toEqual([
+      "2: 7",
+      "3: 8",
+    ]);
+  });
+
+  test("child-label holes stay inert divs; only the overflow row became a control (OU-02)", () => {
+    const { container } = render(
+      <ValueView
+        value={{ t: "array", id: 1, ctor: "Array", length: 4, items: [[0, num("1")], { hole: 2 }, [3, num("4")]] }}
+        expand={noExpand}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Array\(4\)/ }));
+    // `v-hole` serves two unrelated purposes in this file; the child-label one is not the paging affordance.
+    expect([...container.querySelectorAll(".v-hole")].map((node) => [node.tagName, node.textContent])).toEqual([
+      ["DIV", "<2 empty items>"],
+    ]);
+    expect(container.querySelectorAll(".v-hole button")).toHaveLength(0);
+  });
+
+  test("a page whose handle expired says so instead of failing silently (OU-02)", async () => {
+    render(<ValueView value={collectionPage(0, [10, 11], 3)} expand={noExpand} />);
+    fireEvent.click(screen.getByRole("button", { name: /Array\(5\)/ }));
+    fireEvent.click(moreButton() as HTMLElement);
+    await waitFor(() => expect(screen.getByText(/no longer available/)).toBeTruthy());
+  });
+
+  test("collapsing a node drops the pages it had loaded (OU-02)", async () => {
+    const expand = mock(async (): Promise<EncodedValue | null> => collectionPage(2, [12, 13], 1));
+    const { container } = render(<ValueView value={collectionPage(0, [10, 11], 3)} expand={expand} />);
+    const toggle = () => screen.getByRole("button", { name: /Array\(5\)/ });
+    fireEvent.click(toggle());
+    fireEvent.click(moreButton() as HTMLElement);
+    await waitFor(() => expect(container.textContent).toContain("2: 12"));
+
+    fireEvent.click(toggle()); // collapse
+    fireEvent.click(toggle()); // re-expand
+    // A fresh run replaces `value` while this component stays mounted, so stale pages must not survive a collapse.
+    expect(container.textContent).not.toContain("2: 12");
+    expect(container.textContent).toContain("0: 10");
+    expect(advertisedRemainder()).toBe(3);
+  });
+
+  test("the string affordance is a sibling of the new one, not a casualty of it (OU-02)", () => {
+    const { container } = render(
+      <ValueView value={{ t: "string", v: "abcd", truncated: { total: 8, handle: "h2" } }} expand={noExpand} />,
+    );
+    // Both affordances share `.v-more`, so only the wording tells them apart: a truncated string must keep its
+    // own label and never pick up the collection's.
+    expect(container.querySelector(".v-more")?.textContent).toContain("4 more characters");
+    expect(moreButton()).toBeNull();
+  });
 });
 
 /**

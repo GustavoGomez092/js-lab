@@ -302,6 +302,21 @@ export const strings = {
     exportFailed: (error: string) => `Couldn't export: ${error}`,
     loadFailed: "Couldn't read your snippets. Close and reopen the panel to try again.",
     saveFailed: (error: string) => `Couldn't save your snippets (${error}). Nothing was changed.`,
+    // The New Snippet form (spec §13.1).
+    newTitle: "New Snippet",
+    editTitle: "Edit Snippet",
+    nameLabel: "Name",
+    nameHelp: "The word you type to insert this snippet. Letters, digits, _, $ and - only.",
+    descriptionLabel: "Description",
+    languageLabel: "Language hint",
+    languageNone: "Any",
+    bodyLabel: "Body",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal snippet syntax quoted to the user, not a template
+    bodyHelp: "$0 is where the cursor lands; ${1:name} and $1 are tab stops.",
+    save: "Save",
+    nameRequired: "A snippet needs a name.",
+    nameInvalid: "Use letters, digits, _, $ and - only.",
+    nameTaken: "Another snippet already uses this name.",
   },
   npm: {
     title: "NPM Packages",

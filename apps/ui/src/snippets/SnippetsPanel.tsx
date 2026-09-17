@@ -7,6 +7,7 @@ import { copyEntriesToClipboard } from "../output/copy";
 import type { Dialogs } from "../shell/dialogs";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
+import type { SnippetBodyFactory } from "./body-editor";
 import { SnippetForm } from "./SnippetForm";
 import { filterSnippets } from "./snippet-filter";
 
@@ -44,6 +45,8 @@ interface PanelProps {
   actions: SnippetActions;
   colorize?: SnippetColorize;
   clipboard?: Pick<Clipboard, "writeText">;
+  /** Forwarded to the form: Monaco in the app (Task 9), a stub in tests (R-M5b-5). */
+  createBody?: SnippetBodyFactory;
 }
 
 const ROW_HEIGHT = 46;
@@ -66,14 +69,14 @@ function highlight(text: string, ranges: [number, number][]): ReactNode[] {
 }
 
 /** Spec §13.1, §7.5: the Snippets side-bar panel. Keeps the `side-bar` class: the shell and its tests key on it. */
-export function SnippetsPanel({ store, api, dialogs, actions, colorize, clipboard }: PanelProps) {
+export function SnippetsPanel({ store, api, dialogs, actions, colorize, clipboard, createBody }: PanelProps) {
   const snippets = useStore(store, (s) => s.snippets);
   const loaded = useStore(store, (s) => s.snippetsLoaded);
   const request = useStore(store, (s) => s.snippetsRequest);
 
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ initial: Snippet | null; body: string } | null>(null);
+  const [editing, setEditing] = useState<{ initial: Snippet | null; body: string; seedName: string } | null>(null);
   const [deleted, setDeleted] = useState<Snippet | null>(null);
   const [pendingImport, setPendingImport] = useState<Snippet[] | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -169,7 +172,7 @@ export function SnippetsPanel({ store, api, dialogs, actions, colorize, clipboar
   useEffect(() => {
     if (!request) return;
     if (request.kind === "focusSearch") search.current?.focus();
-    else setEditing({ initial: null, body: request.body });
+    else setEditing({ initial: null, body: request.body, seedName: "" });
     store.getState().clearSnippetsRequest();
   }, [request, store]);
 
@@ -246,6 +249,8 @@ export function SnippetsPanel({ store, api, dialogs, actions, colorize, clipboar
           api={api}
           initial={editing.initial}
           body={editing.body}
+          seedName={editing.seedName}
+          createBody={createBody}
           onDone={() => setEditing(null)}
         />
       </aside>
@@ -257,7 +262,7 @@ export function SnippetsPanel({ store, api, dialogs, actions, colorize, clipboar
     <aside className="side-bar snippets-panel" aria-label={strings.snippets.title}>
       <header className="snippets-header">
         <h2>{strings.snippets.title}</h2>
-        <button type="button" onClick={() => setEditing({ initial: null, body: "" })}>
+        <button type="button" onClick={() => setEditing({ initial: null, body: "", seedName: "" })}>
           {strings.snippets.newSnippet}
         </button>
         <button type="button" onClick={() => api.snippetsImportDialog()}>
@@ -342,7 +347,9 @@ export function SnippetsPanel({ store, api, dialogs, actions, colorize, clipboar
           <div className="snippets-empty">
             {strings.snippets.noMatches(trimmed)}
             {isValidSnippetName(trimmed) && (
-              <button type="button" onClick={() => setEditing({ initial: null, body: "" })}>
+              // The query is the point of this button: it seeds the new snippet's NAME. Opening an empty form
+              // here would offer to create "foo" and then create something unnamed instead.
+              <button type="button" onClick={() => setEditing({ initial: null, body: "", seedName: trimmed })}>
                 {strings.snippets.createNamed(trimmed)}
               </button>
             )}
@@ -367,7 +374,7 @@ export function SnippetsPanel({ store, api, dialogs, actions, colorize, clipboar
             <button type="button" onClick={() => void copy(selected)}>
               {strings.snippets.copy}
             </button>
-            <button type="button" onClick={() => setEditing({ initial: selected, body: selected.body })}>
+            <button type="button" onClick={() => setEditing({ initial: selected, body: selected.body, seedName: "" })}>
               {strings.snippets.edit}
             </button>
             <button type="button" className="danger" onClick={() => void remove(selected)}>

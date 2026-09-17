@@ -346,12 +346,74 @@ describe("snippets panel (spec §13.1)", () => {
     expect(screen.queryByRole("button", { name: strings.snippets.createNamed("not a name") })).toBeNull();
   });
 
+  test('Create "<query>" opens the form with the query already in the name field', async () => {
+    setup();
+    await ready();
+    type("newthing");
+    fireEvent.click(button(strings.snippets.createNamed("newthing")));
+    // Task 7 shipped this button opening an EMPTY form: it offered to create "newthing" and then created an
+    // unnamed snippet. Carrying the query into the name field is the whole point of the button.
+    expect((screen.getByLabelText(strings.snippets.nameLabel) as HTMLInputElement).value).toBe("newthing");
+  });
+
+  test("New Snippet opens an empty form, not one seeded from whatever is in the search box", async () => {
+    setup();
+    await ready();
+    type("newthing");
+    fireEvent.click(button(strings.snippets.newSnippet));
+    // Seeding unconditionally from the query would put "newthing" here too, collapsing the two buttons into one.
+    expect((screen.getByLabelText(strings.snippets.nameLabel) as HTMLInputElement).value).toBe("");
+  });
+
+  test("Edit opens the form on the selected snippet, not on a new one", async () => {
+    setup();
+    await ready();
+    // log is the SECOND ranked row, so an Edit that opened on ranked[0] would show fetchjson instead.
+    select("log");
+    fireEvent.click(button(strings.snippets.edit));
+    expect((screen.getByLabelText(strings.snippets.nameLabel) as HTMLInputElement).value).toBe("log");
+    expect(screen.getByRole("heading").textContent).toBe(strings.snippets.editTitle);
+  });
+
+  test("the panel hands its body-field factory to the form (R-M5b-5)", async () => {
+    // Task 9 passes `createMonacoBody` here. A panel that accepted the prop but dropped it on the way to the form
+    // would silently fall back to the textarea, and the shipped app would lose its Monaco body field with nothing
+    // failing -- so the forwarding needs its own test rather than being taken on trust.
+    const store = makeStore();
+    const { api } = createFakeApi();
+    api.snippetsList.mockImplementation(async () => LIBRARY);
+    const hosts: HTMLElement[] = [];
+    const createBody = (host: HTMLElement, options: { value: string }) => {
+      hosts.push(host);
+      return { getValue: () => options.value, focus: () => {}, dispose: () => {} };
+    };
+    render(
+      <SnippetsPanel
+        store={store}
+        api={api}
+        dialogs={{ confirm: mock(async (_o: ConfirmOptions): Promise<string> => "cancel") }}
+        actions={{ insert: mock((_s: Snippet) => {}), insertInNewTab: mock(async (_s: Snippet) => {}) }}
+        createBody={createBody}
+      />,
+    );
+    await ready();
+    fireEvent.click(button(strings.snippets.newSnippet));
+    expect(hosts).toHaveLength(1);
+    // The injected factory was used INSTEAD of the fallback, not alongside it.
+    expect(document.querySelector(".snippets-body textarea")).toBeNull();
+  });
+
   test("New Snippet leaves the list for the form", async () => {
     setup();
     await ready();
     fireEvent.click(button(strings.snippets.newSnippet));
     expect(screen.queryByLabelText(strings.snippets.searchLabel)).toBeNull();
-    expect(options()).toEqual([]);
+    // NOT `expect(options()).toEqual([])`: the form's language <select> contributes <option> elements, which also
+    // carry role="option", so that assertion no longer distinguishes "the list is gone" from "a dropdown is
+    // showing" -- and deep-comparing live happy-dom elements against [] exhausted memory and SIGKILLed the whole
+    // suite rather than failing. What the test means is that the snippet LIST is gone, so assert exactly that.
+    expect(screen.queryByRole("listbox", { name: strings.snippets.list })).toBeNull();
+    expect(document.querySelectorAll(".snippets-row").length).toBe(0);
   });
 
   test("a newSnippet request opens the form, and a focusSearch request does not", async () => {

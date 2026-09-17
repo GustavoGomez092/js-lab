@@ -1018,6 +1018,55 @@ button:disabled {
   gap: 8px;
 }
 
+.snippets-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.snippets-form h2 {
+  margin: 0 0 4px;
+}
+
+/* A class, not `.snippets-form input`: an element-ending compound here descends in specificity from
+   `.env-table tr.invalid input` and trips lint/style/noDescendingSpecificity. `.dialog-input` is the same idiom. */
+.snippets-field {
+  width: 100%;
+  padding: 4px 6px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  color: inherit;
+}
+
+.snippets-body,
+.snippets-body-field {
+  min-height: 160px;
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1.5 var(--code-font-family, var(--mono));
+}
+
+.snippets-body-field {
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  padding: 6px;
+  resize: vertical;
+}
+
+.snippets-help {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.snippets-error {
+  color: var(--fg-error);
+  font-size: 11px;
+}
+
 /* ---------- status bar parts ---------- */
 .status-left,
 .status-right {

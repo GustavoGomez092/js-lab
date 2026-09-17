@@ -39,6 +39,12 @@ export interface TabRuntime {
    * so the per-tab speaker icon (TabBar.tsx) tracks audio specifically, not every kind of handle.
    */
   audioActive: boolean;
+  /**
+   * Task 1 (spec §6.3, §10.1): the tab's logpoint lines, ascending and unique. Deliberately per-tab UI state and
+   * never part of `TabState`: spec §10.1 says logpoints are not persisted, so they live here with `output` and
+   * `diagnostics` rather than anywhere `session.json` can see them.
+   */
+  logpoints: number[];
 }
 
 const freshOutput = (): TabRuntime["output"] => ({ ...initialOutput, workingDirectoryMissing: false });
@@ -48,6 +54,7 @@ export const newRuntime = (): TabRuntime => ({
   diagnostics: [],
   autoRunArmed: false,
   audioActive: false,
+  logpoints: [],
 });
 
 /**
@@ -187,6 +194,7 @@ export interface AppState {
   autoRunArmed: boolean;
   output: TabRuntime["output"];
   diagnostics: DiagnosticPayload[];
+  logpoints: number[];
 
   hoveredLine: number | null;
   revealRequest: { line: number; nonce: number } | null;
@@ -221,6 +229,15 @@ export interface AppState {
    * other `receive*` methods, there is no M1-era "no active tab yet" caller to default for). */
   receiveAudio(active: boolean, tabId: string): void;
   clearOutput(tabId?: string): void;
+  /** Spec §6.3: adds or removes a logpoint on `line` and arms Auto Run, so the change triggers a run. */
+  toggleLogpoint(line: number, tabId?: string): void;
+  /** Spec §6.3 (`Cmd+Shift+F9`): drops every logpoint on the tab and arms Auto Run. */
+  clearLogpoints(tabId?: string): void;
+  /**
+   * Reconciliation from the editor's sticky decorations after an edit moved them (spec §6.3). Not a user action:
+   * it never arms Auto Run, and an unchanged set keeps the previous array identity.
+   */
+  setLogpoints(lines: readonly number[], tabId?: string): void;
   /** Task 13: removes one shown alert() dialog from its tab's queue, once the user has answered it. Defaults to
    *  the active tab, like every other `tabId?`-optional action here. */
   dismissWebDialog(key: string, tabId?: string): void;
@@ -270,6 +287,8 @@ export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "a
 
 const NO_DIAGNOSTICS: DiagnosticPayload[] = [];
 
+const NO_LOGPOINTS: number[] = [];
+
 /** Most notices shown at once; the oldest is dropped first (FA-I3). */
 export const MAX_NOTICES = 5;
 
@@ -290,7 +309,15 @@ function mirrorOf(state: Pick<AppState, "tabs" | "activeTabId" | "buffers" | "ru
     autoRunArmed: runtime?.autoRunArmed ?? false,
     output: runtime?.output ?? freshOutput(),
     diagnostics: runtime?.diagnostics ?? NO_DIAGNOSTICS,
+    logpoints: runtime?.logpoints ?? NO_LOGPOINTS,
   };
+}
+
+/** Ascending and unique; returns `previous` unchanged when the set is identical, so subscribers don't re-run. */
+function normalizeLogpoints(previous: number[], lines: readonly number[]): number[] {
+  const next = [...new Set(lines)].sort((a, b) => a - b);
+  if (next.length === previous.length && next.every((line, index) => line === previous[index])) return previous;
+  return next;
 }
 
 export function createAppStore(options: { timers?: TimerApi } = {}) {
@@ -376,6 +403,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       autoRunArmed: false,
       output: freshOutput(),
       diagnostics: NO_DIAGNOSTICS,
+      logpoints: NO_LOGPOINTS,
       hoveredLine: null,
       revealRequest: null,
       notices: [],
@@ -550,6 +578,38 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
         const id = resolve(tabId);
         if (!id) set({ output: clear(get().output) });
         else updateRuntime(id, (runtime) => ({ ...runtime, output: clear(runtime.output) }));
+      },
+
+      toggleLogpoint(line, tabId) {
+        const id = resolve(tabId);
+        if (!id || !Number.isInteger(line) || line < 1) return;
+        updateRuntime(id, (runtime) => {
+          const has = runtime.logpoints.includes(line);
+          const lines = has
+            ? runtime.logpoints.filter((candidate) => candidate !== line)
+            : [...runtime.logpoints, line];
+          return { ...runtime, logpoints: normalizeLogpoints(runtime.logpoints, lines), autoRunArmed: true };
+        });
+      },
+
+      clearLogpoints(tabId) {
+        const id = resolve(tabId);
+        if (!id) return;
+        updateRuntime(id, (runtime) =>
+          runtime.logpoints.length === 0 ? runtime : { ...runtime, logpoints: [], autoRunArmed: true },
+        );
+      },
+
+      setLogpoints(lines, tabId) {
+        const id = resolve(tabId);
+        if (!id) return;
+        updateRuntime(id, (runtime) => {
+          const logpoints = normalizeLogpoints(
+            runtime.logpoints,
+            lines.filter((line) => Number.isInteger(line) && line >= 1),
+          );
+          return logpoints === runtime.logpoints ? runtime : { ...runtime, logpoints };
+        });
       },
 
       dismissWebDialog(key, tabId) {

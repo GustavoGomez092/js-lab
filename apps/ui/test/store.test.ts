@@ -621,4 +621,42 @@ describe("app store", () => {
     expect(stored?.error?.log.includes("abc123")).toBe(false);
     expect(store.getState().npm.rawTargets.op1).toBe(rawTarget);
   });
+
+  test("logpoints are per tab, sorted, unique, and toggling one arms auto-run (spec §6.3, §10.1)", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    store.getState().openTab(createTab({ id: "t2" }), "", false);
+
+    expect(store.getState().logpoints).toEqual([]);
+    store.getState().toggleLogpoint(3);
+    store.getState().toggleLogpoint(1);
+    expect(store.getState().logpoints).toEqual([1, 3]);
+    expect(shouldAutoRun(store.getState())).toBe(true);
+    // A second toggle of the same line removes it.
+    store.getState().toggleLogpoint(3);
+    expect(store.getState().logpoints).toEqual([1]);
+    // A background tab keeps its own set.
+    store.getState().toggleLogpoint(9, "t2");
+    expect(store.getState().logpoints).toEqual([1]);
+    expect(store.getState().runtimes.t2?.logpoints).toEqual([9]);
+
+    store.getState().clearLogpoints();
+    expect(store.getState().logpoints).toEqual([]);
+    expect(store.getState().runtimes.t2?.logpoints).toEqual([9]);
+  });
+
+  test("setLogpoints reconciles sticky lines without arming auto-run, and keeps identity when unchanged", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    store.getState().setLogpoints([2]);
+    expect(store.getState().logpoints).toEqual([2]);
+    // Reconciliation is not a user action: it must not arm Auto Run on its own.
+    expect(shouldAutoRun(store.getState())).toBe(false);
+
+    const before = store.getState().logpoints;
+    store.getState().setLogpoints([2]);
+    expect(store.getState().logpoints).toBe(before);
+    store.getState().setLogpoints([5, 2, 5]);
+    expect(store.getState().logpoints).toEqual([2, 5]);
+  });
 });

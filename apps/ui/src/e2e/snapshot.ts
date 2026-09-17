@@ -28,6 +28,7 @@ export interface TabSnapshot {
   runState: RunState | null;
   activeHandles: number;
   autoRunArmed: boolean;
+  logpoints: number[];
   entryCount: number;
   stale: boolean;
   truncated: number;
@@ -89,6 +90,7 @@ export function snapshotState(state: AppState): UiSnapshot {
         runState: output.runState,
         activeHandles: output.activeHandles,
         autoRunArmed: state.runtimes[id]?.autoRunArmed ?? false,
+        logpoints: state.runtimes[id]?.logpoints ?? [],
         entryCount: output.entries.length,
         stale: output.stale,
         truncated: output.truncated,

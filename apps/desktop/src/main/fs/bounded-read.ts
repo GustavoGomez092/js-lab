@@ -66,8 +66,39 @@ export class NotARegularFileError extends Error {
  */
 export const MAX_PACKAGE_JSON_BYTES = 5 * 1024 * 1024;
 
+/**
+ * The largest number that can still be a byte cap.
+ *
+ * A cap is only a cap if refusing at it is a real refusal. The largest genuine cap in this tree is
+ * `MAX_OPEN_FILE_BYTES` (50 MB); this sits well above that and far below any allocation Main could survive, so a
+ * finite `maxBytes` beyond it is not a bound at all — it is a WAIVER wearing a number's clothes.
+ * `readBoundedText(p, Number.MAX_SAFE_INTEGER)` is a complete waiver of roughly 9 PB.
+ *
+ * This exists because `test/fs/no-unbounded-reads.test.ts` cannot close that spelling and should not pretend to:
+ * it matches text, and no pattern can recognise an arbitrary large literal as "not really a cap". The gate matches
+ * the `Infinity` / `POSITIVE_INFINITY` spellings, and this refuses every other one, so between them "any read with
+ * no meaningful byte cap, however it is spelled" is true rather than merely claimed. `POSITIVE_INFINITY` is
+ * deliberately still allowed through: it is the one spelling the gate CAN see, which is exactly why it must be the
+ * one that reaches a read and carries a recorded reason there.
+ */
+export const MAX_MEANINGFUL_CAP_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * Refuses a `maxBytes` that is not a bound. A `RangeError` rather than one of the classes above, because this is a
+ * mistake in the caller and not a fact about the file — which is also why the or-null readers check it *before*
+ * their `catch`, instead of collapsing a caller's bug into "this file is unreadable".
+ */
+function assertRealCap(path: string, maxBytes: number): void {
+  if (Number.isFinite(maxBytes) && maxBytes > MAX_MEANINGFUL_CAP_BYTES) {
+    throw new RangeError(
+      `ERANGE: ${maxBytes} is not a byte cap (the limit is ${MAX_MEANINGFUL_CAP_BYTES}); if the read genuinely cannot be bounded, use readRegularFileText and record the waiver: ${path}`,
+    );
+  }
+}
+
 /** The bytes of a regular file at most `maxBytes` long. Throws `FileTooLargeError` / `NotARegularFileError`. */
 export async function readBoundedBytes(path: string, maxBytes: number): Promise<Buffer> {
+  assertRealCap(path, maxBytes);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
@@ -113,6 +144,9 @@ export async function readRegularFileText(path: string): Promise<string> {
  * classify the error.
  */
 export async function readBoundedTextOrNull(path: string, maxBytes: number): Promise<string | null> {
+  // Outside the try on purpose: a cap that is not a cap is the caller's bug, and must not become a `null` that
+  // reads as "that file was unreadable".
+  assertRealCap(path, maxBytes);
   try {
     return await readBoundedText(path, maxBytes);
   } catch {
@@ -122,6 +156,7 @@ export async function readBoundedTextOrNull(path: string, maxBytes: number): Pro
 
 /** `readBoundedBytes`, synchronously — for callers that cannot await (Bun plugin hooks, run preparation). */
 export function readBoundedBytesSync(path: string, maxBytes: number): Buffer {
+  assertRealCap(path, maxBytes);
   const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
     const info = fstatSync(fd);
@@ -163,6 +198,8 @@ export function readRegularFileTextSync(path: string): string {
 
 /** `readBoundedTextOrNull`, synchronously. */
 export function readBoundedTextSyncOrNull(path: string, maxBytes: number): string | null {
+  // Outside the try, as in the async twin above.
+  assertRealCap(path, maxBytes);
   try {
     return readBoundedTextSync(path, maxBytes);
   } catch {

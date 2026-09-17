@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   FileTooLargeError,
+  MAX_MEANINGFUL_CAP_BYTES,
   NotARegularFileError,
   readBoundedBytes,
   readBoundedText,
   readBoundedTextOrNull,
   readBoundedTextSync,
   readBoundedTextSyncOrNull,
+  readRegularFileText,
+  readRegularFileTextSync,
 } from "../../src/main/fs/bounded-read";
 
 let dir = "";
@@ -111,5 +114,36 @@ describe("bounded reads", () => {
     await writeFile(path, "1234567890");
     const bytes = await readBoundedBytes(path, 10);
     expect(bytes.length).toBe(10);
+  });
+
+  test("refuses a maxBytes that is not a bound at all, rather than accepting a waiver spelled as a number", async () => {
+    // `readBoundedText(p, Number.MAX_SAFE_INTEGER)` is a complete waiver -- about 9 PB -- wearing a number's
+    // clothes. The unbounded-reads gate cannot see it: no textual pattern can recognise an arbitrary large
+    // literal, so its ledger of waivers could never have been complete on text alone. Refusing here is what makes
+    // it complete, and it closes every spelling at once (`2 ** 53`, `1e18`, a literal) rather than one at a time.
+    const path = join(dir, "a.txt");
+    await writeFile(path, "hello");
+
+    await expect(readBoundedText(path, Number.MAX_SAFE_INTEGER)).rejects.toBeInstanceOf(RangeError);
+    expect(() => readBoundedTextSync(path, Number.MAX_SAFE_INTEGER)).toThrow(RangeError);
+    await expect(readBoundedBytes(path, 2 ** 53)).rejects.toBeInstanceOf(RangeError);
+
+    // The or-null forms must NOT collapse this into "unreadable": every other failure here is a fact about the
+    // file, and callers are entitled to treat null as one. This is a bug in the caller, and has to stay loud.
+    await expect(readBoundedTextOrNull(path, Number.MAX_SAFE_INTEGER)).rejects.toBeInstanceOf(RangeError);
+    expect(() => readBoundedTextSyncOrNull(path, Number.MAX_SAFE_INTEGER)).toThrow(RangeError);
+
+    // The message has to say what to do instead, or the next author just picks a smaller huge number.
+    const error = (await readBoundedText(path, Number.MAX_SAFE_INTEGER).catch((r: unknown) => r)) as RangeError;
+    expect(error.message).toContain("readRegularFileText");
+
+    // Exactly at the ceiling is still a cap; one byte over is not.
+    expect(await readBoundedText(path, MAX_MEANINGFUL_CAP_BYTES)).toBe("hello");
+    await expect(readBoundedText(path, MAX_MEANINGFUL_CAP_BYTES + 1)).rejects.toBeInstanceOf(RangeError);
+
+    // POSITIVE_INFINITY stays allowed on purpose: it is the one spelling of "no cap" the gate CAN see, so it is
+    // the one that must reach a read and carry a recorded reason in SIZE_EXEMPT.
+    expect(await readRegularFileText(path)).toBe("hello");
+    expect(readRegularFileTextSync(path)).toBe("hello");
   });
 });

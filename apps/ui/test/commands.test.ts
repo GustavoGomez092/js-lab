@@ -1,10 +1,13 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { RunEvent } from "@jslab/rpc-schema";
 import { COMMANDS, createTab, defaultSession, defaultSettings } from "@jslab/shared";
 import { createAppCommands } from "../src/commands/app-commands";
 import { createEditorCommands, EDITOR_ACTIONS } from "../src/commands/editor-commands";
 import { CommandRegistry } from "../src/commands/registry";
 import { sortLinesCaseInsensitive, toggleMagicCommentLines } from "../src/commands/text-edits";
 import type { EditorHandle } from "../src/editor/editor-handle";
+import { entryToText } from "../src/output/text";
+import type { DisplayEvent } from "../src/state/output";
 import { createAppStore } from "../src/state/store";
 import { strings } from "../src/strings";
 import { createTabActions } from "../src/tabs/tab-actions";
@@ -254,5 +257,139 @@ describe("M3 app commands", () => {
     expect(api.npmInstall.mock.calls).toEqual([["zod@4.6.4"]]);
     // R23-1: the status bar confirms the install started.
     expect(store.getState().statusMessage).toBe(strings.install.started("zod@4.6.4", null));
+  });
+});
+
+// R-M2-T19A-1 (spec §7.2): "Copy All copies the entries visible under the current filter chip, not the whole
+// output." The toolbar button obeyed the chip and this command did not -- it mapped over every visible entry and
+// never read `outputFilter` -- so with the Errors chip selected the button copied the errors and the palette
+// copied every row. `docs/parity.md` OU-11 had already flagged that nothing joined Copy All's two tested halves.
+describe("output.copyAll follows the filter chip (R-M2-T19A-1)", () => {
+  const resultEvent: RunEvent = {
+    kind: "result",
+    line: 1,
+    source: "autolog",
+    value: { t: "number", v: "2" },
+    seq: 1,
+    t: 0,
+  };
+  const logEvent: RunEvent = {
+    kind: "console",
+    level: "log",
+    line: 2,
+    groupDepth: 0,
+    args: [{ t: "string", v: "hi" }],
+    seq: 2,
+    t: 0,
+  };
+  const errorEvent: RunEvent = {
+    kind: "error",
+    phase: "runtime",
+    name: "TypeError",
+    message: "boom",
+    line: 3,
+    column: 1,
+    stack: [],
+    seq: 3,
+    t: 0,
+  };
+  const undefinedResult: RunEvent = {
+    kind: "result",
+    line: 4,
+    source: "autolog",
+    value: { t: "undefined" },
+    seq: 4,
+    t: 0,
+  };
+  const textOf = (...events: RunEvent[]) => events.map((event) => entryToText(event as DisplayEvent)).join("\n");
+
+  let writes: string[] = [];
+  let originalClipboard: Clipboard;
+  beforeEach(() => {
+    writes = [];
+    originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: (text: string) => {
+          writes.push(text);
+          return Promise.resolve();
+        },
+      },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(navigator, "clipboard", { value: originalClipboard, configurable: true });
+  });
+
+  function setup(events: RunEvent[] = [resultEvent, logEvent, errorEvent]) {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    store.getState().receiveState("r1", "transpiling", undefined, "t1");
+    store.getState().receiveEvents("r1", events, "t1");
+    const { api } = createFakeApi();
+    const registry = new CommandRegistry();
+    registry.register(
+      ...createAppCommands({ store, api, tabs: createTabActions(store, api), run: () => {}, editor: () => null }),
+    );
+    return { store, registry };
+  }
+
+  test("the Errors chip copies only the error entries, never the whole output", async () => {
+    const { store, registry } = setup();
+    store.getState().setOutputFilter("errors");
+    expect(registry.execute("output.copyAll")).toBe("executed");
+    await Bun.sleep(1);
+    expect(writes).toEqual([textOf(errorEvent)]);
+  });
+
+  test("the Results chip copies only the result entries", async () => {
+    const { store, registry } = setup();
+    store.getState().setOutputFilter("results");
+    registry.execute("output.copyAll");
+    await Bun.sleep(1);
+    expect(writes).toEqual([textOf(resultEvent)]);
+  });
+
+  test("the All chip still copies every visible entry", async () => {
+    const { store, registry } = setup();
+    expect(store.getState().outputFilter).toBe("all");
+    registry.execute("output.copyAll");
+    await Bun.sleep(1);
+    expect(writes).toEqual([textOf(resultEvent, logEvent, errorEvent)]);
+  });
+
+  test("an undefined result stays out of the copy while showUndefined is off", async () => {
+    const { registry } = setup([resultEvent, undefinedResult]);
+    registry.execute("output.copyAll");
+    await Bun.sleep(1);
+    expect(writes).toEqual([textOf(resultEvent)]);
+  });
+
+  // The zero-match case: the toolbar button is disabled here, so the command must not quietly replace whatever the
+  // user had on their clipboard with an empty string.
+  test("a chip that matches nothing disables the command instead of copying an empty string", async () => {
+    const { store, registry } = setup([logEvent]);
+    store.getState().setOutputFilter("errors");
+    expect(registry.execute("output.copyAll")).toBe("disabled");
+    await Bun.sleep(1);
+    expect(writes).toEqual([]);
+  });
+
+  test("a denied clipboard write reports a status message instead of rejecting", async () => {
+    const { store, registry } = setup();
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: () => Promise.reject(new Error("denied")) },
+      configurable: true,
+    });
+    registry.execute("output.copyAll");
+    await Bun.sleep(1);
+    expect(store.getState().statusMessage).toBe(strings.commands.copyFailed);
   });
 });

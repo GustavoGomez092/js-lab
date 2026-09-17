@@ -104,6 +104,9 @@ describe("layout", () => {
     const { rerender } = render(
       <SplitPane
         orientation="horizontal"
+        // Mirrors what `App.tsx` passes. Rendering `SplitPane` directly cannot prove `App.tsx` passes it --
+        // nothing renders `<App>`; the prop being REQUIRED is what makes dropping it there a typecheck failure.
+        label={strings.shell.splitter.editorOutput}
         size={70}
         secondVisible
         onResize={() => {}}
@@ -112,11 +115,13 @@ describe("layout", () => {
         second={<div>output</div>}
       />,
     );
-    fireEvent.doubleClick(screen.getByRole("separator"));
+    // Addressed by name rather than by bare role: the outer splitter is the one under test here.
+    fireEvent.doubleClick(screen.getByRole("separator", { name: strings.shell.splitter.editorOutput }));
     expect(onReset).toHaveBeenCalledTimes(1);
     rerender(
       <SplitPane
         orientation="horizontal"
+        label={strings.shell.splitter.editorOutput}
         size={70}
         secondVisible={false}
         onResize={() => {}}
@@ -150,6 +155,25 @@ describe("layout", () => {
     expect(store.getState().tab?.language).toBe("jsx");
     expect(screen.getByText("Ln 4, Col 7")).toBeTruthy();
     expect(screen.getByText("INSERT")).toBeTruthy();
+  });
+
+  /**
+   * Audit entry 3: `.status-message` was a bare `<span>`, so every transient message routed through
+   * `setStatusMessage` -- "Couldn't format: …", "Installing zod…", the 64 MB refusal -- was shown only to users who
+   * could see it. `<output>` carries an implicit `role="status"` (polite + atomic).
+   *
+   * This pins the element and its role. It does NOT prove a screen reader speaks it: happy-dom has no accessibility
+   * tree, so that is manual QA.
+   */
+  test("a status message is an <output>, so it is exposed as a status region rather than a mute span", () => {
+    const store = hydrated();
+    act(() => store.getState().setStatusMessage("Couldn't format: SyntaxError"));
+    render(<StatusBar store={store} onToggleLayout={() => {}} onToggleWebView={() => {}} runKeys="⌘R" />);
+
+    const message = document.querySelector(".status-message") as HTMLElement | null;
+    expect(message?.textContent).toBe("Couldn't format: SyntaxError");
+    expect(message?.tagName).toBe("OUTPUT");
+    expect(screen.getByRole("status")).toBe(message as HTMLElement);
   });
 
   test("view commands toggle app-wide settings through Main and per-tab layout locally", async () => {

@@ -102,7 +102,11 @@ function renderTiles(store: AppStore, api: MainApi) {
  * `OutputTiles` and `WebViewHosts` are the real production components; this only wires them the same two-line way
  * `App.tsx` does, so tests can exercise hiding Output (`SplitPane`'s own hide-on-`false` path) without rendering
  * the rest of `App` (Editor/Monaco included). Used only where that outer split matters (F1a); everything else
- * uses the simpler `renderTiles` above, since the outer split contributes its own separator otherwise.
+ * uses the simpler `renderTiles` above, since the outer split contributes its own separator otherwise -- and
+ * that second separator is precisely why both are now named: the F1a test below asserts the two are on screen
+ * together with different accessible names. The label passed here mirrors `App.tsx`'s, but rendering this
+ * harness cannot prove `App.tsx` itself passes it (nothing renders `<App>`); `label` being a REQUIRED prop is
+ * what makes dropping it there a typecheck failure.
  */
 function renderArea(store: AppStore, api: MainApi) {
   function Harness() {
@@ -112,6 +116,7 @@ function renderArea(store: AppStore, api: MainApi) {
       <>
         <SplitPane
           orientation="horizontal"
+          label={strings.shell.splitter.editorOutput}
           size={50}
           secondVisible={outputVisible}
           onResize={() => {}}
@@ -176,6 +181,19 @@ describe("OutputTiles / WebViewHosts", () => {
     const store = hydrated({ runtime: "browser", tiles: { webviewVisible: true } });
     const { api } = createFakeApi();
     renderArea(store, api);
+
+    // The exact situation the naming defect was about: a browser tab showing the Web View preview puts BOTH
+    // splitters on screen -- the outer Editor/Output one and the inner Output/Web View one. Unnamed, each is
+    // announced only as "separator, <value>" and they are indistinguishable. Order is DOM order: the outer
+    // divider precedes the OutputTiles subtree that contains the inner one.
+    // happy-dom has no accessibility tree, so this pins the names the role query resolves, not what any screen
+    // reader says out loud.
+    const separators = screen.getAllByRole("separator");
+    expect(separators).toHaveLength(2);
+    const names = separators.map((s) => s.getAttribute("aria-label"));
+    expect(names).toEqual([strings.shell.splitter.editorOutput, strings.shell.splitter.outputWebView]);
+    expect(new Set(names).size).toBe(2);
+
     const before = screen.getByTestId("webview-tile-t1");
     const beforeWebview = before.querySelector("electrobun-webview");
     expect(exposed(before)).toBe(true);
@@ -488,6 +506,9 @@ describe("OutputTiles / WebViewHosts", () => {
     const panes = container.querySelectorAll(".split-pane");
     expect(panes[0]?.querySelector(`[aria-label="${strings.output.region}"]`)).toBeTruthy();
     expect(panes[1]?.querySelector(".webview-tile-dock")).toBeTruthy();
+    // This is the assertion that pins which name THIS call site passes: swapping it for the outer splitter's
+    // name (or dropping the attribute in SplitPane) fails here.
+    expect(screen.getByRole("separator", { name: strings.shell.splitter.outputWebView })).toBeTruthy();
   });
 
   test("the preview keeps its draggable divider, and consoleSize is stored without conversion", () => {

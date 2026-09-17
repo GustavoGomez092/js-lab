@@ -647,6 +647,7 @@ export function App({
         )}
         <SplitPane
           orientation={orientation}
+          label={strings.shell.splitter.editorOutput}
           size={editorSize}
           secondVisible={outputVisible}
           onResize={(size) => store.getState().setEditorSize(size)}

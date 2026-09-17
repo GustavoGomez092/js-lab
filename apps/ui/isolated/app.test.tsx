@@ -15,7 +15,7 @@ import {
   shortcutFor,
   type TabState,
 } from "@jslab/shared";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type ComponentType, Profiler } from "react";
 import type { MainApi } from "../src/api";
 import { type EditorHandle, type OffsetEdit, setEditorHandle } from "../src/editor/editor-handle";
@@ -108,6 +108,29 @@ function fakeEditor(store: AppStore, tabId: string, focused = true) {
   } as unknown as EditorHandle;
   return { handle, applyOffsetEdits };
 }
+
+/**
+ * A `dataTransfer` shaped as a real file drop delivers one. happy-dom has no `DragEvent` and its `DataTransfer`
+ * can't be populated with files, so this is a plain object; @testing-library assigns it onto the event and React's
+ * synthetic event exposes it unchanged, which is all App's handlers need (they read `types` and spread
+ * `files`/`items`). A dropped folder arrives in *both* lists -- as a directory entry in `items` and as a
+ * name-only File in `files` -- which is what App's `webkitGetAsEntry` filter exists to separate.
+ */
+function fileDataTransfer(files: File[], folderNames: string[] = []) {
+  const entry = (isDirectory: boolean, file: File) => ({
+    webkitGetAsEntry: () => ({ isDirectory }),
+    getAsFile: () => file,
+  });
+  const folders = folderNames.map((name) => new File([""], name));
+  return {
+    types: ["Files"],
+    files: [...folders, ...files],
+    items: [...folders.map((file) => entry(true, file)), ...files.map((file) => entry(false, file))],
+  };
+}
+
+/** A drag that carries something other than files (selected text, a tab reorder) must be left to the browser. */
+const textDataTransfer = { types: ["text/plain"], files: [], items: [] };
 
 describe("App shell", () => {
   test("Cmd+R starts a manual run with the current code and the tab's logpoints", () => {
@@ -729,6 +752,46 @@ describe("App shell", () => {
     );
     const settings = screen.getByRole("button", { name: strings.shell.settings }) as HTMLButtonElement;
     expect([settings.disabled, settings.title]).toEqual([true, strings.shell.laterMilestone]);
+  });
+
+  // Task F: the drop wiring on the app root (spec §10.2) had no test at all -- `flows.dropFiles` was only ever
+  // called directly, so the JSX guards around it were unfalsifiable. Every event below is dispatched at the editor
+  // stub, a descendant of `.app` that is *not* inside the toolbar, so a handler moved off the root is not reached.
+  test("dragging files over the window prevents the default, and a non-file drag is left to the browser (§10.2)", () => {
+    renderApp();
+    const target = screen.getByTestId("editor");
+    // Without this preventDefault the WKWebView takes the drop itself and navigates to the file, so the app never
+    // sees it -- the whole point of the dragover handler.
+    const overFiles = createEvent.dragOver(target, { dataTransfer: fileDataTransfer([new File(["x"], "a.ts")]) });
+    fireEvent(target, overFiles);
+    expect(overFiles.defaultPrevented).toBe(true);
+    const overText = createEvent.dragOver(target, { dataTransfer: textDataTransfer });
+    fireEvent(target, overText);
+    expect(overText.defaultPrevented).toBe(false);
+  });
+
+  test("a file dropped anywhere in the window opens as a tab, and the browser's own open is prevented (§10.2)", async () => {
+    const { api } = renderApp();
+    const target = screen.getByTestId("editor");
+    const drop = createEvent.drop(target, { dataTransfer: fileDataTransfer([new File(["const a = 1"], "notes.tsx")]) });
+    fireEvent(target, drop);
+    expect(drop.defaultPrevented).toBe(true);
+    await waitFor(() => expect(api.createTab).toHaveBeenCalledTimes(1));
+    expect(api.createTab.mock.calls).toEqual([
+      [{ title: "notes.tsx", titleIsCustom: true, language: "tsx", content: "const a = 1" }],
+    ]);
+  });
+
+  test("a dropped folder is refused with the working-directory hint, and a non-file drop is ignored (§10.2)", async () => {
+    const { store, api } = renderApp();
+    const target = screen.getByTestId("editor");
+    // A folder reaches `files` as a name-only File too; without the `items` filter it would open as an empty tab.
+    fireEvent(target, createEvent.drop(target, { dataTransfer: fileDataTransfer([], ["assets"]) }));
+    await waitFor(() => expect(store.getState().statusMessage).toBe(strings.files.folderDrop));
+    expect(api.createTab).not.toHaveBeenCalled();
+    const textDrop = createEvent.drop(target, { dataTransfer: textDataTransfer });
+    fireEvent(target, textDrop);
+    expect(textDrop.defaultPrevented).toBe(false);
   });
 
   test("⌘, asks Main to open the Settings window", () => {

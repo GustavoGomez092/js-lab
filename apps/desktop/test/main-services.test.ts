@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NpmListResult, StartupNotice } from "@jslab/rpc-schema";
@@ -187,6 +187,74 @@ describe("main services (composition root)", () => {
     // And still exactly once, however many further changes fail the same way.
     await services.settings.update({ appearance: { fontSize: 18 } });
     await services.settings.update({ editor: { lineWrap: true } });
+    expect(delivered.map((notice) => notice.id)).toEqual(["settingsTooLarge"]);
+  });
+
+  test("the RECOVERY branch of the open-time rewrite behaves the same way (D1/D3)", async () => {
+    const paths = resolveAppPaths({
+      resourcesFolder: join(dir, "Resources"),
+      userData: dir,
+      execPath: process.execPath,
+      env: {},
+    });
+    // settings-store rewrites at open on `recovered !== "none"` OR `version < SETTINGS_VERSION`. The test above
+    // drives the migration half; this drives the recovery half, where a corrupt settings.json falls back to a
+    // valid, near-cap settings.json.bak. It is not the same call either: recovery rewrites with `backup: false`
+    // and migration with `backup: true`.
+    //
+    // Driven rather than argued. "The recovery branch reaches the identical path" is very probably true, and it is
+    // the same shape of claim as the one that produced the D1/D3 defect -- flagged, reasoned about, and wrong. It
+    // is also at least as plausible a real trigger: it is the path a user hits after something already went wrong.
+    const unknown: Record<string, unknown> = {};
+    for (let index = 0; index < 25_000; index++) unknown[`experimentalFeatureFlag${index}`] = index;
+    const base = defaultSettings();
+    const backup = JSON.stringify({ ...base, run: { ...base.run, ...unknown } });
+    await mkdir(paths.dataDir, { recursive: true });
+    await writeFile(join(paths.dataDir, "settings.json"), "{oops");
+    await writeFile(join(paths.dataDir, "settings.json.bak"), backup);
+
+    const raised: StartupNotice[] = [];
+    const delivered: StartupNotice[] = [];
+    let windowOpen = false;
+    services = await createMainServices({
+      paths,
+      env: {},
+      shiftHeld: Promise.resolve(false),
+      realHome: join(dir, "home"),
+      log: () => {},
+      notify: (notice) => {
+        raised.push(notice);
+        if (!windowOpen) return false;
+        delivered.push(notice);
+        return true;
+      },
+      onEvents: () => {},
+      onState: () => {},
+      onDiagnostics: () => {},
+      onNpmOperation: () => {},
+      onNpmLog: () => {},
+      onNpmChanged: () => {},
+      startRunner: () => Promise.reject(new Error("no runners in this test")),
+      transformHost: { transform: () => Promise.reject(new Error("no transforms in this test")), dispose: () => {} },
+    });
+
+    // The test drives the branch it claims to: recovered from the backup, primary reported corrupt, and the
+    // backup's oversized contents really are what got loaded.
+    expect([services.settings.recovered, services.settings.primary]).toEqual(["backup", "corrupt"]);
+    expect("experimentalFeatureFlag0" in (services.settings.current.run as Record<string, unknown>)).toBe(true);
+
+    // Identical to the migration branch: refused at open, raised, and correctly shown to nobody -- no window yet.
+    expect(raised.map((notice) => notice.id)).toEqual(["settingsTooLarge"]);
+    expect(delivered).toEqual([]);
+
+    // A refused recovery rewrite must leave the good backup alone (M1 T12), or the next launch would have nothing
+    // to recover from -- this branch rewrites with `backup: false` precisely so the .bak survives.
+    expect(await readFile(join(paths.dataDir, "settings.json.bak"), "utf8")).toBe(backup);
+
+    // And the telling was not spent on that invisible attempt: the user's first failing change is announced, once.
+    windowOpen = true;
+    await services.settings.update({ editor: { lineWrap: false } });
+    await services.settings.update({ appearance: { fontSize: 18 } });
     expect(delivered.map((notice) => notice.id)).toEqual(["settingsTooLarge"]);
   });
 

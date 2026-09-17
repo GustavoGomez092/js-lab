@@ -241,6 +241,20 @@ button:disabled {
   background: var(--bg-lineHover);
 }
 
+/* ---------- logpoint gutter (spec §6.3) ---------- */
+/* Monaco sizes the glyph margin itself and applies this class to that line's margin cell; the dot is drawn with
+   a radial background so no pseudo-element is needed (Monaco owns the cell's own ::before/::after). */
+.logpoint-glyph {
+  background: radial-gradient(circle at center, var(--fg-accent) 0 4px, transparent 4px);
+  cursor: pointer;
+}
+
+/* Spec §5.5: a logpoint on a line with no loggable statement is hollow. Same specificity as `.logpoint-glyph`
+   (both classes are applied together), so this rule must stay after it to win on source order. */
+.logpoint-glyph-hollow {
+  background: radial-gradient(circle at center, transparent 0 2.5px, var(--fg-muted) 2.5px 4px, transparent 4px);
+}
+
 /* ---------- output ---------- */
 .output {
   display: flex;

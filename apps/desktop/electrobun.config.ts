@@ -25,6 +25,10 @@ export default {
       // readable files). `hutch.config.ts`'s `build:bundles` now stages the real file into `dist/` first, so
       // this key never has to leave the project directory.
       "dist/THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md",
+      // Spec §17: the locale files, staged into dist/ by hutch.config.ts's `build:bundles` for the same
+      // project-relative-key reason as the notices file above. They land at Resources/app/locales, which is
+      // exactly where `app-paths.ts` points Main's `localesDir`.
+      "dist/locales": "locales",
     },
     watchIgnore: ["dist/**"],
     mac: { bundleCEF: false },

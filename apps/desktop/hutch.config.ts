@@ -16,6 +16,10 @@ const bundles = [
   // `dist/` here, then copying it with an ordinary project-relative key, works regardless of how that
   // ambiguity would have resolved -- the same shape every other `build.copy` entry already uses.
   "mkdir -p dist && cp ../../THIRD-PARTY-NOTICES.md dist/THIRD-PARTY-NOTICES.md",
+  // Spec §17: the locale files live at apps/ui/src/i18n/locales/ and Main reads the same ones. Staged here
+  // for the same reason the notices file is -- electrobun.config.ts's `copy` keys are project-relative and
+  // reject ".." components -- and copied to Resources/app/locales by the rule below.
+  "mkdir -p dist/locales && cp ../ui/src/i18n/locales/*.json dist/locales/",
 ].join(" && ");
 
 export default {

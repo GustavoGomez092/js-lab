@@ -33,6 +33,13 @@ export interface AppPaths {
    */
   webRunnerBootstrap: string;
   transformWorker: string;
+  /**
+   * Spec §17: the locale files Main reads. They are authored at `apps/ui/src/i18n/locales/` -- the path the
+   * spec names -- and staged into the bundle by hutch.config.ts's `build:bundles`, exactly as
+   * THIRD-PARTY-NOTICES.md is. Main reads them at runtime rather than inlining them at build time, so it
+   * really does read the same files the UI ships.
+   */
+  localesDir: string;
   bunBinary: string;
 }
 
@@ -62,6 +69,7 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     runnerBootstrap: input.env.JSLAB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "bootstrap.js"),
     webRunnerBootstrap: input.env.JSLAB_WEB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "web-bootstrap.js"),
     transformWorker: input.env.JSLAB_TRANSFORM_WORKER ?? join(appDir, "workers", "transform-worker.js"),
+    localesDir: input.env.JSLAB_LOCALES_DIR ?? join(appDir, "locales"),
     bunBinary: input.env.JSLAB_BUN_PATH ?? input.execPath,
   };
 }

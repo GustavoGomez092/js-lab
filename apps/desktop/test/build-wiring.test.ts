@@ -105,3 +105,37 @@ describe("build wiring: the runner-web bootstrap Main injects", () => {
     expect(overridden.webRunnerBootstrap).toBe("/elsewhere/web-bootstrap.js");
   });
 });
+
+describe("build wiring: locale files (spec §17, Main reads the same files)", () => {
+  const LOCALES_SOURCE = join(import.meta.dir, "..", "..", "ui", "src", "i18n", "locales");
+
+  test("en.json exists at the path the spec names and is a non-empty JSON object", () => {
+    const en = join(LOCALES_SOURCE, "en.json");
+    expect(existsSync(en)).toBe(true);
+    const parsed = JSON.parse(readFileSync(en, "utf8")) as unknown;
+    expect(typeof parsed).toBe("object");
+    expect(Array.isArray(parsed)).toBe(false);
+    // The seed carries real keys on purpose. Task 8 replaces its contents wholesale, but an empty file would
+    // make every downstream reader -- i18next's resource loader and the Main-side one -- special-case it.
+    expect(Object.keys(parsed as Record<string, unknown>).length).toBeGreaterThan(0);
+  });
+
+  test("hutch stages the locales into dist/ and electrobun copies them into Resources/app/locales", () => {
+    const bundles = hutchConfig.scripts["build:bundles"];
+    // Staged, not copied straight out of apps/ui: an electrobun `copy` key may not escape the project
+    // directory (the same constraint that made THIRD-PARTY-NOTICES.md take this route).
+    expect(bundles).toContain("mkdir -p dist/locales");
+    expect(bundles).toContain("cp ../ui/src/i18n/locales/*.json dist/locales/");
+    expect(electrobunConfig.build?.copy?.["dist/locales"]).toBe("locales");
+    for (const dest of Object.values(electrobunConfig.build?.copy ?? {})) {
+      expect(dest.startsWith("/")).toBe(false);
+      expect(dest.split("/")).not.toContain("..");
+    }
+  });
+
+  test("resolveAppPaths points Main at that folder, and JSLAB_LOCALES_DIR overrides it for dev and tests", () => {
+    const base = { resourcesFolder: "/R", userData: "/U", execPath: "/bun", env: {} };
+    expect(resolveAppPaths(base).localesDir).toBe("/R/app/locales");
+    expect(resolveAppPaths({ ...base, env: { JSLAB_LOCALES_DIR: "/tmp/loc" } }).localesDir).toBe("/tmp/loc");
+  });
+});

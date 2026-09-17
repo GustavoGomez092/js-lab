@@ -57,6 +57,11 @@ export interface SessionStoreOptions {
   tabDefaults?: () => Partial<TabState>;
   /** Timer-path write failures (as-built createDebouncedWriter onError). */
   onWriteError?: (error: unknown) => void;
+  /**
+   * Spec §7.5: the welcome tab's content, applied only on a genuinely first launch -- no session.json and no
+   * backup (R-M5a-5). A corrupt or recovered file is never a first run, so a user's tabs are never replaced.
+   */
+  firstRun?: { title: string; content: string; language: Language };
 }
 
 /** A repaired tab's old buffer is moved only when its old id can't escape the buffers folder (Task 4 Step 11). */
@@ -131,6 +136,26 @@ export class SessionStore {
       primary,
       corruptCopy,
     );
+    // R-M5a-5: `loadJson` reports this exact pair only when neither session.json nor session.json.bak could be
+    // read. A corrupt primary recovers to "defaults" and a good backup to "backup" -- neither is a first launch,
+    // so a returning user's tabs are never replaced by the sample.
+    if (primary === "missing" && recovered === "none" && options.firstRun) {
+      const [onlyId] = session.tabOrder;
+      const tab = onlyId ? session.tabs[onlyId] : undefined;
+      // Only ever the single tab `defaultSession` just created for an empty folder.
+      if (onlyId && tab && session.tabOrder.length === 1) {
+        const welcome: TabState = {
+          ...tab,
+          title: options.firstRun.title,
+          titleIsCustom: true,
+          language: options.firstRun.language,
+        };
+        // `store.session` is this same object graph, and nothing has been committed, scheduled or written yet, so
+        // amending it here is equivalent to having created the tab this way -- true at this point and nowhere else.
+        session.tabs[onlyId] = welcome;
+        await writeFileAtomic(join(dataDir, "buffers", bufferFileName(welcome)), options.firstRun.content);
+      }
+    }
     // Task 4 Step 11 (R-M1-18): a repaired tab keeps its content when its old id is a plain file name.
     const repairedTabIds = report?.repairedTabIds ?? [];
     for (const [from, to] of repairedTabIds) {

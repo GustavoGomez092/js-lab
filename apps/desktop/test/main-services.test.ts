@@ -9,6 +9,7 @@ import { createMainServices, type MainServices } from "../src/main/main-services
 import { createRpcHandlers, InvalidPayloadError } from "../src/main/rpc-handlers";
 import type { BunRunnerProcess, RunnerSpawnConfig } from "../src/main/runs/bun-runner-process";
 import type { NpmSpawnOptions } from "../src/main/services/npm-spawn";
+import { WELCOME_CODE, WELCOME_TITLE } from "../src/main/welcome";
 
 let dir = "";
 let services: MainServices | null = null;
@@ -59,7 +60,15 @@ describe("main services (composition root)", () => {
     });
     const payload = await handlers.requests["app.bootstrap"]();
     expect(payload.session.tabOrder).toHaveLength(1);
-    expect(payload.buffers).toEqual({ [payload.session.activeTabId]: "" });
+    // Task 10 (spec §7.5): this test's `dir` is a fresh mkdtemp, so it is a genuinely first launch. This is the
+    // only place that proves the composition root actually hands SessionStore the welcome tab -- session-store's
+    // own tests pass `firstRun` themselves and so cannot catch main-services.ts forgetting to.
+    expect(payload.buffers).toEqual({ [payload.session.activeTabId]: WELCOME_CODE });
+    expect(payload.session.tabs[payload.session.activeTabId]).toMatchObject({
+      title: WELCOME_TITLE,
+      titleIsCustom: true,
+      language: "tsx",
+    });
     expect(() => handlers.requests["run.start"]({ tabId: payload.session.activeTabId, code: 1 })).toThrow(
       InvalidPayloadError,
     );

@@ -22,6 +22,7 @@ import { SettingsStore } from "./services/settings-store";
 import { TypesService } from "./services/types-service";
 import { strings } from "./strings";
 import { CachingTransformHost, type TransformHost, WorkerTransformHost } from "./transform/transform-host";
+import { WELCOME_CODE, WELCOME_TITLE } from "./welcome";
 
 export interface MainServicesOptions {
   paths: AppPaths;
@@ -107,6 +108,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     onWriteError: (error) => log(strings.log.settingsWriteFailed, String(error)),
   });
   const session = await SessionStore.open(paths.dataDir, {
+    firstRun: { title: WELCOME_TITLE, content: WELCOME_CODE, language: "tsx" },
     tabDefaults: () => ({
       language: settings.current.run.defaultLanguage,
       runtime: effectiveRuntime(settings.current.run.defaultRuntime),

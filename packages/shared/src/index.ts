@@ -6,4 +6,5 @@ export * from "./migrations";
 export * from "./packages";
 export * from "./session";
 export * from "./settings";
+export * from "./snippets";
 export * from "./tabs";

@@ -1,9 +1,22 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { type ThemeDefinition, TOKEN_NAMES } from "@jslab/themes";
+import { readBoundedText } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
+import { ZIP_LIMITS } from "../themes/zip";
 
 const SUFFIX = ".jslab-theme.json";
+
+/**
+ * A theme file's byte cap, derived rather than chosen: every file in this folder was written by `save()` below
+ * from a theme that reached it through the importer, and the importer refuses anything over
+ * `ZIP_LIMITS.maxTotalBytes` (`MAX_IMPORT_BYTES` in `rpc/theme-handlers.ts`, derived from the same constant). So
+ * the reader and the writer cannot disagree -- the R-M4-BOUNDED-6 rule that a writer must never produce a file its
+ * own reader refuses. Taken from `../themes/zip` directly, not from `theme-handlers`, which imports this module.
+ *
+ * A refusal costs one theme and never startup: the catch below already treats any failure as "skip this file".
+ */
+const MAX_THEME_FILE_BYTES = ZIP_LIMITS.maxTotalBytes;
 
 /**
  * The ids `slugThemeId` produces and `commandForMenuAction` accepts (Finding T3). The id also becomes the file's
@@ -74,7 +87,7 @@ export class ThemeStore {
     for (const file of files) {
       let parsed: ThemeDefinition | null = null;
       try {
-        parsed = parseTheme(JSON.parse(await readFile(join(themesDir, file), "utf8")));
+        parsed = parseTheme(JSON.parse(await readBoundedText(join(themesDir, file), MAX_THEME_FILE_BYTES)));
       } catch {
         parsed = null;
       }

@@ -208,6 +208,10 @@ const ALLOWED: Record<string, { reads: number; why: string }> = {
     reads: 1,
     why: "the one remaining match is a Bun.file().exists() probe, which stats and never reads a byte. The manifest read that used to sit beside it is now bounded at MAX_PACKAGE_JSON_BYTES, like the third-party manifests on this same path (F4)",
   },
+  [`${MAIN_ROOT}/cli/install.ts`]: {
+    reads: 1,
+    why: "the same shape as npm-service's entry above: `pathExists` is a Bun.file().exists() probe, which stats the path and never reads a byte, so neither hazard applies -- there is no allocation to bound, and `exists()` on a FIFO answers from the directory entry instead of blocking on a writer",
+  },
   "packages/runner-web/src/node-bridge.ts": {
     reads: 2,
     why: "not filesystem reads at all: this is the browser-side Node bridge, and its `readFile` is an RPC shim forwarding to Main's web-node-handlers (F1). The two matches are an interface signature and that shim's own method definition",

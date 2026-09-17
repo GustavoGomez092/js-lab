@@ -128,6 +128,21 @@ describe("OutputPanel", () => {
     }
   });
 
+  // Item 8: the keyboard reaches the same store state the mouse does. EntryRow's own test pins that it reports the
+  // line; this pins that the report is actually wired through to the editor's hovered-line decoration, which is
+  // what the mouse path has always had.
+  test("focusing a row's line badge sets the hovered line, and blurring clears it (item 8)", () => {
+    const store = setup();
+    const badge = screen.getAllByRole("button", { name: /^L\d+$/ })[0];
+    if (!badge) throw new Error("expected at least one line badge");
+
+    act(() => badge.focus());
+    expect(store.getState().hoveredLine).toBe(1);
+
+    act(() => badge.blur());
+    expect(store.getState().hoveredLine).toBeNull();
+  });
+
   // T19A-m3 / review rec 2: a filter that hides everything, and a tab that hasn't run, say so instead of a blank
   // scroller.
   test("a zero-match filter offers Show all, and a tab with no output yet says how to run (T19A-m3)", () => {

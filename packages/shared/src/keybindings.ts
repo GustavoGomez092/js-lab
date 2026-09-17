@@ -252,6 +252,11 @@ export const DEFAULT_KEYBINDINGS: readonly KeybindingRule[] = [
   { key: "cmd+0", command: "view.zoomReset" },
   { key: "alt+cmd+\\", command: "view.toggleLayout" },
   { key: "alt+cmd+w", command: "view.toggleWebView" },
+  // UI item 2. ⌥⌘ is already this app's panel family (⌥⌘W Web View, ⌥⌘\ layout), and ⌥⌘O / ⌥⌘E were both unused
+  // in every context. Deliberately no `when`: ⌥⌘O has to fire from the editor and ⌥⌘E from the output, which are
+  // the only two journeys either chord has, so a focus clause would defeat both.
+  { key: "alt+cmd+o", command: "view.focusOutput" },
+  { key: "alt+cmd+e", command: "view.focusEditor" },
   { key: "ctrl+cmd+f", command: "view.toggleFullScreen" },
   { key: "cmd+shift+p", command: "view.commandPalette" },
 ];

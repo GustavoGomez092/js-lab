@@ -5,7 +5,7 @@ import type { SessionStore } from "../services/session-store";
 
 export interface OpenServiceDeps {
   session: Pick<SessionStore, "createTab" | "findTabByPath" | "activateTab" | "patchTab">;
-  readFile(path: string): Promise<string>;
+  readBoundedFile(path: string): Promise<string>;
   /** `run.defaultLanguage` / `run.defaultRuntime` at the moment of the call (spec §8, §16.2). */
   defaults(): { language: Language; runtime: Runtime };
   /** The existing `file.opened` push; the UI's `handleOpened` already renders it. */
@@ -54,7 +54,7 @@ export function createOpenService(deps: OpenServiceDeps): (params: CliOpenParams
       }
       let content: string;
       try {
-        content = await deps.readFile(path);
+        content = await deps.readBoundedFile(path);
       } catch (error) {
         deps.log("The jslab CLI couldn't read a file", { path, error: String(error) });
         errors.push(`${path} couldn't be read.`);

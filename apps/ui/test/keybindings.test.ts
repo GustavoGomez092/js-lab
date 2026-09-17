@@ -85,4 +85,17 @@ describe("KeybindingResolver", () => {
     expect(resolver.resolve(key("KeyK", { metaKey: true }), base)).toBe("output.clear");
     expect(resolved.filter((binding) => binding.command === "tab.new" && binding.key === "cmd+k")).toEqual([]);
   });
+
+  // UI item 2: the whole point of these two chords is the round trip, so each must resolve from the side it is
+  // meant to be pressed on. A `when: editorFocus` on ⌥⌘O (the obvious-looking choice) would fail the second pair.
+  test("the focus chords resolve from both editor and output focus (UI item 2)", () => {
+    const resolver = new KeybindingResolver(resolveKeybindings(DEFAULT_KEYBINDINGS, []));
+    const focusOutput = key("KeyO", { metaKey: true, altKey: true });
+    const focusEditor = key("KeyE", { metaKey: true, altKey: true });
+
+    expect(resolver.resolve(focusOutput, { ...base, editorFocus: true })).toBe("view.focusOutput");
+    expect(resolver.resolve(focusEditor, { ...base, editorFocus: true })).toBe("view.focusEditor");
+    expect(resolver.resolve(focusOutput, { ...base, outputFocus: true })).toBe("view.focusOutput");
+    expect(resolver.resolve(focusEditor, { ...base, outputFocus: true })).toBe("view.focusEditor");
+  });
 });

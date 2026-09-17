@@ -48,6 +48,23 @@ describe("EntryRow", () => {
     expect(onHover.mock.calls).toEqual([[3], [null]]);
   });
 
+  // Item 8, pointer/keyboard parity. The mouse path is already covered by the test above, so this pins only what
+  // was missing: a keyboard user tabbing to a row's line badge got no indication of which editor line the row
+  // belongs to -- on the app's signature feature, line-anchored output. Driven with a real focus()/blur() rather
+  // than a synthetic event, because "can a keyboard actually reach it" is the whole question.
+  test("focusing the line badge reports its line, and blurring clears it (item 8)", () => {
+    const onHover = mock((_line: number | null) => {});
+    renderEntry(
+      { kind: "console", level: "log", line: 8, groupDepth: 0, args: [{ t: "string", v: "hi" }], seq: 1, t: 0 },
+      { onHover },
+    );
+    const badge = screen.getByRole("button", { name: "L8" });
+    badge.focus();
+    expect(document.activeElement).toBe(badge);
+    badge.blur();
+    expect(onHover.mock.calls).toEqual([[8], [null]]);
+  });
+
   test("styles console levels and indents groups", () => {
     renderEntry({ kind: "console", level: "warn", groupDepth: 2, args: [{ t: "string", v: "careful" }], seq: 1, t: 0 });
     const row = screen.getByTestId("entry");

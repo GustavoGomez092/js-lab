@@ -23,7 +23,7 @@ function setup(files: Record<string, string> = {}, open: Record<string, string> 
         patched.push({ tabId, patch });
       }),
     },
-    readFile: mock(async (path: string) => {
+    readBoundedFile: mock(async (path: string) => {
       const content = files[path];
       if (content === undefined) throw new Error("ENOENT");
       return content;

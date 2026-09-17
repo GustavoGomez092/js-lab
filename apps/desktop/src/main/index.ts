@@ -1,5 +1,5 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { arch, homedir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -11,6 +11,7 @@ import type {
   StartupNotice,
   ViewMessages,
 } from "@jslab/rpc-schema";
+import { MAX_OPEN_FILE_BYTES } from "@jslab/rpc-schema";
 import { DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
 import { listThemes, registerUserThemes } from "@jslab/themes";
 import Electrobun, {
@@ -32,7 +33,7 @@ import type { SocketServer } from "./cli/socket-server";
 import { startCliSocket } from "./cli/start-cli-socket";
 import { createUiDispatch } from "./cli/ui-dispatch";
 import { createErrorPolicy } from "./error-policy";
-import { readBoundedText } from "./fs/bounded-read";
+import { readBoundedBytes, readBoundedText } from "./fs/bounded-read";
 import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-service";
 import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
@@ -57,7 +58,7 @@ import { createNpmHandlers } from "./rpc/npm-handlers";
 import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
 import { createSnippetHandlers } from "./rpc/snippet-handlers";
-import { createThemeHandlers } from "./rpc/theme-handlers";
+import { createThemeHandlers, MAX_IMPORT_BYTES } from "./rpc/theme-handlers";
 import { createTypesHandlers } from "./rpc/types-handlers";
 import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
@@ -498,7 +499,7 @@ async function start(): Promise<void> {
               }),
         // R-M5d-B3: the size is what lets an oversized file be refused before it is read into memory.
         fileSize: async (path) => (await stat(path).catch(() => null))?.size ?? null,
-        readFileBytes: (path) => Bun.file(path).bytes(),
+        readFileBytes: (path) => readBoundedBytes(path, MAX_IMPORT_BYTES),
         onChanged: (all) => {
           registerUserThemes(all);
           rpc.send["theme.changed"]({ themes: [...all] });
@@ -686,7 +687,7 @@ async function start(): Promise<void> {
   // indistinguishable from one the user opened themselves.
   const openTabs = createOpenService({
     session,
-    readFile: (path) => readFile(path, "utf8"),
+    readBoundedFile: (path) => readBoundedText(path, MAX_OPEN_FILE_BYTES),
     defaults: () => ({ language: settings.current.run.defaultLanguage, runtime: settings.current.run.defaultRuntime }),
     announce: (payload) => {
       if (mainWindow.isOpen()) rpc.send["file.opened"](payload);

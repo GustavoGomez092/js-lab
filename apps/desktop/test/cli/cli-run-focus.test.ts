@@ -58,7 +58,7 @@ function wire(session: SessionStore, files: Record<string, string>, windowOpen: 
 
   const openTabs = createOpenService({
     session,
-    readFile: async (path) => {
+    readBoundedFile: async (path) => {
       const content = files[path];
       if (content === undefined) throw new Error("ENOENT");
       return content;

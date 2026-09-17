@@ -22,20 +22,18 @@ export function computeTabPatch(before: TabState, next: TabState): Parameters<Ma
     next.layout.tiles.consoleSize !== before.layout.tiles.consoleSize ||
     next.layout.tiles.order.join(",") !== before.layout.tiles.order.join(",") ||
     next.layout.muted !== before.layout.muted;
-  if (
-    next.language === before.language &&
-    next.runtime === before.runtime &&
-    !layoutChanged &&
-    next.title === before.title &&
-    next.titleIsCustom === before.titleIsCustom
-  ) {
+  const titleChanged = next.title !== before.title || next.titleIsCustom !== before.titleIsCustom;
+  if (next.language === before.language && next.runtime === before.runtime && !layoutChanged && !titleChanged) {
     return null;
   }
   return {
     language: next.language,
     runtime: next.runtime,
     layout: next.layout,
-    title: next.title,
-    titleIsCustom: next.titleIsCustom,
+    // M5c F3: the title goes out ONLY when it changed here. Sending it on every tracked change meant one unrelated
+    // edit (a single divider drag) pushed this store's title back to Main, silently REVERTING a rename Main had made
+    // on its own -- `jslab --title` on an already-open file, whose `file.opened` carries no entry for that tab.
+    // `tabPatchSchema.patch` is `.partial()`, so an omitted title leaves Main's own alone.
+    ...(titleChanged ? { title: next.title, titleIsCustom: next.titleIsCustom } : {}),
   };
 }

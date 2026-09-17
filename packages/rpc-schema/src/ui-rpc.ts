@@ -523,6 +523,13 @@ export type ViewMessages = {
   "npm.log": { opId: string; text: string };
   "npm.changed": NpmListResult;
   "wd.changed": { tabId: string; tab: TabState };
+  /**
+   * Spec §16.3: a tab Main changed on its own, so the UI's store can follow. `jslab --title` on an ALREADY-OPEN file
+   * is the first sender -- `file.opened` announces only tabs that were just created, and the UI's `openTab` ignores
+   * an id it already holds, so without this the tab bar kept the old title and the UI's own `tab.patch` pushed that
+   * stale title back over the rename. Same shape and same UI handler (`applyTabUpdate`) as `wd.changed`.
+   */
+  "tab.updated": { tabId: string; tab: TabState };
   "app.flushState": Record<string, never>;
   /**
    * M4 §5.12: make sure this tab has a live `<electrobun-webview>`, creating one if the tab's own Web View toggle

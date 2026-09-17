@@ -573,6 +573,9 @@ async function start(): Promise<void> {
     announce: (payload) => {
       if (mainWindow.isOpen()) rpc.send["file.opened"](payload);
     },
+    updated: (payload) => {
+      if (mainWindow.isOpen()) rpc.send["tab.updated"](payload);
+    },
     present: ({ run }) => {
       // Focus (or reopen) the window first; a closed window's UI bootstraps the new tabs from the session it just
       // joined, so nothing is lost when `file.opened` above was skipped.

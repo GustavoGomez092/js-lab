@@ -1,5 +1,5 @@
 import type { CliOpenParams, CliOpenResult, FileOpened, TabWithContent } from "@jslab/rpc-schema";
-import { contentHash, type Language, languageForPath, type Runtime } from "@jslab/shared";
+import { contentHash, type Language, languageForPath, type Runtime, type TabState } from "@jslab/shared";
 import type { Log } from "../rpc/validate";
 import type { SessionStore } from "../services/session-store";
 
@@ -10,6 +10,12 @@ export interface OpenServiceDeps {
   defaults(): { language: Language; runtime: Runtime };
   /** The existing `file.opened` push; the UI's `handleOpened` already renders it. */
   announce(payload: FileOpened): void;
+  /**
+   * The `tab.updated` push, for a tab Main changed on its own. `file.opened` cannot carry it: it announces tabs that
+   * were just created, and the UI's `openTab` ignores an id it already holds (store.ts). Same shape and same UI
+   * handler (`applyTabUpdate`) as `wd.changed`.
+   */
+  updated(payload: { tabId: string; tab: TabState }): void;
   /** Focus (or reopen) the window, then run the now-active tab when `--run` was passed. */
   present(options: { run: boolean }): void;
   log: Log;
@@ -37,7 +43,12 @@ export function createOpenService(deps: OpenServiceDeps): (params: CliOpenParams
         // R-M5c-TITLE-1: `--title` names the tab the user asked for, so an already-open tab takes it too. Returning
         // here without applying it would discard a flag the user typed, with no diagnostic anywhere.
         if (params.title !== undefined) {
-          await deps.session.patchTab(existing.id, { title: params.title, titleIsCustom: true });
+          const rename = { title: params.title, titleIsCustom: true } as const;
+          await deps.session.patchTab(existing.id, rename);
+          // ...and tell the UI, or only Main knows. The tab bar would keep showing the old title, and the UI's own
+          // `tab.patch` -- which used to carry title/titleIsCustom on every tracked change -- pushed that stale
+          // title straight back over this rename on the next divider drag (M5c F3).
+          deps.updated({ tabId: existing.id, tab: { ...existing, ...rename } });
         }
         continue;
       }

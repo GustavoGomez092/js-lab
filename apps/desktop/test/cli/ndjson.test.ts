@@ -17,6 +17,15 @@ describe("LineBuffer", () => {
     // The reason the code bound is lower: escaping and the `{"v":1,"id":…,"method":…}` envelope both add to the line.
     expect(MAX_CLI_CODE_CHARS).toBeLessThan(MAX_CLI_LINE_CHARS);
   });
+
+  test("a whole oversized line arriving in ONE chunk is capped too, not just the pending remainder", () => {
+    // The cap used to be checked only on what was left PENDING after popping completed lines, so a complete line
+    // that arrived inside a single chunk passed straight through and a request could exceed it by up to one chunk.
+    // `client.ts`'s own guard covers a `jslab` build; nothing else writing to the socket was bounded by this.
+    expect(() => new LineBuffer().push(`${"x".repeat(MAX_CLI_LINE_CHARS + 1)}\n`)).toThrow("Request line too long");
+    // The boundary itself still gets through, so the cap did not move.
+    expect(new LineBuffer().push(`${"x".repeat(MAX_CLI_LINE_CHARS)}\n`)).toHaveLength(1);
+  });
 });
 
 describe("assertSocketPath", () => {

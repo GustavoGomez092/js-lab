@@ -19,6 +19,7 @@ export const VIEW_MESSAGES = [
   "npm.log",
   "npm.changed",
   "wd.changed",
+  "tab.updated",
   "app.flushState",
   "webRunner.ensure",
   "webRunner.execute",

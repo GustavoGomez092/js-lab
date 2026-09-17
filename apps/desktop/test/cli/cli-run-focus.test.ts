@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileOpened } from "@jslab/rpc-schema";
-import { type CommandId, createTab } from "@jslab/shared";
+import { type CommandId, createTab, type TabState } from "@jslab/shared";
 import { createOpenService } from "../../src/main/cli/open-service";
 import { createUiDispatch } from "../../src/main/cli/ui-dispatch";
 import { SessionStore } from "../../src/main/services/session-store";
@@ -43,6 +43,7 @@ function wire(session: SessionStore, files: Record<string, string>, windowOpen: 
   const events: string[] = [];
   const sent: { command: CommandId; args?: unknown }[] = [];
   const pushed: FileOpened[] = [];
+  const renamed: { tabId: string; tab: TabState }[] = [];
 
   const cliDispatch = createUiDispatch({
     isOpen: () => isOpen,
@@ -70,6 +71,14 @@ function wire(session: SessionStore, files: Record<string, string>, windowOpen: 
         pushed.push(payload);
       }
     },
+    updated: (payload) => {
+      // index.ts -- guarded exactly like `file.opened`: a closed window gets no push and bootstraps from the
+      // session it joins instead.
+      if (isOpen) {
+        events.push("tab.updated");
+        renamed.push(payload);
+      }
+    },
     present: ({ run }) => {
       isOpen = true;
       if (run) {
@@ -80,7 +89,7 @@ function wire(session: SessionStore, files: Record<string, string>, windowOpen: 
     log: () => {},
   });
 
-  return { openTabs, cliDispatch, events, sent, pushed };
+  return { openTabs, cliDispatch, events, sent, pushed, renamed };
 }
 
 describe("the CLI --run gate across open-service, index wiring and ui-dispatch", () => {
@@ -148,5 +157,24 @@ describe("the CLI --run gate across open-service, index wiring and ui-dispatch",
     expect(w.events).toEqual(["file.opened", "dispatch:run.start", "send:run.start"]);
     expect(w.pushed[0]?.focusTabId).toBe(tabA.id);
     expect(store.session.activeTabId).toBe(tabA.id);
+  });
+
+  test("--title on an already-open file renames it in the REAL session AND tells the UI (M5c F3)", async () => {
+    const store = await openStore();
+    const tabA = await store.createTab({ filePath: "/w/a.ts", content: "A" });
+    expect(store.session.tabs[tabA.id]?.title).not.toBe("renamed-by-cli");
+
+    const w = wire(store, { "/w/a.ts": "A" }, true);
+    await w.openTabs({ files: ["/w/a.ts"], title: "renamed-by-cli" });
+
+    // The real `SessionStore.patchTab` applied the rename...
+    expect(store.session.tabs[tabA.id]).toMatchObject({ title: "renamed-by-cli", titleIsCustom: true });
+    // ...and `file.opened` cannot be what tells the UI: an already-open file creates no tab, so it announces none.
+    expect(w.pushed[0]?.tabs).toEqual([]);
+    // `tab.updated` is the only carrier, and it goes out before the announcement.
+    expect(w.events).toEqual(["tab.updated", "file.opened"]);
+    expect(w.renamed).toEqual([
+      { tabId: tabA.id, tab: expect.objectContaining({ title: "renamed-by-cli", titleIsCustom: true }) },
+    ]);
   });
 });

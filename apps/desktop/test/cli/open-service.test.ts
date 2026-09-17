@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { FileOpened } from "@jslab/rpc-schema";
-import { createTab } from "@jslab/shared";
+import { createTab, type TabState } from "@jslab/shared";
 import { createOpenService, type OpenServiceDeps } from "../../src/main/cli/open-service";
 import type { TabPatch } from "../../src/main/services/session-store";
 
@@ -9,6 +9,7 @@ function setup(files: Record<string, string> = {}, open: Record<string, string> 
   const presented: { run: boolean }[] = [];
   const activated: string[] = [];
   const patched: { tabId: string; patch: TabPatch }[] = [];
+  const updates: { tabId: string; tab: TabState }[] = [];
   let next = 0;
   const deps = {
     session: {
@@ -29,10 +30,11 @@ function setup(files: Record<string, string> = {}, open: Record<string, string> 
     }),
     defaults: () => ({ language: "typescript" as const, runtime: "bun" as const }),
     announce: (payload: FileOpened) => announced.push(payload),
+    updated: (payload: { tabId: string; tab: TabState }) => updates.push(payload),
     present: (options: { run: boolean }) => presented.push(options),
     log: mock(() => {}),
   } satisfies OpenServiceDeps;
-  return { deps, announced, presented, activated, patched, open: createOpenService(deps) };
+  return { deps, announced, presented, activated, patched, updates, open: createOpenService(deps) };
 }
 
 describe("the CLI open service", () => {
@@ -148,10 +150,22 @@ describe("the CLI open service", () => {
   });
 
   test("without --title an already-open tab's title is left alone", async () => {
-    const { deps, patched, open } = setup({ "/w/a.ts": "x" }, { "/w/a.ts": "already" });
+    const { deps, patched, updates, open } = setup({ "/w/a.ts": "x" }, { "/w/a.ts": "already" });
     await open({ files: ["/w/a.ts"] });
     expect(patched).toEqual([]);
+    expect(updates).toEqual([]);
     expect(deps.session.patchTab).not.toHaveBeenCalled();
+  });
+
+  test("the rename of an already-open tab is PUSHED to the UI, or only Main knows it (M5c F3)", async () => {
+    // `file.opened` carries no entry for an already-open tab, so this push is the UI's ONLY notice of the rename.
+    // Without it the tab bar keeps the old title, and the UI's own `tab.patch` used to push that stale title back
+    // over the rename on the next unrelated edit -- Main silently reverted.
+    const { updates, open } = setup({ "/w/a.ts": "x" }, { "/w/a.ts": "already" });
+    await open({ files: ["/w/a.ts"], title: "renamed" });
+    expect(updates).toEqual([
+      { tabId: "already", tab: expect.objectContaining({ id: "already", title: "renamed", titleIsCustom: true }) },
+    ]);
   });
 
   test("code runs only when run is passed (§16.3)", async () => {

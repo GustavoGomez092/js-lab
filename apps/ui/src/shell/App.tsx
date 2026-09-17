@@ -334,6 +334,9 @@ export function App({
       // Task 24: the working directory changed (wd.pick/wd.clear); the editor's own subscription invalidates
       // the type feeder for the active tab once the store's tab is updated (Editor.tsx, unchanged here).
       api.on("wd.changed", ({ tab }) => store.getState().applyTabUpdate(tab)),
+      // Spec §16.3: a tab Main changed on its own -- `jslab --title` on an already-open file. The same store action
+      // `wd.changed` above and `file.saved` below use; without it the UI never learns the rename (M5c F3).
+      api.on("tab.updated", ({ tab }) => store.getState().applyTabUpdate(tab)),
       api.on("file.opened", (payload) => void flows.handleOpened(payload)),
       api.on("file.saved", (payload) => flows.handleSaved(payload)),
       api.on("file.saveCancelled", (payload) => flows.handleSaveCancelled(payload)),

@@ -44,11 +44,11 @@ function driveResolve() {
   };
   return {
     builder,
-    resolve: async (path: string) => {
+    resolve: async (path: string, importer = join(workingDirectory, "entry.js")) => {
       if (!callback) throw new Error("onResolve was never registered");
       return callback({
         path,
-        importer: join(workingDirectory, "entry.js"),
+        importer,
         namespace: "file",
         resolveDir: workingDirectory,
         kind: "import-statement",
@@ -94,6 +94,41 @@ describe("browserEntryFor", () => {
 });
 
 describe("jslabResolve", () => {
+  /**
+   * F1. On a resolution *miss* this hook re-reads `args.importer` to position its "Cannot find module" error, and
+   * that importer is third-party- or user-controlled: the vendor build resolves every transitive specifier, so it
+   * can sit inside `node_modules` or the user's working directory. The read was a bare `readFileSync`, excused in
+   * the unbounded-reads allowlist as "best-effort inside try/catch" -- a recoverability argument that answers
+   * neither hazard, because `readFileSync` on a FIFO *blocks* and no try/catch can rescue a blocking syscall.
+   * Measured before the fix by driving this exact hook with a FIFO importer under a hard alarm: it never returned
+   * and had to be killed.
+   */
+  test("positions a miss from a regular importer, and refuses a FIFO one instead of hanging the build", async () => {
+    // Control first: without it, the FIFO assertion below would pass for a hook that never read the importer.
+    const real = join(workingDirectory, "entry.js");
+    await writeFile(real, 'import x from "jslab-absent-pkg";\n');
+    const positioned: Array<{ line?: number }> = [];
+    const ok = driveResolve();
+    jslabResolve({ workingDirectory, packagesNodeModules }, new Set<string>(), (error) => positioned.push(error)).setup(
+      ok.builder as never,
+    );
+    await expect(ok.resolve("jslab-absent-pkg", real)).rejects.toThrow("unresolved bare specifier");
+    expect(positioned[0]?.line).toBe(1);
+
+    // The same hook, with a FIFO importer. This read is synchronous: a regression does not time out, it parks the
+    // thread and hangs the whole run, which is exactly why the refusal belongs in the reader and not in a timeout.
+    const fifo = join(root, "fifo-entry.js");
+    expect(await Bun.spawn(["mkfifo", fifo]).exited).toBe(0);
+    const piped: Array<{ line?: number }> = [];
+    const blocked = driveResolve();
+    jslabResolve({ workingDirectory, packagesNodeModules }, new Set<string>(), (error) => piped.push(error)).setup(
+      blocked.builder as never,
+    );
+    await expect(blocked.resolve("jslab-absent-pkg", fifo)).rejects.toThrow("unresolved bare specifier");
+    // The error still reports, just without a position -- the same fallback an unreadable importer already took.
+    expect(piped[0]?.line).toBeUndefined();
+  });
+
   test("resolves a package that exists only in the working directory's node_modules", async () => {
     await writePackage(join(workingDirectory, "node_modules"), "left-pad", "export default 'from-wd';");
     const imports = new Set<string>();

@@ -69,14 +69,6 @@ const WORKSPACE_SPECIFIER = /"@jslab\/([a-z0-9-]+)/g;
  * third-party controlled.
  */
 const ALLOWED: Record<string, { reads: number; why: string }> = {
-  [`${MAIN_ROOT}/bundling/polyfill-plugin.ts`]: {
-    reads: 1,
-    why: "re-reads the importer's own source only to position an error message; best-effort inside try/catch",
-  },
-  [`${MAIN_ROOT}/bundling/resolve-plugin.ts`]: {
-    reads: 1,
-    why: "same best-effort importer re-read for error positioning; its package.json read is bounded (F4)",
-  },
   [`${MAIN_ROOT}/bundling/vendor-cache.ts`]: {
     reads: 3,
     why: "JSLab's own vendor-chunk cache files, written by JSLab into its own data dir",
@@ -123,16 +115,29 @@ const ALLOWED: Record<string, { reads: number; why: string }> = {
  * (`Bun.file(path).text()`) also could not refuse a FIFO, and a `.css` resolved out of `node_modules` hung the
  * build forever. Splitting the two exemptions apart is the point -- everything here still goes through the shared
  * reader's `O_NONBLOCK` open and `isFile` check, so only the size is unbounded.
+ *
+ * The two bundling plugins joined it for exactly the same reason, one review later: their importer re-reads sat in
+ * ALLOWED excused as "best-effort inside try/catch", which is a *recoverability* argument and answers neither
+ * hazard. Measured: `readFileSync` on a FIFO blocks, so no try/catch can rescue it, and both hooks were driven with
+ * a FIFO importer and had to be killed by a hard alarm.
  */
 const SIZE_EXEMPT: Record<string, { reads: number; why: string }> = {
   [`${MAIN_ROOT}/bundling/css-plugin.ts`]: {
     reads: 1,
     why: "a .css Bun already resolved for this build: no useful byte cap exists, since a legitimately large stylesheet must still bundle. Only the size bound is waived; a FIFO or directory is still refused",
   },
+  [`${MAIN_ROOT}/bundling/polyfill-plugin.ts`]: {
+    reads: 1,
+    why: "re-reads the importing module's own source only to position an error message. No byte cap is meaningful: Bun has already read and parsed that same file to see the import, so a cap could only refuse a file the build itself accepted. Only the size is waived -- a FIFO importer is refused, and falls through to the unpositioned error",
+  },
+  [`${MAIN_ROOT}/bundling/resolve-plugin.ts`]: {
+    reads: 1,
+    why: "the same importer re-read for error positioning, on a resolution miss, where the importer is third-party- or user-controlled. No byte cap is meaningful for the same reason; only the size is waived, and a FIFO importer is refused rather than blocking Main's loop. Its package.json read is separately bounded (F4)",
+  },
 };
 
-/** The size-waiving reader. Anything calling it must carry a SIZE_EXEMPT reason. */
-const UNBOUNDED_SIZE = [/readRegularFileText\s*\(/];
+/** The size-waiving readers. Anything calling one must carry a SIZE_EXEMPT reason. */
+const UNBOUNDED_SIZE = [/readRegularFileText(?:Sync)?\s*\(/];
 
 function sourceFilesUnder(root: string): string[] {
   const absolute = join(REPO, root);

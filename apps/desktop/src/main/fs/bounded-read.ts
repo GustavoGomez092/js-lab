@@ -137,6 +137,18 @@ export function readBoundedTextSync(path: string, maxBytes: number): string {
   return readBoundedBytesSync(path, maxBytes).toString("utf8");
 }
 
+/**
+ * `readRegularFileText`, synchronously — for the size-waiving callers that cannot await (Bun plugin hooks).
+ *
+ * The same warning applies as to the async twin, and more sharply: "unbounded" is a statement about the *size*
+ * only. The `O_NONBLOCK` open and the `isFile` check on the opened handle still apply, so a FIFO at the path is
+ * refused instead of parking Main's loop forever. Prefer `readBoundedTextSync` unless a cap genuinely cannot be
+ * chosen.
+ */
+export function readRegularFileTextSync(path: string): string {
+  return readBoundedTextSync(path, Number.POSITIVE_INFINITY);
+}
+
 /** `readBoundedTextOrNull`, synchronously. */
 export function readBoundedTextSyncOrNull(path: string, maxBytes: number): string | null {
   try {

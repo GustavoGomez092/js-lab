@@ -52,6 +52,12 @@ describe("application menu", () => {
     );
   });
 
+  test("the Edit menu offers Clear Output, wired to the output.clear command (OU-12)", () => {
+    // Parity OU-12 claims the Edit → Clear Output path, which had no menu-level assertion: the item exists in
+    // `menu.ts` and the command and its ⌘K binding are tested elsewhere, but nothing proved the menu reaches it.
+    expect(byLabel(buildMenu(model()), "Clear Output")).toMatchObject({ action: menuAction("output.clear") });
+  });
+
   test("the View menu offers the Web View tile toggle, checked and enabled from the active tab (WV-01, TF-19)", () => {
     const withTile = (runtime: "browser" | "bun", webviewVisible: boolean) => {
       const tab = createTab({ id: "t1", runtime });

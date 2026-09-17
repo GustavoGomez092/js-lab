@@ -3,6 +3,14 @@ import type { RuntimeAdapter } from "./adapter";
 
 export interface RuntimeRegistry {
   get(runtime: Runtime | undefined): RuntimeAdapter;
+  /**
+   * Every distinct registered adapter, de-duplicated by identity.
+   *
+   * For teardown that is not routed by a runtime: closing a tab has no run left to read a runtime from, and a tab
+   * can switch runtime mid-session, so one tabId may hold resources in more than one adapter. `get(undefined)`
+   * always resolves to Bun by design, which is why it cannot stand in here.
+   */
+  all(): RuntimeAdapter[];
 }
 
 /**
@@ -35,6 +43,13 @@ export function createRuntimeRegistry(
         log?.("Runtime has no registered adapter; falling back to Bun", { requestedRuntime: id });
       }
       return adapter ?? adapters.bun;
+    },
+    all() {
+      // A Set because one adapter may legitimately be registered under several runtime ids; a teardown must reach
+      // each adapter once, not once per key it answers to.
+      return [
+        ...new Set(Object.values(adapters).filter((adapter): adapter is RuntimeAdapter => adapter !== undefined)),
+      ];
     },
   };
 }

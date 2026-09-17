@@ -56,6 +56,35 @@ describe("createRuntimeRegistry", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
+  /**
+   * Final review, finding D. `RunCoordinator.disposeTab` had no runtime to route by and used
+   * `get(undefined)`, which always resolves to Bun -- so closing a browser tab called `BunAdapter.dispose` and
+   * never `WebAdapter.dispose`. `all()` is what lets a whole-tab teardown reach every adapter that might hold
+   * something for that tab.
+   */
+  test("all() lists every distinct registered adapter", () => {
+    const bun = fakeAdapter("bun");
+    const browser = fakeAdapter("browser");
+    const browserNode = fakeAdapter("browser-node");
+    const registry = createRuntimeRegistry({ bun, browser, "browser-node": browserNode });
+
+    expect(registry.all()).toHaveLength(3);
+    expect(new Set(registry.all())).toEqual(new Set([bun, browser, browserNode]));
+  });
+
+  test("all() de-duplicates one adapter registered under several runtimes", () => {
+    const bun = fakeAdapter("bun");
+    const registry = createRuntimeRegistry({ bun, browser: bun });
+
+    // Told once, not once per runtime id it answers to.
+    expect(registry.all()).toEqual([bun]);
+  });
+
+  test("all() lists just bun when nothing else is registered", () => {
+    const bun = fakeAdapter("bun");
+    expect(createRuntimeRegistry({ bun }).all()).toEqual([bun]);
+  });
+
   test("works with no log function passed at all (log is optional)", () => {
     const bun = fakeAdapter("bun");
     const registry = createRuntimeRegistry({ bun });

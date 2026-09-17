@@ -533,6 +533,31 @@ describe("WebAdapter", () => {
     }
   });
 
+  /**
+   * Final review, finding I. `stop()` stores its resolver in `#stopSettle` and arms `#stopTimer`. If `kill()`
+   * arrives first it clears that timer and runs `#killWebview()` -> `#retireHandle()`, and **no path ever calls
+   * `#stopSettle`** -- so the promise `stop()` returned never settles and is retained for the session's life.
+   * `BunRunSession` had exactly this bug and fixed it with `#settleStop()`, called from both `#onMessage` and
+   * `#onExit`; `WebRunSession` settles only on the page's own `state: "stopped"` and on the escalation timer.
+   *
+   * Harmless **today** only because the sole caller discards the promise (`run-coordinator.ts`'s
+   * `void run.handle.stop()`) -- the first caller to await it would hang. Fixed for the same reason the Bun one
+   * was: the bug is invisible to a fully green suite.
+   */
+  test("stop()'s promise settles even when kill() pre-empts it", async () => {
+    // A long grace, so the escalation timer cannot be what settles this: only kill() can.
+    const h = await createHarness({ stopGraceMs: 60_000 });
+    try {
+      const stopped = h.handle.stop();
+      h.handle.kill();
+
+      const outcome = await Promise.race([stopped.then(() => "settled"), Bun.sleep(500).then(() => "hung")]);
+      expect(outcome).toBe("settled");
+    } finally {
+      await rm(h.dir, { recursive: true, force: true });
+    }
+  });
+
   test("dispose() destroys the tab's webview", async () => {
     const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
     try {

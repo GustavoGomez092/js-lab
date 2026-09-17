@@ -28,6 +28,7 @@ import { createSocketMethods } from "./cli/socket-methods";
 import { type SocketServer, startSocketServer } from "./cli/socket-server";
 import { createErrorPolicy } from "./error-policy";
 import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-service";
+import { createTranslator } from "./i18n";
 import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
 import { createMainServices } from "./main-services";
@@ -385,6 +386,9 @@ async function start(): Promise<void> {
     Intl.DateTimeFormat().resolvedOptions().locale || process.env.LANG,
   );
   const localizedUrl = withLocale(url, locale);
+  // Spec §17: Main's own `t()`, reading the very locale files the UI ships (AppPaths.localesDir). Fixed for the
+  // life of this launch, like `locale` itself.
+  const t = createTranslator({ dir: paths.localesDir, locale });
   const displays = (): DisplayInfo[] => Screen.getAllDisplays();
   // A blocked web or mail link opens in the default browser; E2E runs record it instead (never the user's browser).
   const openExternal = (link: string) =>
@@ -498,7 +502,7 @@ async function start(): Promise<void> {
         displays(),
       );
       const created = new BrowserWindow({
-        title: strings.window.settingsTitle,
+        title: t("app.settingsWindowTitle"),
         url: settingsUrl,
         frame: restored.frame,
         // The nav column has a 40px top pad and is the drag region, which is built for the inset title bar (review M13).

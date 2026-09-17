@@ -24,6 +24,8 @@ export interface AppPaths {
   /** The web runner's third-party chunk cache (spec §5.12): `apps/desktop/src/main/bundling/vendor-cache.ts`. */
   vendorCacheDir: string;
   envFile: string;
+  /** Spec §4.5: the snippet library (§13.4). */
+  snippetsFile: string;
   socketPath: string;
   screenshotsDir: string;
   runnerBootstrap: string;
@@ -57,6 +59,7 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     npmHome: join(dataDir, "npm-home"),
     vendorCacheDir: join(dataDir, "cache", "vendor"),
     envFile: join(dataDir, "env.json"),
+    snippetsFile: join(dataDir, "snippets.json"),
     socketPath: join(dataDir, "jslab.sock"),
     screenshotsDir: join(dataDir, "e2e-screenshots"),
     runnerBootstrap: input.env.JSLAB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "bootstrap.js"),

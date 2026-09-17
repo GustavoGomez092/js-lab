@@ -47,6 +47,7 @@ describe("main services (composition root)", () => {
     expect(services.safeMode).toEqual({ active: false, reason: null });
     expect(existsSync(paths.packagesJson)).toBe(true);
     expect(services.env.variables).toEqual({});
+    expect([services.snippets.snippets, services.snippets.path]).toEqual([[], paths.snippetsFile]);
     const logged: string[] = [];
     const handlers = createRpcHandlers({
       coordinator: services.coordinator,

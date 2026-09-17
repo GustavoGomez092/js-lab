@@ -19,6 +19,7 @@ import { ensurePackagesProject } from "./services/packages-project";
 import { consumeSafeModeFlag, detectSafeMode, type SafeModeState } from "./services/safe-mode";
 import { SessionStore } from "./services/session-store";
 import { SettingsStore } from "./services/settings-store";
+import { SnippetStore } from "./services/snippet-store";
 import { TypesService } from "./services/types-service";
 import { strings } from "./strings";
 import { CachingTransformHost, type TransformHost, WorkerTransformHost } from "./transform/transform-host";
@@ -75,6 +76,8 @@ export interface MainServices {
   settings: SettingsStore;
   session: SessionStore;
   env: EnvStore;
+  /** Spec §13.4: the snippet library. */
+  snippets: SnippetStore;
   npm: NpmService;
   types: TypesService;
   runLock: RunLock;
@@ -123,6 +126,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   });
   await ensurePackagesProject(paths, log);
   const env = await EnvStore.open(paths.envFile);
+  const snippets = await SnippetStore.open(paths.snippetsFile);
   const safeMode = await detectSafeMode({
     uncleanPreviousExit: runLock.uncleanPreviousExit,
     manualRequested: consumeSafeModeFlag(paths.dataDir),
@@ -247,6 +251,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     settings,
     session,
     env,
+    snippets,
     npm,
     types,
     runLock,

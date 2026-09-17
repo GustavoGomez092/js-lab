@@ -110,42 +110,41 @@ const WORKSPACE_SPECIFIER = /"@jslab\/([a-z0-9-]+)/g;
 
 /**
  * Every read in Main that is allowed to be unbounded, with the count it is pinned at and why it is exempt.
- * Reads of JSLab's own files in its own data dir are the common case: JSLab wrote them, so their size is not
- * third-party controlled.
+ *
+ * What is NOT a reason, although it reads like one and stood here over eleven entries: **"JSLab's own file in its
+ * own data dir"**. That answers the *size* hazard and nothing else, while every read it excused was equally unable
+ * to refuse a non-regular file. All of those paths are user-writable, so having written a file is no guarantee it
+ * is still a regular file when it is next read -- and a FIFO at settings.json, session.json, env.json,
+ * keybindings.json, the font cache, a vendor chunk, main.log, bun.lock or packages/package.json blocks Main exactly
+ * as the bundling plugins' importer re-reads did. It was measured there, twice, and the same measurement was
+ * repeated here for settings.json and the log tail: a blocking `read(2)` never returns, so no `try`/`catch` around
+ * it can rescue the process, and only a hard SIGKILL on the pid reclaimed the runner.
+ *
+ * Those reads now go through the shared reader, which is why they are absent below. The ones whose content has no
+ * meaningful byte cap moved to SIZE_EXEMPT, where the waiver is recorded as being about size and nothing else; the
+ * ones whose own schema or policy bounds them (settings.json, env.json, keybindings.json, the font cache,
+ * packages/package.json) carry a real cap and need no entry in either ledger.
+ *
+ * So a reason here must answer BOTH hazards -- an unbounded allocation, and blocking forever on a non-regular file
+ * -- or state plainly which of the two it waives and why that is acceptable at this call site.
  */
 const ALLOWED: Record<string, { reads: number; why: string }> = {
-  [`${MAIN_ROOT}/bundling/vendor-cache.ts`]: {
-    reads: 3,
-    why: "JSLab's own vendor-chunk cache files, written by JSLab into its own data dir",
-  },
   [`${MAIN_ROOT}/files/file-service.ts`]: {
     reads: 1,
     why: "reads via an injected FileSystem seam; paths come from Main's own dialogs and FileService size-checks them. F3 (reading every open tab whole) is tracked separately and is NOT closed by this gate",
   },
-  [`${MAIN_ROOT}/logging/rotating-log.ts`]: { reads: 1, why: "JSLab's own rotated log files" },
-  [`${MAIN_ROOT}/main-services.ts`]: { reads: 1, why: "JSLab's own shipped web-runner bootstrap asset" },
-  [`${MAIN_ROOT}/persistence/json-store.ts`]: { reads: 1, why: "JSLab's own data-dir JSON, written by JSLab" },
   [`${MAIN_ROOT}/platform/e2e-dialogs.ts`]: {
     reads: 1,
-    why: "JSLAB_E2E=1 only: dialog answers the E2E harness itself writes",
+    why: "JSLAB_E2E=1 only: dialog answers the E2E harness itself writes. This reason is about REACHABILITY, not about the file being JSLab's -- the read is genuinely unbounded and would block on a FIFO like any other, but the path only exists under the harness's own run, and the harness is not a user who can be attacked through it",
   },
-  [`${MAIN_ROOT}/platform/system-fonts.ts`]: { reads: 1, why: "JSLab's own font cache in its data dir" },
   [`${MAIN_ROOT}/rpc/web-node-handlers.ts`]: {
     reads: 3,
     why: "F1, deliberately out of scope: the browser-node bridge's fs.readFile carries the user's own permissions, and bounding it needs a Main-vs-subprocess blast-radius decision first. One of the three is an interface signature, not a call",
   },
-  [`${MAIN_ROOT}/runtimes/web-adapter.ts`]: {
-    reads: 1,
-    why: "reads bun.lock from JSLab's own packages dir to compute the vendor cache key",
-  },
-  [`${MAIN_ROOT}/services/env-store.ts`]: { reads: 1, why: "JSLab's own env.json in its data dir" },
-  [`${MAIN_ROOT}/services/keybindings-store.ts`]: { reads: 1, why: "JSLab's own keybindings.json in its data dir" },
   [`${MAIN_ROOT}/services/npm-service.ts`]: {
-    reads: 2,
-    why: "packages/package.json is JSLab's own manifest; the second match is a Bun.file().exists() probe, which never reads. The third-party manifests on this path are bounded (F4)",
+    reads: 1,
+    why: "the one remaining match is a Bun.file().exists() probe, which stats and never reads a byte. The manifest read that used to sit beside it is now bounded at MAX_PACKAGE_JSON_BYTES, like the third-party manifests on this same path (F4)",
   },
-  [`${MAIN_ROOT}/services/session-store.ts`]: { reads: 2, why: "JSLab's own tab buffer files in its data dir" },
-  [`${MAIN_ROOT}/services/settings-store.ts`]: { reads: 1, why: "JSLab's own settings.json in its data dir" },
   "packages/runner-web/src/node-bridge.ts": {
     reads: 2,
     why: "not filesystem reads at all: this is the browser-side Node bridge, and its `readFile` is an RPC shim forwarding to Main's web-node-handlers (F1). The two matches are an interface signature and that shim's own method definition",
@@ -167,12 +166,29 @@ const ALLOWED: Record<string, { reads: number; why: string }> = {
  * a FIFO importer and had to be killed by a hard alarm.
  *
  * What belongs here is any read with **no meaningful byte cap**, however that is spelled -- not merely a call to
- * one particular reader. `UNBOUNDED_SIZE` below matches both spellings for exactly that reason.
+ * one particular reader. `UNBOUNDED_SIZE` below matches every spelling for exactly that reason.
+ *
+ * The data-dir stores joined them a review later still, when "JSLab's own file in its own data dir" turned out to
+ * be the same mistake wearing a more plausible hat: it answers size, the call it excused answered neither hazard,
+ * and the paths are all user-writable. Those that genuinely cannot name a cap are below; those whose own schema
+ * bounds them took a real cap instead and appear in neither ledger.
  */
 const SIZE_EXEMPT: Record<string, { reads: number; why: string }> = {
   [`${MAIN_ROOT}/bundling/css-plugin.ts`]: {
     reads: 1,
     why: "a .css Bun already resolved for this build: no useful byte cap exists, since a legitimately large stylesheet must still bundle. Only the size bound is waived; a FIFO or directory is still refused",
+  },
+  [`${MAIN_ROOT}/bundling/vendor-cache.ts`]: {
+    reads: 3,
+    why: "the two chunk files and index.json. A vendor chunk is a whole bundled dependency graph, and the cache's bound is the 200 MB directory total that eviction enforces rather than a per-entry one, so there is no per-file cap to apply; index.json's size tracks the entry count for the same reason. Only the size is waived: a FIFO under the cache dir is refused, and #doGet's existing catch treats that as a miss, repairing the index and removing the pair",
+  },
+  [`${MAIN_ROOT}/logging/rotating-log.ts`]: {
+    reads: 1,
+    why: "the log tail. Rotation bounds a ROTATED file at maxBytes, but the live file legitimately outgrows it exactly when rotation is failing -- when its contents matter most -- and maxBytes is a caller option, so there is no constant to cap at. This waiver is therefore real and stated: a huge main.log is still allocated whole. What it buys is the reachable hazard, since tail() is synchronous on Main's loop and existsSync is true for a FIFO: a FIFO at main.log blocked the Debug Report until a hard alarm killed the process. A refused file is now skipped, so the older rotated files behind it are still read",
+  },
+  [`${MAIN_ROOT}/main-services.ts`]: {
+    reads: 1,
+    why: "the shipped web-runner bootstrap, whose size is whatever the build produced, so no cap applies. An app bundle is user-writable and JSLAB_WEB_RUNNER_BOOTSTRAP can repoint it anyway. Only the size is waived -- a FIFO there is refused instead of hanging the first browser-mode run forever",
   },
   [`${MAIN_ROOT}/bundling/polyfill-plugin.ts`]: {
     reads: 1,
@@ -182,24 +198,60 @@ const SIZE_EXEMPT: Record<string, { reads: number; why: string }> = {
     reads: 1,
     why: "the same importer re-read for error positioning, on a resolution miss, where the importer is third-party- or user-controlled. No byte cap is meaningful for the same reason; only the size is waived, and a FIFO importer is refused rather than blocking Main's loop. Its package.json read is separately bounded (F4)",
   },
+  [`${MAIN_ROOT}/runtimes/web-adapter.ts`]: {
+    reads: 1,
+    why: "bun.lock, read to compute the vendor cache key. A lockfile grows with the dependency graph, so a cap would disable the cache for exactly the projects it helps most. Only the size is waived; the packages dir is user-writable, so a FIFO there is refused and vendorKeyFor's own catch turns that into 'no vendor cache for this run'",
+  },
+  [`${MAIN_ROOT}/services/session-store.ts`]: {
+    reads: 3,
+    why: "the tab buffer, the closed-tab buffer, and session.json's own load. A buffer holds whatever the user typed or opened into that tab, and session.json grows with the tab count, so any cap would eventually discard the user's own work. The third match is a Number.POSITIVE_INFINITY handed to loadJson rather than a reader name, which is why UNBOUNDED_SIZE matches the token and not just a call. Only the size is waived: a FIFO at a buffer path is refused and latches the tab unreadable so setBuffer cannot overwrite it, and a FIFO at session.json recovers to defaults and is then renamed over. F3 (reading every open tab whole) is tracked separately and is NOT closed here",
+  },
 };
 
 /**
  * The size-waiving reads. Anything matching one must carry a SIZE_EXEMPT reason.
- *
- * The named readers are not the only way to waive a cap, which is why the second pattern exists: passing
- * `Number.POSITIVE_INFINITY` (or `Infinity`) as the `maxBytes` argument of any bounded reader waives it just as
- * completely, while naming none of them. Mutant M7 called `readBoundedText(p, Number.POSITIVE_INFINITY)` from a
- * file with no SIZE_EXEMPT entry at all and the gate stayed at 9 pass / 0 fail -- the ledger was exhaustive over
- * one function name rather than over "reads with no meaningful cap", which is what it claims to record.
  */
 const UNBOUNDED_SIZE = [
   /readRegularFileText(?:Sync)?\s*\(/,
-  // Both spellings, and they are *not* the same token: `Number.POSITIVE_INFINITY` carries `INFINITY` in caps, so a
-  // pattern written as `(?:POSITIVE_)?Infinity` matches only the bare `Infinity` and silently misses the commoner
-  // form -- measured, with M7 passing 9/0 against exactly that mistake.
-  /readBounded[A-Za-z]*\s*\([^;]*?(?:POSITIVE_INFINITY|Infinity)/,
+  // Every other way to waive a cap, reduced to the token that must appear in one.
+  //
+  // This began anchored to `readBounded...(`, because mutant M7 waived a cap by passing
+  // `Number.POSITIVE_INFINITY` to a bounded reader from a file carrying no SIZE_EXEMPT entry, and the gate stayed
+  // at 9 pass / 0 fail. That anchoring was still too narrow in the same way, one level up: a cap can be waived
+  // through a *wrapper* that names no reader at all. `services/session-store.ts` hands
+  // `Number.POSITIVE_INFINITY` to `loadJson`, and `loadJson` is the thing that reads -- a call the anchored
+  // pattern matched not at all, so the largest waiver in the tree would have gone unrecorded.
+  //
+  // Matching the bare token catches that, at the cost of also matching uses that have nothing to do with reading a
+  // file. Those are classified in NOT_A_READ_CAP below rather than quietly filtered out. A narrower "token as a
+  // call argument" pattern was tried first and is not viable: session-store's own waiver spans five lines with
+  // nested parens (`join(...)`, `() => ...`) between the opening call and the token, so every such pattern misses
+  // the real waiver while still matching an object property that merely holds the constant.
+  //
+  // Both spellings are listed because they are not the same token -- `Number.POSITIVE_INFINITY` carries `INFINITY`
+  // in caps, so a pattern written as `(?:POSITIVE_)?Infinity` matches only the bare form and silently misses the
+  // commoner one. That is not hypothetical, and it is not only a regex trap: the check that this token appeared
+  // nowhere else was first run as a case-sensitive grep for `Infinity`, which cannot see `POSITIVE_INFINITY`. It
+  // reported a clean tree while four uses sat in packages/serializer, and the claim "measured, zero occurrences"
+  // was written on the strength of it. The gate caught what the measurement missed, which is the whole point of
+  // pinning this in a test rather than trusting a one-off grep.
+  /POSITIVE_INFINITY|Infinity/,
 ];
+
+/**
+ * Occurrences of the waiver token that are NOT a file read's byte cap, pinned by count with a reason.
+ *
+ * `UNBOUNDED_SIZE` matches a bare token, so it necessarily also matches uses that have nothing to do with reading a
+ * file. Those are classified here rather than dropped silently, and the count is pinned exactly as ALLOWED pins a
+ * read count -- so a NEW occurrence in one of these files, which could perfectly well be a real read waiver, fails
+ * the gate instead of hiding behind the ones already here.
+ */
+const NOT_A_READ_CAP: Record<string, { uses: number; why: string }> = {
+  "packages/serializer/src/encode.ts": {
+    uses: 4,
+    why: "maxEncodedBytes is the encoder's own OUTPUT budget -- how many bytes a value may serialize to before it is truncated -- and POSITIVE_INFINITY is its 'no budget' sentinel. The four uses are that default, a counter's initial value, a comparison against the sentinel, and a reset. No file is read here, so there is no read cap to waive",
+  },
+};
 
 function sourceFilesUnder(root: string): string[] {
   const absolute = join(REPO, root);
@@ -420,9 +472,27 @@ describe("no unbounded reads in Main", () => {
   test("no file outside SIZE_EXEMPT waives the byte cap", () => {
     const offenders = scannedFiles()
       // bounded-read.ts *declares* readRegularFileText; it is the reader, not a caller reaching past it.
-      .filter((file) => file !== THE_READER && !(file in SIZE_EXEMPT))
+      // NOT_A_READ_CAP files carry the token for a reason that is not a read at all; the test below pins their
+      // counts, so excluding them here cannot hide a real waiver added beside one.
+      .filter((file) => file !== THE_READER && !(file in SIZE_EXEMPT) && !(file in NOT_A_READ_CAP))
       .flatMap((file) => matchesIn(file, UNBOUNDED_SIZE));
 
     expect(offenders).toEqual([]);
+  });
+
+  test("every non-read use of the waiver token is still pinned by count and carries a reason", () => {
+    // Without this pin, "that file's POSITIVE_INFINITY is not a cap" would exempt the whole file forever --
+    // including a genuine read waiver added to it later, which is precisely the shape of hole SIZE_EXEMPT exists
+    // to close. Pinning the count means a fifth occurrence has to be classified before it can land.
+    const files = new Set(scannedFiles());
+    const actual: Record<string, number> = {};
+    const pinned: Record<string, number> = {};
+    for (const [file, entry] of Object.entries(NOT_A_READ_CAP)) {
+      expect({ file, exists: files.has(file) }).toEqual({ file, exists: true });
+      expect(entry.why.length).toBeGreaterThan(20);
+      actual[file] = matchesIn(file, UNBOUNDED_SIZE).length;
+      pinned[file] = entry.uses;
+    }
+    expect(actual).toEqual(pinned);
   });
 });

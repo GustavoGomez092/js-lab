@@ -13,6 +13,7 @@ import {
 } from "../bundling/bundler";
 import { resolveBareSpecifier, resolvedFromWorkingDirectory } from "../bundling/resolve-plugin";
 import { type CachedVendorChunk, hashBunLock, type VendorCache, vendorCacheKey } from "../bundling/vendor-cache";
+import { readRegularFileText } from "../fs/bounded-read";
 import type { Redactor } from "../logging/redact";
 import type { Log } from "../rpc/validate";
 import { createWebFetchRunner, type WebFetchRunner } from "../rpc/web-fetch-handlers";
@@ -874,8 +875,14 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
   };
 }
 
+/**
+ * `bun.lock` from JSLab's own packages dir. The byte cap is waived and only that: a lockfile grows with the
+ * dependency graph, so no useful bound exists, and refusing a large one would disable the vendor cache for exactly
+ * the projects it helps most. The data dir is user-writable, so a FIFO can sit at this path; it is refused rather
+ * than blocking the run, and `vendorKeyFor`'s own catch turns that into "don't use the cache for this run".
+ */
 async function readBunLockFile(path: string): Promise<string> {
-  return Bun.file(path).text();
+  return readRegularFileText(path);
 }
 
 /**

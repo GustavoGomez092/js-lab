@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   authTokenFor,
@@ -401,7 +400,10 @@ export class NpmService {
   protected async readManifest(): Promise<PackagesManifest> {
     let raw: string;
     try {
-      raw = await readFile(this.deps.paths.packagesJson, "utf8");
+      // JSLab writes this manifest, but into its own user-writable data dir, so "JSLab's own file" bounds neither
+      // its size nor what kind of file is at the path now. It is the same shape of manifest F4 already bounds at
+      // MAX_PACKAGE_JSON_BYTES one directory below, and a FIFO here would hang every npm.list on Main.
+      raw = await readBoundedText(this.deps.paths.packagesJson, MAX_PACKAGE_JSON_BYTES);
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return defaultPackagesManifest();
       throw new Error(strings.log.npmManifestUnreadable(this.deps.paths.packagesJson), { cause: error });

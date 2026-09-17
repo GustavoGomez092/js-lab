@@ -3,6 +3,7 @@ import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
 import { effectiveRuntime, runnerSettings } from "@jslab/shared";
 import type { AppPaths } from "./app-paths";
 import { VendorCache } from "./bundling/vendor-cache";
+import { readRegularFileText } from "./fs/bounded-read";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
 import { EXIT_KILL_GRACE_MS, RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
@@ -148,7 +149,10 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   const webviews = options.webviewBridge
     ? createUiWebviewSource({
         bridge: options.webviewBridge,
-        readBootstrap: () => Bun.file(paths.webRunnerBootstrap).text(),
+        // A shipped asset, but inside an app bundle the user can write to, and JSLAB_WEB_RUNNER_BOOTSTRAP can
+        // point it anywhere. Its size is whatever the build produced, so the cap is waived; a FIFO at the path is
+        // refused rather than hanging the first browser-mode run forever.
+        readBootstrap: () => readRegularFileText(paths.webRunnerBootstrap),
       })
     : null;
   // Both web runtimes share the one source: a tab's runtime is fixed when the tab is created, so two adapters can

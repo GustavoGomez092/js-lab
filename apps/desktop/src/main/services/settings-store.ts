@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type DeepPartial,
@@ -8,6 +7,7 @@ import {
   type Settings,
   settingsParser,
 } from "@jslab/shared";
+import { readBoundedText } from "../fs/bounded-read";
 import { type AtomicWriteOptions, writeFileAtomic } from "../persistence/atomic-write";
 import {
   createDebouncedWriter,
@@ -18,9 +18,20 @@ import {
 } from "../persistence/json-store";
 import { strings } from "../strings";
 
+/**
+ * settings.json's byte cap. Every field `settingsSchema` defines is a bounded scalar -- strings at 200 chars,
+ * numbers with an explicit min and max, a fixed set of sections -- so a settings.json JSLab itself wrote is a few
+ * KB. 1 MB is three orders of magnitude of headroom, and it is what stops a settings.json swapped for a multi-GB
+ * file from being allocated whole on Main's loop before anything has a chance to validate it.
+ *
+ * An over-cap file is treated exactly as unparseable JSON already is: fall back to settings.json.bak, then to
+ * defaults. That is a real consequence, which is why the cap is set far above any file this app would produce.
+ */
+export const MAX_SETTINGS_BYTES = 1024 * 1024;
+
 async function storedVersion(path: string): Promise<number | null> {
   try {
-    const raw = JSON.parse(await readFile(path, "utf8")) as { version?: unknown };
+    const raw = JSON.parse(await readBoundedText(path, MAX_SETTINGS_BYTES)) as { version?: unknown };
     return typeof raw.version === "number" ? raw.version : 1;
   } catch {
     return null;
@@ -76,7 +87,12 @@ export class SettingsStore {
 
   static async open(dataDir: string, options: SettingsStoreOptions = {}): Promise<SettingsStore> {
     const path = join(dataDir, "settings.json");
-    const { value, recovered, primary, corruptCopy } = await loadJson(path, settingsParser, defaultSettings);
+    const { value, recovered, primary, corruptCopy } = await loadJson(
+      path,
+      settingsParser,
+      defaultSettings,
+      MAX_SETTINGS_BYTES,
+    );
     // The version of the file that was actually loaded: the primary, or the backup after a recovery.
     const version =
       recovered === "backup"

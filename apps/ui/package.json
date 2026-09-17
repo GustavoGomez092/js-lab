@@ -25,7 +25,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "test": "bun test ./test && bun test ./isolated",
+    "test": "bun test ./test && bun test ./isolated && bun test ./editor-isolated",
     "typecheck": "bun ../desktop/scripts/devkit-tsconfig.ts && tsc --noEmit -p ."
   },
   "devDependencies": {

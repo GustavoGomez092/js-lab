@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { contentHash, createTab, defaultSession, defaultSettings, type TabState } from "@jslab/shared";
+import { contentHash, createTab, defaultSession, defaultSettings, isDirty, type TabState } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createAppStore } from "../src/state/store";
 import { RenameDialog } from "../src/tabs/RenameDialog";
@@ -8,6 +8,22 @@ import { TabBar } from "../src/tabs/TabBar";
 import type { TabActions } from "../src/tabs/tab-actions";
 import { createTabSummaryCache } from "../src/tabs/tab-summary";
 import { createFakeApi } from "./fake-api";
+
+function fakeTabActions() {
+  return {
+    activate: mock((_id: string | null) => {}),
+    close: mock(async (_id?: string) => true),
+    closeOthers: mock(async (_id?: string) => {}),
+    closeToRight: mock(async (_id?: string) => {}),
+    newTab: mock(async () => {}),
+    reopen: mock(async () => {}),
+    next: mock(() => {}),
+    previous: mock(() => {}),
+    goto: mock((_n: number) => {}),
+    reorder: mock((_order: string[]) => {}),
+    setBeforeClose: mock((_guard: (id: string) => Promise<boolean>) => {}),
+  } satisfies TabActions;
+}
 
 function setup() {
   const store = createAppStore();
@@ -29,19 +45,7 @@ function setup() {
         false,
       );
   });
-  const tabs = {
-    activate: mock((_id: string | null) => {}),
-    close: mock(async (_id?: string) => true),
-    closeOthers: mock(async (_id?: string) => {}),
-    closeToRight: mock(async (_id?: string) => {}),
-    newTab: mock(async () => {}),
-    reopen: mock(async () => {}),
-    next: mock(() => {}),
-    previous: mock(() => {}),
-    goto: mock((_n: number) => {}),
-    reorder: mock((_order: string[]) => {}),
-    setBeforeClose: mock((_guard: (id: string) => Promise<boolean>) => {}),
-  } satisfies TabActions;
+  const tabs = fakeTabActions();
   const { api } = createFakeApi();
   render(<TabBar store={store} tabs={tabs} api={api} />);
   return { store, tabs, api };
@@ -163,6 +167,40 @@ describe("tab bar", () => {
     expect([store.getState().tab?.title, store.getState().modal]).toEqual(["sums", null]);
     expect(document.activeElement).toBe(tabButton);
     tabButton.remove();
+  });
+});
+
+/**
+ * B1: the unsaved-changes dot is the visual invitation to press ⌘S, and pressing it on a tab holding a placeholder
+ * is what truncated the user's file. Such a tab must never show the dot -- even though the raw comparison still
+ * reports it modified, because the placeholder differs from the real file's saved hash.
+ */
+describe("a tab whose buffer couldn't be read (B1)", () => {
+  const REAL = "export const answer = 42;\n";
+
+  test("shows no unsaved-changes dot, though a genuinely edited tab still does", () => {
+    const store = createAppStore();
+    const unreadable = createTab({ id: "u", filePath: "/w/app.ts", lastSavedHash: contentHash(REAL) });
+    const edited = createTab({ id: "e", filePath: "/w/other.ts", lastSavedHash: contentHash("saved") });
+    const base = defaultSession(() => unreadable);
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: { ...base, tabs: { u: unreadable, e: edited }, tabOrder: ["u", "e"], activeTabId: "u" },
+      // "u" is absent, exactly as Main leaves a tab whose buffer it couldn't read.
+      buffers: { e: "edited" },
+      unreadableBuffers: ["u"],
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const { api } = createFakeApi();
+    render(<TabBar store={store} tabs={fakeTabActions()} api={api} />);
+
+    // The trap itself, still true: the placeholder differs from the real file's hash, so the raw check says modified.
+    expect(isDirty(unreadable, "")).toBe(true);
+
+    const [u, e] = screen.getAllByRole("tab");
+    expect(u?.querySelector(".tab-dirty")).toBeNull();
+    expect(e?.querySelector(".tab-dirty")).not.toBeNull();
   });
 });
 

@@ -197,6 +197,8 @@ export function buildMenu(model: MenuModel): MenuItem[] {
             language("language.jsx", "jsx", "JSX"),
           ],
         },
+        separator,
+        item("view.showTranspiled"),
       ],
     },
     {

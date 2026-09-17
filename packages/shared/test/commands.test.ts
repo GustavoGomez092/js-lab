@@ -60,4 +60,12 @@ describe("command catalogue", () => {
       { key: "cmd+shift+f9", command: "edit.clearLogpoints" },
     ]);
   });
+
+  test("M5a adds Show Transpiled Output with no default chord (spec §7.4)", () => {
+    expect(commandMeta("view.showTranspiled")).toMatchObject({
+      title: "Show Transpiled Output",
+      category: "view",
+    });
+    expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.command === "view.showTranspiled")).toEqual([]);
+  });
 });

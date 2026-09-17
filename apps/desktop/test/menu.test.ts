@@ -223,4 +223,11 @@ describe("application menu", () => {
     expect(byLabel(withWd, "NPM Packages…")?.label).toBe("NPM Packages…    ⌘I");
     expect(byLabel(withWd, "Environment Variables…")?.action).toBe(menuAction("tools.environmentVariables"));
   });
+
+  test("Actions ends with Show Transpiled Output (spec §7.4)", () => {
+    const menu = buildMenu(model());
+    expect(byLabel(menu, "Show Transpiled Output")?.action).toBe(menuAction("view.showTranspiled"));
+    const actions = menu.find((item) => item.label === "Actions")?.submenu ?? [];
+    expect(actions[actions.length - 1]?.label?.split("    ")[0]).toBe("Show Transpiled Output");
+  });
 });

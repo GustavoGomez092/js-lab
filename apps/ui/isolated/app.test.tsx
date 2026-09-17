@@ -689,6 +689,24 @@ describe("App shell", () => {
     press("Comma");
     expect(api.appCommand).toHaveBeenCalledWith("openSettings");
   });
+
+  test("Show Transpiled Output opens the side bar on the transpiled panel (spec §7.4)", async () => {
+    const { store, api, emit } = renderApp();
+    api.updateSettings.mockImplementation(async (patch: unknown) =>
+      mergeSettings(store.getState().settings ?? defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+    );
+    expect(store.getState().sideBarPanel).toBe("snippets");
+    await emit("menu.command", { command: "view.showTranspiled" });
+    expect(store.getState().sideBarPanel).toBe("transpiled");
+    expect(api.updateSettings).toHaveBeenCalledWith({ view: { sideBar: true } });
+    // Task 8 shipped the panel with no way to open it; the point of the command is that it is now on screen.
+    expect(document.querySelector(".transpiled-panel")).not.toBeNull();
+    // Already open on that panel: the command re-opens rather than toggling it shut.
+    await emit("menu.command", { command: "view.showTranspiled" });
+    expect(store.getState().sideBarPanel).toBe("transpiled");
+    expect(api.updateSettings.mock.calls.length).toBe(1);
+    expect(document.querySelector(".transpiled-panel")).not.toBeNull();
+  });
 });
 
 describe("runStateLabel", () => {

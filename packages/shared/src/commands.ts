@@ -126,6 +126,7 @@ export const COMMANDS = [
   { id: "view.zoomReset", title: "Actual Size", category: "view" },
   { id: "view.toggleOutput", title: "Toggle Output Panel", category: "view" },
   { id: "view.toggleWebView", title: "Toggle Web View", category: "view" },
+  { id: "view.showTranspiled", title: "Show Transpiled Output", category: "view" },
   { id: "view.toggleSideBar", title: "Toggle Side Bar", category: "view" },
   { id: "view.toggleActivityBar", title: "Toggle Activity Bar", category: "view" },
   { id: "view.toggleStatusBar", title: "Toggle Status Bar", category: "view" },

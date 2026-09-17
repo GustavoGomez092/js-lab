@@ -261,6 +261,18 @@ export function App({
           state.openModal({ kind: "palette", context });
         },
       },
+      // spec §7.4: Show Transpiled Output "opens a read-only side tab", so unlike the activity bar's `togglePanel`
+      // this only ever *opens* the panel -- invoking it while that panel is already showing must not close it.
+      // Opening goes through `view.toggleSideBar` rather than writing `view.sideBar` here, so the persisted setting
+      // keeps a single owner and a second invocation writes nothing.
+      {
+        id: "view.showTranspiled",
+        run: () => {
+          const state = store.getState();
+          state.setSideBarPanel("transpiled");
+          if (!state.settings?.view.sideBar) created.execute("view.toggleSideBar");
+        },
+      },
       {
         id: "format.document",
         isEnabled: () => format !== null,

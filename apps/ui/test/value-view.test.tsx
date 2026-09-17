@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { EncodedValue } from "@jslab/rpc-schema";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { childrenOf, summarize, tableModel } from "../src/output/format";
-import { ValueView } from "../src/output/ValueView";
+import { EXPAND_ALL_MAX_DEPTH, ValueView } from "../src/output/ValueView";
 
 const noExpand = async () => null;
 const num = (v: string): EncodedValue => ({ t: "number", v });
@@ -440,6 +440,105 @@ describe("ValueView: arrow-key navigation (§11)", () => {
     expect(root.disabled).toBe(true);
     expect(fireEvent.keyDown(root, { key: "ArrowRight" })).toBe(true);
     expect(root.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+/**
+ * §11 Expand All. Spec §7.2 lists it in the entry `⋯` menu and `docs/parity.md` OU-03 records that nothing
+ * covers it. There is no entry menu in the shipped UI, so it arrives as the modified activation DevTools uses:
+ * Alt+Right, and Alt-click on the row.
+ *
+ * The bound is the feature. `ValueView` fires one `run.expand` per node and `requestInFlight` is per-node, so a
+ * recursive expand-all over lazy handles would issue an unthrottled storm of RPCs. These pin that it issues none.
+ */
+describe("ValueView: Expand All (§11)", () => {
+  const obj = (ctor: string, props: [string, EncodedValue][], id = 1): EncodedValue => ({
+    t: "object",
+    id,
+    ctor,
+    props: props.map(([k, v]): [{ k: string }, EncodedValue] => [{ k }, v]),
+  });
+  const rootToggle = (c: HTMLElement) => c.querySelector(".v-toggle") as HTMLButtonElement;
+  const openCount = (c: HTMLElement) => c.querySelectorAll('.v-toggle[aria-expanded="true"]').length;
+  const altRight = (el: HTMLElement) => fireEvent.keyDown(el, { key: "ArrowRight", altKey: true });
+
+  test("Alt+Right opens the whole already-loaded subtree in one keystroke", async () => {
+    const { container } = render(
+      <ValueView
+        value={obj("Root", [
+          ["a", obj("A", [["b", obj("B", [["c", num("1")]], 2)]], 3)],
+          ["d", obj("D", [["e", num("2")]], 4)],
+        ])}
+        expand={noExpand}
+      />,
+    );
+    altRight(rootToggle(container));
+    // Root, A, B and D -- every expandable node in the payload, from one keystroke.
+    await waitFor(() => expect(openCount(container)).toBe(4));
+    expect(container.textContent).toContain("c: 1");
+    expect(container.textContent).toContain("e: 2");
+  });
+
+  test("a cascade issues ZERO expand calls and leaves lazy handles collapsed but still openable", async () => {
+    const expand = mock(async (): Promise<EncodedValue | null> => obj("Never", [["n", num("0")]], 9));
+    const { container } = render(
+      <ValueView
+        value={obj("Root", [
+          ["loaded", obj("Loaded", [["x", num("1")]], 2)],
+          ["lazy", { t: "handle", handle: "h1", preview: "Object {…}" }],
+        ])}
+        expand={expand}
+      />,
+    );
+    altRight(rootToggle(container));
+    await waitFor(() => expect(openCount(container)).toBe(2)); // root + the already-loaded child, never the handle
+
+    // THE MEASUREMENT: one keystroke over a subtree containing a lazy handle costs no RPCs at all.
+    expect(expand).toHaveBeenCalledTimes(0);
+    const lazy = [...container.querySelectorAll<HTMLButtonElement>(".v-toggle")].find((b) =>
+      b.textContent?.includes("Object {…}"),
+    ) as HTMLButtonElement;
+    expect(lazy.getAttribute("aria-expanded")).toBe("false");
+    // Skipped, not disabled: the user can still open this one deliberately and pay for exactly this one node.
+    expect(lazy.disabled).toBe(false);
+    fireEvent.click(lazy);
+    await waitFor(() => expect(expand).toHaveBeenCalledTimes(1));
+  });
+
+  test("the cascade stops at the depth cap instead of opening an arbitrarily deep payload", async () => {
+    const chain = (depth: number): EncodedValue =>
+      depth === 0 ? num("0") : obj(`L${depth}`, [["child", chain(depth - 1)]], depth);
+    const { container } = render(<ValueView value={chain(EXPAND_ALL_MAX_DEPTH + 3)} expand={noExpand} />);
+    altRight(rootToggle(container));
+    // The activated node, plus EXPAND_ALL_MAX_DEPTH levels beneath it, and no further.
+    await waitFor(() => expect(openCount(container)).toBe(EXPAND_ALL_MAX_DEPTH + 1));
+    expect(container.querySelectorAll('.v-toggle[aria-expanded="false"]').length).toBeGreaterThan(0);
+  });
+
+  test("Alt-click on the row does the same as Alt+Right, and a plain click still just toggles", async () => {
+    const value = obj("Root", [["a", obj("A", [["b", num("1")]], 2)]]);
+    const alt = render(<ValueView value={value} expand={noExpand} />);
+    fireEvent.click(rootToggle(alt.container), { altKey: true });
+    await waitFor(() => expect(openCount(alt.container)).toBe(2));
+
+    const plain = render(<ValueView value={value} expand={noExpand} />);
+    fireEvent.click(rootToggle(plain.container));
+    // A plain click opens exactly the node it hit -- the child stays closed.
+    expect(openCount(plain.container)).toBe(1);
+  });
+
+  test("Alt+Right on an unloaded handle costs exactly one expand, then cascades into what arrived", async () => {
+    const expand = mock(
+      async (): Promise<EncodedValue | null> => obj("Deep", [["inner", obj("Inner", [["leaf", num("7")]], 3)]], 2),
+    );
+    const { container } = render(
+      <ValueView value={{ t: "handle", handle: "h1", preview: "Object {…}" }} expand={expand} />,
+    );
+    altRight(rootToggle(container));
+    await waitFor(() => expect(container.textContent).toContain("leaf: 7"));
+    // The activated node pays what a plain click would have paid, and not one RPC more.
+    expect(expand).toHaveBeenCalledTimes(1);
+    expect(openCount(container)).toBe(2);
   });
 });
 

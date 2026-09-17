@@ -1,5 +1,5 @@
 import type { EncodedValue } from "@jslab/rpc-schema";
-import { type KeyboardEvent as ReactKeyboardEvent, useRef, useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import { strings } from "../strings";
 import { childrenOf, formatPrimitive, summarize } from "./format";
 
@@ -11,10 +11,35 @@ interface ValueViewProps {
   expand: ExpandHandle;
   nested?: boolean;
   label?: string;
+  /** §11: an ancestor asking this subtree to open. Set only by `ValueView` itself. */
+  cascade?: Cascade | null;
 }
 
 const EXPIRED = "Value no longer available. Re-run to inspect.";
 const EXPAND_FAILED = "Couldn't expand value. Try again.";
+
+/**
+ * §11 Expand All. How many levels below the activated node one modified activation may open.
+ *
+ * This is the second of two bounds, and the weaker one. The first is structural and absolute: the cascade effect
+ * below contains no call to `expand` at all, so the gesture costs at most the single `run.expand` the user's own
+ * activation already paid for. That matters because `ValueView` fires one `run.expand` per node and the
+ * `requestInFlight` guard is per-node, not global -- an expand-all that recursed through lazy handles would issue
+ * a storm of RPCs that nothing here would have throttled. Not fetching makes the storm impossible by
+ * construction rather than by rationing.
+ *
+ * This cap is then belt-and-braces against a pathological already-loaded payload: no RPCs, but still a lot of
+ * rows to lay out in one frame.
+ */
+export const EXPAND_ALL_MAX_DEPTH = 10;
+
+/** A broadcast that asks a subtree to open. `nonce` makes a repeat activation distinguishable from a re-render. */
+interface Cascade {
+  nonce: number;
+  depth: number;
+}
+
+let cascadeNonce = 0;
 
 /**
  * §11 arrow-key navigation. The tree's rows are the `.v-toggle` buttons; a primitive row is a bare `<span>` and
@@ -43,7 +68,7 @@ function firstChildToggle(button: HTMLElement): HTMLButtonElement | null {
 /** The row of the node that contains this one, or null at the root of an entry. */
 const parentToggle = (button: HTMLElement) => ownToggle(nodeOf(button)?.parentElement?.closest(".v-node"));
 
-export function ValueView({ value, expand, nested = false, label }: ValueViewProps) {
+export function ValueView({ value, expand, nested = false, label, cascade = null }: ValueViewProps) {
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState<EncodedValue | "expired" | null>(null);
   const [loading, setLoading] = useState(false);
@@ -59,6 +84,25 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
   const lazyHandle = value.t === "handle" || value.t === "getter" || value.t === "function" ? value.handle : null;
   const shown = loaded && loaded !== "expired" ? loaded : value;
   const labelNode = label !== undefined ? <span className="v-key">{label}: </span> : null;
+
+  // §11 Expand All is a broadcast, not a traversal: a node that sees a new nonce opens itself and hands the nonce
+  // down one level shallower. Nothing walks the tree, so no single call site can accumulate a queue of requests.
+  const [ownCascade, setOwnCascade] = useState<Cascade | null>(null);
+  const seenNonce = useRef(0);
+  useEffect(() => {
+    if (!cascade || cascade.depth <= 0 || cascade.nonce === seenNonce.current) return;
+    seenNonce.current = cascade.nonce;
+    // THE BOUND, and it is structural: there is no call to `expand` anywhere in this effect, so a cascade cannot
+    // issue a single RPC however deep or however lazy the subtree is. A node opens only over children it already
+    // has -- and `childrenOf` has no case for `handle`, `getter` or `function`, so an unfetched lazy node returns
+    // null here and stays collapsed, while staying expandable for the user to open deliberately.
+    const kids = childrenOf(shown);
+    if (kids === null || kids.length === 0) return;
+    setOpen(true);
+  }, [cascade, shown]);
+  // A node's own activation outranks an inherited cascade, so re-triggering deeper in the tree works.
+  const outgoing =
+    ownCascade ?? (cascade && cascade.depth > 0 ? { nonce: cascade.nonce, depth: cascade.depth - 1 } : null);
 
   if (value.t === "string" && value.truncated) {
     const truncated = value.truncated;
@@ -162,12 +206,29 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
     setOpen(!open);
   };
 
+  // §11: one modified activation opens the subtree. The activated node pays the same single `run.expand` a plain
+  // click would have; every descendant opens only if the children it needs have already arrived.
+  const expandAll = async () => {
+    if (!expandable) return;
+    if (lazyHandle && loaded === null && !open) await toggle();
+    else setOpen(true);
+    cascadeNonce += 1;
+    setOwnCascade({ nonce: cascadeNonce, depth: EXPAND_ALL_MAX_DEPTH });
+  };
+
   // §11: Right expands and then moves inward; Left collapses and then moves outward -- the mapping Chrome
   // DevTools and Firefox's Web Console have both used for years, so it is what a user arrives already knowing.
   // Anything this does not handle is left completely untouched: no `preventDefault`, no `stopPropagation`. That
   // is what keeps Tab able to leave the tree, and keeps a modified chord reaching the window-level resolver in
   // `App.tsx` rather than being eaten here.
   const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    // Alt is DevTools' modifier for "expand all sub-properties", so Alt+Right reads as the keyboard twin of the
+    // Alt-click on the disclosure arrow. Checked before the modifier bail-out below, which Alt would otherwise hit.
+    if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowRight") {
+      event.preventDefault();
+      void expandAll();
+      return;
+    }
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key === "ArrowRight") {
       if (!open) {
@@ -202,7 +263,10 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
         className="v-toggle"
         aria-expanded={open}
         disabled={!expandable}
-        onClick={toggle}
+        onClick={(event) => {
+          if (event.altKey) void expandAll();
+          else void toggle();
+        }}
         onKeyDown={onKeyDown}
       >
         {expandable ? (open ? "▾ " : "▸ ") : ""}
@@ -223,6 +287,7 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
                 value={child.value}
                 expand={expand}
                 nested
+                cascade={outgoing}
               />
             ) : (
               <div

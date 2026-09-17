@@ -65,6 +65,13 @@ export const strings = {
       `session.json was written by a newer version of JSLab (version ${version}). Tab changes in this window won't be saved to it.`,
     tabsDropped: (count: number) =>
       `${count} ${count === 1 ? "tab" : "tabs"} in session.json couldn't be read and were skipped. Their buffer files were kept.`,
+    /**
+     * F1: one unreadable buffer used to fail the whole `app.bootstrap`, leaving a failure screen whose only
+     * control re-ran the same request. Those tabs now open empty instead, and Main keeps them in its unreadable
+     * set so an edit never overwrites the file that could not be read.
+     */
+    buffersUnreadable: (count: number) =>
+      `${count} ${count === 1 ? "tab's contents couldn't" : "tabs' contents couldn't"} be read, so ${count === 1 ? "it opened" : "they opened"} empty. The ${count === 1 ? "file" : "files"} on disk won't be overwritten.`,
   },
   runs: {
     /** Spec §12.2. */

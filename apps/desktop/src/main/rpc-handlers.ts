@@ -16,13 +16,14 @@ import type { RunCoordinator } from "./runs/run-coordinator";
 import type { SafeModeState } from "./services/safe-mode";
 import type { SessionStore } from "./services/session-store";
 import type { SettingsStore } from "./services/settings-store";
+import { strings } from "./strings";
 
 export { InvalidPayloadError };
 
 export interface RpcHandlerDeps {
   coordinator: Pick<RunCoordinator, "start" | "stop" | "kill" | "wait" | "expand" | "mute">;
   settings: Pick<SettingsStore, "current">;
-  session: Pick<SessionStore, "session" | "readBuffers" | "setBuffer" | "patchTab">;
+  session: Pick<SessionStore, "session" | "readBuffers" | "readBuffer" | "setBuffer" | "patchTab">;
   safeMode: SafeModeState;
   versions: { app: string; bun: string };
   log(message: string, detail?: unknown): void;
@@ -37,22 +38,58 @@ export interface RpcHandlerDeps {
 /** A valid request that Main declines to act on (for example an automatic run while Safe Mode is active). */
 export class RunRefusedError extends Error {}
 
+/**
+ * F1: read each tab's buffer on its own, so one unreadable file doesn't fail the whole `app.bootstrap`.
+ *
+ * `SessionStore.readBuffers()` throws on the first tab whose buffer exists but can't be read (EACCES, EISDIR,
+ * EIO). That rejection reached `main.tsx`'s catch, which showed a failure screen whose only control re-ran the
+ * identical bootstrap -- an infinite loop the user could only escape by deleting files by hand. Reading per tab
+ * keeps the app openable: the tabs that loaded are returned, and the ones that didn't are named in a notice.
+ *
+ * Skipping a tab here is safe because `readBuffer` has already put it in the store's unreadable set, so
+ * `setBuffer` refuses to write it -- an edit in the empty tab can never overwrite the file that failed to read.
+ * `readBuffers()` keeps its all-or-nothing contract for every other caller.
+ */
+async function readBuffersPerTab(
+  session: RpcHandlerDeps["session"],
+  log: RpcHandlerDeps["log"],
+): Promise<{ buffers: Record<string, string>; unreadable: string[] }> {
+  const buffers: Record<string, string> = {};
+  const unreadable: string[] = [];
+  for (const id of session.session.tabOrder) {
+    try {
+      buffers[id] = await session.readBuffer(id);
+    } catch (error) {
+      unreadable.push(id);
+      log("Couldn't read a tab's buffer at startup", { tabId: id, error: String(error) });
+    }
+  }
+  return { buffers, unreadable };
+}
+
 /** Handlers for the UI RPC. Every inbound payload is validated before use (spec §18). */
 export function createRpcHandlers(deps: RpcHandlerDeps) {
   const { parse, message } = createValidators(deps.log);
 
   return {
     requests: {
-      "app.bootstrap": async (): Promise<BootstrapPayload> => ({
-        settings: deps.settings.current,
-        session: deps.session.session,
-        buffers: await deps.session.readBuffers(),
-        safeMode: deps.safeMode,
-        versions: deps.versions,
-        ...(deps.e2e ? { e2e: true } : {}),
-        ...(deps.keybindings ? { keybindings: deps.keybindings.rules } : {}),
-        ...(deps.notices && deps.notices.length > 0 ? { notices: deps.notices } : {}),
-      }),
+      "app.bootstrap": async (): Promise<BootstrapPayload> => {
+        const { buffers, unreadable } = await readBuffersPerTab(deps.session, deps.log);
+        const notices = [...(deps.notices ?? [])];
+        if (unreadable.length > 0) {
+          notices.push({ id: "buffersUnreadable", message: strings.notices.buffersUnreadable(unreadable.length) });
+        }
+        return {
+          settings: deps.settings.current,
+          session: deps.session.session,
+          buffers,
+          safeMode: deps.safeMode,
+          versions: deps.versions,
+          ...(deps.e2e ? { e2e: true } : {}),
+          ...(deps.keybindings ? { keybindings: deps.keybindings.rules } : {}),
+          ...(notices.length > 0 ? { notices } : {}),
+        };
+      },
       "run.start": (input: unknown): { runId: string } => {
         const { tabId, code, language, logpoints, reason, runtime } = parse(runStartParamsSchema, "run.start", input);
         // Defence in depth (spec §5.14): Main never starts an automatic run in Safe Mode, whatever the UI sends.

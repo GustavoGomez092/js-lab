@@ -354,6 +354,9 @@ export const STARTUP_NOTICE_IDS = [
   "settingsNewer",
   "sessionNewer",
   "tabsDropped",
+  // F1: one tab whose buffer file can't be read no longer fails the whole `app.bootstrap`. The app opens with that
+  // tab empty (Main keeps it in its unreadable set, so nothing overwrites the file on disk) and says so here.
+  "buffersUnreadable",
   "unexpectedError",
 ] as const;
 
@@ -459,6 +462,35 @@ export type MainRequests = {
   "env.get": { params: Record<string, never>; response: { variables: EnvVars } };
   "env.save": { params: { variables: EnvVars }; response: SaveResult };
 };
+
+/**
+ * Every `MainRequests` method paired with the schema Main validates its params against (spec §18).
+ *
+ * Exhaustive by type: a new entry in `MainRequests` fails to compile here until it is registered. That is what lets
+ * the UI's per-request timeout table (`apps/ui/src/rpc-timeouts.ts`) be checked against the *schema* rather than
+ * against a hand-written list -- a request whose params admit a `MAX_TEXT_CHARS` string is detected here instead of
+ * being remembered. `emptyParamsSchema` is the entry for requests that take no params.
+ */
+export const MAIN_REQUEST_PARAMS_SCHEMAS: Record<keyof MainRequests, z.ZodType> = {
+  "app.bootstrap": emptyParamsSchema,
+  "run.start": runStartParamsSchema,
+  "run.expand": runExpandParamsSchema,
+  "tab.create": tabCreateParamsSchema,
+  "tab.close": tabParamsSchema,
+  "tab.reopen": emptyParamsSchema,
+  "settings.get": emptyParamsSchema,
+  "settings.update": settingsUpdateParamsSchema,
+  "file.save": fileSaveParamsSchema,
+  "npm.list": npmListParamsSchema,
+  "npm.search": npmSearchParamsSchema,
+  "types.package": packageTypesParamsSchema,
+  "types.local": localTypesParamsSchema,
+  "env.get": emptyParamsSchema,
+  "env.save": envSaveParamsSchema,
+};
+
+/** The `MainRequests` method names at runtime, derived from the exhaustive table above so they cannot drift. */
+export const MAIN_REQUEST_NAMES = Object.keys(MAIN_REQUEST_PARAMS_SCHEMAS) as (keyof MainRequests)[];
 
 /** Messages received by Main, sent by the UI. */
 export type MainMessages = {

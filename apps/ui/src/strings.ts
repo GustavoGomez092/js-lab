@@ -161,6 +161,13 @@ export const strings = {
   startup: {
     failed: (message: string) => `JSLab failed to start: ${message}`,
     retry: "Try Again",
+    /**
+     * F1: Try Again re-runs the identical bootstrap, so on its own it is an infinite loop for any failure that
+     * isn't transient. These give the user somewhere else to go -- the tab files themselves, and a report.
+     */
+    stuck: "If Try Again keeps failing, one of your tab files may be unreadable.",
+    openDataFolder: "Open Data Folder",
+    copyDebugLog: "Copy Debug Log",
   },
   palette: {
     label: "Command palette",

@@ -23,5 +23,9 @@ api
     );
   })
   .catch((error: unknown) => {
-    showStartupFailure(root, error, { heartbeat: () => api.heartbeat(), reload: () => window.location.reload() });
+    showStartupFailure(root, error, {
+      heartbeat: () => api.heartbeat(),
+      reload: () => window.location.reload(),
+      appCommand: (action) => api.appCommand(action),
+    });
   });

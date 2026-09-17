@@ -136,7 +136,7 @@ M5 depends on M3 because snippets autocomplete, AI context and the CLI all use t
   2. Snippets panel, completion provider, import/export.
   3. AI chat: provider adapters, streaming proxy, Keychain secrets, Explain Result.
   4. Gist: device flow, publish/update, open.
-  5. CLI: `jslab` binary and the socket `open` method on the existing `jslab.sock` server (M2), install/uninstall menu.
+  5. CLI: `jslab` binary and the socket `open` method on the existing `jslab.sock` server (M2), install/uninstall menu. **Done (M5c)** — plan: `docs/superpowers/plans/2026-09-16-jslab-m5c-cli.md`.
   6. VS Code theme importer.
   7. Keybindings settings UI.
   8. Show Transpiled Output, first-run welcome tab.

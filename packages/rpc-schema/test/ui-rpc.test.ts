@@ -4,6 +4,7 @@ import {
   appNoticeSchema,
   bufferChangedSchema,
   commandsPublishedSchema,
+  DEFAULT_NOTICE_SEVERITY,
   e2eResponseSchema,
   fileConfirmLargeSchema,
   fileConfirmSaveAsSchema,
@@ -11,9 +12,11 @@ import {
   keybindingsSaveParamsSchema,
   MAX_OPEN_FILE_BYTES,
   MAX_TEXT_CHARS,
+  noticeSeverity,
   runExpandParamsSchema,
   runStartParamsSchema,
   runTranspiledParamsSchema,
+  STARTUP_NOTICE_IDS,
   settingsAppCommandSchema,
   settingsUpdateParamsSchema,
   tabCreateParamsSchema,
@@ -274,6 +277,45 @@ describe("inbound validators", () => {
     expect(appNoticeSchema.safeParse({ id: "unexpectedError", message: "Something went wrong." }).success).toBe(true);
     expect(appNoticeSchema.safeParse({ id: "exec", message: "x" }).success).toBe(false);
     expect(appNoticeSchema.safeParse({ id: "unexpectedError", message: "x".repeat(2001) }).success).toBe(false);
+  });
+
+  // UI item 7. One banner voice for every id was the defect; severity is what gives it more than one. The map has
+  // to be TOTAL, because an id with no severity is the failure mode that hides -- the notice still renders, just
+  // in whatever tone the fallback picks.
+  test("every notice id has a severity, and ids that differ in kind differ in severity", () => {
+    // Drift guard. TypeScript already rejects a map that is missing a key; this catches what it cannot -- an id
+    // added to the map that is no longer (or never was) a real notice id.
+    expect(Object.keys(DEFAULT_NOTICE_SEVERITY).sort()).toEqual([...STARTUP_NOTICE_IDS].sort());
+    expect(DEFAULT_NOTICE_SEVERITY).toEqual({
+      // Recoveries: JSLab already put things right, and says so.
+      settingsRecovered: "info",
+      sessionRecovered: "info",
+      cliInstall: "info",
+      // Something the user still has, but degraded: changes that will not be saved, tabs that did not come back.
+      settingsNewer: "warning",
+      sessionNewer: "warning",
+      tabsDropped: "warning",
+      buffersUnreadable: "warning",
+      // D1 is worded after `settingsNewer` in Main's strings ("the same situation") and has the same consequence
+      // -- settings changes silently lost at restart -- so it gets that id's severity, not a louder one.
+      settingsTooLarge: "warning",
+      unexpectedError: "error",
+    });
+  });
+
+  test("a notice carries its id's severity unless Main overrides it", () => {
+    expect(noticeSeverity({ id: "unexpectedError", message: "x" })).toBe("error");
+    expect(noticeSeverity({ id: "settingsTooLarge", message: "x" })).toBe("warning");
+    // Spec §16.1: `cliInstall` reports BOTH a successful install and a failed one (CliInstallResult.ok), so it is
+    // the one id whose severity cannot be derived from the id alone.
+    expect(noticeSeverity({ id: "cliInstall", message: "x" })).toBe("info");
+    expect(noticeSeverity({ id: "cliInstall", message: "x", severity: "error" })).toBe("error");
+  });
+
+  test("app.notice accepts an optional severity and rejects one that is not a severity", () => {
+    expect(appNoticeSchema.safeParse({ id: "cliInstall", message: "ok" }).success).toBe(true);
+    expect(appNoticeSchema.safeParse({ id: "cliInstall", message: "ok", severity: "error" }).success).toBe(true);
+    expect(appNoticeSchema.safeParse({ id: "cliInstall", message: "ok", severity: "fatal" }).success).toBe(false);
   });
 
   test("file payloads cap content and token lists", () => {

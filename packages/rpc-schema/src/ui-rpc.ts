@@ -489,6 +489,34 @@ export const STARTUP_NOTICE_IDS = [
   "cliInstall",
 ] as const;
 
+export const NOTICE_SEVERITIES = ["info", "warning", "error"] as const;
+
+/** How loudly a notice speaks (UI item 7): its colour, its icon, and whether it may dismiss itself. */
+export type NoticeSeverity = (typeof NOTICE_SEVERITIES)[number];
+
+/**
+ * The severity each notice id speaks in unless Main overrides it. Total by construction: an id added to
+ * STARTUP_NOTICE_IDS without an entry here fails typecheck. That is the point — a missing severity would
+ * otherwise surface as a banner in the wrong tone, which is exactly the class of defect that hides.
+ *
+ * `settingsTooLarge` is a `warning` rather than an `error` deliberately: Main's own strings word it after
+ * `settingsNewer` ("the same situation") and it has that id's consequence — settings changes silently lost at
+ * restart. Only `warning` and `error` persist, so nothing about it auto-dismisses either way.
+ */
+export const DEFAULT_NOTICE_SEVERITY: Record<(typeof STARTUP_NOTICE_IDS)[number], NoticeSeverity> = {
+  // JSLab already put things right, and is telling the user so.
+  settingsRecovered: "info",
+  sessionRecovered: "info",
+  cliInstall: "info",
+  // Still usable, but degraded: changes that will not be saved, tabs that did not come back.
+  settingsNewer: "warning",
+  sessionNewer: "warning",
+  tabsDropped: "warning",
+  buffersUnreadable: "warning",
+  settingsTooLarge: "warning",
+  unexpectedError: "error",
+};
+
 /**
  * Something Main wants the user to know (spec §20): at startup, recovered files, newer files and skipped tabs; later,
  * an unexpected Main error (FA-I3) or a settings write refused as too large (D1), sent as an `app.notice` message.
@@ -496,10 +524,24 @@ export const STARTUP_NOTICE_IDS = [
 export interface StartupNotice {
   id: (typeof STARTUP_NOTICE_IDS)[number];
   message: string;
+  /**
+   * Set only where the id alone cannot say: `cliInstall` reports both a successful install and a failed one
+   * (`CliInstallResult.ok`). Every other id takes its severity from DEFAULT_NOTICE_SEVERITY.
+   */
+  severity?: NoticeSeverity;
+}
+
+/** A notice's severity: Main's override if it sent one, otherwise the id's own. Never undefined. */
+export function noticeSeverity(notice: StartupNotice): NoticeSeverity {
+  return notice.severity ?? DEFAULT_NOTICE_SEVERITY[notice.id];
 }
 
 /** `app.notice` (Main → UI): validated by the UI before it is shown (FA-I3). */
-export const appNoticeSchema = z.object({ id: z.enum(STARTUP_NOTICE_IDS), message: z.string().min(1).max(2000) });
+export const appNoticeSchema = z.object({
+  id: z.enum(STARTUP_NOTICE_IDS),
+  message: z.string().min(1).max(2000),
+  severity: z.enum(NOTICE_SEVERITIES).optional(),
+});
 
 const settingValue = z.union([z.boolean(), z.number().finite(), z.string().max(200)]);
 

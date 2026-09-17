@@ -221,6 +221,8 @@ export const strings = {
   },
   notices: {
     copyDebugLog: "Copy Debug Log",
+    /** UI item 7: one control to clear a stack, shown only once more than two are up at the same time. */
+    dismissAll: "Dismiss all",
   },
   startup: {
     failed: (message: string) => `JSLab failed to start: ${message}`,

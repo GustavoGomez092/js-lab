@@ -37,7 +37,8 @@ import { join } from "node:path";
  *      the waiver disappears from SIZE_EXEMPT entirely. Caught by `RENAMED_UNBOUNDED_READER`, in every file.
  *   6. Hand-rolling the read from `openSync`/`fstatSync`/`readSync` inside an ALLOWLISTED file. `readSync` was in
  *      the import check but in no call-level list, and the import check skips allowlisted files, so nothing looked
- *      at it and no count moved. Caught by `FD_PRIMITIVE`, which only `THE_READER` may name.
+ *      at it and no count moved. Caught by `FD_PRIMITIVE`, which only `THE_READER` may name -- for the SYNCHRONOUS
+ *      shape only. The async twin is not closed, and is admitted in the limits below rather than implied away.
  *   7. Recording a genuine `readRegularFileText(p)` as a NOT_A_READ_CAP entry -- a ledger whose whole claim is
  *      "no file is read here". The waiver test skipped those files wholesale while the pin only checked a total,
  *      so the real read was excused by a ledger that cannot describe one. `UNBOUNDED_READER_CALL` is now split out
@@ -63,6 +64,16 @@ import { join } from "node:path";
  *     pattern, so this file cannot be the thing that closes it. It is closed in `bounded-read.ts` instead, which
  *     refuses a finite `maxBytes` over `MAX_MEANINGFUL_CAP_BYTES`. That is the one limit here that is answered
  *     elsewhere rather than admitted, and the ledger below is complete only because it is.
+ *   - The **asynchronous** hand-roll -- `open()` from `node:fs/promises` plus `handle.read()`, which is what
+ *     `bounded-read.ts` itself does minus `O_NONBLOCK` -- is NOT matched, in any file. `FD_PRIMITIVE` covers the
+ *     synchronous shape only. Closing it textually was tried and rejected: `open(` appears legitimately twelve
+ *     times in the scanned tree (a dialog's `open()`, a window's `open()`, four stores' `static async open(`, and
+ *     `persistence/atomic-write.ts` opening a file in order to WRITE it), so a call-level matcher would need about
+ *     ten ledger entries for things that are not reads -- the exact conflation SIZE_EXEMPT and NOT_A_READ_CAP
+ *     exist to undo. An import-level matcher is no better: it would record atomic-write's write-open as a read,
+ *     and `fsReadImports` skips allowlisted files, so it would not close the hole in the very files evasion 6 was
+ *     about. The hazard differs too: an async `handle.read()` on a FIFO occupies a libuv threadpool slot rather
+ *     than blocking the JS thread, so it degrades Main rather than stopping it.
  *
  * To add a read here: use `src/main/fs/bounded-read.ts`. If the read genuinely cannot be bounded, add it below
  * with a reason -- the reason is the point, and "it seemed fine" is not one.
@@ -80,7 +91,7 @@ const THE_READER = `${MAIN_ROOT}/fs/bounded-read.ts`;
 const BARE_READ = [/readFileSync\s*\(/, /readFile\s*\(/, /Bun\s*\.\s*file\s*\(/, /createReadStream\s*\(/];
 
 /**
- * The fd primitives a whole-file read is hand-rolled from.
+ * The **synchronous** fd primitives a whole-file read is hand-rolled from.
  *
  * These are not unbounded reads in themselves -- `bounded-read.ts` is built out of exactly this
  * `openSync`/`fstatSync`/`readSync` shape -- which is precisely why no other file may name them: `openSync(path)`
@@ -89,9 +100,15 @@ const BARE_READ = [/readFileSync\s*\(/, /readFile\s*\(/, /Bun\s*\.\s*file\s*\(/,
  *
  * `readSync` sat in `READ_BINDING` (the import check) but in `BARE_READ` not at all, and `fsReadImports` skips
  * allowlisted files -- so this shape was invisible in exactly the files most likely to reach for it. Measured as a
- * matched pair, identical code: in `services/npm-service.ts` (ALLOWED, pinned at 1) the gate stayed at
- * 10 pass / 0 fail, while in `services/keybindings-store.ts` (not allowlisted) it failed 9 pass / 1 fail. Since the
- * offence is the hand-rolling and not the count, this carries no allowlist exemption at all.
+ * matched pair, identical code: in `services/npm-service.ts` (ALLOWED, pinned at 1) the gate stayed green, while in
+ * `services/keybindings-store.ts` (not allowlisted) it failed. Since the offence is the hand-rolling and not the
+ * count, this carries no allowlist exemption at all.
+ *
+ * SYNCHRONOUS ONLY, and the name of the test below says so. The async twin -- `open()` from `node:fs/promises`
+ * plus `handle.read()` -- evades this and every other check in this file, in every file. That is stated in the
+ * header's limits, with the reasons a textual matcher for it was rejected and the way its hazard differs. Naming
+ * this constant or its test as though it covered both would be this branch's own thesis broken in its own test
+ * suite: a stated reason has to answer its hazard, and one that overclaims answers nothing.
  */
 const FD_PRIMITIVE = [/openSync\s*\(/, /readSync\s*\(/];
 
@@ -143,8 +160,13 @@ const ALIASED_READ_BINDING = /\b(?:readFile|readFileSync|createReadStream|readSy
  *
  * It is not a contrived spelling either. `runs/runner-config.ts` already writes
  * `const readTextSync = readBoundedTextSyncOrNull`, so re-binding a reader to a local name is an established idiom
- * in this tree, which is why the local-`const` form is refused alongside the import rename. Renaming these is never
- * legitimate in any file: the waiver has to stay legible to SIZE_EXEMPT, and a renamed one is not.
+ * in this tree, which is why the local-`const` form is refused alongside the import rename. Neither spelling is ever
+ * legitimate -- the waiver has to stay legible to SIZE_EXEMPT, and a renamed one is not -- so both are refused in
+ * every file, allowlisted or not.
+ *
+ * What is matched is those TWO spellings, not renaming in general. A reader passed as a parameter, stashed on an
+ * object or returned from a factory still names no binding this can see; that is the value-mediated limit the
+ * header admits, and this comment does not pretend otherwise.
  */
 const RENAMED_UNBOUNDED_READER = [
   /readRegularFileText(?:Sync)?\s+as\s+/,
@@ -583,10 +605,16 @@ describe("no unbounded reads in Main", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("no file but the shared reader hand-rolls a whole-file read out of fd primitives", () => {
+  test("no file but the shared reader hand-rolls a whole-file read out of the SYNCHRONOUS fd primitives", () => {
     // bounded-read.ts is written in exactly this openSync/fstatSync/readSync shape, which is what makes the shape
     // the likeliest to be copied by someone doing the right thing badly -- and copying it is how an allowlisted
     // file reads a whole file without moving the count that pins it.
+    //
+    // The name says SYNCHRONOUS because that is all this enforces. `open()` from node:fs/promises plus
+    // `handle.read()` passes this test, and every other test here, in every file. The header's limits say so and
+    // why. An earlier name -- "out of fd primitives" -- claimed the pair; that overclaim is the defect this
+    // rename fixes, because a gate whose own names overstate their coverage teaches exactly the habit it exists
+    // to punish.
     const offenders = scannedFiles()
       .filter((file) => file !== THE_READER)
       .flatMap((file) => matchesIn(file, FD_PRIMITIVE));

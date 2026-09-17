@@ -70,6 +70,11 @@ export function EntryRow({
           aria-label={`L${line}`}
           title={strings.output.jumpToLine(line)}
           onClick={() => onReveal(line)}
+          // Item 8: pointer/keyboard parity. The row reports hover on mouse enter/leave, which drives the editor's
+          // .line-hover decoration; this badge is the row's only focusable node, so tabbing to it must say which
+          // editor line the row belongs to exactly as the mouse does.
+          onFocus={() => onHover(line)}
+          onBlur={() => onHover(null)}
         >
           :{line}
         </button>

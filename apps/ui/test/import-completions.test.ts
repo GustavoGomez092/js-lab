@@ -76,6 +76,8 @@ describe("import specifier completions (the user report: word-based suggestions 
       ["export { x } from 'na'", "'na"],
       ["const m = await import('na')", "'na"],
       ["const m = require('na')", "'na"],
+      // A multi-line import's continuation line -- just the `from` clause, no `import` keyword on this line.
+      ["} from 'na'", "'na"],
     ];
     for (const [line, upTo] of cases) {
       const found = importSpecifierAt(line, caretAfter(line, upTo));
@@ -95,6 +97,40 @@ describe("import specifier completions (the user report: word-based suggestions 
     ];
     for (const [line, upTo] of cases) {
       expect({ line, found: importSpecifierAt(line, caretAfter(line, upTo)) }).toEqual({ line, found: null });
+    }
+  });
+
+  // Would fail if a `//` line comment containing the literal text of an import form were treated as a real
+  // specifier -- e.g. `from` or `require(` appearing only because the line is commented out.
+  test("does NOT fire inside a line comment, even one that reads like an import form", () => {
+    const cases: [string, string][] = [
+      ["// pulled from 'na'", "'na"],
+      ["// see require('na') for details", "'na"],
+    ];
+    for (const [line, upTo] of cases) {
+      expect({ line, found: importSpecifierAt(line, caretAfter(line, upTo)) }).toEqual({ line, found: null });
+    }
+  });
+
+  // Would fail if `//` inside a string literal (not a comment) were mistaken for a comment marker, suppressing
+  // a real specifier that happens to follow one on the same line.
+  test("a // inside a string is not mistaken for a line comment", () => {
+    const line = "const base = 'http://x'; import y from 'na'";
+    expect(importSpecifierAt(line, caretAfter(line, "'na"))?.prefix).toBe("na");
+  });
+
+  // KNOWN LIMITATION, not fixed here: an ordinary prose string that happens to contain the literal substring
+  // `from '` (or a template literal with `from '` after interpolation) still fires. Excluding this on a single
+  // line without a real tokenizer was judged impractical relative to the (cosmetic-only) impact -- an unwanted
+  // popup, never an insertion. Documented so a future attempt doesn't have to rediscover it.
+  test('KNOWN LIMITATION: a prose string containing "from \'" still fires', () => {
+    const cases: [string, string][] = [
+      ["const msg = \"converted from 'en'\"", "'en"],
+      ["const x = `${a} from 'na'`", "'na"],
+    ];
+    for (const [line, upTo] of cases) {
+      const found = importSpecifierAt(line, caretAfter(line, upTo));
+      expect({ line, found: found?.prefix }).toEqual({ line, found: line.includes("'en'") ? "en" : "na" });
     }
   });
 
@@ -192,8 +228,11 @@ describe("the registered Monaco provider", () => {
       detail: strings.completions.packageDetail("6.0.1"),
       range: { startLineNumber: 1, endLineNumber: 1, startColumn: column - 2, endColumn: column },
     });
-    // Ranks above Monaco's buffer word-based suggestions, which is the whole point of the user's report.
-    expect(typeof suggestion?.sortText).toBe("string");
+    // Pins the literal value, not just its type: sortText must sort before Monaco's word-based buffer
+    // suggestions, which are plain identifiers ("name", "namespace", …). A "0" prefix guarantees that
+    // lexicographically; asserting the exact string is what would catch a regression to plain `pkg.name`
+    // (e.g. "nanoid" sorting after "name") -- the milder, quieter version of the user's reported bug.
+    expect(suggestion?.sortText).toBe("0nanoid");
   });
 
   // Would fail if dispose() did not forward to the Monaco registration -- the leak the brief calls out, where

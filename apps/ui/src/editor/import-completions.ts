@@ -20,6 +20,38 @@ const SPECIFIER_BEFORE_CARET = /(?:\bfrom\s*|^[ \t]*import\s*|\bimport\s*\(\s*|\
 /** Monaco's two JavaScript-family language ids. `tsx`/`jsx` models carry the JSX-ness in their file extension. */
 const LANGUAGE_IDS = ["typescript", "javascript"];
 
+/**
+ * True when `text` ends inside a `//` line comment rather than inside a string literal such as `"http://x"`.
+ *
+ * A minimal same-line scan, not a tokenizer: walk left to right, tracking whether each character sits inside a
+ * single- or double-quoted string (honoring `\` escapes), and only count a `//` seen while outside one. This is
+ * exactly enough to keep `// … from 'x'` and `// see require('x')` from opening the specifier popup, which is the
+ * one thing it guards. It deliberately does not track template literals or interpolation -- a `//` after an
+ * unbalanced backtick, or `from '...'` sitting inside an ordinary prose string on the same line (e.g.
+ * `"converted from 'en'"`), can still slip through. That gap is accepted: excluding it would need real
+ * tokenization, which is out of scope for a cosmetic false-positive popup (see the tests documenting it).
+ */
+function endsInsideLineComment(text: string): boolean {
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === "\\") {
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") return true;
+  }
+  return false;
+}
+
 export interface ImportSpecifier {
   /** What the user has typed so far between the opening quote and the caret; "" right after the quote. */
   prefix: string;
@@ -32,6 +64,13 @@ export function importSpecifierAt(line: string, column: number): ImportSpecifier
   const before = line.slice(0, Math.max(0, column - 1));
   const match = SPECIFIER_BEFORE_CARET.exec(before);
   if (!match) return null;
+  // Reject when the anchor (`from`, `import(`, `require(`) itself sits inside a `//` comment, e.g.
+  // `// pulled from 'na'`. The quote's index is wherever a quote character first appears in the full match --
+  // the anchor text before it is plain words/parens/whitespace, never a quote -- found via `search` rather than
+  // `indexOf(match[1])` because `noUncheckedIndexedAccess` types a capture group as possibly `undefined`.
+  const quoteOffset = match[0].search(/["']/);
+  const quoteIndex = match.index + (quoteOffset === -1 ? 0 : quoteOffset);
+  if (endsInsideLineComment(before.slice(0, quoteIndex))) return null;
   const prefix = match[2] ?? "";
   return { prefix, startColumn: column - prefix.length };
 }

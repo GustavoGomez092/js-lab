@@ -202,17 +202,20 @@ export class RunCoordinator {
    * logpoints and loop protection off (R-M5a-3) rather than stripping `__jl` calls out of generated code, which
    * cannot be done correctly. The transform host is LRU-cached, so the second call is cheap and repeatable.
    */
-  async transpiled(tabId: string, hideInstrumentation: boolean): Promise<{ code: string } | null> {
+  async transpiled(tabId: string, hideInstrumentation: boolean): Promise<{ code: string; source: string } | null> {
     const entry = this.#transpiled.get(tabId);
     if (!entry) return null;
-    if (!hideInstrumentation) return { code: entry.code };
+    // R-M5a-7: the caller gets the source this output was produced from, either way -- the uninstrumented view is
+    // the same program, transformed again with the instrumentation off, so it is stale under exactly the same
+    // condition. Nothing here mutates the cached entry.
+    if (!hideInstrumentation) return { code: entry.code, source: entry.source };
     const plain = await this.deps.transform(entry.source, {
       ...entry.options,
       autoLog: false,
       logpoints: [],
       loopProtection: false,
     });
-    return plain.ok ? { code: plain.code } : null;
+    return plain.ok ? { code: plain.code, source: entry.source } : null;
   }
 
   /**

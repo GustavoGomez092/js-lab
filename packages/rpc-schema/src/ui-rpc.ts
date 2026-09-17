@@ -435,7 +435,12 @@ export type MainRequests = {
   "app.bootstrap": { params: Record<string, never>; response: BootstrapPayload };
   "run.start": { params: RunStartParams; response: { runId: string } };
   "run.expand": { params: RunExpandParams; response: EncodedValue | null };
-  "run.transpiled": { params: RunTranspiledParams; response: { code: string } | null };
+  /**
+   * R-M5a-7: `source` is the exact source Main transpiled to produce `code`, so the panel can say when what it
+   * shows is output for code the user has since edited. Re-deriving that UI-side from the last `run.start` payload
+   * is unsound -- after a run that fails to transpile, Main still serves the previous successful transform.
+   */
+  "run.transpiled": { params: RunTranspiledParams; response: { code: string; source: string } | null };
   "tab.create": { params: TabCreateParams; response: { tab: TabState } };
   "tab.close": { params: TabParams; response: TabCloseResult };
   "tab.reopen": { params: Record<string, never>; response: TabWithContent | null };

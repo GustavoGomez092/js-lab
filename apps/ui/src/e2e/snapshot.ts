@@ -45,6 +45,8 @@ export interface UiSnapshot {
   diagnostics: number;
   focus: AppState["focus"];
   modal: string | null;
+  /** Which panel the side bar is showing, so a scenario can assert Show Transpiled Output switched it (spec §7.4). */
+  sideBarPanel: AppState["sideBarPanel"];
   outputFilter: AppState["outputFilter"];
   outputCounts: Record<AppState["outputFilter"], number>;
   statusMessage: string | null;
@@ -108,6 +110,7 @@ export function snapshotState(state: AppState): UiSnapshot {
     diagnostics: state.diagnostics.length,
     focus: state.focus,
     modal: state.modal?.kind ?? null,
+    sideBarPanel: state.sideBarPanel,
     outputFilter: state.outputFilter,
     outputCounts: filterCounts(
       visibleEntries(state.output, { showUndefined: state.settings?.run.showUndefined ?? false }),

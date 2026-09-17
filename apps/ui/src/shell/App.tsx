@@ -381,6 +381,10 @@ export function App({
         outputPlain: document.querySelector(".output-plain") !== null,
         lineAnchors: document.querySelector(".entry-line") !== null,
         staleLabel: document.querySelector(".output-stale-label") !== null,
+        // M5a (spec §7.4): the read-only transpiled-output panel, so a scenario can tell it is on screen, and
+        // (R-M5a-7) whether it is currently admitting that what it shows is output for code that has since changed.
+        transpiledPanel: document.querySelector(".transpiled-panel") !== null,
+        transpiledStale: document.querySelector(".transpiled-stale-label") !== null,
         // M4 Task 16: the Web View tile's docking placeholder, which `OutputTiles` renders only for a runtime that
         // can host a webview and only while that tab's own Web View toggle is on -- so this is what an E2E
         // scenario reads to tell "the tile is on screen" from "a bun tab never gets one" (spec §7.1, parity WV-01).
@@ -522,7 +526,7 @@ export function App({
             onNpm={() => registry.execute("tools.npmPackages")}
           />
         )}
-        {settings.view.sideBar && <SideBar panel={sideBarPanel} />}
+        {settings.view.sideBar && <SideBar panel={sideBarPanel} store={store} api={api} />}
         <SplitPane
           orientation={orientation}
           size={editorSize}

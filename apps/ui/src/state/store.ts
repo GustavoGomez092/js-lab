@@ -154,6 +154,9 @@ function evictOperations(operations: readonly NpmOperation[]): NpmOperation[] {
   return operations.filter((_, index) => !removeAt.has(index));
 }
 
+/** Which panel the side bar shows (Task 16, M4). M5a adds the read-only transpiled output (spec §7.4, R-M5a-6). */
+export type SideBarPanel = "snippets" | "ai" | "transpiled";
+
 export interface AppState {
   ready: boolean;
   settings: Settings | null;
@@ -182,7 +185,7 @@ export interface AppState {
   /** True when `appearance.font` failed to load and JetBrains Mono is in use instead (spec §9.4). */
   fontFallback: boolean;
   /** Which panel the side bar shows when open (Task 16). Snippets and AI Chat arrive in M5. */
-  sideBarPanel: "snippets" | "ai";
+  sideBarPanel: SideBarPanel;
   /** Bumped on every `npm.changed` message, so the editor's type feeder invalidates its package cache (Task 23). */
   packagesRevision: number;
   /** The NPM Packages sheet (spec §11.2, Task 26). */
@@ -271,7 +274,7 @@ export interface AppState {
   setVimMode(mode: string | null): void;
   setThemeId(themeId: string): void;
   setFontFallback(value: boolean): void;
-  setSideBarPanel(panel: "snippets" | "ai"): void;
+  setSideBarPanel(panel: SideBarPanel): void;
   bumpPackagesRevision(): void;
   /** Spec §11.2. Bumps `packagesRevision` when the installed name@version set changes (not on `latest` alone). */
   receiveNpmList(list: NpmListResult, now?: number): void;

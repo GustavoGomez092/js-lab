@@ -29,6 +29,11 @@ export interface MainApi {
   bootstrap(): Promise<BootstrapPayload>;
   startRun(params: RunStartParams): Promise<{ runId: string }>;
   expand(params: RunExpandParams): Promise<EncodedValue | null>;
+  /**
+   * Spec §7.4: the latest Babel output for a tab, or null when it has never transpiled successfully. `source` is
+   * the source Main transpiled to produce `code`, which is what "stale" is judged against (R-M5a-7).
+   */
+  transpiled(tabId: string, hideInstrumentation: boolean): Promise<{ code: string; source: string } | null>;
   stop(tabId: string): void;
   kill(tabId: string): void;
   wait(tabId: string): void;

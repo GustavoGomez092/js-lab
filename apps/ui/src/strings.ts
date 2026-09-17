@@ -18,6 +18,15 @@ export const strings = {
     // The two command titles that used to sit here moved to the command catalogue (`packages/shared/src/commands.ts`)
     // in M5a Task 5, where every other menu, palette and keybinding title lives; they were dead duplicates here.
   },
+  transpiled: {
+    title: "Transpiled Output",
+    /** Spec §7.4: "a toggle hides the instrumentation calls". */
+    hideInstrumentation: "Hide instrumentation",
+    empty: "Run this tab to see its transpiled output.",
+    failed: "Couldn't read the transpiled output.",
+    /** R-M5a-7: shown while the editor's source differs from the source that produced the output on screen. */
+    stale: "Stale — run to refresh",
+  },
   commands: {
     failed: (title: string, error: unknown) =>
       `${title} failed: ${error instanceof Error ? error.message : String(error)}`,

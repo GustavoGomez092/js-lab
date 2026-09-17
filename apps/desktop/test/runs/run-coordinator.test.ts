@@ -742,10 +742,15 @@ describe("RunCoordinator", () => {
 
     const instrumented = await h.coordinator.transpiled("t1", false);
     expect(instrumented?.code).toContain("__jl.");
+    // R-M5a-7: the source this output was produced from travels with it, so the panel compares against what Main
+    // actually transpiled rather than guessing from what it last sent.
+    expect(instrumented?.source).toBe("const a = 5;\na;");
 
     const plain = await h.coordinator.transpiled("t1", true);
     expect(plain?.code).not.toContain("__jl.");
     expect(plain?.code).toContain("const a = 5");
+    // The uninstrumented view is the same program, so it is stale under the same condition: same `source`.
+    expect(plain?.source).toBe("const a = 5;\na;");
 
     expect(await h.coordinator.transpiled("never-ran", false)).toBeNull();
 
@@ -753,4 +758,25 @@ describe("RunCoordinator", () => {
     h.coordinator.disposeTab("t1");
     expect(await h.coordinator.transpiled("t1", false)).toBeNull();
   });
+
+  // The two ways this cache could lie, neither of them pinned before: a later run that cannot compile must not
+  // replace the last good entry (if it did, `source` would stop describing where `code` came from, and R-M5a-7's
+  // stale indicator would report "fresh" over older output), and asking for the uninstrumented view must not
+  // consume or overwrite the instrumented one.
+  test("a failed compile leaves the last good transform in place, and hiding instrumentation does not erase it", async () => {
+    const h = await createHarness();
+    const good = h.coordinator.start({ tabId: "t1", code: "const a = 5;\na;", language: "typescript", logpoints: [] });
+    await h.waitForState("evaluating", good.runId);
+    const before = await h.coordinator.transpiled("t1", false);
+    expect(before?.source).toBe("const a = 5;\na;");
+    expect(before?.code).toContain("__jl.");
+
+    const broken = h.coordinator.start({ tabId: "t1", code: "const a = ;", language: "typescript", logpoints: [] });
+    await h.waitForState("failed", broken.runId);
+    expect(await h.coordinator.transpiled("t1", false)).toEqual(before);
+
+    const plain = await h.coordinator.transpiled("t1", true);
+    expect(plain?.code).not.toContain("__jl.");
+    expect(await h.coordinator.transpiled("t1", false)).toEqual(before);
+  }, 15_000);
 });

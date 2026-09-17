@@ -83,7 +83,7 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         const { tabId, runId, handleId } = parse(runExpandParamsSchema, "run.expand", input);
         return deps.coordinator.expand(tabId, runId, handleId);
       },
-      "run.transpiled": (input: unknown): Promise<{ code: string } | null> => {
+      "run.transpiled": (input: unknown): Promise<{ code: string; source: string } | null> => {
         const { tabId, hideInstrumentation } = parse(runTranspiledParamsSchema, "run.transpiled", input);
         return deps.coordinator.transpiled(tabId, hideInstrumentation);
       },

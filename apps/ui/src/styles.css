@@ -655,15 +655,47 @@ button:disabled {
   border-bottom: 1px solid var(--border-default);
 }
 
+/* UI item 7: one tone for every notice is what these replace. A recovery and an unexpected error no longer
+   arrive in the same yellow. */
+.banner-info {
+  background: var(--bg-elevated);
+  color: var(--fg-info);
+}
+
 .banner-warning {
   background: var(--bg-elevated);
   color: var(--fg-warn);
 }
 
-/* Startup notices (Task 9, spec §20). */
+.banner-error {
+  background: var(--bg-elevated);
+  color: var(--fg-error);
+}
+
+/* Decorative, so severity survives for anyone who cannot tell the colours apart. */
+.banner-icon {
+  margin-right: 8px;
+  font-style: normal;
+}
+
+/* Startup notices (Task 9, spec §20).
+   UI item 7: still in normal flow on purpose -- floating these over the editor would put them in front of
+   Monaco's own widgets, the problem `widget-occlusion` exists to manage -- but now bounded, so a full queue of
+   five can only ever take a slice of the editor instead of pushing it off the bottom. */
 .notices {
   display: flex;
   flex-direction: column;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+/* Shown only once more than two are stacked (see DISMISS_ALL_THRESHOLD). */
+.notices-dismiss-all {
+  align-self: flex-end;
+  margin: 4px 12px;
+  padding: 2px 10px;
+  border-color: var(--border-default);
+  color: var(--fg-muted);
 }
 
 /* A notice's action button, such as Copy Debug Log (spec §20). */
@@ -674,11 +706,14 @@ button:disabled {
   color: var(--fg-default);
 }
 
+/* UI item 7: was 20x20, well under a comfortable target. The negative block margin buys the extra size from the
+   banner's own padding rather than making every banner taller. */
 .banner-dismiss {
   float: right;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   padding: 0;
+  margin: -4px 0;
   color: inherit;
 }
 

@@ -299,7 +299,14 @@ async function start(): Promise<void> {
   };
   const reportCliResult = (result: CliInstallResult) => {
     log(result.message);
-    if (mainWindow.isOpen()) rpc.send["app.notice"]({ id: "cliInstall", message: result.message });
+    // §16.1: this one id reports a successful install AND a failed one, so its tone comes from the result rather
+    // than from the id (UI item 7). Every other notice takes its severity from DEFAULT_NOTICE_SEVERITY.
+    if (mainWindow.isOpen())
+      rpc.send["app.notice"]({
+        id: "cliInstall",
+        message: result.message,
+        severity: result.ok ? "info" : "error",
+      });
     void refreshCliInstalled();
   };
 

@@ -15,8 +15,8 @@ export const strings = {
     tooltip: "Logpoint — this line's value is shown in the output",
     /** Spec §5.5: "A logpoint on a line with no loggable statement is shown hollow, with a tooltip." */
     noValue: "Logpoint has no value to log on this line",
-    toggle: "Toggle Logpoint",
-    clearAll: "Clear All Logpoints",
+    // The two command titles that used to sit here moved to the command catalogue (`packages/shared/src/commands.ts`)
+    // in M5a Task 5, where every other menu, palette and keybinding title lives; they were dead duplicates here.
   },
   commands: {
     failed: (title: string, error: unknown) =>

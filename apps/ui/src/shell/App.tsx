@@ -232,7 +232,7 @@ export function App({
     );
     created.register(
       ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle, keysFor }),
-      ...createEditorCommands(getEditorHandle),
+      ...createEditorCommands(getEditorHandle, store),
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
       ...createFileCommands(flows, api),

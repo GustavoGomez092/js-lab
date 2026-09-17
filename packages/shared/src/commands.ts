@@ -88,6 +88,8 @@ export const COMMANDS = [
   { id: "edit.toggleLineComment", title: "Toggle Line Comment", category: "edit", context: "editor" },
   { id: "edit.toggleBlockComment", title: "Toggle Block Comment", category: "edit", context: "editor" },
   { id: "edit.toggleMagicComment", title: "Toggle Magic Comment", category: "edit", context: "editor" },
+  { id: "edit.toggleLogpoint", title: "Toggle Logpoint", category: "edit", context: "editor" },
+  { id: "edit.clearLogpoints", title: "Clear All Logpoints", category: "edit", context: "editor" },
   { id: "edit.deleteLine", title: "Delete Line", category: "edit", context: "editor" },
   { id: "edit.selectLine", title: "Select Line", category: "edit", context: "editor" },
   { id: "edit.splitSelectionIntoLines", title: "Split Selection into Lines", category: "edit", context: "editor" },

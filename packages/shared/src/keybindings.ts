@@ -206,6 +206,10 @@ export const DEFAULT_KEYBINDINGS: readonly KeybindingRule[] = [
   { key: "cmd+/", command: "edit.toggleLineComment", when: editor },
   { key: "cmd+alt+/", command: "edit.toggleBlockComment", when: editor },
   { key: "cmd+alt+shift+/", command: "edit.toggleMagicComment", when: editor },
+  // Spec §6.3: "`F9` toggles the current line, and `Cmd+Shift+F9` clears all." Clear All has no `when`, so it
+  // reaches the whole window; the toggle needs the caret, so it is editor-only.
+  { key: "f9", command: "edit.toggleLogpoint", when: editor },
+  { key: "cmd+shift+f9", command: "edit.clearLogpoints" },
   { key: "ctrl+space", command: "edit.triggerSuggest", when: editor },
   { key: "f1", command: "edit.showHover", when: editor },
   { key: "cmd+f1", command: "edit.showDiagnostic", when: editor },

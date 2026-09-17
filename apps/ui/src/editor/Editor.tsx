@@ -250,6 +250,7 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
         const position = editor.getPosition();
         return model && position ? model.getOffsetAt(position) : 0;
       },
+      getCursorLine: () => editor.getPosition()?.lineNumber ?? null,
       getSelectedLineRange: () => {
         const selection = editor.getSelection();
         if (!selection) return null;

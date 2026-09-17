@@ -58,6 +58,17 @@ describe("application menu", () => {
     expect(byLabel(buildMenu(model()), "Clear Output")).toMatchObject({ action: menuAction("output.clear") });
   });
 
+  test("Edit lists Toggle Logpoint and Clear All Logpoints with their chords (spec §7.4)", () => {
+    const menu = buildMenu(model());
+    expect(byLabel(menu, "Toggle Logpoint")?.label).toBe("Toggle Logpoint    F9");
+    expect(byLabel(menu, "Clear All Logpoints")?.label).toBe("Clear All Logpoints    ⇧⌘F9");
+    expect(byLabel(menu, "Toggle Logpoint")?.action).toBe(menuAction("edit.toggleLogpoint"));
+    const labels = flatten(menu).map((item) => item.label?.split("    ")[0]);
+    // Spec §7.4 orders them right after Toggle Magic Comment.
+    expect(labels.indexOf("Toggle Logpoint")).toBe(labels.indexOf("Toggle Magic Comment") + 1);
+    expect(labels.indexOf("Clear All Logpoints")).toBe(labels.indexOf("Toggle Logpoint") + 1);
+  });
+
   test("the View menu offers the Web View tile toggle, checked and enabled from the active tab (WV-01, TF-19)", () => {
     const withTile = (runtime: "browser" | "bun", webviewVisible: boolean) => {
       const tab = createTab({ id: "t1", runtime });

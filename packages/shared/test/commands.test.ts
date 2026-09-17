@@ -41,4 +41,23 @@ describe("command catalogue", () => {
       { key: "alt+cmd+w", command: "view.toggleWebView" },
     ]);
   });
+
+  test("M5a adds the logpoint commands with the spec's chords (spec §6.3, §6.5)", () => {
+    expect(commandMeta("edit.toggleLogpoint")).toMatchObject({
+      title: "Toggle Logpoint",
+      category: "edit",
+      context: "editor",
+    });
+    expect(commandMeta("edit.clearLogpoints")).toMatchObject({
+      title: "Clear All Logpoints",
+      category: "edit",
+      context: "editor",
+    });
+    expect(
+      DEFAULT_KEYBINDINGS.filter((rule) => rule.command.endsWith("Logpoint") || rule.command.endsWith("Logpoints")),
+    ).toEqual([
+      { key: "f9", command: "edit.toggleLogpoint", when: "editorFocus" },
+      { key: "cmd+shift+f9", command: "edit.clearLogpoints" },
+    ]);
+  });
 });

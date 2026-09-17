@@ -1624,6 +1624,18 @@ button:disabled {
   font-weight: 600;
 }
 
+/* R-M4-PALETTE-HIDE-1: a disabled command stays listed, greyed and unselectable, so "not right now" never reads
+   as "no such command". Arrow keys skip it, so it never carries aria-selected and needs no selected-row rule. */
+.palette-item[aria-disabled="true"] {
+  color: var(--fg-muted);
+}
+
+.palette-unavailable {
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
 .palette-desc {
   color: var(--fg-muted);
   font-size: 12px;

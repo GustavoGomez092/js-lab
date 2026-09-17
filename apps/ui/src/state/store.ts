@@ -221,6 +221,11 @@ export interface AppState {
   notices: StartupNotice[];
 
   hydrate(payload: BootstrapPayload): void;
+  /**
+   * Replaces the user's keybinding overrides (Finding K1). App.tsx subscribes to `keybindings`, so writing here is
+   * what makes a saved keybindings.json take effect in the dispatcher, the palette and the chrome without a relaunch.
+   */
+  setKeybindings(keybindings: KeybindingRule[]): void;
   dismissNotice(id: StartupNotice["id"]): void;
   /** A notice Main sends after startup (`app.notice`, FA-I3): shown once per id, at most MAX_NOTICES at a time. */
   addNotice(notice: StartupNotice): void;
@@ -451,6 +456,10 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           runtimes: Object.fromEntries(session.tabOrder.map((id) => [id, newRuntime()])),
           closedCount: session.closedStack.length,
         });
+      },
+
+      setKeybindings(keybindings) {
+        set({ keybindings });
       },
 
       dismissNotice(id) {

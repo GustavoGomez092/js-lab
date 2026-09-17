@@ -473,7 +473,9 @@ async function start(): Promise<void> {
   // `MenuItem` (menu.ts) is the devkit's own `ApplicationMenuItemConfig` shape at its source (final review T14),
   // proved at compile time by `MENU_IS_DEVKIT_CONFIG`, so a built menu is passed straight to
   // `ApplicationMenu.setApplicationMenu` with no adapter.
-  const resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, keybindings.rules);
+  // Finding K1: reassigned by `keybindings.onChange` below. `build` closes over it and re-reads on every
+  // `menu.refresh()`, so a saved keybindings.json reaches the native menu's shortcut text without a relaunch.
+  let resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, keybindings.rules);
   const menu = createMenuController({
     build: () =>
       buildMenu({
@@ -548,6 +550,15 @@ async function start(): Promise<void> {
   });
   settings.onChange((next) => {
     if (settingsWindow.isOpen()) settingsRpc.send["settings.changed"]({ settings: next });
+  });
+  // Finding K1: a saved keybindings.json takes effect in the running app. The menu is rebuilt from the freshly
+  // resolved bindings and the main window is told, so its dispatcher, palette keycaps and chrome keycaps follow.
+  // The Settings window is deliberately not told here: `SettingsViewMessages` gains that entry in Task 10, which
+  // owns `settings-rpc.ts` and the Keybindings pane's wire.
+  keybindings.onChange((rules) => {
+    resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, rules);
+    menu.refresh();
+    if (mainWindow.isOpen()) rpc.send["keybindings.changed"]({ rules: [...rules] });
   });
 
   if (e2eEnabled) {

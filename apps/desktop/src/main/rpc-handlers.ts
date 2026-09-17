@@ -32,7 +32,7 @@ export interface RpcHandlerDeps {
   /** True for JSLAB_E2E=1 launches. */
   e2e?: boolean;
   onE2EResponse?(response: E2EResponse): void;
-  keybindings?: { rules: KeybindingRule[] };
+  keybindings?: { rules: readonly KeybindingRule[] };
   notices?: StartupNotice[];
   /** Spec §9.3: the imported themes, so the UI has them before its first paint (Finding T1). */
   themes?: { themes: readonly ThemeDefinition[] };
@@ -54,7 +54,7 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         safeMode: deps.safeMode,
         versions: deps.versions,
         ...(deps.e2e ? { e2e: true } : {}),
-        ...(deps.keybindings ? { keybindings: deps.keybindings.rules } : {}),
+        ...(deps.keybindings ? { keybindings: [...deps.keybindings.rules] } : {}),
         ...(deps.notices && deps.notices.length > 0 ? { notices: deps.notices } : {}),
         ...(deps.themes && deps.themes.themes.length > 0 ? { userThemes: [...deps.themes.themes] } : {}),
       }),

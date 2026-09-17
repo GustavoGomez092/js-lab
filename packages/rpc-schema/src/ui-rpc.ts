@@ -566,6 +566,12 @@ export type ViewMessages = {
    * the registry wholesale, and the four surfaces of Finding T1 read it on their next lookup.
    */
   "theme.changed": { themes: ThemeDefinition[] };
+  /**
+   * Finding K1: the whole override set after a save, never a delta -- the UI re-resolves it against
+   * `DEFAULT_KEYBINDINGS`, so the key dispatcher, the palette's keycaps and the chrome's keycaps all follow a
+   * saved keybindings.json without a relaunch.
+   */
+  "keybindings.changed": { rules: KeybindingRule[] };
   "npm.op": NpmOperation;
   "npm.log": { opId: string; text: string };
   "npm.changed": NpmListResult;

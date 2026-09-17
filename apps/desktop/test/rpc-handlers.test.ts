@@ -57,6 +57,22 @@ describe("requests", () => {
     expect((await none.requests["app.bootstrap"]()).userThemes).toBeUndefined();
   });
 
+  // Finding K1: the UI resolves its keymap from this payload, so a launch must already carry the user's overrides.
+  // Unlike `userThemes` above, an empty set is still sent -- the key is omitted only when Main has no store at all.
+  test("app.bootstrap carries the user's keybinding overrides as a copy", async () => {
+    const { deps } = setup();
+    const rules = [{ key: "cmd+j", command: "run.start" }];
+    const withRules = createRpcHandlers({ ...deps, keybindings: { rules } });
+    const payload = await withRules.requests["app.bootstrap"]();
+    expect(payload.keybindings).toEqual(rules);
+    // A copy, not the store's own array: the payload crosses the RPC boundary as mutable `KeybindingRule[]`, and
+    // handing out the live set would let a caller edit what Main believes is on disk.
+    expect(payload.keybindings).not.toBe(rules);
+    const empty = createRpcHandlers({ ...deps, keybindings: { rules: [] } });
+    expect((await empty.requests["app.bootstrap"]()).keybindings).toEqual([]);
+    expect((await createRpcHandlers({ ...deps }).requests["app.bootstrap"]()).keybindings).toBeUndefined();
+  });
+
   test("run.start validates and forwards only the run fields", () => {
     const { handlers, deps } = setup();
     expect(handlers.requests["run.start"]({ ...validStart, extra: "ignored" })).toEqual({ runId: "run-1" });

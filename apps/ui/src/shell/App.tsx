@@ -243,7 +243,11 @@ export function App({
     return () => tabs.setBeforeClose(null);
   }, [tabs, flows, bufferSync]);
 
-  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
+  // Finding K1: this was `useMemo(..., [store])` reading state imperatively, so it ran once at mount and a saved
+  // binding could not take effect before a relaunch. Subscribing is what makes Settings -> Keybindings work;
+  // everything downstream (keysFor, the resolver, the keycaps, the palette) already follows `bindings`.
+  const keybindingRules = useStore(store, (s) => s.keybindings);
+  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, keybindingRules), [keybindingRules]);
   // R23-1: hoisted above the registry so app-commands' npm.install status message can show its keycap too.
   const keysFor = useCallback(
     (command: string) => {
@@ -360,6 +364,9 @@ export function App({
         registry.execute(command, args);
       }),
       api.on("settings.changed", ({ settings }) => store.getState().receiveSettings(settings)),
+      // Finding K1: a keybindings.json write in Main reaches the running app here. The dispatcher, the palette's
+      // keycaps and the chrome's keycaps all derive from `bindings`, which now follows the store.
+      api.on("keybindings.changed", ({ rules }) => store.getState().setKeybindings(rules)),
       // Spec §9.3: a theme was imported, so the whole imported set is re-registered and the current selection is
       // re-applied -- that is what makes the picker, the palette and Monaco show it without a settings change.
       api.on("theme.changed", ({ themes }) => {

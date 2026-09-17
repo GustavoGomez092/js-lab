@@ -1,6 +1,6 @@
 import type { CommandCatalogEntry } from "@jslab/rpc-schema";
 import type { KeybindingRule } from "@jslab/shared";
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { strings } from "../strings";
 import { captureKey, captureSpec } from "./key-capture";
 import { type KeybindingRow, keybindingRows } from "./keybinding-rows";
@@ -23,6 +23,17 @@ const text = strings.settings.keybindings;
 /** The command a rule addresses, with the `-` that marks a removal rule stripped off. */
 function ruleCommand(rule: KeybindingRule): string {
   return rule.command.startsWith("-") ? rule.command.slice(1) : rule.command;
+}
+
+/**
+ * `from` with every rule addressing `command` dropped -- both the binding and its `-command` removal.
+ *
+ * R-M5d-T13-RACE-1: deliberately module-scoped and fed the set to derive from, so it CANNOT read the `rules` render
+ * state. That read was the bug: a second write dispatched inside the first save's await window computed from the
+ * pre-first-save set and silently dropped the first change.
+ */
+function rulesWithout(from: readonly KeybindingRule[], command: string): KeybindingRule[] {
+  return from.filter((rule) => ruleCommand(rule) !== command);
 }
 
 /** Settings → Keybindings (spec §6.5): the searchable Command / Keybinding / When / Source table. */
@@ -49,6 +60,32 @@ export function KeybindingsPane({
   // R27-1's idiom, as NpmrcEditor uses it: the first Reset All click only asks, the second commits.
   const [confirmAll, setConfirmAll] = useState(false);
 
+  /**
+   * The rule set Main last confirmed, advanced SYNCHRONOUSLY. `rules` above is the rendering copy of the same value;
+   * this ref is the one every write is derived from, because render state does not refresh until the save that
+   * produced it has already resolved (R-M5d-T13-RACE-1).
+   */
+  const committed = useRef<readonly KeybindingRule[]>([]);
+  /**
+   * Bumped every time Main tells us what the file holds -- the initial load, or a `keybindings.changed` broadcast.
+   * A save that resolves afterwards compares stamps and can tell its own request has been overtaken.
+   */
+  const fromMain = useRef(0);
+  /** Saves run one at a time; see `save` for why the derivation happens at the front of this queue. */
+  const queue = useRef<Promise<void>>(Promise.resolve());
+
+  /**
+   * Adopt Main's word on the file: it outranks any save request still in flight.
+   *
+   * Stable across renders -- it touches only refs and a state setter -- so the effects below can depend on it
+   * without re-subscribing to `keybindings.changed` on every render.
+   */
+  const adoptFromMain = useCallback((next: readonly KeybindingRule[]) => {
+    fromMain.current += 1;
+    committed.current = next;
+    setRules(next);
+  }, []);
+
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -62,18 +99,18 @@ export function KeybindingsPane({
         if (!mounted.current) return;
         setCatalogue(catalog.commands);
         setDefaults(keybindings.defaults);
-        setRules(keybindings.rules);
+        adoptFromMain(keybindings.rules);
         setInvalid(keybindings.invalid);
       },
       () => {
         if (mounted.current) setFailed(true);
       },
     );
-  }, [api]);
+  }, [api, adoptFromMain]);
 
   // Finding K1: a keybindings.json write reaches this pane without a relaunch, whoever made it -- the user
   // editing the file by hand, or a capture saved below. Main broadcasts the whole override set, never a delta.
-  useEffect(() => api.on("keybindings.changed", ({ rules: next }) => setRules(next)), [api]);
+  useEffect(() => api.on("keybindings.changed", ({ rules: next }) => adoptFromMain(next)), [api, adoptFromMain]);
 
   const allRows = useMemo(
     () => (catalogue ? keybindingRows(catalogue, defaults, rules, "") : []),
@@ -99,20 +136,43 @@ export function KeybindingsPane({
   if (invalid) status = text.fileInvalid;
   if (failed) status = text.loadFailed;
 
-  const save = async (next: KeybindingRule[]) => {
+  /**
+   * Queues a write, deriving the rule set from `committed` at the moment the write REACHES THE FRONT of the queue --
+   * never at dispatch time, and never from render state.
+   *
+   * R-M5d-T13-RACE-1. Serializing the derivation was chosen over an optimistic ref advanced at dispatch time because
+   * with one save in flight at a time there is never an unpersisted value to roll back: a refused save simply does
+   * not advance `committed`, so a later write cannot build on a rule Main never wrote. The optimistic variant needs
+   * a rollback that is ill-defined the moment a second write has already derived from the value being rolled back.
+   * A functional `setRules(prev => ...)` would not help either -- the stale read happens while COMPUTING `next`,
+   * before any state update is queued.
+   */
+  const save = (derive: (from: readonly KeybindingRule[]) => KeybindingRule[]) => {
     setNotice(null);
-    try {
-      const result = await api.saveKeybindings(next);
+    const run = async () => {
       if (!mounted.current) return;
-      if (result.ok) setRules(next);
-      else setNotice(text.saveFailed);
-    } catch {
-      // The raw cause can carry an absolute path (EACCES), so it is never rendered (spec §18).
-      if (mounted.current) setNotice(text.saveFailed);
-    }
+      const next = derive(committed.current);
+      const stamp = fromMain.current;
+      try {
+        const result = await api.saveKeybindings(next);
+        if (!mounted.current) return;
+        if (!result.ok) {
+          setNotice(text.saveFailed);
+          return;
+        }
+        // A `keybindings.changed` that landed while this was in flight is Main's newer word on the file, so it wins
+        // and this request is dropped rather than rolling the pane back to a set the file no longer holds.
+        if (fromMain.current !== stamp) return;
+        committed.current = next;
+        setRules(next);
+      } catch {
+        // The raw cause can carry an absolute path (EACCES), so it is never rendered (spec §18).
+        if (mounted.current) setNotice(text.saveFailed);
+      }
+    };
+    // Both arms, so one rejected link can never wedge the queue and silently swallow every later save.
+    queue.current = queue.current.then(run, run);
   };
-
-  const rulesWithout = (command: string) => rules.filter((rule) => ruleCommand(rule) !== command);
 
   /**
    * Binds `key` to the row's command, retiring every default chord that command still answers to.
@@ -126,8 +186,8 @@ export function KeybindingsPane({
     const removals = defaults
       .filter((rule) => rule.command === row.command)
       .map((rule) => ({ key: rule.key, command: `-${row.command}` }));
-    void save([
-      ...rulesWithout(row.command),
+    save((from) => [
+      ...rulesWithout(from, row.command),
       ...removals,
       { key, command: row.command, ...(row.when ? { when: row.when } : {}) },
     ]);
@@ -202,13 +262,14 @@ export function KeybindingsPane({
       },
       resetRow: (command) => {
         if (!writable || !allRows.some((row) => row.command === command)) return false;
-        void save(rulesWithout(command));
+        save((from) => rulesWithout(from, command));
         return true;
       },
       resetAll: () => {
         if (!writable) return false;
         setConfirmAll(false);
-        void save([]);
+        // Immune to the race by construction: it never reads the current rules at all.
+        save(() => []);
         return true;
       },
     });
@@ -289,7 +350,7 @@ export function KeybindingsPane({
                       className="keybindings-action"
                       aria-label={text.resetRow(row.title)}
                       disabled={!writable}
-                      onClick={() => void save(rulesWithout(row.command))}
+                      onClick={() => save((from) => rulesWithout(from, row.command))}
                     >
                       {text.reset}
                     </button>
@@ -321,7 +382,7 @@ export function KeybindingsPane({
             disabled={!writable}
             onClick={() => {
               setConfirmAll(false);
-              void save([]);
+              save(() => []);
             }}
           >
             {strings.settings.confirmReset}

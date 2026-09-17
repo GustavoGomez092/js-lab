@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { SettingsViewMessages } from "@jslab/rpc-schema";
 import { COMMANDS, DEFAULT_KEYBINDINGS, type KeybindingRule } from "@jslab/shared";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { KeybindingsPane } from "../src/settings/KeybindingsPane";
+import { KeybindingsPane, type KeybindingsPaneHandle } from "../src/settings/KeybindingsPane";
 import type { SettingsApi } from "../src/settings/settings-rpc";
 import { strings } from "../src/strings";
 
@@ -10,9 +10,15 @@ const text = strings.settings.keybindings;
 
 function fakeApi(
   rules: KeybindingRule[] = [],
-  options: { unregistered?: string; invalid?: boolean; saveFails?: boolean } = {},
+  options: { unregistered?: string; invalid?: boolean; saveFails?: boolean; defer?: boolean } = {},
 ) {
   const listeners = new Map<string, Set<(payload: never) => void>>();
+  /**
+   * With `defer`, every save parks UNRESOLVED until the test settles it by hand, which is the only way to put a
+   * second dispatch inside the first save's await window deterministically -- a timer would just be racing the
+   * same window from the outside.
+   */
+  const pending: { next: KeybindingRule[]; ok(): Promise<void>; deny(): Promise<void>; crash(): Promise<void> }[] = [];
   const api = {
     getKeybindings: mock(async () => ({
       rules,
@@ -20,9 +26,27 @@ function fakeApi(
       path: "/data/keybindings.json",
       invalid: options.invalid === true,
     })),
-    saveKeybindings: mock(async (_next: KeybindingRule[]) =>
-      options.saveFails === true ? { ok: false as const, error: "EACCES" } : { ok: true as const },
-    ),
+    saveKeybindings: mock((next: KeybindingRule[]) => {
+      if (options.defer !== true) {
+        return Promise.resolve(
+          options.saveFails === true ? { ok: false as const, error: "EACCES" } : { ok: true as const },
+        );
+      }
+      return new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
+        const settle = (run: () => void) =>
+          act(async () => {
+            run();
+            await Bun.sleep(1);
+          });
+        pending.push({
+          next,
+          ok: () => settle(() => resolve({ ok: true })),
+          deny: () => settle(() => resolve({ ok: false, error: "EACCES" })),
+          // The absolute path is deliberate: it is what must NOT reach the pane's notice (spec §18).
+          crash: () => settle(() => reject(new Error("EACCES: permission denied, open '/Users/me/keybindings.json'"))),
+        });
+      });
+    }),
     commandCatalog: mock(async () => ({
       commands: COMMANDS.map((command) => ({
         id: command.id,
@@ -44,8 +68,30 @@ function fakeApi(
       for (const listener of listeners.get(name) ?? []) (listener as (value: unknown) => void)(payload);
       await Bun.sleep(1);
     });
-  return { api: api as unknown as SettingsApi, appCommand: api.appCommand, save: api.saveKeybindings, emit };
+  return { api: api as unknown as SettingsApi, appCommand: api.appCommand, save: api.saveKeybindings, emit, pending };
 }
+
+/** Renders the pane and hands back a getter for the handle `SettingsApp` drives commands through. */
+function renderWithHandle(api: SettingsApi) {
+  let handle: KeybindingsPaneHandle | null = null;
+  render(
+    <KeybindingsPane
+      api={api}
+      onReady={(next) => {
+        if (next) handle = next;
+      }}
+    />,
+  );
+  return () => {
+    const ready = handle as KeybindingsPaneHandle | null;
+    if (!ready) throw new Error("the pane never reported a handle");
+    return ready;
+  };
+}
+
+/** The rule set handed to the nth `saveKeybindings` call (0-based). */
+const savedAt = (save: { mock: { calls: unknown[][] } }, index: number) =>
+  save.mock.calls[index]?.[0] as KeybindingRule[] | undefined;
 
 const rowNamed = (name: RegExp) => screen.getByRole("row", { name });
 const button = (name: string) => screen.getByRole("button", { name });
@@ -290,5 +336,200 @@ describe("KeybindingsPane", () => {
     // Main did not write, so the row must not pretend otherwise.
     expect(rowNamed(/^Run\b/).textContent).toContain("⌘R");
     expect(rowNamed(/^Run\b/).textContent).not.toContain("⌘J");
+  });
+
+  /**
+   * R-M5d-T13-RACE-1 -- the silent data-loss bug these six tests exist for.
+   *
+   * Every write used to be derived from the `rules` REACT STATE, which only refreshes once the previous save has
+   * resolved. A second dispatch inside that await window therefore computed from the pre-first-save set and
+   * overwrote the first change. Both saves reported success, nothing threw and nothing was logged -- the user's
+   * first rebind was simply gone from the file.
+   */
+  test("a capture made while the first save is still in flight does not drop the first capture", async () => {
+    const { api, save, pending } = fakeApi([], { defer: true });
+    render(<KeybindingsPane api={api} />);
+    await settled();
+
+    fireEvent.click(button(text.capture("Run")));
+    fireEvent.keyDown(screen.getByLabelText(text.capturing("Run")), { code: "KeyJ", metaKey: true });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(savedAt(save, 0)).toEqual([
+      { key: "cmd+r", command: "-run.start" },
+      { key: "cmd+j", command: "run.start" },
+    ]);
+
+    // The second capture happens while save #1 is still unresolved -- the whole point.
+    fireEvent.click(button(text.capture("Stop")));
+    fireEvent.keyDown(screen.getByLabelText(text.capturing("Stop")), { code: "KeyY", metaKey: true });
+    await pending[0]?.ok();
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    // Run's pair must still be in the set the second save writes, or the file loses the first rebind.
+    expect(savedAt(save, 1)).toEqual([
+      { key: "cmd+r", command: "-run.start" },
+      { key: "cmd+j", command: "run.start" },
+      { key: "cmd+shift+r", command: "-run.stop" },
+      { key: "cmd+y", command: "run.stop" },
+    ]);
+  });
+
+  /**
+   * The same race on the path with no human pacing at all: `SettingsApp` routes the `keybindings.resetRow` COMMAND
+   * straight to this handle, so nothing throttles two dispatches into one save round trip.
+   */
+  test("a resetRow dispatched inside a save round trip does not resurrect the first reset's rules", async () => {
+    const { api, save, pending } = fakeApi(
+      [
+        { key: "cmd+j", command: "run.start" },
+        { key: "cmd+y", command: "run.stop" },
+        { key: "cmd+u", command: "output.clear" },
+      ],
+      { defer: true },
+    );
+    const handle = renderWithHandle(api);
+    await settled();
+
+    act(() => {
+      expect(handle().resetRow("run.start")).toBe(true);
+    });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(savedAt(save, 0)).toEqual([
+      { key: "cmd+y", command: "run.stop" },
+      { key: "cmd+u", command: "output.clear" },
+    ]);
+
+    act(() => {
+      expect(handle().resetRow("run.stop")).toBe(true);
+    });
+    await pending[0]?.ok();
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    // run.start was reset first, so it must stay gone. Deriving from stale state puts its rule back.
+    expect(savedAt(save, 1)).toEqual([{ key: "cmd+u", command: "output.clear" }]);
+  });
+
+  /**
+   * A refused save must not become the basis for later writes. If the pane advanced its source of truth optimistically
+   * and never rolled it back, the next derivation would build on a rule Main never wrote -- turning a visible save
+   * error into silent divergence from the file, which is worse than the race being fixed.
+   */
+  test("a save Main refused is not treated as persisted by the next capture", async () => {
+    const { api, save, pending } = fakeApi([], { defer: true });
+    render(<KeybindingsPane api={api} />);
+    await settled();
+
+    fireEvent.click(button(text.capture("Run")));
+    fireEvent.keyDown(screen.getByLabelText(text.capturing("Run")), { code: "KeyJ", metaKey: true });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await pending[0]?.deny();
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(text.saveFailed));
+    expect(rowNamed(/^Run\b/).textContent).toContain("⌘R");
+
+    fireEvent.click(button(text.capture("Stop")));
+    fireEvent.keyDown(screen.getByLabelText(text.capturing("Stop")), { code: "KeyY", metaKey: true });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(savedAt(save, 1)).toEqual([
+      { key: "cmd+shift+r", command: "-run.stop" },
+      { key: "cmd+y", command: "run.stop" },
+    ]);
+  });
+
+  /** The same, through the throw channel rather than `ok: false`. */
+  test("a save that threw is not treated as persisted by the next capture", async () => {
+    const { api, save, pending } = fakeApi([], { defer: true });
+    render(<KeybindingsPane api={api} />);
+    await settled();
+
+    fireEvent.click(button(text.capture("Run")));
+    fireEvent.keyDown(screen.getByLabelText(text.capturing("Run")), { code: "KeyJ", metaKey: true });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await pending[0]?.crash();
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(text.saveFailed));
+    // The raw fs message can carry an absolute path, so it is never rendered (spec §18).
+    expect(document.body.textContent).not.toContain("/Users/me");
+
+    fireEvent.click(button(text.capture("Stop")));
+    fireEvent.keyDown(screen.getByLabelText(text.capturing("Stop")), { code: "KeyY", metaKey: true });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(savedAt(save, 1)).toEqual([
+      { key: "cmd+shift+r", command: "-run.stop" },
+      { key: "cmd+y", command: "run.stop" },
+    ]);
+  });
+
+  /**
+   * Finding K1: `keybindings.changed` is Main's word on what the file now holds, whoever wrote it. A save resolving
+   * afterwards must not roll the pane back to its own older request -- nor keep deriving from it, which would leave
+   * the pane silently disagreeing with the file.
+   */
+  test("a keybindings.changed that lands mid-save survives the save completing", async () => {
+    const { api, save, pending, emit } = fakeApi([], { defer: true });
+    render(<KeybindingsPane api={api} />);
+    await settled();
+
+    fireEvent.click(button(text.capture("Run")));
+    fireEvent.keyDown(screen.getByLabelText(text.capturing("Run")), { code: "KeyJ", metaKey: true });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    await emit("keybindings.changed", { rules: [{ key: "cmd+shift+enter", command: "run.start" }] });
+    expect(rowNamed(/^Run\b/).textContent).toContain("⇧⌘↩");
+
+    await pending[0]?.ok();
+    expect(rowNamed(/^Run\b/).textContent).toContain("⇧⌘↩");
+    expect(rowNamed(/^Run\b/).textContent).not.toContain("⌘J");
+
+    // ...and the next write derives from the broadcast too, not from the request that lost.
+    fireEvent.click(button(text.capture("Stop")));
+    fireEvent.keyDown(screen.getByLabelText(text.capturing("Stop")), { code: "KeyY", metaKey: true });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(savedAt(save, 1)).toEqual([
+      { key: "cmd+shift+enter", command: "run.start" },
+      { key: "cmd+shift+r", command: "-run.stop" },
+      { key: "cmd+y", command: "run.stop" },
+    ]);
+  });
+
+  /**
+   * R-M5d-ALIAS-1's ordering rule, at the case that actually bites: rebinding a command to its OWN default chord.
+   * `resolveKeybindings` applies overrides in file order and a removal drops every binding matching its command and
+   * chord, so a removal written AFTER the binding would delete the binding the user just made -- leaving the command
+   * unbound rather than rebound.
+   */
+  test("rebinding a command to its own default chord keeps the removal before the binding", async () => {
+    const { api, save } = fakeApi();
+    render(<KeybindingsPane api={api} />);
+    await settled();
+
+    fireEvent.click(button(text.capture("Run")));
+    fireEvent.keyDown(screen.getByLabelText(text.capturing("Run")), { code: "KeyR", metaKey: true });
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith([
+        { key: "cmd+r", command: "-run.start" },
+        { key: "cmd+r", command: "run.start" },
+      ]),
+    );
+    // The chord survives the round trip: reversed, the removal would take the new binding with it.
+    await waitFor(() => expect(rowNamed(/^Run\b/).textContent).toContain("User"));
+    expect(rowNamed(/^Run\b/).textContent).toContain("⌘R");
+    expect(rowNamed(/^Run\b/).textContent).not.toContain("Not bound");
+  });
+
+  /**
+   * The `writable` guard exists because `invalid` means Main could not parse the file, so saving would replace the
+   * user's broken file with a set derived from nothing. The buttons are covered above; these are the COMMAND paths,
+   * which no disabled attribute protects.
+   */
+  test("an unparseable keybindings.json closes the programmatic write paths too", async () => {
+    const { api, save } = fakeApi([], { invalid: true });
+    const handle = renderWithHandle(api);
+    await settled();
+
+    act(() => {
+      expect(handle().resetRow("run.start")).toBe(false);
+      expect(handle().resetAll()).toBe(false);
+      expect(handle().capture("run.start", "cmd+j")).toBe(false);
+    });
+    expect(save).not.toHaveBeenCalled();
   });
 });

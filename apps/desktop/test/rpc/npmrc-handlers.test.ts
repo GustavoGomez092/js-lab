@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_NPMRC_BYTES } from "@jslab/rpc-schema";
@@ -80,5 +80,43 @@ describe(".npmrc handlers (spec §11.5)", () => {
   test("get still returns the default when there is simply no .npmrc yet", async () => {
     const handlers = createNpmrcHandlers({ path: join(dir, "absent", ".npmrc"), onSaved: () => {}, log: () => {} });
     expect(await handlers.requests["npmrc.get"]({})).toEqual({ content: DEFAULT_NPMRC });
+  });
+
+  /**
+   * F-NPMRC. `npmrc.get` refuses to hand back the default for a file that is present but unreadable, precisely so
+   * the user is never invited to save that default over their real `.npmrc`. `npmrc.reset` then wrote the default
+   * unconditionally, which destroyed the same file directly: the Settings Reset button stayed enabled after a
+   * failed load, and its two clicks arrived here. The guard belongs on this side as well as in the UI -- a UI-only
+   * guard leaves the path open to every other caller of the request.
+   */
+  test("reset refuses to overwrite an oversized .npmrc, leaving the user's real file untouched", async () => {
+    const path = join(dir, ".npmrc");
+    const real = "x".repeat(MAX_NPMRC_BYTES + 1);
+    await writeFile(path, real);
+    const onSaved = mock(() => {});
+    const handlers = createNpmrcHandlers({ path, onSaved, log: () => {} });
+
+    await expect(handlers.requests["npmrc.reset"]({})).rejects.toBeInstanceOf(FileTooLargeError);
+    expect(await readFile(path, "utf8")).toBe(real);
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  test("reset refuses a FIFO .npmrc rather than replacing it", async () => {
+    const path = join(dir, ".npmrc");
+    expect(await Bun.spawn(["mkfifo", path]).exited).toBe(0);
+    const handlers = createNpmrcHandlers({ path, onSaved: () => {}, log: () => {} });
+
+    await expect(handlers.requests["npmrc.reset"]({})).rejects.toBeInstanceOf(NotARegularFileError);
+    expect((await lstat(path)).isFIFO()).toBe(true);
+  }, 5000);
+
+  test("reset still writes the default when there is simply no .npmrc yet", async () => {
+    const path = join(dir, ".npmrc");
+    const onSaved = mock(() => {});
+    const handlers = createNpmrcHandlers({ path, onSaved, log: () => {} });
+
+    expect(await handlers.requests["npmrc.reset"]({})).toEqual({ content: DEFAULT_NPMRC });
+    expect(await readFile(path, "utf8")).toBe(DEFAULT_NPMRC);
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
 });

@@ -44,12 +44,20 @@ export function createNpmrcHandlers(deps: NpmrcHandlerDeps) {
           (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }),
         );
       },
-      "npmrc.reset": (input: unknown): Promise<{ content: string }> => {
+      "npmrc.reset": async (input: unknown): Promise<{ content: string }> => {
         parse(emptyParamsSchema, "npmrc.reset", input);
-        return write(DEFAULT_NPMRC).then(() => {
-          deps.onSaved();
-          return { content: DEFAULT_NPMRC };
-        });
+        // F-NPMRC: the same rule `npmrc.get` applies, for the same reason. Writing the default over a file that is
+        // present but unreadable -- oversized, a FIFO, permission-denied -- destroys contents that neither the user
+        // nor JSLab has ever seen; only a genuinely absent file may be replaced sight unseen. The guard lives here
+        // rather than only in Settings because a UI-only guard leaves the path open to every other caller.
+        try {
+          await readBoundedText(deps.path, MAX_NPMRC_BYTES);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+        }
+        await write(DEFAULT_NPMRC);
+        deps.onSaved();
+        return { content: DEFAULT_NPMRC };
       },
     },
     messages: {},

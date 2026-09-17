@@ -193,7 +193,10 @@ export function NpmrcEditor({
 
   const warnings = npmrcWarnings(text);
   const saveDisabled = busy !== null || saved === null || text === saved;
-  const resetAreaDisabled = busy !== null;
+  // F-NPMRC: a failed load leaves `saved` null, and Reset has to be as dead as Save is then. Otherwise its two
+  // clicks write the default over a `.npmrc` that is present but unreadable -- the one file whose contents the
+  // failed load deliberately refused to guess at.
+  const resetAreaDisabled = busy !== null || saved === null;
 
   return (
     <section className="npmrc">

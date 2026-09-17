@@ -11,6 +11,7 @@ import { FilterChips } from "./FilterChips";
 import { applyFilter, filterCounts } from "./filters";
 import { entryIsStale, lastSuccessfulRunLabel } from "./stale";
 import { entryToText } from "./text";
+import { WebDialog } from "./WebDialog";
 
 const COPY_STATUS_DURATION_MS = 2000;
 
@@ -94,6 +95,10 @@ export function OutputPanel({ store, api, runKeys = null, onInstall }: OutputPan
           {strings.output.clear}
         </button>
       </header>
+      <WebDialog
+        dialogs={output.dialogs}
+        onDismiss={(key) => store.getState().dismissWebDialog(key, tabId ?? undefined)}
+      />
       <div
         ref={scroller}
         className="output-scroller"

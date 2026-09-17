@@ -50,6 +50,7 @@ import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
 import { createTypesHandlers } from "./rpc/types-handlers";
 import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
+import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
@@ -171,12 +172,24 @@ async function start(): Promise<void> {
     env: baseEnv,
     shiftHeld,
     log,
+    redact,
     onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
     onState: (tabId, runId, state, activeHandles) =>
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
     onDiagnostics: (tabId, runId, diagnostics) => rpc.send["run.diagnostics"]({ tabId, runId, diagnostics }),
+    onAudio: (tabId, active) => rpc.send["run.audio"]({ tabId, active }),
     realHome: homedir(),
     ...(cacheDir ? { bunCacheDirOverride: cacheDir } : {}),
+    // M4 §5.12: a browser-mode tab's `<electrobun-webview>` lives in the UI, but the runtime driving it lives
+    // here, so every instruction crosses as one of these four messages. `rpc` is declared further down; like the
+    // run and npm callbacks above, none of these ever runs before it exists.
+    webviewBridge: {
+      // T9e: `generation` travels with ensure/destroy so the UI can stamp every `ready`/`exit` it forwards with it.
+      ensure: (tabId, generation) => rpc.send["webRunner.ensure"]({ tabId, generation }),
+      execute: (tabId, js) => rpc.send["webRunner.execute"]({ tabId, js }),
+      reload: (tabId) => rpc.send["webRunner.reload"]({ tabId }),
+      destroy: (tabId, generation) => rpc.send["webRunner.destroy"]({ tabId, generation }),
+    },
     onNpmOperation: (operation) => rpc.send["npm.op"](operation),
     // R-M3-T18-LOGCAP-1: a pass-through; the log drawer (Task 26) keeps the newest MAX_NPM_LOG_CHARS per operation.
     onNpmLog: (opId, text) => rpc.send["npm.log"]({ opId, text }),
@@ -260,6 +273,11 @@ async function start(): Promise<void> {
     send: () => rpc.send["app.flushState"]({}),
     isOpen: () => mainWindow.isOpen(),
   });
+  // M4 §5.12 (Task 9a): the Main-side half of the web runner's UI-relayed bridge. Registered only when a webview
+  // source exists, which is whenever a `webviewBridge` was passed above -- i.e. always, in a real app. Without
+  // this group the UI's `webRunner.ready` / `.exit` / `.message` reach no handler at all, and a browser tab's run
+  // hangs until `waitForReady` gives up rather than failing with anything a user could act on.
+  const webRunnerHandlers = services.webviews ? [createWebRunnerHandlers({ webviews: services.webviews, log })] : [];
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
     handlers: mergeHandlers(
@@ -283,6 +301,7 @@ async function start(): Promise<void> {
         notices: startupNotices({ settings, session }),
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
+      ...webRunnerHandlers,
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createNpmHandlers({ npm, log }),
       createEnvHandlers({ env, log }),
@@ -314,6 +333,13 @@ async function start(): Promise<void> {
       }),
       appHandlers,
       createUiFlushHandlers(uiFlush, log),
+      // Task 12/13 (spec §5.12), fix round 1: `browser-node`'s fetch proxy is no longer an RPC handler group here.
+      // It used to take a page-supplied `tabId` in a flat payload, authorized by looking the tab's runtime up by
+      // that same id -- once registered, a `browser` tab could name a `browser-node` tab's id and get a CORS-free
+      // request issued on the user's session. It's now constructed per `WebRunSession`
+      // (`runtimes/web-adapter.ts`), which already knows its own tab and runtime from the `WebviewHost` the
+      // connection arrived on, never from anything the message claims -- see `rpc/web-fetch-handlers.ts`'s doc
+      // comment and `main-services.ts`'s `webAdapterDeps` for the wiring.
       createFileHandlers({
         files: new FileService(nodeFileSystem),
         session,
@@ -393,7 +419,14 @@ async function start(): Promise<void> {
   };
   const mainWindow = createMainWindowController({
     create: createWindow,
-    onClosed: () => e2eBridge.rejectAll("The JSLab window closed"),
+    onClosed: () => {
+      e2eBridge.rejectAll("The JSLab window closed");
+      // M4 final review (C): this window's UI owned every `<electrobun-webview>` Main was driving. Reopening from
+      // the Dock builds a fresh view with an empty registry, so Main's own entries must go with the old one --
+      // otherwise the next run on every browser tab hits a stale entry, skips `webRunner.ensure`, and fails after
+      // 2 s with "never reported ready".
+      services.webviews?.invalidateAll();
+    },
   });
   mainWindow.open();
   Electrobun.events.on("reopen", () => {
@@ -539,6 +572,11 @@ async function start(): Promise<void> {
     // A reload is a fresh boot (R-M2-T18-3): the reloaded view gets the 30 s boot grace until its own first
     // heartbeat, instead of the 6 s steady-state deadline left over from the view it replaces.
     ({ sawFirstHeartbeat, bootWindowStartedAt, lastUiHeartbeat } = onReload(now));
+    // M4 final review (C): the reloaded view starts with an empty webview registry, so Main's entries for the view
+    // being replaced are stale the instant this navigates. Dropping them here is what makes the next run create a
+    // new element instead of driving one nobody owns any more. This reload is the likeliest trigger of all: it
+    // exists because WKWebView freezes after sleep, i.e. exactly when the user wakes the laptop and hits Run.
+    services.webviews?.invalidateAll();
     current.webview.loadURL(url);
   }, 2000);
 

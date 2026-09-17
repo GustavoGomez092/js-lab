@@ -18,6 +18,8 @@ import {
   tabPatchSchema,
   tabReorderSchema,
   tabViewStateSchema,
+  webRunnerMessageParamsSchema,
+  webRunnerTabSchema,
 } from "../src/ui-rpc";
 
 const validStart = {
@@ -26,6 +28,7 @@ const validStart = {
   language: "typescript" as const,
   logpoints: [2],
   reason: "auto" as const,
+  runtime: "bun" as const,
 };
 
 describe("inbound validators", () => {
@@ -38,6 +41,30 @@ describe("inbound validators", () => {
     expect(runStartParamsSchema.safeParse({ ...validStart, language: "python" }).success).toBe(false);
     expect(runStartParamsSchema.safeParse({ ...validStart, logpoints: [0] }).success).toBe(false);
     expect(runStartParamsSchema.safeParse({ ...validStart, code: "x".repeat(MAX_TEXT_CHARS + 1) }).success).toBe(false);
+  });
+
+  test("run.start carries the tab's runtime", () => {
+    const parsed = runStartParamsSchema.parse({
+      tabId: "t1",
+      code: "1",
+      language: "typescript",
+      logpoints: [],
+      reason: "manual",
+      runtime: "browser",
+    });
+    expect(parsed.runtime).toBe("browser");
+  });
+
+  test("run.start defaults an unknown runtime to bun rather than throwing", () => {
+    const parsed = runStartParamsSchema.parse({
+      tabId: "t1",
+      code: "1",
+      language: "typescript",
+      logpoints: [],
+      reason: "manual",
+      runtime: "nope",
+    });
+    expect(parsed.runtime).toBe("bun");
   });
 
   test("tab ids must use the safe id format tabs are created with", () => {
@@ -71,6 +98,56 @@ describe("inbound validators", () => {
     expect(
       tabPatchSchema.safeParse({ tabId: "t1", patch: { layout: { orientation: "diagonal", editorSize: 50 } } }).success,
     ).toBe(false);
+  });
+
+  // Fix round 1 (F5): tiles used to require every field once present, so a partial tiles patch failed validation
+  // and took the whole tab.patch down with it -- language/runtime/title included.
+  test("tab.patch's layout.tiles accepts a partial patch without taking the rest of the patch down (fix round 1, F5)", () => {
+    const parsed = tabPatchSchema.parse({
+      tabId: "t1",
+      patch: { runtime: "browser", layout: { tiles: { webviewVisible: true } } },
+    });
+    expect(parsed.patch.runtime).toBe("browser");
+    expect(parsed.patch.layout?.tiles).toEqual({ webviewVisible: true });
+    // Still rejects a genuinely invalid tiles field, partial or not.
+    expect(tabPatchSchema.safeParse({ tabId: "t1", patch: { layout: { tiles: { consoleSize: 500 } } } }).success).toBe(
+      false,
+    );
+  });
+
+  // Task 15: `muted` is a sibling field of `tiles` in `tabLayoutSchema` (packages/shared), so it must be named here
+  // too -- the same whitelist gotcha F5 documents for `tiles` above (an unlisted field is silently stripped in
+  // transit: the UI updates, nothing persists, no error anywhere).
+  /**
+   * Final review, finding E. `runtime` was the one field in `tab.patch`'s patch object left without a fallback,
+   * while its siblings `tiles`/`muted` and both `runStartParamsSchema.runtime` (`.catch("bun")`) and
+   * `tabStateSchema.runtime` (`.catch(DEFAULT_RUNTIME)`) all degrade on their own. An unrecognised runtime
+   * therefore failed the whole `safeParse`, so Main silently dropped the ENTIRE patch -- a legitimate simultaneous
+   * title or language change included -- logging only "Rejected invalid tab.patch payload" with nothing
+   * user-visible. That is the exact failure mode fix round 1's F5 was written to eliminate.
+   */
+  test("tab.patch survives an unrecognised runtime instead of dropping the whole patch (final review, E)", () => {
+    const parsed = tabPatchSchema.parse({
+      tabId: "t1",
+      patch: { title: "Renamed", language: "javascript", runtime: "deno" },
+    });
+
+    // The rest of the patch survives -- this is the half that was being silently lost.
+    expect(parsed.patch.title).toBe("Renamed");
+    expect(parsed.patch.language).toBe("javascript");
+    // The unrecognised value degrades to the default rather than failing the object.
+    expect(parsed.patch.runtime).toBe("bun");
+
+    // A patch naming only a bad runtime still parses, rather than being rejected outright.
+    expect(tabPatchSchema.safeParse({ tabId: "t1", patch: { runtime: "deno" } }).success).toBe(true);
+    // A well-formed runtime is still carried through untouched.
+    expect(tabPatchSchema.parse({ tabId: "t1", patch: { runtime: "browser" } }).patch.runtime).toBe("browser");
+  });
+
+  test("tab.patch's layout.muted accepts a bare patch without the rest of layout", () => {
+    const parsed = tabPatchSchema.parse({ tabId: "t1", patch: { layout: { muted: true } } });
+    expect(parsed.patch.layout).toEqual({ muted: true });
+    expect(tabPatchSchema.safeParse({ tabId: "t1", patch: { layout: { muted: "yes" } } }).success).toBe(false);
   });
 
   test("e2e.response requires a positive request id and caps error text", () => {
@@ -147,5 +224,36 @@ describe("inbound validators", () => {
     expect(fileSaveParamsSchema.safeParse({ tabId: "t", content: "x".repeat(MAX_TEXT_CHARS + 1) }).success).toBe(false);
     expect(fileConfirmLargeSchema.safeParse({ tokens: Array.from({ length: 101 }, () => "t") }).success).toBe(false);
     expect(fileConfirmSaveAsSchema.safeParse({ token: "t", confirmed: "yes" }).success).toBe(false);
+  });
+});
+
+// M4 Task 9a: the Main <-> UI web-runner bridge (spec §5.12). Only the UI -> Main direction is validated here;
+// the Main -> UI messages are typed by `ViewMessages` and never cross an untrusted boundary.
+describe("web runner bridge payloads", () => {
+  test("webRunner.ready / webRunner.exit accept a tab id and generation, and reject malformed ones", () => {
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: 1 }).success).toBe(true);
+    expect(webRunnerTabSchema.safeParse({ tabId: "", generation: 1 }).success).toBe(false);
+    // The same path-safety rule every other tabId payload keeps (spec §18): Main joins these into runs/<tabId>/…
+    expect(webRunnerTabSchema.safeParse({ tabId: "../escape", generation: 1 }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: 1, generation: 1 }).success).toBe(false);
+    // T9e: `generation` is what lets Main tell a stale event (from an entry it has already replaced) from a
+    // current one, so it must actually be present and a real generation counter, not just any number.
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1" }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: 0 }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: -1 }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: 1.5 }).success).toBe(false);
+    expect(webRunnerTabSchema.safeParse({ tabId: "t1", generation: "1" }).success).toBe(false);
+  });
+
+  test("webRunner.message requires an object envelope and passes its contents through untouched", () => {
+    const envelope = { seq: 1, message: { type: "ready" } };
+    const parsed = webRunnerMessageParamsSchema.parse({ tabId: "t1", raw: envelope });
+    // `raw` is the page's own WebToHost envelope: this boundary only confirms it is routable, it never
+    // re-implements the bridge's own shape check (createSequencedWebviewHost does that).
+    expect(parsed.raw).toEqual(envelope);
+    expect(webRunnerMessageParamsSchema.safeParse({ tabId: "t1", raw: "ready" }).success).toBe(false);
+    expect(webRunnerMessageParamsSchema.safeParse({ tabId: "t1", raw: null }).success).toBe(false);
+    expect(webRunnerMessageParamsSchema.safeParse({ tabId: "t1" }).success).toBe(false);
+    expect(webRunnerMessageParamsSchema.safeParse({ tabId: "", raw: envelope }).success).toBe(false);
   });
 });

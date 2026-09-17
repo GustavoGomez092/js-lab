@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration — https://docs.coderabbit.ai/getting-started/configure-coderabbit
+
+reviews:
+  auto_review:
+    enabled: true
+    # Milestone work lands on a long-lived feature branch whose PR stays a draft
+    # until the milestone is finished, so draft reviews are the only ones that
+    # arrive while the code can still cheaply change.
+    drafts: true

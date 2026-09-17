@@ -5,6 +5,7 @@ export const VIEW_MESSAGES = [
   "run.events",
   "run.state",
   "run.diagnostics",
+  "run.audio",
   "menu.command",
   "e2e.request",
   "settings.changed",
@@ -19,6 +20,10 @@ export const VIEW_MESSAGES = [
   "npm.changed",
   "wd.changed",
   "app.flushState",
+  "webRunner.ensure",
+  "webRunner.execute",
+  "webRunner.reload",
+  "webRunner.destroy",
 ] as const satisfies readonly (keyof ViewMessages)[];
 
 // Type-level exhaustiveness check: a ViewMessages key missing from VIEW_MESSAGES fails typecheck here (m-5).

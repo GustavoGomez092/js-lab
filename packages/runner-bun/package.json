@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@jslab/rpc-schema": "workspace:*",
+    "@jslab/runner-shared": "workspace:*",
     "@jslab/serializer": "workspace:*"
   },
   "scripts": {

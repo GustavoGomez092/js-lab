@@ -71,6 +71,9 @@ export function createRpcApi(): MainApi {
     clearWorkingDirectory: (tabId) => rpc.send["wd.clear"]({ tabId }),
     appCommand: (action) => rpc.send["app.command"]({ action }),
     e2eRespond: (response) => rpc.send["e2e.response"](response),
+    webRunnerReady: (tabId, generation) => rpc.send["webRunner.ready"]({ tabId, generation }),
+    webRunnerExit: (tabId, generation) => rpc.send["webRunner.exit"]({ tabId, generation }),
+    webRunnerMessage: (tabId, raw) => rpc.send["webRunner.message"]({ tabId, raw }),
     on: (name, listener) => router.on(name, listener),
   };
 }

@@ -11,6 +11,7 @@ import {
   sessionParser,
   sessionSchema,
   TAB_ID_PATTERN,
+  tabLayoutSchema,
 } from "../src/session";
 import { defaultSettings } from "../src/settings";
 
@@ -21,7 +22,7 @@ describe("session", () => {
     const s = defaultSession(() => tab("t1"));
     expect(s.tabOrder).toEqual(["t1"]);
     expect(s.activeTabId).toBe("t1");
-    expect(s.tabs.t1).toMatchObject({ title: "Untitled", language: "typescript", runtime: "browser-node" });
+    expect(s.tabs.t1).toMatchObject({ title: "Untitled", language: "typescript", runtime: "bun" });
     expect(s.window).toBeNull();
   });
 
@@ -171,6 +172,90 @@ describe("session", () => {
       parseSession({ version: 2, tabOrder: ["t2"], activeTabId: "t2", tabs: { t2: { id: "t2" } } }).session.tabs.t2
         ?.workingDirectory,
     ).toBeNull();
-    expect(SESSION_VERSION).toBe(2);
+    expect(SESSION_VERSION).toBe(3);
+  });
+
+  test("layout.tiles defaults independently via .catch(), and the v2 → v3 migration is a no-op bump (R-M4-T8-VERSION-1)", () => {
+    // A v2 session (pre-Task 8) has no `tiles` at all; migrating it only bumps the version -- tiles comes from
+    // tabLayoutSchema's own .catch() default, not from a data transform (mirrors v1 → v2's own no-op precedent).
+    const migrated = parseSession({
+      version: 2,
+      tabOrder: ["a"],
+      activeTabId: "a",
+      tabs: { a: { id: "a", layout: { orientation: "horizontal", editorSize: 55, outputVisible: true } } },
+    });
+    expect(migrated.fileVersion).toBe(2);
+    expect(migrated.session.version).toBe(SESSION_VERSION);
+    expect(migrated.session.tabs.a?.layout.tiles).toEqual({
+      arrangement: "stacked",
+      order: ["console", "webview"],
+      webviewVisible: false,
+      consoleSize: 55,
+    });
+
+    // Each tiles field defaults on its own: a bad `order` (a duplicate) resets only `order`, and leaves the other,
+    // valid fields alone -- exactly what lets Task 15 add `muted` beside `tiles` with no second version bump.
+    const partiallyBad = tabLayoutSchema.parse({
+      orientation: "horizontal",
+      editorSize: 55,
+      outputVisible: true,
+      tiles: { arrangement: "side-by-side", order: ["console", "console"], webviewVisible: true, consoleSize: 40 },
+    });
+    expect(partiallyBad.tiles).toEqual({
+      arrangement: "side-by-side",
+      order: ["console", "webview"],
+      webviewVisible: true,
+      consoleSize: 40,
+    });
+  });
+
+  test("a session from a newer build reads layout.tiles with defaults rather than being discarded (downgrade case)", () => {
+    const future = parseSession({
+      version: SESSION_VERSION + 1,
+      tabOrder: ["a"],
+      activeTabId: "a",
+      tabs: { a: { id: "a" } },
+      somethingFromTheFuture: true,
+    });
+    expect(future.newerThanBuild).toBe(true);
+    expect(future.session.version).toBe(SESSION_VERSION + 1);
+    expect(future.session.tabs.a?.layout.tiles).toEqual({
+      arrangement: "stacked",
+      order: ["console", "webview"],
+      webviewVisible: false,
+      consoleSize: 55,
+    });
+    expect((future.session as Record<string, unknown>).somethingFromTheFuture).toBe(true);
+  });
+
+  test("layout.muted defaults to false and lives beside tiles under the same v3 bump (Task 15)", () => {
+    // A v2 session has neither `tiles` nor `muted`; migrating it is still a no-op version bump, and `muted`
+    // comes from tabLayoutSchema's own .catch() default, exactly like `tiles` did in Task 8.
+    const migrated = parseSession({
+      version: 2,
+      tabOrder: ["a"],
+      activeTabId: "a",
+      tabs: { a: { id: "a", layout: { orientation: "horizontal", editorSize: 55, outputVisible: true } } },
+    });
+    expect(migrated.session.tabs.a?.layout.muted).toBe(false);
+  });
+
+  test("an invalid layout.muted falls back to false without discarding tiles or the other layout fields", () => {
+    const parsed = tabLayoutSchema.parse({
+      orientation: "vertical",
+      editorSize: 40,
+      outputVisible: false,
+      tiles: { arrangement: "side-by-side", order: ["console", "webview"], webviewVisible: true, consoleSize: 30 },
+      muted: "yes",
+    });
+    expect(parsed).toEqual({
+      orientation: "vertical",
+      editorSize: 40,
+      outputVisible: false,
+      tiles: { arrangement: "side-by-side", order: ["console", "webview"], webviewVisible: true, consoleSize: 30 },
+      muted: false,
+    });
+    // A valid `true` is preserved.
+    expect(tabLayoutSchema.parse({ muted: true }).muted).toBe(true);
   });
 });

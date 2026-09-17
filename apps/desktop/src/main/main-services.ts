@@ -2,11 +2,16 @@ import { join } from "node:path";
 import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
 import { effectiveRuntime, runnerSettings } from "@jslab/shared";
 import type { AppPaths } from "./app-paths";
+import { VendorCache } from "./bundling/vendor-cache";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
-import { RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
-import { createRunnerConfig } from "./runs/runner-config";
+import { EXIT_KILL_GRACE_MS, RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
+import { createRunnerConfig, runnerContextFor } from "./runs/runner-config";
 import { SparePool } from "./runs/spare-pool";
+import { createBunAdapter } from "./runtimes/bun-adapter";
+import { createRuntimeRegistry, type RuntimeRegistry } from "./runtimes/registry";
+import { createWebAdapter, type WebAdapterDeps } from "./runtimes/web-adapter";
+import { createUiWebviewSource, type UiWebviewSource, type WebviewBridge } from "./runtimes/webview-source";
 import { EnvStore } from "./services/env-store";
 import { NpmService } from "./services/npm-service";
 import { createBunSpawn, type NpmSpawn } from "./services/npm-spawn";
@@ -27,15 +32,38 @@ export interface MainServicesOptions {
   onEvents: RunCoordinatorDeps["onEvents"];
   onState: RunCoordinatorDeps["onState"];
   onDiagnostics: RunCoordinatorDeps["onDiagnostics"];
+  /** Task 15 (spec §5.12, EX-35). Optional, like `RunCoordinatorDeps.onAudio` itself. */
+  onAudio?: RunCoordinatorDeps["onAudio"];
   /** Test seams. Production spawns real Bun runners and runs Babel in the bundled transform worker. */
   startRunner?: (config: RunnerSpawnConfig) => Promise<BunRunnerProcess>;
   transformHost?: TransformHost;
+  /**
+   * Bun adapter timing knobs (spec §5.1). Undefined in production, which leaves every one at its documented
+   * default; a caller that does set one gets it applied identically whether or not `RunCoordinator` ends up using
+   * its own fallback registry or the `runtimes` one built below (fix round 1, Finding 3).
+   */
+  stopGraceMs?: RunCoordinatorDeps["stopGraceMs"];
+  idleRunnerTtlMs?: RunCoordinatorDeps["idleRunnerTtlMs"];
+  expandTimeoutMs?: RunCoordinatorDeps["expandTimeoutMs"];
   /** Main's log (index.ts passes the rotating log). Defaults to console.error. */
   log?: (message: string, detail?: unknown) => void;
+  /**
+   * Fix round 1 (Task 13, security): masks anything recorded about a `browser-node` fetch (spec §18) before it
+   * reaches the log or the page. `index.ts` passes its own `redact`; defaults to a no-op so tests that never touch
+   * `browser-node` fetch don't need to supply one.
+   */
+  redact?: (text: string) => string;
   /** The user's real home folder (for the Bun cache location, spec §11.3). */
   realHome: string;
   /** E2E only: a temp Bun cache for npm operations instead of the user's. */
   bunCacheDirOverride?: string;
+  /**
+   * M4 §5.12: how Main reaches the UI's `<electrobun-webview>` elements. `index.ts` provides it (it owns the main
+   * window's RPC); headless tests don't, and there is nothing a web adapter could drive without one -- so
+   * `browser`/`browser-node` then keep the documented Bun fallback rather than registering a runtime whose every
+   * run could only time out. That is the same trade Task 9 made when it declined to register a stub.
+   */
+  webviewBridge?: WebviewBridge;
   npmSpawn?: NpmSpawn;
   npmFetch?: typeof fetch;
   onNpmOperation(operation: NpmOperation): void;
@@ -53,6 +81,15 @@ export interface MainServices {
   safeMode: SafeModeState;
   transform: TransformHost;
   spares: SparePool;
+  /** M4: the web runner's third-party chunk cache (spec §5.12); invalidated by `npm.afterChange` below (§11.3). */
+  vendorCache: VendorCache;
+  /** The runtime → adapter lookup (spec §5.1), exposed so callers can see what actually got registered. */
+  runtimes: RuntimeRegistry;
+  /**
+   * M4 §5.12: Main's side of the browser runtimes' webviews -- where `index.ts` routes the UI's `webRunner.*`
+   * messages. Null when no `webviewBridge` was provided, which is also when no web adapter is registered.
+   */
+  webviews: UiWebviewSource | null;
   coordinator: RunCoordinator;
   /** Disposes runners, the watchdog and the transform worker, and releases run.lock. */
   dispose(): void;
@@ -73,7 +110,15 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     tabDefaults: () => ({
       language: settings.current.run.defaultLanguage,
       runtime: effectiveRuntime(settings.current.run.defaultRuntime),
-      layout: { orientation: settings.current.view.layout, editorSize: 55, outputVisible: true },
+      layout: {
+        orientation: settings.current.view.layout,
+        editorSize: 55,
+        outputVisible: true,
+        // M4 Task 8: matches tabTilesSchema's own `.catch()` defaults (packages/shared/src/session.ts).
+        tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+        // Task 15: matches tabLayoutSchema's own `.catch()` default for `muted`.
+        muted: false,
+      },
     }),
   });
   await ensurePackagesProject(paths, log);
@@ -93,6 +138,63 @@ export async function createMainServices(options: MainServicesOptions): Promise<
       workingDirectory: (tabId) => session.session.tabs[tabId]?.workingDirectory ?? null,
     }),
   );
+  const vendorCache = new VendorCache({ cacheDir: paths.vendorCacheDir });
+  // M4 Task 9a (ledger ruling R-M4-C1-1): the runtime registry (spec §5.1), now with the browser runtimes really
+  // registered. Before this, `createWebAdapter` was fully built and unit-tested but constructed nowhere, so
+  // `registry.get("browser")` fell through to the Bun adapter and a tab the user had explicitly set to Browser ran
+  // its code under Bun, where `document` doesn't exist. What was missing was never the adapter: it was a real
+  // `WebviewSource` to build one from, which needs a live `<electrobun-webview>` (Task 8) *and* a Main⇄UI protocol
+  // to drive it (this task) -- see `./runtimes/webview-source.ts`.
+  const webviews = options.webviewBridge
+    ? createUiWebviewSource({
+        bridge: options.webviewBridge,
+        readBootstrap: () => Bun.file(paths.webRunnerBootstrap).text(),
+      })
+    : null;
+  // Both web runtimes share the one source: a tab's runtime is fixed when the tab is created, so two adapters can
+  // never contend over the same tab's webview.
+  const webAdapterDeps = (runtime: "browser" | "browser-node", source: UiWebviewSource): WebAdapterDeps => ({
+    webviews: source,
+    runtime,
+    runsDir: paths.runsDir,
+    // Task 11: what a `browser-node` Node call resolves a relative path against when the tab has no working
+    // directory -- the same `workingDirectory ?? dataDir` the Bun runner uses (`./runs/runner-config.ts`).
+    dataDir: paths.dataDir,
+    // Task 9f item 6: what a bridged `child_process` command's environment defaults to. Built through the *same*
+    // `runnerContextFor` the Bun runner's own `configFor` uses, so env.json, the working directory's `.env` and the
+    // JSLAB_*/BUN_OPTIONS stripping all apply identically whichever runtime the tab happens to be set to -- rather
+    // than the bridge handing the child Main's raw `process.env`, under which a user's `.env` never applied at all.
+    nodeEnvironment: (workingDirectory) =>
+      runnerContextFor({ paths, baseEnv: () => options.env, envVars: () => env.variables }, workingDirectory).env,
+    packagesNodeModules: paths.packagesNodeModules,
+    bunLockPath: join(paths.packagesDir, "bun.lock"),
+    vendorCache,
+    runLock,
+    log,
+    ...(options.redact ? { redact: options.redact } : {}),
+    ...(options.stopGraceMs === undefined ? {} : { stopGraceMs: options.stopGraceMs }),
+    ...(options.expandTimeoutMs === undefined ? {} : { expandTimeoutMs: options.expandTimeoutMs }),
+  });
+  const runtimes = createRuntimeRegistry(
+    {
+      bun: createBunAdapter({
+        spares,
+        runsDir: paths.runsDir,
+        runLock,
+        exitGraceMs: EXIT_KILL_GRACE_MS,
+        stopGraceMs: options.stopGraceMs,
+        idleRunnerTtlMs: options.idleRunnerTtlMs,
+        expandTimeoutMs: options.expandTimeoutMs,
+      }),
+      ...(webviews
+        ? {
+            browser: createWebAdapter(webAdapterDeps("browser", webviews)),
+            "browser-node": createWebAdapter(webAdapterDeps("browser-node", webviews)),
+          }
+        : {}),
+    },
+    log,
+  );
   const coordinator = new RunCoordinator({
     transform: (source, transformOptions) => transform.transform(source, transformOptions),
     spares,
@@ -101,7 +203,12 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     onEvents: options.onEvents,
     onState: options.onState,
     onDiagnostics: options.onDiagnostics,
+    onAudio: options.onAudio,
     runLock,
+    stopGraceMs: options.stopGraceMs,
+    idleRunnerTtlMs: options.idleRunnerTtlMs,
+    expandTimeoutMs: options.expandTimeoutMs,
+    runtimes,
   });
   // Spec §12.1: saving env.json recycles every tab's spare, so the next run gets the new values.
   env.onChange(() => spares.invalidateAll());
@@ -126,10 +233,13 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     onOperation: options.onNpmOperation,
     onLog: options.onNpmLog,
     onChanged: options.onNpmChanged,
-    // Spec §11.3: after any change, spares are recycled and the type cache is invalidated (web vendor caches: M4).
+    // Spec §11.3: after any change, spares are recycled, the type cache is invalidated, and (M4) every cached web
+    // runner vendor chunk is dropped -- not just the ones whose key happens to go stale, since a chunk not yet
+    // rebuilt under its new key would otherwise linger on disk.
     afterChange: () => {
       spares.invalidateAll();
       types.invalidate();
+      vendorCache.invalidateAll().catch((error) => log(strings.log.vendorCacheInvalidateFailed, String(error)));
     },
     log,
   });
@@ -143,6 +253,9 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     safeMode,
     transform,
     spares,
+    vendorCache,
+    runtimes,
+    webviews,
     coordinator,
     dispose() {
       coordinator.dispose();

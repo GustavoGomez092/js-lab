@@ -249,6 +249,59 @@ button:disabled {
   background: var(--bg-canvas);
 }
 
+/* ---------- web view tile (Task 8, fix round 1 F1-F3) ---------- */
+/* `.split-pane` children are flex items, not containers (see `.output`/`.editor` above), so `OutputTiles`'s
+   docking placeholder sets its own height explicitly, same as every other pane. It carries no visible content of
+   its own -- `WebViewTile` only ever reads its box (`getBoundingClientRect`/`ResizeObserver`) to position the
+   real tile over it; nothing is ever rendered inside it (fix round 1, F1: a portal target that lives inside a
+   component allowed to unmount is exactly what let hiding Output or switching tabs destroy the webview). */
+.webview-tile-dock {
+  height: 100%;
+}
+
+/* The actual tile: always a child of `.webview-parking` (see below), positioned with `position: fixed` and
+   `top`/`left`/`width`/`height` set inline to track `.webview-tile-dock`'s box when docked, or collapsed to a 1x1
+   box when not (`WebViewTile.tsx`'s `COLLAPSED_STYLE` -- not literally 0x0, see that constant's own doc comment
+   for the native-layer reason why) -- never `display: none`, which a native, compositor-level webview surface is
+   not guaranteed to honor, and never moved in the DOM (fix round 1, F1/F2). */
+.webview-tile {
+  overflow: hidden;
+}
+
+.webview-tile-surface {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Always mounted, permanent home for every tab's `.webview-tile` -- never unmounted by anything this task's
+   layout does, which is the entire point (fix round 1, F1/F2). Contributes no box of its own; every `.webview-
+   tile` inside it is independently `position: fixed`.
+   Fix round 2 (N3): `position: fixed` is viewport-relative ONLY as long as no ancestor establishes a containing
+   block for fixed-position descendants -- `transform`, `filter`, `backdrop-filter`, `perspective`, `contain` (any
+   value but `size`/`style`) or `will-change: transform`/`will-change: filter`/`will-change: backdrop-filter` on
+   `html`, `body`, `#root`, `.app` or `.app-main` would silently re-base every docked webview's coordinates to
+   that ancestor's box instead of the viewport. None of them declare any of those today (checked repo-wide) --
+   this holds by accident, not by contract, so anyone adding one of those properties to an ancestor here needs to
+   know this relies on their absence. Stacking is NOT the same story, despite appearances: neither this rule nor
+   `.webview-tile` sets `z-index`, and every overlay in this stylesheet does declare a higher one than either's
+   implicit 0 (`.dialog-backdrop` 50, `.context-menu` 60, `.palette-scrim` 70, `.palette` 71) -- but M4 T9a's real
+   run (a screenshot, not a reading of this file) settled that CSS stacking does not arbitrate a native compositor
+   surface AT ALL: a docked `<electrobun-webview>` painted above the command palette regardless of any of these
+   numbers. `z-index` here is decorative among the HTML overlays themselves, not a defense against the webview.
+   The actual fix (M4 T9c) is not in this file: `WebViewHosts` collapses every docked tile -- to this same 1x1,
+   non-interactive box `.webview-tile` already uses while undocked -- for as long as any overlay is open
+   (`apps/ui/src/shell/overlay-presence.ts`), so there is effectively no native surface left in the rectangle for
+   these z-indexes to lose to. See `WebViewHosts.tsx`'s own doc comment for the mechanism and its cost. */
+.webview-parking {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+}
+
 .output-toolbar {
   display: flex;
   align-items: center;
@@ -375,6 +428,33 @@ button:disabled {
 .output-truncated {
   padding: 6px 12px;
   color: var(--fg-warn);
+}
+
+/* Task 13 (spec §5.12): the non-blocking alert() dialog -- a banner row, not a modal, so it never covers the
+   editor or steals focus from anything else. */
+.web-dialog {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border-default);
+  color: var(--fg-default);
+}
+
+.web-dialog-text {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.web-dialog-queued {
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+
+.web-dialog-dismiss {
+  padding: 2px 8px;
+  color: var(--fg-accent);
 }
 
 /* Output empty states (T19A-m3, review rec 2): muted text on the canvas, centered, no icon. */
@@ -991,6 +1071,21 @@ button:disabled {
   line-height: 16px;
   color: var(--fg-muted);
   opacity: 0;
+}
+
+/* Task 15 (spec §5.12, EX-35): unlike .tab-close, this stays visible whenever it renders at all (the tab has
+   audio activity) -- it's not merely a hover affordance, it's the thing that tells you which tab is making noise. */
+.tab-audio {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 16px;
+  font-size: 11px;
+}
+
+.tab-audio.muted {
+  opacity: 0.6;
 }
 
 .tab:hover .tab-close,

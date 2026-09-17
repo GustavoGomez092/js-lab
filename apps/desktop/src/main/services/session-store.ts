@@ -14,6 +14,7 @@ import {
   type SessionParseResult,
   type TabLayout,
   type TabState,
+  type TabTiles,
   tabAfterClose,
   tabStateSchema,
   type WindowState,
@@ -30,7 +31,12 @@ import {
 
 export type TabPatch = Partial<
   Pick<TabState, "title" | "titleIsCustom" | "language" | "runtime" | "filePath" | "lastSavedHash">
-> & { layout?: Partial<TabLayout> };
+> & {
+  // Fix round 1 (F5): `tiles` is itself partial -- a caller may patch just `webviewVisible`, say -- so it is
+  // merged field-by-field against the tab's existing tiles below, not spread wholesale (which would silently
+  // reset every omitted tiles field to its schema default).
+  layout?: Partial<Omit<TabLayout, "tiles">> & { tiles?: Partial<TabTiles> };
+};
 
 export interface CreateTabOptions {
   language?: Language;
@@ -295,7 +301,14 @@ export class SessionStore {
   async patchTab(tabId: string, patch: TabPatch): Promise<void> {
     const tab = this.#session.tabs[tabId];
     if (!tab) return;
-    const next = tabStateSchema.parse({ ...tab, ...patch, layout: { ...tab.layout, ...patch.layout } });
+    // Fix round 1 (F5): `tiles` gets its own merge, not a spread -- `{ ...tab.layout, ...patch.layout }` alone
+    // would replace the whole `tiles` object with whatever the patch carries, silently dropping any field the
+    // patch omitted (a partial `{ webviewVisible: true }` patch would reset arrangement/order/consoleSize to
+    // their schema defaults instead of leaving them alone).
+    const layout = patch.layout
+      ? { ...tab.layout, ...patch.layout, tiles: { ...tab.layout.tiles, ...patch.layout.tiles } }
+      : tab.layout;
+    const next = tabStateSchema.parse({ ...tab, ...patch, layout });
     if (next.language !== tab.language) {
       await this.#bufferWriters.get(tabId)?.flush();
       await rename(this.#bufferPath(tab), this.#bufferPath(next)).catch(() => {});

@@ -20,7 +20,7 @@ import {
 import { createStore } from "zustand/vanilla";
 import { MAX_NPM_LOG_CHARS, MAX_NPM_OPERATIONS, maskCredentials, splitLogChunk } from "../npm/npm-panel";
 import type { TimerApi } from "./auto-run";
-import { applyRunEvents, applyRunState, initialOutput, type OutputState } from "./output";
+import { applyRunEvents, applyRunState, dismissWebDialog, initialOutput, type OutputState } from "./output";
 import { clampEditorSize, EDITOR_SIZE_RESET, insertAfterActive, isPermutation, renamePatch } from "./workspace";
 
 export interface TabRuntime {
@@ -33,11 +33,22 @@ export interface TabRuntime {
   diagnostics: DiagnosticPayload[];
   /** Restored tabs never auto-run until edited or run manually (spec §5.14). */
   autoRunArmed: boolean;
+  /**
+   * Task 15 (spec §5.12, EX-35): true while this tab's runner reports an AudioContext running or a media element
+   * playing -- pushed by `run.audio` (event-driven, never polled), independent of `output.runState`/activeHandles
+   * so the per-tab speaker icon (TabBar.tsx) tracks audio specifically, not every kind of handle.
+   */
+  audioActive: boolean;
 }
 
 const freshOutput = (): TabRuntime["output"] => ({ ...initialOutput, workingDirectoryMissing: false });
 
-export const newRuntime = (): TabRuntime => ({ output: freshOutput(), diagnostics: [], autoRunArmed: false });
+export const newRuntime = (): TabRuntime => ({
+  output: freshOutput(),
+  diagnostics: [],
+  autoRunArmed: false,
+  audioActive: false,
+});
 
 /**
  * Fix round 1 (I-1): true exactly when the most recent events carried a `WorkingDirectoryError`, reset to false the
@@ -195,10 +206,24 @@ export interface AppState {
   toggleOrientation(): void;
   setOrientation(orientation: TabState["layout"]["orientation"]): void;
   toggleOutputVisible(): void;
+  /** M4 Task 8: the nested split between the Console and Web View tiles (`layout.tiles.consoleSize`). */
+  setConsoleSize(size: number): void;
+  resetConsoleSize(): void;
+  toggleWebviewVisible(): void;
+  /** Task 15 (spec §5.12, EX-35): flips a specific tab's saved mute preference -- unlike `updateLayout`'s other
+   * callers, this must be able to target a background tab (TabBar.tsx renders every tab's indicator, not just
+   * the active one's). */
+  toggleMuted(tabId: string): void;
   receiveEvents(runId: string, events: RunEvent[], tabId?: string): void;
   receiveState(runId: string, state: RunState, activeHandles?: number, tabId?: string): void;
   receiveDiagnostics(runId: string, diagnostics: DiagnosticPayload[], tabId?: string): void;
+  /** Task 15 (spec §5.12, EX-35): applies a `run.audio` push. Always carries an explicit `tabId` (unlike the
+   * other `receive*` methods, there is no M1-era "no active tab yet" caller to default for). */
+  receiveAudio(active: boolean, tabId: string): void;
   clearOutput(tabId?: string): void;
+  /** Task 13: removes one shown alert() dialog from its tab's queue, once the user has answered it. Defaults to
+   *  the active tab, like every other `tabId?`-optional action here. */
+  dismissWebDialog(key: string, tabId?: string): void;
   setHoveredLine(line: number | null): void;
   reveal(line: number): void;
 
@@ -292,6 +317,19 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       const id = tabId ?? get().activeTabId;
       return id && get().tabs[id] ? id : null;
     };
+
+    /**
+     * Whether the caller named a tab that no longer exists.
+     *
+     * `resolve` answers `null` for two entirely different requests: "no tabId given, so act on the active tab"
+     * and "this tabId names a tab that is gone". Any caller that writes the active-tab mirror (`get().output`)
+     * on the `null` branch must tell them apart, because collapsing the two applies a dead tab's operation to
+     * whichever tab is live -- a late `clearOutput` for a tab the user just closed would wipe the output they
+     * are actually looking at, and a stale `dismissWebDialog` would clear a dialog the live tab still needs
+     * answered. `updateTab` above never had this bug: it re-checks `get().tabs[id]` and bails.
+     */
+    const namesMissingTab = (tabId?: string | null): boolean =>
+      tabId !== undefined && tabId !== null && resolve(tabId) === null;
 
     const updateTab = (tabId: string | null | undefined, update: (tab: TabState) => TabState) => {
       const id = resolve(tabId);
@@ -396,7 +434,15 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       },
 
       setRuntime(runtime) {
-        updateTab(null, (tab) => ({ ...tab, runtime }));
+        // Unlike setLanguage, this arms auto-run itself (mirrors editCode) rather than relying on the tab already
+        // being dirty: spec §5.2 states switching a tab's runtime triggers a run when Auto Run is on, unconditionally.
+        const id = resolve();
+        const tab = id ? get().tabs[id] : undefined;
+        if (!id || !tab) return;
+        commit({
+          tabs: { ...get().tabs, [id]: { ...tab, runtime } },
+          runtimes: { ...get().runtimes, [id]: { ...(get().runtimes[id] ?? newRuntime()), autoRunArmed: true } },
+        });
       },
 
       setEditorSize(size) {
@@ -413,6 +459,25 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       setOrientation(orientation) {
         updateLayout(() => ({ orientation }));
+      },
+
+      setConsoleSize(size) {
+        updateLayout((layout) => ({ tiles: { ...layout.tiles, consoleSize: clampEditorSize(size) } }));
+      },
+
+      resetConsoleSize() {
+        // Fix round 1 (F8): 55, matching tiles.consoleSize's own schema default (packages/shared/src/session.ts)
+        // -- unlike EDITOR_SIZE_RESET (50), which resets editorSize to a value that disagrees with its own default
+        // too; that pre-existing mismatch is unchanged here, not propagated to a second control.
+        updateLayout((layout) => ({ tiles: { ...layout.tiles, consoleSize: 55 } }));
+      },
+
+      toggleWebviewVisible() {
+        updateLayout((layout) => ({ tiles: { ...layout.tiles, webviewVisible: !layout.tiles.webviewVisible } }));
+      },
+
+      toggleMuted(tabId) {
+        updateTab(tabId, (tab) => ({ ...tab, layout: { ...tab.layout, muted: !tab.layout.muted } }));
       },
 
       toggleOutputVisible() {
@@ -464,18 +529,42 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
         if (runtime && runId === runtime.output.runId) updateRuntime(id, (current) => ({ ...current, diagnostics }));
       },
 
+      receiveAudio(active, tabId) {
+        if (!get().tabs[tabId]) return;
+        updateRuntime(tabId, (runtime) => ({ ...runtime, audioActive: active }));
+      },
+
       clearOutput(tabId) {
         const clear = (output: TabRuntime["output"]): TabRuntime["output"] => ({
           ...output,
           entries: [],
           stale: false,
           truncated: 0,
-          // Fix round 1 (I-1): clearing the output clears any WorkingDirectoryError row with it.
+          // Task 13: clearing the output clears any still-shown alert() dialog with it, the same as it already
+          // does for a WorkingDirectoryError row (fix round 1, I-1).
+          dialogs: [],
           workingDirectoryMissing: false,
         });
+        // A tabId naming a tab that has since closed is not a request to clear the ACTIVE tab's output.
+        if (namesMissingTab(tabId)) return;
         const id = resolve(tabId);
         if (!id) set({ output: clear(get().output) });
         else updateRuntime(id, (runtime) => ({ ...runtime, output: clear(runtime.output) }));
+      },
+
+      dismissWebDialog(key, tabId) {
+        // Same guard as `clearOutput` above: dismissing a dead tab's dialog must not dismiss the live tab's.
+        if (namesMissingTab(tabId)) return;
+        const id = resolve(tabId);
+        // `dismissWebDialog` (./output) is typed against the runtime-agnostic `OutputState`, so its result is
+        // merged back onto the full `TabRuntime["output"]` here rather than replacing it outright -- the same
+        // shape `clearOutput`'s own `clear` above preserves `workingDirectoryMissing` through.
+        const apply = (output: TabRuntime["output"]): TabRuntime["output"] => ({
+          ...output,
+          dialogs: dismissWebDialog(output, key).dialogs,
+        });
+        if (!id) set({ output: apply(get().output) });
+        else updateRuntime(id, (runtime) => ({ ...runtime, output: apply(runtime.output) }));
       },
 
       setHoveredLine(line) {

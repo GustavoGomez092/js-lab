@@ -30,7 +30,13 @@ describe("SessionStore tabs", () => {
     const store = await open({
       tabDefaults: () => ({
         language: "javascript",
-        layout: { orientation: "vertical", editorSize: 55, outputVisible: true },
+        layout: {
+          orientation: "vertical",
+          editorSize: 55,
+          outputVisible: true,
+          tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+          muted: false,
+        },
       }),
     });
     const second = await store.createTab({ content: "1 + 1" });
@@ -156,6 +162,20 @@ describe("SessionStore tabs", () => {
     });
     expect(store.findTabByPath("/w/a.ts")?.id).toBe("t1");
     expect(store.findTabByPath("/w/b.ts")).toBeNull();
+  });
+
+  // Fix round 1 (F5): a partial tiles patch merges field-by-field onto the tab's existing tiles, rather than
+  // replacing the whole object and silently resetting every field the patch didn't mention to its schema default.
+  test("patchTab merges a partial layout.tiles patch onto the tab's existing tiles instead of replacing it", async () => {
+    const store = await open();
+    await store.patchTab("t1", { layout: { tiles: { arrangement: "side-by-side", consoleSize: 70 } } });
+    await store.patchTab("t1", { layout: { tiles: { webviewVisible: true } } });
+    expect(store.session.tabs.t1?.layout.tiles).toEqual({
+      arrangement: "side-by-side",
+      order: ["console", "webview"],
+      webviewVisible: true,
+      consoleSize: 70,
+    });
   });
 
   test("setWorkingDirectory updates a known tab, persists it, and returns null for an unknown tab", async () => {

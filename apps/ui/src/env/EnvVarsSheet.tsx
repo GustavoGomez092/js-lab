@@ -2,6 +2,7 @@ import { MAX_ENV_VALUE_CHARS, MAX_ENV_VARS } from "@jslab/shared";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
+import { useOverlayPresence } from "../shell/overlay-presence";
 import { useSheetFocus } from "../shell/sheet-focus";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
@@ -32,6 +33,9 @@ export function EnvVarsSheet({ store, api }: { store: AppStore; api: Pick<MainAp
 }
 
 function EnvForm({ store, api }: { store: AppStore; api: Pick<MainApi, "getEnv" | "saveEnv"> }) {
+  // M4 T9c: this component only ever mounts while the sheet is open (`EnvVarsSheet` above returns null
+  // otherwise), so its whole mount lifetime IS the open window -- see `overlay-presence.ts`.
+  useOverlayPresence(true);
   const [rows, setRows] = useState<EnvRow[]>([]);
   const [draft, setDraft] = useState({ key: "", value: "" });
   const [errors, setErrors] = useState<EnvTableError[]>([]);

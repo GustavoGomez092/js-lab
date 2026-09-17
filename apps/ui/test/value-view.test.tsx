@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { EncodedValue } from "@jslab/rpc-schema";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { childrenOf, tableModel } from "../src/output/format";
+import { childrenOf, summarize, tableModel } from "../src/output/format";
 import { ValueView } from "../src/output/ValueView";
 
 const noExpand = async () => null;
@@ -139,6 +139,82 @@ describe("ValueView", () => {
     fireEvent.click(screen.getByRole("button", { name: /foo/ }));
     await waitFor(() => expect(screen.getByText(source)).toBeTruthy());
     expect(expand).toHaveBeenCalledWith("h3");
+  });
+});
+
+/**
+ * Task 14 shipped the `dom` encoding with no consumer in the UI, so `console.log(someElement)` arrived as an
+ * output entry that rendered as the empty string. Spec §5.9 asks for tag, attributes, child count and an
+ * outerHTML preview; these assert what the user actually sees, not what the serializer emits.
+ */
+describe("ValueView: DOM nodes (spec §5.9)", () => {
+  const markup = '<div id="app" class="row"><b>hi</b>!</div>';
+  const element: EncodedValue = {
+    t: "dom",
+    nodeType: 1,
+    tag: "DIV",
+    attrs: [
+      ["id", "app"],
+      ["class", "row"],
+    ],
+    childCount: 2,
+    outerHTML: markup,
+  };
+  const toggleOf = (container: HTMLElement) => container.querySelector(".v-toggle") as HTMLElement;
+
+  test("a logged element shows its tag, attributes and child count instead of an empty entry", () => {
+    const { container } = render(<ValueView value={element} expand={noExpand} />);
+    // The leading caret is the collapsed-node affordance every structured value gets.
+    expect(container.textContent).toBe('▸ <div id="app" class="row"> (2 children)');
+  });
+
+  test("expands to every attribute, the child count and the outerHTML preview", () => {
+    const { container } = render(<ValueView value={element} expand={noExpand} />);
+    fireEvent.click(toggleOf(container));
+    expect([...container.querySelectorAll(".v-children > .v")].map((row) => row.textContent)).toEqual([
+      'id: "app"',
+      'class: "row"',
+      "childCount: 2",
+      `outerHTML: ${JSON.stringify(markup)}`,
+    ]);
+  });
+
+  test("a truncated outerHTML preview offers the rest through its handle", async () => {
+    const full = `<div>${"x".repeat(50)}</div>`;
+    const expand = mock(async (): Promise<EncodedValue | null> => ({ t: "string", v: full }));
+    const { container } = render(
+      <ValueView
+        value={{
+          t: "dom",
+          nodeType: 1,
+          tag: "DIV",
+          attrs: [],
+          childCount: 0,
+          outerHTML: full.slice(0, 10),
+          truncated: { total: full.length, handle: "h9" },
+        }}
+        expand={expand}
+      />,
+    );
+    fireEvent.click(toggleOf(container));
+    fireEvent.click(container.querySelector(".v-more") as HTMLElement);
+    await waitFor(() => expect(container.textContent).toContain(full));
+    expect(expand).toHaveBeenCalledWith("h9");
+  });
+
+  test("summaries read naturally, and a case-sensitive tag keeps its own spelling", () => {
+    const node = (tag: string, childCount: number): EncodedValue => ({
+      t: "dom",
+      nodeType: 1,
+      tag,
+      attrs: [],
+      childCount,
+      outerHTML: "",
+    });
+    // tagName is uppercase for HTML, so it prints the way the markup does; an SVG tag is already cased and stays.
+    expect(summarize(node("SPAN", 1))).toBe("<span> (1 child)");
+    expect(summarize(node("SPAN", 0))).toBe("<span>");
+    expect(summarize(node("linearGradient", 0))).toBe("<linearGradient>");
   });
 });
 

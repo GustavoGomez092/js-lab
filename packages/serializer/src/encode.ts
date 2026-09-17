@@ -112,6 +112,29 @@ function ctorName(obj: object): string | null {
 
 const MAX_PREVIEW = 100;
 
+/** Runs `read`, swallowing any throw (a hostile or cross-realm accessor) and returning `fallback` instead. */
+function readSafely<T>(read: () => T, fallback: T): T {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+}
+
+/** `Node.ELEMENT_NODE`. Hardcoded, never read from the node: only Elements are encoded as `dom` (spec §5.9). */
+const ELEMENT_NODE = 1;
+
+/**
+ * True for anything duck-typed as a DOM Element: `nodeType === 1` and a string `tagName`. No `instanceof` (a node
+ * from another document or realm has a different prototype chain) and no throw (either accessor may be hostile).
+ */
+function isDomElement(obj: object): obj is { tagName: string } {
+  return readSafely(() => {
+    const candidate = obj as { nodeType?: unknown; tagName?: unknown };
+    return candidate.nodeType === ELEMENT_NODE && typeof candidate.tagName === "string";
+  }, false);
+}
+
 /** `text.slice(0, end)`, one unit shorter when the cut would keep only the high half of a surrogate pair. */
 function slicePairSafe(text: string, end: number): string {
   if (end >= text.length) return text;
@@ -165,10 +188,16 @@ export function clipToJsonBytes(text: string, maxBytes: number): string {
   return text;
 }
 
+// M4 Task 9b: this module runs in a **webview** as well as in Bun -- `packages/runner-web` imports it to encode
+// every `console.log` argument and every `__jl.log` value -- and a webview has no `Buffer`. `TextEncoder` is the
+// standard API both realms have, exactly as `EventBuffer` (`packages/runner-shared`) already does its own byte
+// accounting. One instance is reused rather than constructed per call.
+const textEncoder = new TextEncoder();
+
 /** Exact size of `value` serialized with JSON.stringify, in UTF-8 bytes. */
 export function jsonBytes(value: unknown): number {
   // Exact: JSON.stringify already escapes lone surrogates, so its UTF-8 length is the wire size (FA-m13).
-  return Buffer.byteLength(JSON.stringify(value) ?? "");
+  return textEncoder.encode(JSON.stringify(value) ?? "").length;
 }
 
 /** Replaces the values of an event that no longer fit even as summaries. */
@@ -484,6 +513,9 @@ export class Encoder {
       this.#chargeText(obj.href);
       return { t: "url", href: obj.href };
     }
+    // A DOM node never recurses (its children aren't walked, only counted), so — like Date/RegExp/URL above — it
+    // is encoded in full at any depth rather than turned into a depth handle.
+    if (isDomElement(obj)) return this.#dom(obj);
     if (obj instanceof WeakMap) return { t: "weak", kind: "WeakMap" };
     if (obj instanceof WeakSet) return { t: "weak", kind: "WeakSet" };
     if (typeof WeakRef !== "undefined" && obj instanceof WeakRef) return { t: "weak", kind: "WeakRef" };
@@ -549,6 +581,63 @@ export class Encoder {
       this.#chargeText(k, 16);
       this.#chargeText(v);
     }
+  }
+
+  /**
+   * A DOM Element as tag, attributes, child count and an outerHTML preview (spec §5.9). Reads exactly those four
+   * things, each individually guarded: a detached node, one from an exotic document, or one whose accessors throw
+   * all encode without throwing, at worst with empty fields. Children are counted (`childNodes.length`), never
+   * walked, so a node with many children costs the same as one with none.
+   */
+  #dom(obj: { tagName: string }): EncodedValue {
+    const el = obj as { tagName?: unknown; attributes?: unknown; childNodes?: unknown; outerHTML?: unknown };
+
+    const tag = readSafely(() => String(el.tagName ?? ""), "");
+    this.#chargeText(tag);
+
+    const attrs: [string, string][] = [];
+    const attributes = readSafely(
+      () => el.attributes as ArrayLike<{ name?: unknown; value?: unknown }> | null | undefined,
+      undefined,
+    );
+    const attrCount = readSafely(() => {
+      const length = attributes?.length;
+      return typeof length === "number" ? length : 0;
+    }, 0);
+    const attrLimit = Math.min(attrCount, this.limits.maxEntries);
+    for (let i = 0; i < attrLimit; i++) {
+      const attr = readSafely(() => attributes?.[i], undefined);
+      if (!attr) continue;
+      attrs.push([readSafely(() => String(attr.name ?? ""), ""), readSafely(() => String(attr.value ?? ""), "")]);
+    }
+    this.#chargeEntries(attrs);
+
+    const childCount = readSafely(() => {
+      const n = Number((el.childNodes as { length?: unknown } | null | undefined)?.length ?? 0);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    }, 0);
+
+    const rawOuterHTML = readSafely(() => String(el.outerHTML ?? ""), "");
+    const { maxString } = this.limits;
+    if (rawOuterHTML.length <= maxString) {
+      this.#chargeText(rawOuterHTML);
+      return { t: "dom", nodeType: ELEMENT_NODE, tag, attrs, childCount, outerHTML: rawOuterHTML };
+    }
+    // The preview is bounded like any string preview (spec §5.9); the full markup is available through a handle.
+    const shown = slicePairSafe(rawOuterHTML, maxString);
+    this.#chargeText(shown);
+    return {
+      t: "dom",
+      nodeType: ELEMENT_NODE,
+      tag,
+      attrs,
+      childCount,
+      outerHTML: shown,
+      truncated: {
+        total: rawOuterHTML.length,
+        handle: this.registry.register({ kind: "string", value: rawOuterHTML }),
+      },
+    };
   }
 
   #array(arr: unknown[], depth: number, ancestors: Set<object>): EncodedValue {

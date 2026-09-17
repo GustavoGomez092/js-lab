@@ -65,11 +65,30 @@ describe("layout", () => {
     expect(activeTab(await again.state()).layout.orientation).toBe("vertical");
   });
 
-  test("the runtime selector keeps Bun and rejects runtimes that arrive later (EX-24)", async () => {
-    const app = await launchApp();
+  test("the runtime selector switches the active tab between all three runtimes (EX-24)", async () => {
+    // A selector test, not an execution test. Auto Run is off so that switching a runtime doesn't also start a
+    // run (spec §5.2): a browser run would bundle the tab and spin up a webview, which says nothing about the
+    // selector and would make this scenario depend on the whole web pipeline.
+    //
+    // This replaces an M2-era assertion that Bun was the only selectable runtime and that `runtime.browserNode`
+    // was refused as a disabled command. Task 9 widened `AVAILABLE_RUNTIMES` to all three, which made that
+    // assertion false by design; it was left failing rather than quietly rewritten, because it was a behavioural
+    // claim belonging to another task.
+    const app = await launchApp({ settings: { version: 3, run: { autoRun: false } } });
     apps.push(app);
-    await app.command("runtime.bun");
-    expect(activeTab(await app.state()).runtime).toBe("bun");
-    await expect(app.command("runtime.browserNode")).rejects.toThrow("Command is disabled: runtime.browserNode");
+
+    /** Runs a runtime command and waits for the tab to actually report that runtime. */
+    const select = async (command: string, runtime: string) => {
+      await app.command(command);
+      return waitFor(async () => (activeTab(await app.state()).runtime === runtime ? runtime : null), {
+        message: `the tab never switched to ${runtime}`,
+      });
+    };
+
+    // Each command is accepted (none is refused as disabled) and each one moves the tab to that runtime. The two
+    // browser runtimes are real transitions away from the `bun` default, so this cannot pass by standing still.
+    expect(await select("runtime.bun", "bun")).toBe("bun");
+    expect(await select("runtime.browserNode", "browser-node")).toBe("browser-node");
+    expect(await select("runtime.browser", "browser")).toBe("browser");
   });
 });

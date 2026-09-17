@@ -95,6 +95,30 @@ describe("startAutoRun", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  test("switching a tab's runtime schedules a run on its own, without a prior edit arming it (spec §5.2)", () => {
+    const store = hydratedStore();
+    const run = mock(() => {});
+    const clock = manualTimers();
+    startAutoRun(store, run, clock.timers);
+    // Unlike a language change, a runtime change is armed by the switch itself (store.ts's setRuntime) -- the spec
+    // states it as unconditional ("a change triggers a run when Auto Run is on"), not gated on the tab already
+    // being dirty from an edit.
+    store.getState().setRuntime("browser");
+    expect(clock.pending.size).toBe(1);
+    clock.fireAll();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  test("switching a tab's runtime in Safe Mode never schedules a run", () => {
+    const run = mock(() => {});
+    const clock = manualTimers();
+    const safe = hydratedStore(true);
+    startAutoRun(safe, run, clock.timers);
+    safe.getState().setRuntime("browser");
+    expect(clock.pending.size).toBe(0);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   test("unsubscribing cancels a pending run", () => {
     const store = hydratedStore();
     const run = mock(() => {});
@@ -254,6 +278,17 @@ describe("text rendering", () => {
     };
     expect(valueToText(value)).toBe('{ a: 1, list: ["x", 2] }');
     expect(valueToText({ t: "string", v: "top" })).toBe("top");
+    // Copy All used to produce an empty line for a logged DOM node, because nothing summarised it (spec §5.9).
+    expect(
+      valueToText({
+        t: "dom",
+        nodeType: 1,
+        tag: "DIV",
+        attrs: [["id", "app"]],
+        childCount: 2,
+        outerHTML: '<div id="app"></div>',
+      }),
+    ).toBe('<div id="app"> (2 children)');
   });
 
   test("renders console arguments, streams and errors", () => {

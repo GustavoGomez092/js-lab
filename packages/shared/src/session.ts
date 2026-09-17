@@ -8,16 +8,58 @@ export const MAX_CLOSED_TABS = 20;
  */
 export const TAB_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
 export const LAYOUT_ORIENTATIONS = ["horizontal", "vertical"] as const;
-/** Session file format version. M1 wrote 1; M2 writes 2 (see SESSION_MIGRATIONS). */
-export const SESSION_VERSION = 2;
+/** M4 Task 8, spec §7.1 / Appendix C: the Web View tile's arrangement relative to the Console tile. */
+export const TILE_ARRANGEMENTS = ["stacked", "side-by-side"] as const;
+export const TILE_KINDS = ["console", "webview"] as const;
+export type TileKind = (typeof TILE_KINDS)[number];
+/** Session file format version. M1 wrote 1; M2 wrote 2; M4 Task 8 writes 3 (see SESSION_MIGRATIONS). */
+export const SESSION_VERSION = 3;
 
-const defaultLayout = () => ({ orientation: "horizontal" as const, editorSize: 55, outputVisible: true });
+const defaultTileOrder = (): TileKind[] => ["console", "webview"];
+
+const defaultTiles = () => ({
+  arrangement: "stacked" as const,
+  order: defaultTileOrder(),
+  webviewVisible: false,
+  consoleSize: 55,
+});
+
+const defaultLayout = () => ({
+  orientation: "horizontal" as const,
+  editorSize: 55,
+  outputVisible: true,
+  tiles: defaultTiles(),
+  // Task 15, spec §5.12/EX-35: whether the tab's audio (every tracked AudioContext, every media element) is
+  // muted. Lives beside `tiles` under the same v3 bump (R-M4-T8-VERSION-1) -- its own `.catch()` default is what
+  // lets it be additive with no further SESSION_VERSION bump.
+  muted: false,
+});
+
+/**
+ * Ruling R-M4-T8-VERSION-1: every field defaults independently via its own `.catch()`, rather than the whole
+ * object being gated on SESSION_VERSION, so a later additive field (Task 15's `muted`) needs no further bump.
+ */
+export const tabTilesSchema = z
+  .object({
+    arrangement: z.enum(TILE_ARRANGEMENTS).catch("stacked"),
+    // A valid order names both tiles exactly once; a missing one, a duplicate, or a third value falls back to the
+    // default order on its own, without discarding arrangement/webviewVisible/consoleSize alongside it.
+    order: z
+      .array(z.enum(TILE_KINDS))
+      .refine((order) => order.length === 2 && new Set(order).size === 2)
+      .catch(() => defaultTileOrder()),
+    webviewVisible: z.boolean().catch(false),
+    consoleSize: z.number().min(10).max(90).catch(55),
+  })
+  .catch(defaultTiles);
 
 export const tabLayoutSchema = z
   .object({
     orientation: z.enum(LAYOUT_ORIENTATIONS).catch("horizontal"),
     editorSize: z.number().min(10).max(90).catch(55),
     outputVisible: z.boolean().catch(true),
+    tiles: tabTilesSchema,
+    muted: z.boolean().catch(false),
   })
   .catch(defaultLayout);
 
@@ -104,6 +146,7 @@ export const sessionSchema = z.looseObject({
   lastDirectory: z.string().min(1).max(4096).nullable().catch(null),
 });
 
+export type TabTiles = z.infer<typeof tabTilesSchema>;
 export type TabLayout = z.infer<typeof tabLayoutSchema>;
 export type TabState = z.infer<typeof tabStateSchema>;
 export type ClosedTab = z.infer<typeof closedTabSchema>;
@@ -120,6 +163,9 @@ function isObject(value: unknown): value is RawSession {
 export const SESSION_MIGRATIONS: Record<number, (raw: RawSession) => RawSession> = {
   // v1 (M1) → v2 (M2): the new tab fields, closedStack, settingsWindow and lastDirectory all have schema defaults.
   1: (raw) => ({ ...raw, version: 2 }),
+  // v2 (M2) → v3 (M4 Task 8): layout.tiles is additive with its own `.catch()` defaults (R-M4-T8-VERSION-1) --
+  // a no-op bump, exactly like v1 → v2 was. Keeps `tiles` and Task 15's `muted` sharing this one bump.
+  2: (raw) => ({ ...raw, version: 3 }),
 };
 
 export interface SessionParseResult {

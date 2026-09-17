@@ -1,0 +1,535 @@
+import { readFileSync } from "node:fs";
+import * as nodeOs from "node:os";
+/*
+ * Task 10 (spec §5.13): every import below reads a `packages/runner-web/src/polyfills/**` file's raw text at
+ * *this* build's compile time (an import attribute, not a normal import), so its source ships inside Main's own
+ * compiled output with no dependency on a `node_modules` folder existing next to the packaged app. Each subpath
+ * ends in `.txt` -- a `package.json` export-map alias to the real `.ts`/`.js` file, not the file's real name; see
+ * `text-imports.d.ts` for why the alias (not the real subpath) is what makes this typecheck.
+ *
+ * `process.ts`/`os.ts` export no default (see each file's own comment on why), which TypeScript treats as a hard
+ * error on a normal default import (TS1192) even under `{ type: "text" }` -- it has no built-in notion of that
+ * attribute and resolves the real file's real shape regardless, hence the `@ts-expect-error`s. `crypto.ts` *does*
+ * have a default export, so its import doesn't error, but its inferred type (`CryptoPolyfill`, not `string`) fails
+ * where the text is used below -- the `as unknown as string` cast is exactly as narrow a lie as the two
+ * `@ts-expect-error`s are.
+ */
+/*
+ * Task 11: imported for its **values**, not its text -- unlike every `polyfills/*` import above.
+ *
+ * `node-bridge.ts` deliberately is NOT text-imported here, and must not become one: Bun keys a module by its
+ * resolved path, ignoring the `type: "text"` attribute when deciding identity, so importing one file both ways in
+ * one program makes whichever load happens first win. Measured: with both imports present, the text load won and
+ * every named import from it failed at evaluation with "Export named 'CHILD_PROCESS_SYNC_METHODS' not found".
+ *
+ * It also is not needed as text. The bridge *client* lives in the bootstrap (`startRunnerWeb` installs it on the
+ * page global); a tab's bundle only needs a few lines of glue that read that global, which is generated below from
+ * these constants -- so the module-name lists and the spec's refusal wording keep a single source of truth without
+ * shipping the whole client into every bundle.
+ */
+import {
+  CHILD_PROCESS_SYNC_METHODS,
+  childProcessSyncAlternative,
+  FS_ASYNC_METHODS,
+  FS_SYNC_ALTERNATIVE,
+  FS_SYNC_METHODS,
+  NODE_BRIDGE_GLOBAL,
+  NODE_BRIDGE_MISSING_MESSAGE,
+  UNSUPPORTED_ERROR_NAME,
+  UNSUPPORTED_MODULE_DATA_EXPORTS,
+  UNSUPPORTED_MODULE_EXPORTS,
+  UNSUPPORTED_MODULES,
+  unsupportedModuleMessage,
+  unsupportedSyncMessage,
+} from "@jslab/runner-web/node-bridge";
+import cryptoSrcModule from "@jslab/runner-web/polyfills/crypto.ts.txt" with { type: "text" };
+// @ts-expect-error -- `os.ts` has no default export, and that's by design.
+import osSrc from "@jslab/runner-web/polyfills/os.ts.txt" with { type: "text" };
+// @ts-expect-error -- `process.ts` has no default export, and that's by design.
+import processSrc from "@jslab/runner-web/polyfills/process.ts.txt" with { type: "text" };
+import type { Runtime } from "@jslab/shared";
+import type { BunPlugin } from "bun";
+import { runnerEnvironment } from "../app-paths";
+import type { BundleError } from "./bundler";
+import { buildCodeFrame, locateImport } from "./locate-import";
+import { isNodeBuiltin, stripNodePrefix } from "./node-builtins";
+
+const cryptoSrc = cryptoSrcModule as unknown as string;
+
+import assertVendor from "@jslab/runner-web/polyfills/vendor/assert.js.txt" with { type: "text" };
+// The ten §5.13 sync builtins: each a real npm polyfill, pre-flattened (every transitive `require()` already
+// inlined -- see the Task 10 report for why, and each vendor file's own header for its exact provenance/version).
+import bufferVendor from "@jslab/runner-web/polyfills/vendor/buffer.js.txt" with { type: "text" };
+// `crypto.ts`'s own `createHash`/`createHmac` implementation (see its comment for the two-path resolution trick).
+import createHashVendor from "@jslab/runner-web/polyfills/vendor/create-hash.js.txt" with { type: "text" };
+import createHmacVendor from "@jslab/runner-web/polyfills/vendor/create-hmac.js.txt" with { type: "text" };
+import eventsVendor from "@jslab/runner-web/polyfills/vendor/events.js.txt" with { type: "text" };
+import pathVendor from "@jslab/runner-web/polyfills/vendor/path-browserify.js.txt" with { type: "text" };
+import punycodeVendor from "@jslab/runner-web/polyfills/vendor/punycode.js.txt" with { type: "text" };
+import querystringVendor from "@jslab/runner-web/polyfills/vendor/querystring-es3.js.txt" with { type: "text" };
+import streamVendor from "@jslab/runner-web/polyfills/vendor/stream-browserify.js.txt" with { type: "text" };
+import stringDecoderVendor from "@jslab/runner-web/polyfills/vendor/string_decoder.js.txt" with { type: "text" };
+import urlVendor from "@jslab/runner-web/polyfills/vendor/url.js.txt" with { type: "text" };
+import utilVendor from "@jslab/runner-web/polyfills/vendor/util.js.txt" with { type: "text" };
+
+/** What Main knows about a tab's run that a `browser-node` snapshot needs (spec §5.13). Both fields already exist
+ * on `BundleOptions`/`VendorBundleOptions` -- no new plumbing required beyond the two call sites in `bundler.ts`.
+ */
+export interface BrowserNodeContext {
+  /** The tab's working directory, or null when none is set (spec §5.3). */
+  workingDirectory: string | null;
+  /** `apps/desktop/src/main/app-paths.ts:46`'s `packagesNodeModules` -- what `runnerEnvironment` needs for `NODE_PATH`. */
+  packagesNodeModules: string;
+  /**
+   * The app's data directory: what a tab with **no** working directory takes as its cwd, exactly as
+   * `../runs/runner-config.ts`'s `runnerContextFor` does for a `bun` tab (Task 9f item 5).
+   */
+  dataDir: string;
+}
+
+const VENDOR_TABLE: Record<string, string> = {
+  buffer: bufferVendor,
+  path: pathVendor,
+  events: eventsVendor,
+  util: utilVendor,
+  url: urlVendor,
+  querystring: querystringVendor,
+  string_decoder: stringDecoderVendor,
+  assert: assertVendor,
+  stream: streamVendor,
+  punycode: punycodeVendor,
+};
+
+/** Keyed by the exact specifier `crypto.ts` imports (see that file); never touched by user code directly. */
+const INTERNAL_VENDOR_TABLE: Record<string, string> = {
+  "./vendor/create-hash-entry": createHashVendor,
+  "./vendor/create-hmac-entry": createHmacVendor,
+};
+
+/**
+ * The `process.env` snapshot (spec §5.13, "constraint most likely to be got wrong" per the Task 10 brief): reuses
+ * `runnerEnvironment` verbatim -- the same layering and reserved-key stripping (no `JSLAB_*`, no `BUN_OPTIONS`) the
+ * Bun runtime's own runner process gets (`apps/desktop/src/main/runs/runner-config.ts`). `base` is Main's own
+ * `process.env`, which *is* the login-shell environment (spec §4.6): Main never re-execs, so its own `process.env`
+ * at bundle time is byte-for-byte what `apps/desktop/src/main/index.ts` captured at launch and threads through as
+ * `MainServicesOptions.env` everywhere else. `env.json` (`variables`) and a working directory's `.env` (`dotenv`)
+ * are not layered in here: `WebAdapterDeps` does not yet carry them through to `bundleAppForWeb`/`bundleVendorForWeb`
+ * (the registry only wires up the `bun` adapter so far -- `main-services.ts`'s own note on this), so there is
+ * nothing to layer from this seam today. A future task that wires the real `browser-node` production adapter
+ * should extend `BrowserNodeContext` with `variables`/`dotenv` and pass them straight through to `runnerEnvironment`
+ * here, rather than inventing a second builder.
+ */
+function browserNodeEnv(ctx: BrowserNodeContext): Record<string, string> {
+  return runnerEnvironment(
+    { packagesNodeModules: ctx.packagesNodeModules },
+    { base: process.env, workingDirectory: ctx.workingDirectory },
+  );
+}
+
+/**
+ * `process.ts` exports only the pure factory (see its own comment); this appends the lines that instantiate it
+ * with a real, bundle-time snapshot -- computed fresh on every call, matching the app chunk's own "rebuilt on
+ * every run without exception" rule (`bundler.ts`), so this is effectively a page-load snapshot.
+ *
+ * Fix round 1 (I1): a default export alone left `import { env } from 'process'` (an ordinary spelling, not an
+ * exotic one) failing the build with "no matching export" -- so every `ProcessPolyfill` property also gets its
+ * own named export, re-read off the one instantiated object (no second construction, no drift between the two
+ * forms). `cwd`/`nextTick` are plain functions that close over `snapshot`, not `this` -- safe to export directly
+ * without binding.
+ */
+function processModuleSource(ctx: BrowserNodeContext): string {
+  /*
+   * Task 9f (item 5): `workingDirectory ?? dataDir`, **not** `?? process.cwd()`.
+   *
+   * `process.cwd()` here is Main's own process cwd -- wherever the app binary happened to be launched from, which
+   * is nothing to do with the tab. Task 11 made `fs` and `child_process` resolve relative paths against
+   * `workingDirectory ?? dataDir`, matching the Bun runner (`../runs/runner-config.ts`), so a tab with no working
+   * directory ended up with three different answers to "what is the cwd?": `process.cwd()` said one place,
+   * `fs.readFile("notes.txt")` read from another, and `bun` would have used a third. All three now agree.
+   *
+   * `PWD` is set alongside it for the same reason `runnerContextFor` sets it: a runner's `PWD` always matches its
+   * real cwd, so a command or a library reading `process.env.PWD` sees the same directory `process.cwd()` reports.
+   */
+  const cwd = ctx.workingDirectory ?? ctx.dataDir;
+  const snapshot = {
+    env: { ...browserNodeEnv(ctx), PWD: cwd },
+    cwd,
+    platform: process.platform,
+    // No real argv exists for a page: this mirrors the shape of a Bun runner's own argv (execPath, entry) closely
+    // enough for code that merely checks `process.argv.length` or logs it, without pretending to a real script path.
+    argv: [process.execPath, "jslab-tab"],
+    versions: { ...process.versions },
+  };
+  return [
+    processSrc,
+    `const __jslabProcess = createProcessPolyfill(${JSON.stringify(snapshot)});`,
+    "export default __jslabProcess;",
+    "export const env = __jslabProcess.env;",
+    "export const platform = __jslabProcess.platform;",
+    "export const argv = __jslabProcess.argv;",
+    "export const versions = __jslabProcess.versions;",
+    "export const version = __jslabProcess.version;",
+    "export const cwd = __jslabProcess.cwd;",
+    "export const nextTick = __jslabProcess.nextTick;",
+    "export const browser = __jslabProcess.browser;",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Same pattern as `processModuleSource`: `os.ts` exports only the pure factory; this appends the instantiation,
+ * built from Main's own `node:os` at bundle time (spec §5.13: "snapshot values (sync)") -- plus, per fix round 1
+ * (I1), one named export per `OsPolyfill` property so `import { platform } from 'os'` works exactly like
+ * `import osMod from 'os'; osMod.platform()` does. Every property here is a function that closes over `snapshot`
+ * (see `os.ts`), so re-exporting it directly is safe -- none of them reference `this`.
+ */
+function osModuleSource(): string {
+  const snapshot = {
+    arch: nodeOs.arch(),
+    platform: nodeOs.platform(),
+    release: nodeOs.release(),
+    type: nodeOs.type(),
+    version: nodeOs.version(),
+    homedir: nodeOs.homedir(),
+    tmpdir: nodeOs.tmpdir(),
+    hostname: nodeOs.hostname(),
+    endianness: nodeOs.endianness(),
+    eol: nodeOs.EOL,
+    cpus: nodeOs.cpus().map((cpu) => ({ model: cpu.model, speed: cpu.speed })),
+    totalmem: nodeOs.totalmem(),
+    freemem: nodeOs.freemem(),
+  };
+  return [
+    osSrc,
+    `const __jslabOs = createOsPolyfill(${JSON.stringify(snapshot)});`,
+    "export default __jslabOs;",
+    "export const arch = __jslabOs.arch;",
+    "export const platform = __jslabOs.platform;",
+    "export const release = __jslabOs.release;",
+    "export const type = __jslabOs.type;",
+    "export const version = __jslabOs.version;",
+    "export const homedir = __jslabOs.homedir;",
+    "export const tmpdir = __jslabOs.tmpdir;",
+    "export const hostname = __jslabOs.hostname;",
+    "export const endianness = __jslabOs.endianness;",
+    "export const EOL = __jslabOs.EOL;",
+    "export const cpus = __jslabOs.cpus;",
+    "export const totalmem = __jslabOs.totalmem;",
+    "export const freemem = __jslabOs.freemem;",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Task 11 (spec §5.13): the three modules served by the async Node bridge. Each one is `node-bridge.ts`'s whole
+ * source text (which is import-free precisely so it can be served here, where no bare specifier resolves) plus a
+ * generated tail that names the module's exports.
+ *
+ * Every forwarding wrapper resolves the bridge **lazily**, per call, rather than once at module scope: importing
+ * `fs` must not throw merely because a page has no bridge installed, and the `*Sync` refusals below have to work
+ * with no bridge at all -- they are the whole point of the module for a user who reaches for the sync API.
+ */
+const CHILD_PROCESS_ASYNC_METHODS = ["exec", "execFile", "spawn"] as const;
+
+/**
+ * The two helpers every generated bridge module shares: a lazy read of the client the bootstrap installed, and the
+ * sync refusal.
+ *
+ * Lazy, per call, rather than resolved once at module scope: importing `fs` must not throw merely because a page
+ * has no bridge installed, and the `*Sync` refusals have to work with **no bridge at all** -- they are the whole
+ * point of the module for a user who reaches for the sync API, and they must never depend on the async half being
+ * reachable.
+ */
+function bridgeAccessorSource(): string {
+  return [
+    "var __jslabBridge = function () {",
+    `  var bridge = globalThis[${JSON.stringify(NODE_BRIDGE_GLOBAL)}];`,
+    "  if (!bridge) {",
+    `    var missing = new Error(${JSON.stringify(NODE_BRIDGE_MISSING_MESSAGE)});`,
+    `    missing.name = ${JSON.stringify(UNSUPPORTED_ERROR_NAME)};`,
+    "    throw missing;",
+    "  }",
+    "  return bridge;",
+    "};",
+    "var __jslabRefuseSync = function (message) {",
+    "  var error = new Error(message);",
+    `  error.name = ${JSON.stringify(UNSUPPORTED_ERROR_NAME)};`,
+    "  throw error;",
+    "};",
+  ].join("\n");
+}
+
+/** `function`, not an arrow, so `arguments` forwards every argument Node's own signature accepts. */
+function forward(name: string, surface: string): string {
+  return `export var ${name} = function () { return __jslabBridge().${surface}.${name}.apply(null, arguments); };`;
+}
+
+function refusal(name: string, qualified: string, alternative: string): string {
+  return `export var ${name} = function () { return __jslabRefuseSync(${JSON.stringify(
+    unsupportedSyncMessage(qualified, alternative),
+  )}); };`;
+}
+
+function fsPromisesModuleSource(): string {
+  return [
+    bridgeAccessorSource(),
+    ...FS_ASYNC_METHODS.map((name) => forward(name, "fsPromises")),
+    `export default { ${FS_ASYNC_METHODS.join(", ")} };`,
+    "",
+  ].join("\n");
+}
+
+function fsModuleSource(): string {
+  const promises = FS_ASYNC_METHODS.map(
+    (name) => `${name}: function () { return __jslabBridge().fsPromises.${name}.apply(null, arguments); }`,
+  ).join(", ");
+  return [
+    bridgeAccessorSource(),
+    ...FS_ASYNC_METHODS.map((name) => forward(name, "fs")),
+    ...FS_SYNC_METHODS.map((name) => refusal(name, `fs.${name}`, FS_SYNC_ALTERNATIVE)),
+    `export var promises = { ${promises} };`,
+    `export default { ${[...FS_ASYNC_METHODS, ...FS_SYNC_METHODS].join(", ")}, promises: promises };`,
+    "",
+  ].join("\n");
+}
+
+function childProcessModuleSource(): string {
+  return [
+    bridgeAccessorSource(),
+    ...CHILD_PROCESS_ASYNC_METHODS.map((name) => forward(name, "childProcess")),
+    ...CHILD_PROCESS_SYNC_METHODS.map((name) =>
+      refusal(name, `child_process.${name}`, childProcessSyncAlternative(name)),
+    ),
+    `export default { ${[...CHILD_PROCESS_ASYNC_METHODS, ...CHILD_PROCESS_SYNC_METHODS].join(", ")} };`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * One of the §5.13 throw-only modules (`http`, `net`, `tls`, `dgram`, `worker_threads`, `vm`).
+ *
+ * An **ES module with explicit named throwers plus a `Proxy` default export**. That shape was chosen by measuring
+ * four candidates, on both Bun 1.3.13 and 1.4.0 (identical results; the table is in the Task 11 report):
+ * - CommonJS whose `module.exports` is a `Proxy` serves `import http from "http"` correctly, but binds
+ *   `import { createServer } from "http"` to `undefined`, so the call fails with a bare `TypeError` rather than the
+ *   spec's refusal. Bun does **not** compile that named import into a runtime property read, so the `get` trap
+ *   never runs -- contrary to what `resolve-plugin.ts`'s vendor-stub note suggests for a plain object.
+ * - An ES module that throws at top level fails the **build**, for every import form.
+ * - A CommonJS object with getters does refuse, but at *import* time rather than on use.
+ * - This shape is the only one where the named form throws `JSLabUnsupportedError` **when called**, the default
+ *   form refuses on any property at all, and an unused `import` stays harmless.
+ *
+ * The default export stays a `Proxy` so that a property nobody enumerated still refuses. Its interop allowlist is
+ * what keeps an unused import harmless: a bundler's own interop reads those keys before any user code runs, and
+ * §5.13 asks for a refusal when the module is *used*.
+ */
+function unsupportedModuleSource(moduleName: string): string {
+  const names = UNSUPPORTED_MODULE_EXPORTS[moduleName] ?? [];
+  // The data-valued names get a different shape from the callable ones -- see `UNSUPPORTED_MODULE_DATA_EXPORTS`
+  // for the audit and for why a thrower function was the wrong binding for them.
+  const dataValued = new Set(UNSUPPORTED_MODULE_DATA_EXPORTS[moduleName] ?? []);
+  return [
+    `var __jslabMessage = ${JSON.stringify(unsupportedModuleMessage(moduleName))};`,
+    "var __jslabRefuse = function () {",
+    "  var error = new Error(__jslabMessage);",
+    `  error.name = ${JSON.stringify(UNSUPPORTED_ERROR_NAME)};`,
+    "  throw error;",
+    "};",
+    'var __jslabInterop = ["__esModule", "default", "then", "constructor", "prototype"];',
+    // A data-valued export is bound to the same refusing `Proxy` shape the default export uses, so that a
+    // *property read* (`STATUS_CODES[200]`, `parentPort.postMessage`) throws `JSLabUnsupportedError` instead of
+    // handing back `undefined`. The interop allowlist and the symbol rule are copied from the default export
+    // deliberately: that policy is the one measured safe against Bun's own ESM/CommonJS interop (see this
+    // function's doc comment), and a named export has no reason to be stricter than the namespace it came from.
+    "var __jslabRefusingValue = function () {",
+    "  return new Proxy(function () { return __jslabRefuse(); }, {",
+    "    get: function (_target, key) {",
+    '      if (typeof key === "symbol" || __jslabInterop.indexOf(key) >= 0) return undefined;',
+    "      return __jslabRefuse();",
+    "    },",
+    "    apply: __jslabRefuse,",
+    "    construct: __jslabRefuse,",
+    "  });",
+    "};",
+    ...names.map((name) =>
+      dataValued.has(name)
+        ? `export var ${name} = __jslabRefusingValue();`
+        : `export var ${name} = function () { return __jslabRefuse(); };`,
+    ),
+    "export default new Proxy(function () { return __jslabRefuse(); }, {",
+    "  get: function (_target, key) {",
+    '    if (typeof key === "symbol" || __jslabInterop.indexOf(key) >= 0) return undefined;',
+    "    return __jslabRefuse();",
+    "  },",
+    "  apply: __jslabRefuse,",
+    "  construct: __jslabRefuse,",
+    "});",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Task 9f (item 3): binds `process` inside a vendored source that references it.
+ *
+ * The vendor text used to be served **raw**. `assert.js` references `process.env` and `path-browserify.js`
+ * references `process.cwd` -- free references, resolved against whatever `process` the surrounding realm happens to
+ * have. A real page has none, so they are unbound; Bun's test realm does have one, which is why this never threw
+ * and instead silently read the *host process's* cwd, making `path.resolve('x')` disagree with the tab's own
+ * `process.cwd()`. Prepending the import binds them to the same snapshot-backed module the tab's own
+ * `import process from "process"` resolves to, so there is one `process` per bundle rather than two.
+ *
+ * An import rather than a page global, deliberately: this codebase avoids adding new page globals, and `process`
+ * *is* already resolvable in this namespace, so the module table can simply serve it.
+ *
+ * Applied only to files that actually mention `process`, so a bundle that merely imports `path` does not drag in
+ * the snapshot (and the per-tab environment it carries) for nothing. Safe to prepend blindly otherwise: an ESM
+ * import is hoisted, so a leading line cannot disturb the minified body, and no vendor file declares a top-level
+ * binding named `process` for it to shadow (measured across all twelve).
+ */
+const VENDOR_PROCESS_IMPORT = 'import process from "process";\n';
+
+function bindVendorProcess(vendor: string): string {
+  return vendor.includes("process.") ? VENDOR_PROCESS_IMPORT + vendor : vendor;
+}
+
+/** The bridged module specifiers, and the throw-only ones, as sets the resolve hook below can test membership on. */
+const BRIDGE_MODULES = new Set(["fs", "fs/promises", "child_process"]);
+const UNSUPPORTED_MODULE_SET = new Set<string>(UNSUPPORTED_MODULES);
+
+/** The virtual namespace every `browser-node` module table entry loads under (real user files never enter it). */
+const NAMESPACE = "jslab-node-polyfill";
+
+/**
+ * `nodePolyfills` (spec §5.12): the second of `Bun.build`'s three plugins, the §5.13 Node-builtin table.
+ *
+ * - `browser` has no Node builtins at all (confirmed by measurement: left unhandled, `Bun.build({target:'browser'})`
+ *   silently stubs an unresolved builtin rather than failing the build -- which would hide a real problem from the
+ *   user at bundle time only to surface it as a confusing runtime error later). So every builtin bare specifier is
+ *   explicitly caught here and turned into an install-assist-shaped `BundleError` (`specifier` set; §11.4's own
+ *   "node: and built-ins are ignored" rule keeps install-assist from offering to install it) reported through
+ *   `onError` before the plugin forces the build to fail. The position/code-frame is recovered by `locateImport`
+ *   (a direct scan of the importing file for the real import, not just the first quoted occurrence of the
+ *   specifier text -- fix round 1, M1), since forcing a Bun.build failure from a plugin callback (throwing, or
+ *   resolving to a path that can't load) discards whatever `position`/`specifier` Bun would otherwise have
+ *   attached to the resulting `BuildMessage` (measured: both come back empty).
+ * - `browser-node` (Task 10) resolves the §5.13 module table: `buffer, path, events, util, url, querystring,
+ *   string_decoder, assert, stream, punycode` (bundled sync and full, pre-flattened real polyfills -- see the
+ *   vendor files), `process`/`os` (a page-load snapshot, computed here and appended to the pure factory in
+ *   `packages/runner-web/src/polyfills/{process,os}.ts`), and `crypto` (native `webcrypto` plus a polyfilled
+ *   `createHash`/`createHmac`, `packages/runner-web/src/polyfills/crypto.ts`). `fs`, `child_process` and the
+ *   throw-only builtins (`http`, `net`, `tls`, `dgram`, `worker_threads`, `vm`) are Task 11's async bridge, not
+ *   this table -- an import of one of those still falls through unhandled here, exactly as it did before this task
+ *   (unchanged scope, per the Task 10 brief).
+ *
+ * `jslabResolve` (the plugin registered before this one) already defers a bare specifier it recognizes as a Node
+ * builtin -- returning `undefined` instead of failing it -- specifically so this plugin still gets to produce its
+ * own, more specific error for it (fix round 1, C1). The same deferral is what lets the §5.13 table below actually
+ * receive `buffer`/`path`/etc.: `isNodeBuiltin` is true for all ten, so `jslabResolve` never touches them.
+ */
+export function nodePolyfills(
+  runtime: Runtime,
+  onError: (error: BundleError) => void,
+  browserNode?: BrowserNodeContext,
+): BunPlugin {
+  return {
+    name: "jslab-node-polyfills",
+    setup(build) {
+      if (runtime === "browser") {
+        build.onResolve({ filter: /^[^./]/ }, (args) => {
+          if (!isNodeBuiltin(args.path)) return undefined;
+          let location: ReturnType<typeof locateImport>;
+          try {
+            location = locateImport(readFileSync(args.importer, "utf8"), args.path);
+          } catch {
+            // best effort only; fall back to an unpositioned error below
+          }
+          onError({
+            message: `Cannot find module '${args.path}'. Node built-ins aren't available in the Browser runtime.`,
+            specifier: args.path,
+            ...(location
+              ? {
+                  line: location.line,
+                  column: location.column,
+                  codeFrame: buildCodeFrame(location.lineText, location.column),
+                }
+              : {}),
+          });
+          // Forces Bun.build to fail; the caller uses the `BundleError` captured by `onError` above, not whatever
+          // this produces in `result.logs`/the thrown `AggregateError` (which carries no useful position here).
+          throw new Error(`jslab: blocked Node builtin "${args.path}"`);
+        });
+        return;
+      }
+
+      if (runtime !== "browser-node") return;
+      const ctx: BrowserNodeContext = browserNode ?? {
+        workingDirectory: null,
+        packagesNodeModules: "",
+        dataDir: "",
+      };
+
+      // The ten sync builtins, `process`, `os` and `crypto` -- the top-level bare specifiers a tab (or a vendored
+      // npm package) can import directly, `node:`-prefixed or not. `isNodeBuiltin` already gated everything
+      // reaching this plugin (see the doc comment above), so a plain key lookup on the *normalized* name is exact
+      // -- no risk of catching an unrelated bare specifier. Fix round 1 (I2): normalizing through `stripNodePrefix`
+      // (the same function `isNodeBuiltin` uses) is what makes `node:path`/`node:buffer`/`node:process` resolve to
+      // this table instead of bypassing it -- measured, before this fix, to produce three different wrong outcomes
+      // (two silently wrong, one a confusing hard error; see the Task 10 fix-round-1 report). The resolved `path`
+      // is the normalized (unprefixed) name, so `onLoad` below never needs to know which spelling was used.
+      build.onResolve({ filter: /^[^./]/ }, (args) => {
+        const bare = stripNodePrefix(args.path);
+        if (bare in VENDOR_TABLE || bare === "process" || bare === "os" || bare === "crypto") {
+          return { path: bare, namespace: NAMESPACE };
+        }
+        // Task 11: the async bridge's three modules and the six throw-only ones. Before this they fell through
+        // unhandled, and `Bun.build({target:'browser'})` silently stubbed them -- so `browser-node` advertised
+        // Node APIs and delivered neither the APIs nor the spec's refusal.
+        if (BRIDGE_MODULES.has(bare) || UNSUPPORTED_MODULE_SET.has(bare)) {
+          return { path: bare, namespace: NAMESPACE };
+        }
+        return undefined;
+      });
+
+      // `crypto.ts`'s own two relative imports (its `createHash`/`createHmac` vendor entries). Scoped to imports
+      // made *from inside* the plugin's own virtual `crypto` module (`args.importer === "crypto"`) so a real
+      // relative import in a tab's own code is never touched. Measured, not assumed: `args.namespace` here reflects
+      // the *specifier's own* default resolution namespace ("file"), not the importer's namespace -- unlike
+      // `resolve-plugin.ts`'s `VENDOR_STUB_NAMESPACE` check (a namespace check works there because that stub
+      // content is loaded under a namespace with no further imports of its own to resolve). `args.importer` is the
+      // one field that reliably names which virtual module is doing the importing.
+      //
+      // M4 Task 9b: the `filter` is the load-bearing part, NOT just an optimization ahead of the `args.importer`
+      // check below it. This hook used to be registered as `filter: /.*/`, and merely *registering* a hook that
+      // matches every specifier corrupts Bun's output even though the callback returns `undefined` for everything
+      // but `crypto`: bundling a package that internally does `import * as util from "./util.js"` (zod does)
+      // emitted the module's functions but no namespace object, while leaving every `util.foo(...)` call site
+      // intact, so the chunk died at evaluation with `ReferenceError: util is not defined` -- and silently dropped
+      // ~425 KB of the graph with it. Measured by bisecting the plugin list: identical builds with this hook's
+      // filter narrowed (or the hook removed) produce 667,635 bytes that evaluate cleanly, versus 242,634 bytes
+      // that throw with it registered catch-all. Keep this filter as narrow as the two specifiers it exists for.
+      build.onResolve({ filter: /^\.\/vendor\/create-(hash|hmac)-entry$/ }, (args) => {
+        if (args.importer !== "crypto") return undefined;
+        if (!(args.path in INTERNAL_VENDOR_TABLE)) return undefined;
+        return { path: args.path, namespace: NAMESPACE };
+      });
+
+      build.onLoad({ filter: /.*/, namespace: NAMESPACE }, (args) => {
+        const vendor = VENDOR_TABLE[args.path] ?? INTERNAL_VENDOR_TABLE[args.path];
+        if (vendor !== undefined) return { contents: bindVendorProcess(vendor), loader: "js" };
+        if (args.path === "process") return { contents: processModuleSource(ctx), loader: "ts" };
+        if (args.path === "os") return { contents: osModuleSource(), loader: "ts" };
+        if (args.path === "crypto") return { contents: cryptoSrc, loader: "ts" };
+        // Task 11 (spec §5.13). All four are plain JavaScript: the bridge modules are generated glue rather than
+        // this package's TypeScript source (see `bridgeAccessorSource`), and the throw-only modules' exact module
+        // shape is load-bearing rather than incidental -- see `unsupportedModuleSource`'s own note.
+        if (args.path === "fs/promises") return { contents: fsPromisesModuleSource(), loader: "js" };
+        if (args.path === "fs") return { contents: fsModuleSource(), loader: "js" };
+        if (args.path === "child_process") return { contents: childProcessModuleSource(), loader: "js" };
+        if (UNSUPPORTED_MODULE_SET.has(args.path)) {
+          return { contents: unsupportedModuleSource(args.path), loader: "js" };
+        }
+        return undefined;
+      });
+    },
+  };
+}

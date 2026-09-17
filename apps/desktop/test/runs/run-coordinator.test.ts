@@ -9,6 +9,8 @@ import { DEFAULT_BUILD_OPTIONS, transform } from "@jslab/transform";
 import { BunRunnerProcess } from "../../src/main/runs/bun-runner-process";
 import { RunCoordinator, type RunnerSettings } from "../../src/main/runs/run-coordinator";
 import { SparePool } from "../../src/main/runs/spare-pool";
+import type { RuntimeAdapter } from "../../src/main/runtimes/adapter";
+import { createRuntimeRegistry } from "../../src/main/runtimes/registry";
 
 const BOOTSTRAP = Bun.resolveSync("@jslab/runner-bun/bootstrap", import.meta.dir);
 
@@ -249,6 +251,69 @@ describe("RunCoordinator", () => {
     }
   }, 15_000);
 
+  /**
+   * Final review, finding D. `disposeTab` resolved its adapter with `#registry.get(undefined)`, which always
+   * returns the Bun adapter -- so closing a browser tab called `BunAdapter.dispose` (a no-op for a tab that never
+   * took a spare) and **never** `WebAdapter.dispose`, leaving the webview undestroyed and Main's own entry in
+   * place. Contrast `invalidate`, which was routed correctly all along.
+   *
+   * `web-adapter.test.ts`'s own "dispose() destroys the tab's webview" passes against the adapter in isolation and
+   * cannot see that nothing in production ever reaches it, so this asserts the wiring rather than the adapter.
+   */
+  test("closing a tab disposes it on every registered adapter, not just Bun's", () => {
+    const disposedByBun: string[] = [];
+    const disposedByBrowser: string[] = [];
+    const adapter = (id: RuntimeAdapter["id"], seen: string[]): RuntimeAdapter => ({
+      id,
+      prepare: async () => {},
+      start: async () => {
+        throw new Error("no run is started by this test");
+      },
+      invalidate: () => {},
+      dispose: async (tabId) => void seen.push(tabId),
+    });
+    const coordinator = new RunCoordinator({
+      transform: async () => {
+        throw new Error("nothing is transformed by this test");
+      },
+      spares: {
+        take: async () => {
+          throw new Error("no spare is taken by this test");
+        },
+        prepare: () => {},
+        invalidate: () => {},
+        dispose: () => {},
+      },
+      runsDir: join(tmpdir(), "jslab-dispose-routing"),
+      settings: () => ({
+        autoLog: true,
+        loopProtection: true,
+        loopProtectionMaxIterations: 2000,
+        maxEntries: 10_000,
+        unresponsiveTimeoutMs: 400,
+      }),
+      onEvents: () => {},
+      onState: () => {},
+      onDiagnostics: () => {},
+      runLock: { add: () => {}, remove: () => {} },
+      watchdogIntervalMs: 100_000,
+      runtimes: createRuntimeRegistry({
+        bun: adapter("bun", disposedByBun),
+        browser: adapter("browser", disposedByBrowser),
+      }),
+    });
+
+    try {
+      coordinator.disposeTab("t1");
+
+      // The half that was dead in production.
+      expect(disposedByBrowser).toEqual(["t1"]);
+      expect(disposedByBun).toEqual(["t1"]);
+    } finally {
+      coordinator.dispose();
+    }
+  });
+
   test("closing a tab while a runner is being taken leaves no runners behind", async () => {
     // onRunnerRequested fires while take() is awaiting the spare, which is the window this test is named for.
     const runners: BunRunnerProcess[] = [];
@@ -389,6 +454,21 @@ describe("RunCoordinator", () => {
     });
   }, 15_000);
 
+  // Task 15 (spec §5.12, EX-35): `RunCoordinator.mute()` is a harmless no-op for a runtime whose `RunHandle` has no
+  // `mute` method at all (only `WebAdapter`'s sessions implement it) -- Bun has no audio concept, and the tab's
+  // saved preference still persists in session.json (packages/shared) regardless of what's currently running.
+  test("mute() is a harmless no-op when the running handle has no mute concept (Bun)", async () => {
+    const h = await createHarness();
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1 + 1", language: "typescript", logpoints: [] });
+    await h.waitForState("idle", runId);
+    expect(() => h.coordinator.mute("t1", true)).not.toThrow();
+  }, 15_000);
+
+  test("mute() is a harmless no-op when nothing is running for that tab", async () => {
+    const h = await createHarness();
+    expect(() => h.coordinator.mute("no-such-tab", true)).not.toThrow();
+  });
+
   test("reports a runner that exits unexpectedly", async () => {
     const h = await createHarness();
     const { runId } = h.coordinator.start({
@@ -528,6 +608,33 @@ describe("RunCoordinator", () => {
       "stopping",
       "stopped",
     ]);
+  }, 15_000);
+
+  // Task 9d: `lastHeartbeatAt` was stamped at run creation and refreshed only by a `heartbeat` message, but
+  // transpiling and bundling happen in between. `#checkHeartbeats` skips a run only until its handle attaches --
+  // it defers the judgement without refreshing the stale stamp -- so the instant `attached:` fired, a creation-time
+  // stamp already older than `unresponsiveTimeoutMs` was judged and the user saw the unresponsive prompt for a run
+  // that had only just begun. This runner never sends a heartbeat, so Main stamping the attach itself is the only
+  // thing that can keep the run out of that state.
+  test("a run whose preparation outlasts the unresponsive timeout is not declared unresponsive the moment it starts", async () => {
+    const h = await createHarness(
+      { unresponsiveTimeoutMs: 300 },
+      {
+        bootstrapPath: join(import.meta.dir, "fixtures/silent-runner.ts"),
+        transform: async (source, options) => {
+          // Deliberately longer than the unresponsive timeout, so the creation-time stamp is already stale by the
+          // time a handle exists to judge it against.
+          await Bun.sleep(600);
+          return transform(source, options);
+        },
+      },
+    );
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1", language: "typescript", logpoints: [] });
+    await h.waitForState("evaluating", runId);
+    // Comfortably past the 50 ms watchdog interval (so a stale stamp would already have been judged) and well
+    // inside the fresh 300 ms window an attach-time stamp buys.
+    await Bun.sleep(100);
+    expect(h.states.filter((s) => s.runId === runId).map((s) => s.state)).toEqual(["transpiling", "evaluating"]);
   }, 15_000);
 
   test("output logged right before process.exit(0) reaches the UI before the run settles, 20 runs plus near-256 KB final flushes (FA-I4, spec §5.11)", async () => {

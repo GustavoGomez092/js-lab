@@ -52,6 +52,32 @@ describe("application menu", () => {
     );
   });
 
+  test("the Edit menu offers Clear Output, wired to the output.clear command (OU-12)", () => {
+    // Parity OU-12 claims the Edit → Clear Output path, which had no menu-level assertion: the item exists in
+    // `menu.ts` and the command and its ⌘K binding are tested elsewhere, but nothing proved the menu reaches it.
+    expect(byLabel(buildMenu(model()), "Clear Output")).toMatchObject({ action: menuAction("output.clear") });
+  });
+
+  test("the View menu offers the Web View tile toggle, checked and enabled from the active tab (WV-01, TF-19)", () => {
+    const withTile = (runtime: "browser" | "bun", webviewVisible: boolean) => {
+      const tab = createTab({ id: "t1", runtime });
+      return {
+        ...tab,
+        layout: { ...tab.layout, tiles: { ...tab.layout.tiles, webviewVisible } },
+      };
+    };
+    expect(byLabel(buildMenu(model({ activeTab: withTile("browser", true) })), "Web View")).toMatchObject({
+      action: menuAction("view.toggleWebView"),
+      checked: true,
+      enabled: true,
+    });
+    // A bun tab can never host a webview, so the item is there but disabled -- exactly like the status-bar button.
+    expect(byLabel(buildMenu(model({ activeTab: withTile("bun", true) })), "Web View")).toMatchObject({
+      checked: false,
+      enabled: false,
+    });
+  });
+
   test("keeps native roles, never the delete role, and accelerators only for Quit and Hide", () => {
     const items = flatten(buildMenu(model()));
     for (const role of [
@@ -83,7 +109,13 @@ describe("application menu", () => {
       id: "t1",
       language: "jsx",
       runtime: "bun",
-      layout: { orientation: "vertical", editorSize: 55, outputVisible: false },
+      layout: {
+        orientation: "vertical",
+        editorSize: 55,
+        outputVisible: false,
+        tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+        muted: false,
+      },
     });
     const menu = buildMenu(model({ settings, activeTab: tab, canReopen: true }));
     expect(byLabel(menu, "Nord")?.checked).toBe(true);
@@ -91,7 +123,9 @@ describe("application menu", () => {
     expect(byLabel(menu, "Follow System Appearance")?.checked).toBe(false);
     expect(byLabel(menu, "JSX")?.checked).toBe(true);
     expect(byLabel(menu, "Bun")).toMatchObject({ checked: true, enabled: true });
-    expect(byLabel(menu, "Browser & Node APIs")).toMatchObject({ checked: false, enabled: false });
+    // Every runtime is available since M4 Task 9 (AVAILABLE_RUNTIMES): the Actions -> Runtime menu enables all
+    // three, same as the status bar's own runtime selector.
+    expect(byLabel(menu, "Browser & Node APIs")).toMatchObject({ checked: false, enabled: true });
     expect(byLabel(menu, "Output")?.checked).toBe(false);
     expect(byLabel(menu, "Status Bar")?.checked).toBe(false);
     expect(byLabel(menu, "Vertical")?.checked).toBe(true);

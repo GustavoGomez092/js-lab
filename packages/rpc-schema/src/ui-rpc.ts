@@ -1,5 +1,6 @@
 import type { CommandId, KeybindingRule, TabState } from "@jslab/shared";
 import {
+  DEFAULT_RUNTIME,
   type EnvVars,
   envVarsSchema,
   LANGUAGES,
@@ -42,6 +43,9 @@ export const runStartParamsSchema = z.object({
   language: z.enum(["typescript", "javascript", "tsx", "jsx"]),
   logpoints: z.array(z.number().int().positive()).max(10_000),
   reason: z.enum(["auto", "manual"]),
+  // M4: the run's runtime. `.catch` keeps an older or malformed UI from failing the whole request, matching how
+  // every other self-repairing field in this package behaves.
+  runtime: z.enum(RUNTIMES).catch("bun"),
 });
 
 export const tabParamsSchema = z.object({ tabId });
@@ -64,12 +68,36 @@ export const tabPatchSchema = z.object({
       title: z.string().max(200),
       titleIsCustom: z.boolean(),
       language: languageSchema,
-      runtime: runtimeSchema,
+      // Final review (E): `.catch` for the same reason `tiles` is `.partial()` and `muted` degrades -- every field
+      // inside this patch object must fail on its own or not at all. Without it an unrecognised runtime (a
+      // version-skewed renderer mid-auto-update, a future build naming a runtime this Main doesn't know) failed the
+      // whole `safeParse`, so Main silently dropped the ENTIRE patch -- a legitimate simultaneous title or language
+      // change with it -- logging only "Rejected invalid tab.patch payload" with nothing user-visible. Matches
+      // `runStartParamsSchema.runtime` (`.catch("bun")`) and `tabStateSchema.runtime` (`.catch(DEFAULT_RUNTIME)`).
+      // Applied here rather than on the shared `runtimeSchema`, so `tabCreateParamsSchema` keeps rejecting outright.
+      runtime: runtimeSchema.catch(DEFAULT_RUNTIME),
       layout: z
         .object({
           orientation: z.enum(["horizontal", "vertical"]),
           editorSize: z.number().min(10).max(90),
           outputVisible: z.boolean(),
+          // M4 Task 8 (ruling R-M4-T8-PATCH-1): added alongside the three fields above -- this whitelist is the
+          // one place a new `tabLayoutSchema` (packages/shared) field must also be named, or it is silently
+          // stripped in transit (the UI updates, nothing persists, no error anywhere).
+          // Fix round 1 (F5): `.partial()` here too, matching its parent `layout` -- otherwise a `tiles` patch
+          // that omits even one field (a future partial patch, e.g. Task 15's `muted` alone) fails validation and
+          // takes the *whole* tab.patch down with it, language/runtime/title included.
+          tiles: z
+            .object({
+              arrangement: z.enum(["stacked", "side-by-side"]),
+              order: z.array(z.enum(["console", "webview"])).length(2),
+              webviewVisible: z.boolean(),
+              consoleSize: z.number().min(10).max(90),
+            })
+            .partial(),
+          // Task 15 (spec §5.12, EX-35): a sibling field of `tiles`, not nested inside it -- named here for the
+          // same reason `tiles` is (R-M4-T8-PATCH-1's comment above), or it is silently stripped in transit.
+          muted: z.boolean(),
         })
         .partial(),
     })
@@ -118,6 +146,31 @@ export const settingsAppCommandSchema = z.object({ action: z.enum(SETTINGS_APP_A
 export const fileSaveParamsSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });
 export const fileConfirmLargeSchema = z.object({ tokens: z.array(z.uuid()).min(1).max(100) });
 export const fileConfirmSaveAsSchema = z.object({ token: z.uuid(), confirmed: z.boolean() });
+
+// ---------- M4 Task 9a: the Main ⇄ UI web-runner bridge (spec §5.12) ----------
+
+/**
+ * A browser-mode tab's `<electrobun-webview>` lives in the UI process (Task 8's `WebViewTile`), but the runtime
+ * that drives it -- `WebAdapter` (`apps/desktop/src/main/runtimes/web-adapter.ts`) -- lives in Main. These messages
+ * are that seam: Main asks the UI to act on one tab's element (`webRunner.ensure` / `.execute` / `.reload` /
+ * `.destroy`, typed in `ViewMessages`), and the UI reports what the element did back (`webRunner.ready` / `.exit` /
+ * `.message`, validated here because they cross into Main).
+ *
+ * Only the UI → Main direction carries validators: `ViewMessages` payloads are built by Main itself and never
+ * re-enter it, exactly as every other `ViewMessages` entry is left unvalidated.
+ */
+export const webRunnerTabSchema = z.object({ tabId, generation: z.number().int().positive() });
+
+/**
+ * `webRunner.message`: one page → host envelope, relayed verbatim. `raw` is deliberately only checked for being a
+ * plain object -- enough to route it -- and never interpreted here: the envelope's own `{seq, message}` shape is
+ * `createSequencedWebviewHost`'s to check (`web-adapter.ts`), and the page-side bridge already validated the
+ * reverse direction. A record keeps every key it was given, so nothing inside `raw` is stripped in transit.
+ */
+export const webRunnerMessageParamsSchema = z.object({ tabId, raw: z.record(z.string(), z.unknown()) });
+
+export type WebRunnerTabParams = z.infer<typeof webRunnerTabSchema>;
+export type WebRunnerMessageParams = z.infer<typeof webRunnerMessageParamsSchema>;
 
 // ---------- M3: npm, environment variables, working directory, types and .npmrc (spec §6.2, §11, §12) ----------
 
@@ -418,12 +471,37 @@ export type MainMessages = {
   "wd.pick": TabParams;
   "wd.clear": TabParams;
   "ui.stateFlushed": Record<string, never>;
+  /**
+   * M4 §5.12 / T9e: the tab's page reached `dom-ready` -- it is safe to inject script into it now. `generation`
+   * is the counter Main minted for the entry this event's element belongs to (see `webRunner.ensure` below); Main
+   * drops the event rather than acting on it when that no longer matches the tab's current entry, which is what
+   * keeps a late `dom-ready` from a destroyed-and-replaced webview from waking the wrong one.
+   */
+  "webRunner.ready": WebRunnerTabParams;
+  /**
+   * M4 §5.12 / T9e: the tab's webview died or was torn down by something other than Main's own `webRunner.destroy`.
+   * Carries the same `generation` correlation as `webRunner.ready`, for the same reason: a crash reported by an
+   * element Main has already replaced must not tear down the replacement.
+   */
+  "webRunner.exit": WebRunnerTabParams;
+  /**
+   * M4 §5.12: one page → host envelope, relayed from the element's `host-message` event. `raw` is `unknown` on the
+   * wire -- it is whatever the page handed the element -- and becomes a routable object only once
+   * `webRunnerMessageParamsSchema` has validated it on Main's side.
+   */
+  "webRunner.message": { tabId: string; raw: unknown };
 };
 
 /** Messages received by the UI, sent by Main. */
 export type ViewMessages = {
   "run.events": { tabId: string; runId: string; events: RunEvent[] };
   "run.state": { tabId: string; runId: string; state: RunState; activeHandles?: number };
+  /**
+   * Task 15 (spec §5.12, EX-35): pushed whenever a tab's audio-active state flips -- true while any AudioContext
+   * the web runner tracks is running or any media element is playing, false the instant neither is true anymore.
+   * Event-driven from the runner's own handle tracking (`packages/runner-web/src/handles.ts`), never polled.
+   */
+  "run.audio": { tabId: string; active: boolean };
   "run.diagnostics": { tabId: string; runId: string; diagnostics: DiagnosticPayload[] };
   "menu.command": { command: CommandId; args?: unknown };
   "e2e.request": E2ERequest;
@@ -439,4 +517,25 @@ export type ViewMessages = {
   "npm.changed": NpmListResult;
   "wd.changed": { tabId: string; tab: TabState };
   "app.flushState": Record<string, never>;
+  /**
+   * M4 §5.12: make sure this tab has a live `<electrobun-webview>`, creating one if the tab's own Web View toggle
+   * has never been switched on. Sent by `WebviewSource.ensure()` before every run, which is what lets a run on an
+   * untouched `browser` tab work at all -- Task 9's lazy creation otherwise leaves it with no webview to drive.
+   *
+   * T9e: `generation` is the monotonic-per-tab counter Main mints the moment it creates this entry. The UI records
+   * it as the tab's current generation and stamps every `webRunner.ready` / `.exit` it forwards for this tab with
+   * it, until a later `webRunner.ensure` replaces it -- see `apps/ui/src/output/webview-host.ts`.
+   */
+  "webRunner.ensure": { tabId: string; generation: number };
+  /** M4 §5.12: run `js` inside the tab's page (the element's own `executeJavascript`). */
+  "webRunner.execute": { tabId: string; js: string };
+  /** M4 §5.12: reload the tab's page, for the fresh realm/DOM every run starts from. */
+  "webRunner.reload": { tabId: string };
+  /**
+   * M4 §5.12: tear the tab's webview down for good (Kill, tab dispose, a timed-out reset). T9e: carries the entry's
+   * own `generation`, paired with `webRunner.ensure` above, so Main's side of the wire is symmetric even though the
+   * UI does not need to gate on it -- Main only ever destroys an entry after removing it from its own map, so a
+   * `webRunner.ensure` for a replacement is never sent ahead of the `webRunner.destroy` for what it replaces.
+   */
+  "webRunner.destroy": { tabId: string; generation: number };
 };

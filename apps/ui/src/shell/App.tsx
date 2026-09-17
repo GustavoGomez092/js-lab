@@ -26,7 +26,8 @@ import { type Formatter, shouldFormatBeforeRun } from "../format/formatter";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { NpmSheet } from "../npm/NpmSheet";
 import { operationStatusMessage } from "../npm/npm-panel";
-import { OutputPanel } from "../output/OutputPanel";
+import { OutputTiles } from "../output/OutputTiles";
+import { WebViewHosts, type WebviewDock } from "../output/WebViewHosts";
 import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
@@ -49,6 +50,7 @@ import { SideBar } from "./SideBar";
 import { SplitPane } from "./SplitPane";
 import { StatusBar } from "./StatusBar";
 import { Toolbar } from "./Toolbar";
+import { computeTabPatch } from "./tab-patch";
 
 const UI_HEARTBEAT_MS = 2000;
 
@@ -98,6 +100,9 @@ export function App({
   const sideBarPanel = useStore(store, (s) => s.sideBarPanel);
   const tabCount = useStore(store, (s) => s.tabOrder.length);
   const npmOpen = useStore(store, (s) => s.modal?.kind === "npm");
+  // Fix round 1 (F1/F2): lifted here, not into OutputTiles, specifically so it survives OutputTiles unmounting
+  // (hiding the Output panel) -- see WebViewHosts.tsx's doc comment for the full mechanism.
+  const [webviewDock, setWebviewDock] = useState<WebviewDock | null>(null);
 
   const lastTypedAt = useRef(0);
   // T16-rr1: the React-owned slot the Editor puts the Vim status node into, always rendered before the status bar.
@@ -149,7 +154,14 @@ export function App({
           return;
         }
         bufferSync.flush(tabId);
-        void api.startRun({ tabId, code, language: freshTab.language, logpoints: [], reason });
+        void api.startRun({
+          tabId,
+          code,
+          language: freshTab.language,
+          logpoints: [],
+          reason,
+          runtime: freshTab.runtime,
+        });
       };
       const wantsFormat =
         format !== null &&
@@ -300,6 +312,9 @@ export function App({
         coalescer.flush(tabId);
         store.getState().receiveDiagnostics(runId, diagnostics, tabId);
       }),
+      // Task 15 (spec §5.12, EX-35): no coalescer flush needed -- audio activity is its own independent signal,
+      // not ordered against a tab's console/result events the way state/diagnostics are.
+      api.on("run.audio", ({ tabId, active }) => store.getState().receiveAudio(active, tabId)),
       api.on("menu.command", ({ command, args }) => {
         registry.execute(command, args);
       }),
@@ -364,6 +379,10 @@ export function App({
         outputPlain: document.querySelector(".output-plain") !== null,
         lineAnchors: document.querySelector(".entry-line") !== null,
         staleLabel: document.querySelector(".output-stale-label") !== null,
+        // M4 Task 16: the Web View tile's docking placeholder, which `OutputTiles` renders only for a runtime that
+        // can host a webview and only while that tab's own Web View toggle is on -- so this is what an E2E
+        // scenario reads to tell "the tile is on screen" from "a bun tab never gets one" (spec §7.1, parity WV-01).
+        webViewTile: document.querySelector(".webview-tile-dock") !== null,
       }),
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {
@@ -389,28 +408,8 @@ export function App({
             else bufferSync.changed(id, content);
             if (id === state.activeTabId) lastTypedAt.current = Date.now();
           }
-          // updateLayout (state/store.ts) always replaces the layout object, even when the clamped
-          // fields end up the same (a divider drag past 10/90, or a reset to the current split), so
-          // compare fields rather than the object reference (fix round 1, I-1).
-          const layoutChanged =
-            next.layout.orientation !== before.layout.orientation ||
-            next.layout.editorSize !== before.layout.editorSize ||
-            next.layout.outputVisible !== before.layout.outputVisible;
-          if (
-            next.language !== before.language ||
-            next.runtime !== before.runtime ||
-            layoutChanged ||
-            next.title !== before.title ||
-            next.titleIsCustom !== before.titleIsCustom
-          ) {
-            api.patchTab(id, {
-              language: next.language,
-              runtime: next.runtime,
-              layout: next.layout,
-              title: next.title,
-              titleIsCustom: next.titleIsCustom,
-            });
-          }
+          const patch = computeTabPatch(before, next);
+          if (patch) api.patchTab(id, patch);
         }
       }),
     [store, api, bufferSync],
@@ -537,14 +536,26 @@ export function App({
               vimSlot={vimSlot}
             />
           }
-          second={<OutputPanel store={store} api={api} runKeys={keycaps.run} onInstall={install} />}
+          second={
+            <OutputTiles
+              store={store}
+              api={api}
+              runKeys={keycaps.run}
+              onInstall={install}
+              onWebviewDock={setWebviewDock}
+            />
+          }
         />
       </div>
+      {/* Fix round 1 (F1/F2): a sibling of the SplitPane above, not inside it -- so hiding the Output panel
+          (which unmounts that SplitPane's `second`, OutputTiles included) never touches this. */}
+      <WebViewHosts store={store} dock={webviewDock} api={api} />
       <div className="vim-slot" ref={vimSlot} />
       {settings.view.statusBar && (
         <StatusBar
           store={store}
           onToggleLayout={() => registry.execute("view.toggleLayout")}
+          onToggleWebView={() => registry.execute("view.toggleWebView")}
           runKeys={keycaps.run}
           onPickWorkingDirectory={() => registry.execute("wd.set")}
           onClearWorkingDirectory={() => registry.execute("wd.clear")}

@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { RunEvent } from "@jslab/rpc-schema";
-import { applyRunEvents, applyRunState, initialOutput, type OutputState, visibleEntries } from "../src/state/output";
+import {
+  applyRunEvents,
+  applyRunState,
+  dismissWebDialog,
+  initialOutput,
+  type OutputState,
+  visibleEntries,
+} from "../src/state/output";
 
 let seq = 0;
 const result = (line: number, v: string): RunEvent => ({
@@ -106,5 +113,32 @@ describe("output state", () => {
     const s = withRun("r1", [undef, result(2, "1")]);
     expect(visibleEntries(s, { showUndefined: false })).toHaveLength(1);
     expect(visibleEntries(s, { showUndefined: true })).toHaveLength(2);
+  });
+
+  // Task 13 (spec §5.12): alert() events are queued separately, never as a console-output row.
+  test("dialog events are queued for WebDialog, not appended to entries", () => {
+    const dialog: RunEvent = { kind: "dialog", text: "hi from the page", seq: ++seq, t: 0 };
+    const s = withRun("r1", [log("before"), dialog, log("after")]);
+    expect(s.entries.map((e) => e.event.kind)).toEqual(["console", "console"]);
+    expect(s.dialogs).toEqual([{ key: `r1:${dialog.seq}`, text: "hi from the page" }]);
+  });
+
+  test("a new run clears any dialog left over from the previous one", () => {
+    const dialog: RunEvent = { kind: "dialog", text: "still open", seq: ++seq, t: 0 };
+    const s = withRun("r1", [dialog]);
+    expect(s.dialogs).toHaveLength(1);
+    const next = applyRunState(s, "r2", "transpiling");
+    expect(next.dialogs).toEqual([]);
+  });
+
+  test("dismissWebDialog removes one dialog by key and leaves the rest", () => {
+    const a: RunEvent = { kind: "dialog", text: "a", seq: ++seq, t: 0 };
+    const b: RunEvent = { kind: "dialog", text: "b", seq: ++seq, t: 0 };
+    const s = withRun("r1", [a, b]);
+    const keyA = s.dialogs[0]?.key as string;
+    const next = dismissWebDialog(s, keyA);
+    expect(next.dialogs).toEqual([{ key: `r1:${b.seq}`, text: "b" }]);
+    // Dismissing an already-gone key is a no-op, returning the identical object rather than a new one.
+    expect(dismissWebDialog(next, keyA)).toBe(next);
   });
 });

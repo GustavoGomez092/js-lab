@@ -21,10 +21,17 @@ export interface AppPaths {
   packagesNpmrc: string;
   /** The empty HOME of npm operations (spec §11.3, M0-S8). */
   npmHome: string;
+  /** The web runner's third-party chunk cache (spec §5.12): `apps/desktop/src/main/bundling/vendor-cache.ts`. */
+  vendorCacheDir: string;
   envFile: string;
   socketPath: string;
   screenshotsDir: string;
   runnerBootstrap: string;
+  /**
+   * M4 §5.12: the bundled runner-web bootstrap Main injects into a browser-mode tab's page. The page itself is
+   * bare (no `<script>`), so this string is the only thing that turns it into a runner.
+   */
+  webRunnerBootstrap: string;
   transformWorker: string;
   bunBinary: string;
 }
@@ -48,10 +55,12 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     packagesJson: join(dataDir, "packages", "package.json"),
     packagesNpmrc: join(dataDir, "packages", ".npmrc"),
     npmHome: join(dataDir, "npm-home"),
+    vendorCacheDir: join(dataDir, "cache", "vendor"),
     envFile: join(dataDir, "env.json"),
     socketPath: join(dataDir, "jslab.sock"),
     screenshotsDir: join(dataDir, "e2e-screenshots"),
     runnerBootstrap: input.env.JSLAB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "bootstrap.js"),
+    webRunnerBootstrap: input.env.JSLAB_WEB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "web-bootstrap.js"),
     transformWorker: input.env.JSLAB_TRANSFORM_WORKER ?? join(appDir, "workers", "transform-worker.js"),
     bunBinary: input.env.JSLAB_BUN_PATH ?? input.execPath,
   };

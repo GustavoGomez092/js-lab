@@ -1,6 +1,21 @@
 const bundles = [
   "bun build ../../packages/runner-bun/src/bootstrap.ts --target bun --outfile dist/runner/bootstrap.js",
+  // M4 §5.12: the web runner, in the one form `executeJavascript` can evaluate -- a classic script, since that
+  // call is not a module context. `--target browser` because it lands in a WKWebView page, not a Bun process.
+  // Deliberately no `--format`: these scripts run inside Hutch's Cottontail shell (see the note above), whose
+  // `build` command rejects the flag outright ("unsupported cottontail build option"). It isn't needed -- the
+  // default browser output is self-contained, with no top-level `import`/`export` and no `import.meta`, which
+  // `packages/runner-web/test/web-entry.test.ts` pins so a future dependency can't quietly reintroduce any.
+  // `dist/runner` is already shipped by electrobun.config.ts's `"dist/runner": "runner"` rule.
+  "bun build ../../packages/runner-web/src/web-entry.ts --target browser --outfile dist/runner/web-bootstrap.js",
   "bun build src/main/transform/transform-worker.ts --target bun --outfile dist/workers/transform-worker.js",
+  // Task 10 fix round 2 (B1): `electrobun.config.ts`'s `build.copy` key must be a project (apps/desktop)
+  // -relative source path -- `.`/`..` components are rejected for every other path-ish field in that same
+  // config block, and the copy implementation isn't auditable in this environment to confirm an escaping key
+  // like "../../THIRD-PARTY-NOTICES.md" would even error rather than silently skip. Staging the file into
+  // `dist/` here, then copying it with an ordinary project-relative key, works regardless of how that
+  // ambiguity would have resolved -- the same shape every other `build.copy` entry already uses.
+  "mkdir -p dist && cp ../../THIRD-PARTY-NOTICES.md dist/THIRD-PARTY-NOTICES.md",
 ].join(" && ");
 
 export default {

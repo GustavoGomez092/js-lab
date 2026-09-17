@@ -7,6 +7,7 @@ import {
   DEFAULT_LIMITS,
   Encoder,
   HandleRegistry,
+  jsonBytes,
   jsonStringBytes,
   MAX_EXPAND_BYTES,
   parseStack,
@@ -22,6 +23,48 @@ const make = (limits = DEFAULT_LIMITS) => {
     isProxy: (v) => types.isProxy(v),
   });
 };
+
+/**
+ * M4 Task 9b. This encoder runs in a **webview** as well as in Bun (`packages/runner-web` imports it for every
+ * `console.log` and every `__jl.log`), and a webview has no `Buffer`. `jsonBytes` used `Buffer.byteLength`, so the
+ * very first value a browser-mode run tried to encode threw `ReferenceError: Can't find variable: Buffer` inside
+ * the user's own `console.log` -- which rejected the run's module import, and then threw *again* out of the error
+ * reporter that tried to encode that rejection. The run reported no events and no terminal state at all: every
+ * browser/browser-node tab sat in `evaluating` forever. `EventBuffer` (`packages/runner-shared`) already documents
+ * and avoids exactly this trap; the serializer did not.
+ *
+ * These tests delete the global for the duration, which is the only way to reproduce a webview's realm under Bun.
+ */
+describe("no Node globals (the web runner's realm)", () => {
+  function withoutBuffer<T>(body: () => T): T {
+    const g = globalThis as unknown as Record<string, unknown>;
+    const original = g.Buffer;
+    delete g.Buffer;
+    try {
+      return body();
+    } finally {
+      g.Buffer = original;
+    }
+  }
+
+  test("jsonBytes measures exact UTF-8 JSON size without Buffer", () => {
+    // JSON.stringify("é") is `"é"`: two ASCII quotes plus one 2-byte character.
+    expect(withoutBuffer(() => jsonBytes("é"))).toBe(4);
+    // An astral character is 4 UTF-8 bytes inside the quotes.
+    expect(withoutBuffer(() => jsonBytes("😀"))).toBe(6);
+    expect(withoutBuffer(() => jsonBytes({ a: 1 }))).toBe(7);
+    // `undefined` stringifies to undefined, which the implementation treats as the empty string.
+    expect(withoutBuffer(() => jsonBytes(undefined))).toBe(0);
+  });
+
+  test("a console.log-shaped encode works without Buffer", () => {
+    // The exact path the page takes: Encoder.encodeMany -> #fit -> jsonBytes.
+    expect(withoutBuffer(() => make().encodeMany(["héllo", 42]))).toEqual([
+      { t: "string", v: "héllo" },
+      { t: "number", v: "42" },
+    ]);
+  });
+});
 
 describe("primitives", () => {
   test("encodes numbers losslessly", () => {

@@ -50,6 +50,13 @@ export const strings = {
     renameHelp: "Leave empty to use the first line of code as the title.",
     cancel: "Cancel",
     save: "Rename",
+    // Task 15 (spec §5.12, EX-35): the per-tab audio indicator's accessible name, carrying the tab title so a
+    // screen reader user with several tabs open can tell which one it's about (the motivating scenario for this
+    // whole task) -- and its current state (playing vs. muted), announced honestly, not just drawn.
+    audio: {
+      mute: (title: string) => `Mute ${title} (currently playing audio)`,
+      unmute: (title: string) => `Unmute ${title} (currently muted)`,
+    },
   },
   files: {
     saved: (name: string) => `Saved ${name}`,
@@ -98,6 +105,13 @@ export const strings = {
     safeMode: "Safe Mode",
     sideBarPlaceholder: "This panel arrives in a later version.",
     split: { horizontal: "Side by side", vertical: "Stacked" },
+    // M4 Task 8 (ruling R-M4-T8-DISABLED-1): mirrors the runtime <select>'s own disabled-option idiom -- native
+    // `disabled` plus this string as the button's `title`, for the one runtime that never creates a webview.
+    webView: {
+      show: "Show Web View",
+      hide: "Hide Web View",
+      unavailable: "Web View isn't available for the Bun runtime",
+    },
     cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
     runtime: "Runtime",
     language: "Language",
@@ -198,6 +212,12 @@ export const strings = {
     changeWorkingDirectory: "Change…",
     /** R24-4: a relative module-not-found row offers to set a working directory when the tab has none. */
     setWorkingDirectory: "Set Working Directory…",
+  },
+  webDialog: {
+    /** Task 13 (spec §5.12): JSLab's own non-blocking stand-in for `alert()`. */
+    region: "Page message",
+    dismiss: "Dismiss",
+    queued: (count: number) => `${count} more waiting`,
   },
   env: {
     title: "Environment Variables",
@@ -376,7 +396,7 @@ export const strings = {
       "run.autoLog": { label: "Auto Log", help: "Show the value of each top-level expression." },
       "run.defaultRuntime": {
         label: "Default Runtime",
-        help: "Runtime for new tabs. Browser runtimes arrive in a later version; until then new tabs use Bun.",
+        help: "Runtime for new tabs.",
       },
       "run.defaultLanguage": { label: "Default Language", help: "Language for new tabs." },
       "run.formatOnRun": {

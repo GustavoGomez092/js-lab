@@ -158,7 +158,9 @@ export function App({
           tabId,
           code,
           language: freshTab.language,
-          logpoints: [],
+          // Spec §6.3 / §5.5: the tab's own logpoint lines, read at send time like `code` above, so a toggle
+          // that landed while a format was in flight is still included.
+          logpoints: fresh.runtimes[tabId]?.logpoints ?? [],
           reason,
           runtime: freshTab.runtime,
         });

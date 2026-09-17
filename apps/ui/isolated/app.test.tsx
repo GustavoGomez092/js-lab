@@ -106,14 +106,15 @@ function fakeEditor(store: AppStore, tabId: string, focused = true) {
 }
 
 describe("App shell", () => {
-  test("Cmd+R starts a manual run with the current code", () => {
-    const { api } = renderApp();
+  test("Cmd+R starts a manual run with the current code and the tab's logpoints", () => {
+    const { store, api } = renderApp();
+    act(() => store.getState().toggleLogpoint(1));
     press("KeyR");
     expect(api.startRun).toHaveBeenCalledWith({
       tabId: "t1",
       code: "1 + 1",
       language: "typescript",
-      logpoints: [],
+      logpoints: [1],
       reason: "manual",
       // DEFAULT_RUNTIME, which M4 Task 9a returned to "bun" until browser runs finish.
       runtime: "bun",

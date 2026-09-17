@@ -119,6 +119,50 @@ describe("startAutoRun", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  test("toggling a logpoint schedules a run on its own, without a prior edit (spec §6.3)", () => {
+    const store = hydratedStore();
+    const run = mock(() => {});
+    const clock = manualTimers();
+    startAutoRun(store, run, clock.timers);
+    store.getState().toggleLogpoint(1);
+    expect(clock.pending.size).toBe(1);
+    clock.fireAll();
+    expect(run).toHaveBeenCalledTimes(1);
+
+    store.getState().clearLogpoints();
+    clock.fireAll();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  test("reconciling sticky logpoint lines never schedules a run of its own", () => {
+    const store = hydratedStore();
+    const run = mock(() => {});
+    const clock = manualTimers();
+    startAutoRun(store, run, clock.timers);
+    store.getState().setLogpoints([4]);
+    expect(clock.pending.size).toBe(0);
+    expect(run).not.toHaveBeenCalled();
+
+    // Above only exercises the unarmed guard, which short-circuits before `changed` is even computed. On an ARMED
+    // tab the logpoint clause is live, and what keeps a no-op reconciliation quiet is store.ts's normalizeLogpoints
+    // identity contract: re-sending the same set returns the PREVIOUS array, so `state.logpoints` stays
+    // referentially equal and the subscription sees no change.
+    store.getState().armAutoRun();
+    store.getState().setLogpoints([4]);
+    expect(clock.pending.size).toBe(0);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test("toggling a logpoint in Safe Mode never schedules a run", () => {
+    const run = mock(() => {});
+    const clock = manualTimers();
+    const safe = hydratedStore(true);
+    startAutoRun(safe, run, clock.timers);
+    safe.getState().toggleLogpoint(1);
+    expect(clock.pending.size).toBe(0);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   test("unsubscribing cancels a pending run", () => {
     const store = hydratedStore();
     const run = mock(() => {});

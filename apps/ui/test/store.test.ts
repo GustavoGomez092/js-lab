@@ -645,6 +645,22 @@ describe("app store", () => {
     expect(store.getState().runtimes.t2?.logpoints).toEqual([9]);
   });
 
+  test("a logpoint action naming a closed tab is a no-op, not an edit to the active tab", () => {
+    const store = createAppStore();
+    store.getState().hydrate(payload());
+    store.getState().toggleLogpoint(2);
+    expect(store.getState().logpoints).toEqual([2]);
+
+    // M4 shipped this defect twice (fixed in clearOutput/dismissWebDialog, 9e77af5): `resolve` answers null both
+    // for "no tabId given, use the active tab" and "that tabId names a tab that is gone", so a null branch that
+    // falls back writes the ACTIVE tab's state on behalf of a dead one. All three logpoint actions return early.
+    store.getState().toggleLogpoint(7, "gone");
+    store.getState().clearLogpoints("gone");
+    store.getState().setLogpoints([9], "gone");
+    expect(store.getState().logpoints).toEqual([2]);
+    expect(store.getState().runtimes.gone).toBeUndefined();
+  });
+
   test("setLogpoints reconciles sticky lines without arming auto-run, and keeps identity when unchanged", () => {
     const store = createAppStore();
     store.getState().hydrate(payload());

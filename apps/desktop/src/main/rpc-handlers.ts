@@ -6,6 +6,7 @@ import {
   e2eResponseSchema,
   runExpandParamsSchema,
   runStartParamsSchema,
+  runTranspiledParamsSchema,
   type StartupNotice,
   tabParamsSchema,
   tabPatchSchema,
@@ -20,7 +21,7 @@ import type { SettingsStore } from "./services/settings-store";
 export { InvalidPayloadError };
 
 export interface RpcHandlerDeps {
-  coordinator: Pick<RunCoordinator, "start" | "stop" | "kill" | "wait" | "expand" | "mute">;
+  coordinator: Pick<RunCoordinator, "start" | "stop" | "kill" | "wait" | "expand" | "mute" | "transpiled">;
   settings: Pick<SettingsStore, "current">;
   session: Pick<SessionStore, "session" | "readBuffers" | "setBuffer" | "patchTab">;
   safeMode: SafeModeState;
@@ -81,6 +82,10 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
       "run.expand": (input: unknown): Promise<EncodedValue | null> => {
         const { tabId, runId, handleId } = parse(runExpandParamsSchema, "run.expand", input);
         return deps.coordinator.expand(tabId, runId, handleId);
+      },
+      "run.transpiled": (input: unknown): Promise<{ code: string } | null> => {
+        const { tabId, hideInstrumentation } = parse(runTranspiledParamsSchema, "run.transpiled", input);
+        return deps.coordinator.transpiled(tabId, hideInstrumentation);
       },
     },
     messages: {

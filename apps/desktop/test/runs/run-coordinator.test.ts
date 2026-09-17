@@ -726,4 +726,31 @@ describe("RunCoordinator", () => {
     expect(seen[0]?.build?.pipelineOperator).toBe(true);
     expect(harness.events.find((event) => event.kind === "result")).toMatchObject({ value: { t: "number", v: "2" } });
   });
+
+  // Spec §7.4 / R-M5a-3: Show Transpiled Output serves the tab's last *successful* Babel output, and derives the
+  // uninstrumented view by transforming the same source again with Auto Log, logpoints and loop protection off --
+  // not by stripping `__jl` calls out of generated code, which cannot be done correctly.
+  test("transpiled() returns the last Babel output, and re-transforms without instrumentation on request", async () => {
+    const h = await createHarness();
+    const { runId } = h.coordinator.start({
+      tabId: "t1",
+      code: "const a = 5;\na;",
+      language: "typescript",
+      logpoints: [1],
+    });
+    await h.waitForState("evaluating", runId);
+
+    const instrumented = await h.coordinator.transpiled("t1", false);
+    expect(instrumented?.code).toContain("__jl.");
+
+    const plain = await h.coordinator.transpiled("t1", true);
+    expect(plain?.code).not.toContain("__jl.");
+    expect(plain?.code).toContain("const a = 5");
+
+    expect(await h.coordinator.transpiled("never-ran", false)).toBeNull();
+
+    // The remembered transform is dropped with the tab, so a closed tab stops serving its last program.
+    h.coordinator.disposeTab("t1");
+    expect(await h.coordinator.transpiled("t1", false)).toBeNull();
+  });
 });

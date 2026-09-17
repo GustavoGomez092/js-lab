@@ -4,7 +4,7 @@ import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { useOverlayOpen } from "../shell/overlay-presence";
 import type { AppStore } from "../state/store";
-import { RUNNER_WEB_URL, type TileWebview, WebViewTile } from "./WebViewTile";
+import { RUNNER_WEB_URL, recordHostsRender, type TileWebview, WebViewTile } from "./WebViewTile";
 import { createWebviewHostRegistry } from "./webview-host";
 
 /** Which DOM node -- and which tab -- `OutputTiles`'s real docking placeholder currently is, or `null` when no
@@ -92,6 +92,12 @@ export function WebViewHosts({
   // M4 T9c: whether at least one occluding overlay (the palette, a dialog, a sheet, a context menu) is open
   // anywhere in the shell right now -- see this component's own doc comment and `overlay-presence.ts`.
   const overlayOpen = useOverlayOpen();
+
+  // M4 diagnostics (see `recordHostsRender`): an effect with no dependency array runs after every render, so this
+  // counts this component's renders without doing side-effect work during the render phase itself.
+  useEffect(() => {
+    recordHostsRender();
+  });
 
   // N4: which tabIds have ever had their Web View toggle on -- passed to each tile as `enabled`, gating creation
   // of the real `<electrobun-webview>` inside it (`WebViewTile.tsx`). Once added here a tabId is never removed

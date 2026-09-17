@@ -28,7 +28,7 @@ import { NpmSheet } from "../npm/NpmSheet";
 import { operationStatusMessage } from "../npm/npm-panel";
 import { OutputTiles } from "../output/OutputTiles";
 import { WebViewHosts, type WebviewDock } from "../output/WebViewHosts";
-import { webViewTileCounters } from "../output/WebViewTile";
+import { recordAppRender, webViewTileCounters } from "../output/WebViewTile";
 import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
@@ -104,6 +104,30 @@ export function App({
   // Fix round 1 (F1/F2): lifted here, not into OutputTiles, specifically so it survives OutputTiles unmounting
   // (hiding the Output panel) -- see WebViewHosts.tsx's doc comment for the full mechanism.
   const [webviewDock, setWebviewDock] = useState<WebviewDock | null>(null);
+
+  // M4 diagnostics (see `recordAppRender`): every input that can re-render this component, recorded once per render
+  // so an idle-window sample names WHICH subscription drove the shell's churn rather than only that it churned.
+  // A ref (not state) holds the previous values, so this measures the render loop without joining it.
+  const previousInputs = useRef<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    const current: Record<string, unknown> = {
+      tabId,
+      orientation,
+      editorSize,
+      outputVisible,
+      toolbarTitle,
+      runState,
+      safeMode,
+      notices,
+      settings,
+      sideBarPanel,
+      tabCount,
+      npmOpen,
+      webviewDock,
+    };
+    recordAppRender(current, previousInputs.current);
+    previousInputs.current = current;
+  });
 
   const lastTypedAt = useRef(0);
   // T16-rr1: the React-owned slot the Editor puts the Vim status node into, always rendered before the status bar.

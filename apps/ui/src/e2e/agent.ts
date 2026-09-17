@@ -33,8 +33,18 @@ export interface OverlayDiagnostics {
   webviewCount: number;
   /** The window's inner box, so a degenerate rect can be read against the space it had available. */
   viewport: { width: number; height: number };
-  /** `WebViewTile`'s re-measure/re-render counters (see `webViewTileCounters`). */
-  counters: { measures: number; renders: number };
+  /**
+   * The re-measure/re-render counters (see `webViewTileCounters`): the tile's own `measures`/`renders`, plus
+   * `hosts`/`app` render counts and `appInputs` -- how often each of `App`'s own subscriptions changed identity.
+   * Together these say where an idle-window re-render loop starts, not just that one exists.
+   */
+  counters: {
+    measures: number;
+    renders: number;
+    hosts: number;
+    app: number;
+    appInputs: Record<string, number>;
+  };
 }
 
 export interface E2EAgentDeps {

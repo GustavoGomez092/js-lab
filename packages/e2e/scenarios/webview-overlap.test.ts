@@ -42,7 +42,13 @@ type Diagnostics = {
   rects: Record<string, Rect | null>;
   webviewCount: number;
   viewport: { width: number; height: number };
-  counters: { measures: number; renders: number };
+  counters: {
+    measures: number;
+    renders: number;
+    hosts: number;
+    app: number;
+    appInputs: Record<string, number>;
+  };
 };
 
 let apps: LaunchedApp[] = [];
@@ -170,7 +176,22 @@ describe("Web View / console overlap (user report: console rows invisible)", () 
       `measures (setRect calls): ${before.measures} -> ${after.measures} (delta ${after.measures - before.measures})`,
     );
     console.log(
-      `renders:                  ${before.renders} -> ${after.renders} (delta ${after.renders - before.renders})`,
+      `renders (tile):           ${before.renders} -> ${after.renders} (delta ${after.renders - before.renders})`,
+    );
+    // Round 2: where the loop STARTS. An in-process probe proved the tile's churn is just `App` re-rendering and
+    // passing through `WebViewHosts` with `docked`/`dockNode` unchanged (which is why `measures` stays flat), so
+    // these three lines are what name the driver: if `app` climbs in step with the tile, the shell is the loop, and
+    // `appInputs` says which of its own subscriptions kept changing identity to drive it.
+    console.log(`renders (WebViewHosts):   ${before.hosts} -> ${after.hosts} (delta ${after.hosts - before.hosts})`);
+    console.log(`renders (App):            ${before.app} -> ${after.app} (delta ${after.app - before.app})`);
+    const inputDeltas = Object.keys({ ...before.appInputs, ...after.appInputs })
+      .map((key) => [key, (after.appInputs[key] ?? 0) - (before.appInputs[key] ?? 0)] as const)
+      .filter(([, delta]) => delta > 0)
+      .sort((a, b) => b[1] - a[1]);
+    console.log(
+      `App inputs that changed:  ${
+        inputDeltas.length === 0 ? "NONE" : inputDeltas.map(([key, delta]) => `${key} +${delta}`).join(", ")
+      }`,
     );
     console.log("======================================================\n");
 

@@ -22,10 +22,47 @@ type Rect = { top: number; left: number; width: number; height: number };
  * the reload error") pointed at the Web View tile itself as a re-render driver independent of run state; these two
  * numbers, sampled twice across a fixed idle window, are what turns that into a measurement instead of a guess.
  */
-const counters = { measures: 0, renders: 0 };
+const counters = { measures: 0, renders: 0, hosts: 0, app: 0, appInputs: {} as Record<string, number> };
+
+/**
+ * M4 round 2: the same idea, one level up.
+ *
+ * The first sample (b6673a8) established that a docked tile re-renders ~110 times a second while the app sits idle
+ * with nothing running, and that `measures` stays at 0 through it -- so the tile's own `ResizeObserver`/`setRect`
+ * path is not the driver and the churn arrives from upstream. An in-process probe then narrowed it further: the
+ * ONLY mechanism that reproduces that exact signature (tile renders climb, `measures` flat) is `App` itself
+ * re-rendering and passing through `WebViewHosts` with `docked`/`dockNode` unchanged. An overlay-presence flip does
+ * not reproduce it, and neither does store churn `App` does not select.
+ *
+ * What is still unnamed is what re-renders `App` ~110 times a second. `App` re-renders only when one of its own
+ * subscriptions yields a new value, so these counters record exactly that: how many times each of `App`,
+ * `WebViewHosts` and the tile rendered, and -- decisively -- which of `App`'s inputs actually changed identity on
+ * each of its renders. An idle-window sample then reads, for example, "app +330, settings +330", which names the
+ * subscription driving the loop instead of leaving it to inference.
+ */
+export function recordAppRender(current: Record<string, unknown>, previous: Record<string, unknown> | null): void {
+  counters.app += 1;
+  if (!previous) return;
+  for (const key of Object.keys(current)) {
+    // `Object.is` is exactly the comparison React/zustand use to decide whether a subscription re-renders, so a key
+    // counted here is a key that really did force this render -- not one that merely looks different.
+    if (!Object.is(current[key], previous[key])) counters.appInputs[key] = (counters.appInputs[key] ?? 0) + 1;
+  }
+}
+
+/** Counts one `WebViewHosts` render, so the loop's start can be told from the tile it ends at. */
+export function recordHostsRender(): void {
+  counters.hosts += 1;
+}
 
 /** A snapshot of the diagnostics counters above, for `e2e.state`. */
-export const webViewTileCounters = (): { measures: number; renders: number } => ({ ...counters });
+export const webViewTileCounters = (): {
+  measures: number;
+  renders: number;
+  hosts: number;
+  app: number;
+  appInputs: Record<string, number>;
+} => ({ ...counters, appInputs: { ...counters.appInputs } });
 
 /**
  * The collapsed (not-docked) style, deliberately 1x1 rather than 0x0 -- confirmed necessary by a live run, not a

@@ -22,7 +22,31 @@ type Rect = { top: number; left: number; width: number; height: number };
  * the reload error") pointed at the Web View tile itself as a re-render driver independent of run state; these two
  * numbers, sampled twice across a fixed idle window, are what turns that into a measurement instead of a guess.
  */
-const counters = { measures: 0, renders: 0, hosts: 0, app: 0, appInputs: {} as Record<string, number> };
+const counters = {
+  measures: 0,
+  renders: 0,
+  hosts: 0,
+  app: 0,
+  appInputs: {} as Record<string, number>,
+  /**
+   * M4 round 3: the last few `runState` transitions, as `"<previous>-><next>"` strings.
+   *
+   * Round 2's sample named `runState` as the sole input driving the shell's churn (+314 over a 3s idle window, every
+   * other input +0). But `runState` is a primitive string union, so `Object.is` compares it BY VALUE -- meaning the
+   * run state is genuinely oscillating between two different values ~105 times a second, not merely losing object
+   * identity. Which two values that is, is what separates a known-and-already-fixed defect from a new one: the
+   * `idle`/`settled` pair is the signature of the self-rescheduling-handle dip fixed in `runner-web` (388f865) and
+   * `runner-bun` (75f8c84), and seeing a DIFFERENT pair here is what would prove those fixes are not the whole
+   * story. A count alone cannot tell those apart, so this records the values themselves.
+   *
+   * A bounded ring (the most recent `RUN_STATE_TRAIL_MAX`), so it stays useful for an idle window sampled minutes
+   * into a session rather than filling up during the run that precedes it, and never grows without limit.
+   */
+  runStateTrail: [] as string[],
+};
+
+/** How many recent `runState` transitions `counters.runStateTrail` keeps. */
+const RUN_STATE_TRAIL_MAX = 40;
 
 /**
  * M4 round 2: the same idea, one level up.
@@ -46,7 +70,14 @@ export function recordAppRender(current: Record<string, unknown>, previous: Reco
   for (const key of Object.keys(current)) {
     // `Object.is` is exactly the comparison React/zustand use to decide whether a subscription re-renders, so a key
     // counted here is a key that really did force this render -- not one that merely looks different.
-    if (!Object.is(current[key], previous[key])) counters.appInputs[key] = (counters.appInputs[key] ?? 0) + 1;
+    if (Object.is(current[key], previous[key])) continue;
+    counters.appInputs[key] = (counters.appInputs[key] ?? 0) + 1;
+    // `runState` is a primitive, so a change counted just above is a change of VALUE, not of object identity --
+    // record which values, because the PAIR is what names the defect (see `counters.runStateTrail`).
+    if (key === "runState") {
+      counters.runStateTrail.push(`${String(previous[key])}->${String(current[key])}`);
+      if (counters.runStateTrail.length > RUN_STATE_TRAIL_MAX) counters.runStateTrail.shift();
+    }
   }
 }
 
@@ -62,7 +93,8 @@ export const webViewTileCounters = (): {
   hosts: number;
   app: number;
   appInputs: Record<string, number>;
-} => ({ ...counters, appInputs: { ...counters.appInputs } });
+  runStateTrail: string[];
+} => ({ ...counters, appInputs: { ...counters.appInputs }, runStateTrail: [...counters.runStateTrail] });
 
 /**
  * The collapsed (not-docked) style, deliberately 1x1 rather than 0x0 -- confirmed necessary by a live run, not a

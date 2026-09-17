@@ -28,6 +28,7 @@ function fakeSettingsApi(fonts: Awaited<ReturnType<SettingsApi["listFonts"]>> = 
       rules: [] as KeybindingRule[],
       defaults: [] as KeybindingRule[],
       path: "/data/keybindings.json",
+      invalid: false,
     })),
     saveKeybindings: mock(async (_rules: KeybindingRule[]) => ({ ok: true as const })),
     appCommand: mock((_action: string) => {}),

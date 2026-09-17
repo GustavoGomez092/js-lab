@@ -410,6 +410,20 @@ export const strings = {
       openFile: "Open keybindings.json",
       empty: "No commands match this search",
       loadFailed: "Couldn't read the keybindings.",
+      change: "Change",
+      capture: (title: string) => `Change the shortcut for ${title}`,
+      capturing: (title: string) => `Recording a shortcut for ${title}`,
+      captureHint: "Press the keys you want, or Escape to cancel.",
+      reset: "Reset",
+      resetRow: (title: string) => `Reset ${title} to its default shortcut`,
+      resetAll: "Reset All Keybindings",
+      rejected: {
+        bareKey: "Add a modifier (⌘, ⌃ or ⌥) to that key, or use a function key.",
+        reserved: "That key is reserved and can't be used as a shortcut.",
+      },
+      saveFailed: "Couldn't save your keybindings.",
+      // Spec §18: the path is never quoted here -- Main logs the raw cause instead.
+      fileInvalid: "keybindings.json isn't valid JSON, so it can't be edited here. Open it, fix it, then relaunch.",
     },
     groups: {
       dark: "Dark",

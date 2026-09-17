@@ -100,7 +100,12 @@ export function SettingsApp({
           ? { content: npmrc.current.content(), dirty: npmrc.current.dirty(), status: npmrc.current.status() }
           : null,
         keybindings: keys.current
-          ? { rowCount: keys.current.rows().length, query: keys.current.query(), status: keys.current.status() }
+          ? {
+              rowCount: keys.current.rows().length,
+              query: keys.current.query(),
+              status: keys.current.status(),
+              capturing: keys.current.capturing(),
+            }
           : null,
       }),
       execute: (id, args) => {
@@ -132,6 +137,16 @@ export function SettingsApp({
         if (id === "keybindings.search" && keys.current) {
           keys.current.setQuery(String((args as { query?: unknown }).query ?? ""));
           return true;
+        }
+        if (id === "keybindings.capture" && keys.current) {
+          const { command, key } = args as { command?: unknown; key?: unknown };
+          return keys.current.capture(String(command ?? ""), String(key ?? ""));
+        }
+        if (id === "keybindings.resetRow" && keys.current) {
+          return keys.current.resetRow(String((args as { command?: unknown }).command ?? ""));
+        }
+        if (id === "keybindings.resetAll" && keys.current) {
+          return keys.current.resetAll();
         }
         return false;
       },

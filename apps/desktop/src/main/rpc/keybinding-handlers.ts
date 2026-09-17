@@ -11,7 +11,7 @@ import { strings } from "../strings";
 import { createValidators, type Log } from "./validate";
 
 export interface KeybindingHandlerDeps {
-  store: Pick<KeybindingsStore, "path" | "rules" | "save">;
+  store: Pick<KeybindingsStore, "path" | "rules" | "save" | "invalid">;
   /** Ids the running main window has registered, published by App.tsx. Empty when no main window is open. */
   registeredCommands(): readonly string[];
   log: Log;
@@ -43,14 +43,29 @@ export function createKeybindingHandlers(deps: KeybindingHandlerDeps) {
           })),
         };
       },
-      "keybindings.get": (input: unknown): { rules: KeybindingRule[]; defaults: KeybindingRule[]; path: string } => {
+      "keybindings.get": (
+        input: unknown,
+      ): { rules: KeybindingRule[]; defaults: KeybindingRule[]; path: string; invalid: boolean } => {
         parse(emptyParamsSchema, "keybindings.get", input);
         // Copies: the response crosses the RPC boundary as mutable arrays, and handing out the store's own set (or
         // the module-level defaults) would let a caller edit what Main believes is on disk.
-        return { rules: [...deps.store.rules], defaults: [...DEFAULT_KEYBINDINGS], path: deps.store.path };
+        return {
+          rules: [...deps.store.rules],
+          defaults: [...DEFAULT_KEYBINDINGS],
+          path: deps.store.path,
+          // Settings closes its editing affordances on this, so the refusal below is never reached by accident.
+          invalid: deps.store.invalid,
+        };
       },
       "keybindings.save": async (input: unknown): Promise<SaveResult> => {
         const { rules } = parse(keybindingsSaveParamsSchema, "keybindings.save", input);
+        // An unparseable file left the store holding NO rules, so every save is computed from nothing. Writing it
+        // would replace the user's broken file with an empty-ish set at the moment they opened it to repair it.
+        // Checked after validation so a malformed payload is still rejected as one.
+        if (deps.store.invalid) {
+          deps.log("Refused to overwrite an unparseable keybindings.json", deps.store.path);
+          return { ok: false, error: strings.keybindings.fileInvalid };
+        }
         try {
           await deps.store.save(rules);
           return { ok: true };

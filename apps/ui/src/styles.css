@@ -1735,3 +1735,30 @@ button:disabled {
 .keybindings-status {
   color: var(--fg-error);
 }
+
+/* Every chord bound to the command sits in this cell, so the row can wrap rather than widen the table
+   (R-M5d-ALIAS-1: a command with two chords shows both). */
+.keybindings-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.keybindings-capture {
+  width: 132px;
+  font: 500 11px / 1 var(--mono);
+}
+
+.keybindings-action {
+  padding: 2px 8px;
+  border-color: var(--border-default);
+  font-size: 11px;
+}
+
+.keybindings-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}

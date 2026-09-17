@@ -92,6 +92,13 @@ export const strings = {
   /** Settings → Keybindings (spec §6.5). Never quotes a path: the raw cause goes to the log instead (spec §18). */
   keybindings: {
     saveFailed: "Couldn't save your keybindings. Your changes are still here.",
+    /**
+     * Refusing to write over a keybindings.json we could not parse.
+     *
+     * When the file is unparseable the store holds no rules, so any save from Settings would replace the user's
+     * broken file with a set derived from nothing -- destroying the very text they opened the file to repair.
+     */
+    fileInvalid: "keybindings.json isn't valid JSON. Open it, fix it, then relaunch JSLab.",
   },
   runs: {
     /** Spec §12.2. */

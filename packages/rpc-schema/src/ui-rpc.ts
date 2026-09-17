@@ -399,7 +399,8 @@ export type SettingsWindowRequests = {
   "commands.catalog": { params: Record<string, never>; response: { commands: CommandCatalogEntry[] } };
   "keybindings.get": {
     params: Record<string, never>;
-    response: { rules: KeybindingRule[]; defaults: KeybindingRule[]; path: string };
+    /** `invalid` is true when keybindings.json could not be parsed at startup, so Settings must not write over it. */
+    response: { rules: KeybindingRule[]; defaults: KeybindingRule[]; path: string; invalid: boolean };
   };
   "keybindings.save": { params: { rules: KeybindingRule[] }; response: SaveResult };
 };

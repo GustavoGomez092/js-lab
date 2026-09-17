@@ -8,12 +8,13 @@ import {
 import { InvalidPayloadError } from "../../src/main/rpc/validate";
 import { strings } from "../../src/main/strings";
 
-function setup(published: string[] = []) {
+function setup(published: string[] = [], options: { invalid?: boolean } = {}) {
   const saved: KeybindingRule[][] = [];
   const deps = {
     store: {
       path: "/data/keybindings.json",
       rules: [{ key: "cmd+k", command: "-output.clear" }] as readonly KeybindingRule[],
+      invalid: options.invalid === true,
       save: mock(async (rules: readonly KeybindingRule[]) => {
         saved.push([...rules]);
       }),
@@ -69,7 +70,7 @@ describe("commands.catalog", () => {
   test("reflects the ids published after the handler group was built", async () => {
     let published: string[] = [];
     const handlers = createKeybindingHandlers({
-      store: { path: "/data/keybindings.json", rules: [], save: async () => {} },
+      store: { path: "/data/keybindings.json", rules: [], invalid: false, save: async () => {} },
       registeredCommands: () => published,
       log: () => {},
     });
@@ -96,6 +97,14 @@ describe("keybindings.get / keybindings.save", () => {
     expect(result.rules).toEqual([{ key: "cmd+k", command: "-output.clear" }]);
     expect(result.defaults).toEqual([...DEFAULT_KEYBINDINGS]);
     expect(result.path).toBe("/data/keybindings.json");
+    expect(result.invalid).toBe(false);
+  });
+
+  // Settings closes its editing affordances on this flag, so it has to cross the wire truthfully. Reporting a
+  // constant `false` would leave the pane offering to write over a file Main knows it could not read.
+  test("reports an unparseable file so Settings can close its editing affordances", async () => {
+    const { handlers } = setup([], { invalid: true });
+    expect((await handlers.requests["keybindings.get"]({})).invalid).toBe(true);
   });
 
   // Copies, not the live arrays: the response crosses the RPC boundary as mutable `KeybindingRule[]`, and handing
@@ -135,6 +144,28 @@ describe("keybindings.get / keybindings.save", () => {
     // The absolute path is still recoverable by whoever debugs it -- it goes to the log, never to the user.
     expect(deps.log).toHaveBeenCalled();
     expect(String(deps.log.mock.calls.at(-1))).toContain("EACCES");
+  });
+
+  /**
+   * An unparseable keybindings.json left the store holding NO rules, so every save is computed from nothing.
+   * Writing it would replace the user's broken file with an empty-ish set at the moment they opened it to repair
+   * it -- the same refusal Main's "Open keybindings.json" action already makes.
+   */
+  test("refuses to overwrite a keybindings.json it could not parse", async () => {
+    const { handlers, saved, deps } = setup([], { invalid: true });
+    const result = await handlers.requests["keybindings.save"]({ rules: [{ key: "cmd+j", command: "run.start" }] });
+    expect(result).toEqual({ ok: false, error: strings.keybindings.fileInvalid });
+    expect(deps.store.save).not.toHaveBeenCalled();
+    expect(saved).toEqual([]);
+    // Spec §18: the user-facing line never quotes the path, but the log still records which file it was.
+    expect(strings.keybindings.fileInvalid).not.toMatch(/[/\\]/);
+    expect(String(deps.log.mock.calls.at(-1))).toContain("/data/keybindings.json");
+  });
+
+  // The refusal must not swallow validation: a malformed payload is still a malformed payload.
+  test("still rejects a malformed payload when the file is unparseable", async () => {
+    const { handlers } = setup([], { invalid: true });
+    await expect(handlers.requests["keybindings.save"]({ rules: "nope" })).rejects.toThrow(InvalidPayloadError);
   });
 
   test("rejects a malformed payload rather than writing it", async () => {

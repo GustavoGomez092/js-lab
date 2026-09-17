@@ -11,7 +11,7 @@ export interface SettingsSnapshot {
   fontOptions: string[];
   settings: Settings | null;
   npmrc: { content: string; dirty: boolean; status: string | null } | null;
-  keybindings: { rowCount: number; query: string; status: string | null } | null;
+  keybindings: { rowCount: number; query: string; status: string | null; capturing: string | null } | null;
 }
 
 /** Answers `e2e.*` calls routed with `window: "settings"`. */

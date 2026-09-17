@@ -290,6 +290,9 @@ export const strings = {
     searchPlaceholder: "Search by name or description",
     list: "Snippet library",
     newSnippet: "New Snippet",
+    // Spec §13.1: the editor context menu's own entry. It deliberately reads the same as the `snippets.create`
+    // command title -- the command catalogue and the UI strings are separate surfaces (note for M5e Phase B).
+    createAction: "Create Snippet…",
     // Spec §13.1 actions.
     insert: "Insert",
     insertInNewTab: "Insert in New Tab",

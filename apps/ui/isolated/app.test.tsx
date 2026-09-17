@@ -25,6 +25,7 @@ import { applyEdits } from "../src/format/line-diff";
 import * as OutputPanelModule from "../src/output/OutputPanel";
 import { ActivityBar } from "../src/shell/ActivityBar";
 import { runStateLabel } from "../src/shell/labels";
+import { setSnippetMonaco } from "../src/snippets/monaco-bridge";
 import { BUFFER_SYNC_DELAY_MS } from "../src/state/buffer-sync";
 import { type AppStore, createAppStore } from "../src/state/store";
 import { strings } from "../src/strings";
@@ -744,6 +745,79 @@ describe("App shell", () => {
       await Bun.sleep(1);
     });
     expect([shown(), api.updateSettings.mock.calls.length]).toEqual([false, writes + 1]);
+  });
+
+  /**
+   * The App -> SideBar -> SnippetsPanel wiring for Monaco's two contributions (spec §13.1). Both props are
+   * OPTIONAL, so dropping either from App's SideBar mount is typecheck-clean -- and the panel behaves identically
+   * without them UNLESS the bridge slot is full, which is why this test fills it. MEASURED: before this test,
+   * deleting `colorize={snippetColorize}` or `createBody={snippetBodyFactory}` from App survived the entire suite.
+   */
+  test("App routes the Monaco bridge through to the snippets preview and the form's body editor", async () => {
+    const SIZES = { offsetHeight: 600, offsetWidth: 400 } as const;
+    const originals = new Map<string, PropertyDescriptor | undefined>();
+    // R-M5b-D2: @tanstack/virtual-core sizes the scroller from offsetWidth/offsetHeight, which happy-dom reports as
+    // 0, so the list renders NO rows and nothing is ever selected to preview. Patch copied from the precedent that
+    // documents it verbatim (apps/ui/test/output-panel.test.tsx:55-77), scoped to this test and undone in `finally`.
+    for (const [prop, size] of Object.entries(SIZES)) {
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, prop);
+      originals.set(prop, original);
+      Object.defineProperty(HTMLElement.prototype, prop, {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.classList.contains("snippets-scroller") ? size : (original?.get?.call(this) ?? 0);
+        },
+      });
+    }
+    try {
+      const { store, api } = renderApp();
+      api.updateSettings.mockImplementation(async (patch: unknown) =>
+        mergeSettings(store.getState().settings ?? defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+      );
+      api.snippetsList.mockImplementation(async () => [
+        {
+          id: "s1",
+          name: "log",
+          description: "print a value",
+          body: "console.log(1)",
+          language: null,
+          createdAt: "2026-09-16T10:00:00.000Z",
+          updatedAt: "2026-09-16T10:00:00.000Z",
+        },
+      ]);
+      // Stands in for what Editor.tsx publishes once Monaco is mounted. Under happy-dom the slot is otherwise
+      // empty, and an empty slot is exactly what makes a dropped prop invisible.
+      setSnippetMonaco({
+        colorize: async (code: string) => `<span class="mtk1">${code}</span>`,
+        createBody: (host: HTMLElement) => {
+          const marker = host.ownerDocument.createElement("div");
+          marker.className = "monaco-body-marker";
+          host.append(marker);
+          return { getValue: () => "", focus: () => {}, dispose: () => marker.remove() };
+        },
+      });
+
+      await act(async () => {
+        press("KeyB");
+        await Bun.sleep(1);
+      });
+      // The preview really colorized -- which only happens if App handed the panel `colorize`.
+      await waitFor(() => expect(document.querySelector(".snippets-preview .mtk1")).not.toBeNull());
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: strings.snippets.newSnippet }));
+        await Bun.sleep(1);
+      });
+      // ...and the form used the injected factory rather than silently shipping the <textarea> fallback (R-M5b-5).
+      expect(document.querySelector(".snippets-body .monaco-body-marker")).not.toBeNull();
+      expect(document.querySelector(".snippets-body textarea")).toBeNull();
+    } finally {
+      setSnippetMonaco(null);
+      for (const [prop, original] of originals) {
+        if (original) Object.defineProperty(HTMLElement.prototype, prop, original);
+        else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[prop];
+      }
+    }
   });
 
   // The activity bar's Snippets tooltip gains the ⌘B keycap (FB-m3's rule, applied to the new binding). Nothing

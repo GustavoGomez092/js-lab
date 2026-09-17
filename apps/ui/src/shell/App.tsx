@@ -30,6 +30,7 @@ import { OutputTiles } from "../output/OutputTiles";
 import { WebViewHosts, type WebviewDock } from "../output/WebViewHosts";
 import { recordAppRender, webViewTileCounters } from "../output/WebViewTile";
 import { CommandPalette } from "../palette/CommandPalette";
+import { snippetBodyFactory, snippetColorize } from "../snippets/monaco-bridge";
 import { createSnippetActions, createSnippetCommands } from "../snippets/snippet-actions";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
@@ -618,7 +619,15 @@ export function App({
           />
         )}
         {settings.view.sideBar && (
-          <SideBar panel={sideBarPanel} store={store} api={api} dialogs={dialogs} actions={snippetActions} />
+          <SideBar
+            panel={sideBarPanel}
+            store={store}
+            api={api}
+            dialogs={dialogs}
+            actions={snippetActions}
+            colorize={snippetColorize}
+            createBody={snippetBodyFactory}
+          />
         )}
         <SplitPane
           orientation={orientation}
@@ -632,6 +641,7 @@ export function App({
               api={api}
               onLargePaste={flows.confirmLargePaste}
               onInstall={install}
+              onCreateSnippet={() => registry.execute("snippets.create")}
               vimSlot={vimSlot}
             />
           }

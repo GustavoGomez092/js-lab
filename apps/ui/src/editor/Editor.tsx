@@ -2,6 +2,10 @@ import { getTheme } from "@jslab/themes";
 import type * as Monaco from "monaco-editor";
 import { type RefObject, useEffect, useRef } from "react";
 import type { MainApi } from "../api";
+import { createMonacoBody } from "../snippets/body-editor";
+import { registerCreateSnippetAction } from "../snippets/create-snippet-action";
+import { setSnippetMonaco } from "../snippets/monaco-bridge";
+import { registerSnippetCompletions } from "../snippets/snippet-completions";
 import type { AppState, AppStore } from "../state/store";
 import { setEditorHandle } from "./editor-handle";
 import { type EditorOptions, editorOptionsFor } from "./editor-options";
@@ -28,6 +32,8 @@ interface EditorProps {
   onLargePaste?(bytes: number): Promise<boolean>;
   /** R23-1: routed through the npm.install command by the caller, not called on api directly. */
   onInstall?(spec: string): void;
+  /** Spec §13.1: the editor context menu's Create Snippet…, routed through the snippets.create command. */
+  onCreateSnippet?(): void;
   /** The React-owned `.vim-slot` before the status bar, where the Vim status node goes (T16-rr1). */
   vimSlot?: RefObject<HTMLElement | null>;
 }
@@ -43,7 +49,7 @@ function toMonacoOptions(options: EditorOptions): Omit<Monaco.editor.IEditorOpti
   return { ...options, hover: { enabled: options.hover.enabled ? "on" : "off", delay: options.hover.delay } };
 }
 
-export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorProps) {
+export function Editor({ store, api, onLargePaste, onInstall, onCreateSnippet, vimSlot }: EditorProps) {
   const host = useRef<HTMLDivElement>(null);
   // FB-m10: the paste confirm is read through a ref, so a new callback identity (for example `flows` rebuilt after a
   // formatter change) never disposes and recreates Monaco, which would lose undo history and Vim state.
@@ -52,6 +58,10 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
   // R23-1: same latest-props ref pattern, so a new onInstall identity from App never tears down Monaco.
   const install = useRef(onInstall);
   install.current = onInstall;
+  // Same reason: the context-menu action is registered once per mount, so it must read the current callback rather
+  // than the identity captured at registration.
+  const createSnippet = useRef(onCreateSnippet);
+  createSnippet.current = onCreateSnippet;
 
   useEffect(() => {
     const monaco = setupMonaco();
@@ -127,6 +137,18 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
     // every re-render -- and read from the store per keystroke, so an install or remove needs no re-registration.
     const importCompletions = registerImportCompletions(monaco, {
       installed: () => store.getState().npm.installed,
+    });
+    // Spec §13.3: the snippet suggest channel. The library is read from the store at completion time, so a snippet
+    // created a moment ago is suggested without re-registering anything.
+    const snippetCompletions = registerSnippetCompletions(monaco, {
+      snippets: () => store.getState().snippets,
+    });
+    const createSnippetAction = registerCreateSnippetAction(editor, { run: () => createSnippet.current?.() });
+    // Spec §13.1: the panel's preview highlighting and the form's body editor both need Monaco; publish them the
+    // same way the editor handle itself is published, so App keeps no import path to monaco-editor.
+    setSnippetMonaco({
+      colorize: (code, language) => monaco.editor.colorize(code, languageId(language ?? "typescript"), {}),
+      createBody: createMonacoBody(monaco, (language) => languageId(language ?? "typescript")),
     });
 
     const applyMonacoTheme = (themeId: string) => {
@@ -522,6 +544,11 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
       feeder.dispose();
       installAssist.dispose();
       importCompletions.dispose();
+      snippetCompletions.dispose();
+      createSnippetAction.dispose();
+      // Before `editor.dispose()`: the panel must stop reaching into a Monaco that is going away, and fall back to
+      // its plain-text preview rather than colorizing through a disposed editor.
+      setSnippetMonaco(null);
       // Before `editor.dispose()`: releases any presence still held, so a tile can't stay collapsed because the
       // editor was torn down while a hover was showing over it.
       stopWidgetOcclusion();

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { spawn as nodeSpawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -407,5 +408,40 @@ describe("child_process over the bridge (spec §5.13)", () => {
     const { runner, events } = setup();
     expect(() => runner.abort(99)).not.toThrow();
     expect(events).toEqual([]);
+  });
+
+  /**
+   * CodeRabbit finding 2. `WebAdapter` forwards the page's own `message.id` straight to `call`, and the schema
+   * only bounds it to a positive integer -- nothing made it unique. `runChildProcess` then did
+   * `children.set(id, ...)` unconditionally, so a page reusing an id for a second concurrent command **overwrote
+   * the first child's kill handle**. The first process survives `abort(id)` and even `abortAll()` (both can only
+   * reach whatever is in the map now), so it outlives the run entirely -- on the `browser-node` boundary, where
+   * page code is assumed hostile, that is an unkillable process for the asking.
+   *
+   * `web-fetch-handlers.ts` already refuses a duplicate in-flight id (`inflight.has(id)`); this is the same guard,
+   * and it has to sit **before** the spawn, which is what `spawns` pins -- refusing after the fact would still
+   * have started the process.
+   */
+  test("a duplicate active call id is refused before a second process is spawned (CodeRabbit 2)", async () => {
+    let spawns = 0;
+    const counting = ((...args: Parameters<typeof nodeSpawn>) => {
+      spawns += 1;
+      return nodeSpawn(...args);
+    }) as typeof nodeSpawn;
+    const { runner, events } = setup({ spawn: counting });
+
+    runner.call(1, cpCall(1, "spawn", ["/bin/sleep", ["30"], {}]));
+    await waitUntil(() => runner.pending() === 1, "the first process to start");
+
+    runner.call(1, cpCall(1, "spawn", ["/bin/sleep", ["30"], {}]));
+    await waitUntil(() => events.some((event) => event.type === "error"), "the duplicate to be refused", 2000);
+
+    // Never spawned: the guard runs before the process is created, not after.
+    expect(spawns).toBe(1);
+    expect(String(events[0]?.payload.message)).toContain("repeated call id");
+    // The original handle was not clobbered, so aborting by that id really does release the first child.
+    expect(runner.pending()).toBe(1);
+    runner.abort(1);
+    expect(runner.pending()).toBe(0);
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useLayoutEffect, useSyncExternalStore } from "react";
 
 /**
  * M4 T9c: a native `<electrobun-webview>` surface paints above every HTML element regardless of CSS `z-index` --
@@ -68,7 +68,23 @@ export function useOverlayOpen(): boolean {
  * site's own comment).
  */
 export function useOverlayPresence(open: boolean): void {
-  useEffect(() => {
+  /*
+   * `useLayoutEffect`, NOT `useEffect` -- and that is a correctness requirement here, not a preference.
+   *
+   * `useEffect` runs *after* paint. Every consumer of this counter exists to get a native
+   * `<electrobun-webview>` surface out of the way (see this module's header), so registering after paint leaves a
+   * frame in which the newly mounted overlay is on screen while the native surface is still there to paint over
+   * it -- the overlay flickers behind the Web View exactly when it first appears. A layout effect runs before
+   * paint, so the tile is already collapsed in the same frame the overlay first draws.
+   *
+   * This is the same defect family as the 0x0 `OverlaySyncController` guard fixed in Task 9c. It is also the only
+   * such race left in this module: `useOverlayOpen` reads through `useSyncExternalStore`, which subscribes during
+   * the commit and reads its snapshot synchronously, so it has no after-paint window of its own.
+   *
+   * The unmount direction is deliberately on the same schedule: releasing the count before paint means the Web
+   * View reappears in the frame the overlay leaves, rather than one frame later.
+   */
+  useLayoutEffect(() => {
     if (!open) return;
     const s = state();
     s.openCount += 1;

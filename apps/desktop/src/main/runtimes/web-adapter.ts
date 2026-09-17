@@ -412,14 +412,29 @@ class WebRunSession implements RunHandle {
       this.#stopSettle = resolve;
       this.#stopTimer = setTimeout(() => {
         if (this.#terminal) {
-          resolve();
+          this.#settleStop();
           return;
         }
         this.#terminal = "killed";
         this.#killWebview();
-        resolve();
+        this.#settleStop();
       }, this.deps.stopGraceMs ?? 500);
     });
+  }
+
+  /**
+   * Settles a pending `stop()` exactly once, whatever actually ended the run.
+   *
+   * Mirrors `BunRunSession#settleStop` (`bun-adapter.ts`), which exists for this same defect. `stop()` used to
+   * resolve only on the page's own `state: "stopped"` or on the escalation timer -- so a `kill()` arriving first
+   * cleared that timer and retired the handle with nothing ever calling the stored resolver, and the promise
+   * `stop()` returned never settled. Invisible today only because the sole caller discards it
+   * (`../runs/run-coordinator.ts`'s `void run.handle.stop()`); the first caller to await it would hang.
+   */
+  #settleStop(): void {
+    const settle = this.#stopSettle;
+    this.#stopSettle = undefined;
+    settle?.();
   }
 
   kill(): void {
@@ -487,6 +502,9 @@ class WebRunSession implements RunHandle {
     if (this.#retired) return;
     this.#retired = true;
     clearTimeout(this.#stopTimer);
+    // The one choke point every terminal path goes through (Kill pre-empting a pending Stop, a crash, the page's
+    // own "stopped"), so a caller awaiting `stop()` is never left hanging on a run that is already over.
+    this.#settleStop();
     for (const settle of [...this.#pendingExpands.values()]) settle(null);
     this.#pendingExpands.clear();
     // Fix round 1: a run that retires mid-request must not leave Main still talking to a server on the user's
@@ -623,7 +641,7 @@ class WebRunSession implements RunHandle {
       case "state": {
         if (message.state === "stopped") {
           clearTimeout(this.#stopTimer);
-          this.#stopSettle?.();
+          this.#settleStop();
         }
         if (message.state !== "evaluating") this.deps.runLock.remove(this.run.runId);
         if (this.#stopRequested && message.state !== "stopped") return;

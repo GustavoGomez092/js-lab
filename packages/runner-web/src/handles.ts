@@ -47,6 +47,45 @@ export class HandleTracker {
   }
 }
 
+/**
+ * Maps one kind of handle's raw platform ids onto unique object keys for `HandleTracker`.
+ *
+ * `HandleTracker` keys a single Map by whatever it is handed, so the raw id a platform API returned cannot be that
+ * key: per the HTML spec `setTimeout`/`setInterval` share one id space while `requestAnimationFrame` has its own,
+ * and **both start at 1**. A timer and a frame therefore collide -- `add()` early-returns for the second one, so it
+ * is never tracked and no disposer is ever stored for it, and `remove()` deletes whichever of the two it finds.
+ * The observable failure was a run with a `setTimeout` and a rAF loop reporting `idle` while still animating, and
+ * Stop calling `clearTimeout` on what was really a frame id, leaving the animation running against a page the host
+ * believed had finished.
+ *
+ * Giving each kind its own registry makes two kinds structurally unable to share a key -- the same collision-proofing
+ * `fetch`, `AudioContext` and media elements already get from minting an object key of their own.
+ */
+class HandleKeys {
+  readonly #keys = new Map<unknown, object>();
+
+  constructor(private readonly tracker: HandleTracker) {}
+
+  add(rawId: unknown, dispose: () => void): void {
+    if (this.#keys.has(rawId)) return;
+    const key = {};
+    this.#keys.set(rawId, key);
+    // The disposer clears this map too, so `disposeAll()` (Stop) leaves no stale id behind for a later
+    // `clearTimeout`/`cancelAnimationFrame` of a since-reused id to match against.
+    this.tracker.add(key, () => {
+      this.#keys.delete(rawId);
+      dispose();
+    });
+  }
+
+  remove(rawId: unknown): void {
+    const key = this.#keys.get(rawId);
+    if (key === undefined) return;
+    this.#keys.delete(rawId);
+    this.tracker.remove(key);
+  }
+}
+
 /** What `AudioController` needs from a `GainNode`'s `.gain` `AudioParam`: a settable `.value`. */
 export interface GainLike {
   value: number;
@@ -145,37 +184,50 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
     HTMLMediaElement,
   } = g;
 
+  // One registry per id space (see `HandleKeys`): timers share theirs, exactly as the platform does, while frames
+  // below get their own -- so a timer id and a frame id that are both `1` can never collide on one tracker key.
+  const timerKeys = new HandleKeys(tracker);
+  const frameKeys = new HandleKeys(tracker);
+
   g.setTimeout = Object.assign((fn: AnyFn, ms?: number, ...args: unknown[]) => {
     const id = st(
       (...a: unknown[]) => {
-        tracker.remove(id);
+        timerKeys.remove(id);
         fn(...a);
       },
       ms,
       ...args,
     );
-    tracker.add(id, () => ct(id));
+    timerKeys.add(id, () => ct(id));
     return id;
   }, st);
   g.clearTimeout = (id?: unknown) => {
-    tracker.remove(id);
+    timerKeys.remove(id);
     ct(id);
   };
 
   g.setInterval = Object.assign((fn: AnyFn, ms?: number, ...args: unknown[]) => {
     const id = si(fn, ms, ...args);
-    tracker.add(id, () => ci(id));
+    timerKeys.add(id, () => ci(id));
     return id;
   }, si);
   g.clearInterval = (id?: unknown) => {
-    tracker.remove(id);
+    timerKeys.remove(id);
     ci(id);
   };
 
   if (typeof f === "function") {
     g.fetch = Object.assign((input: unknown, init?: RequestInit) => {
       const controller = new AbortController();
-      const signal = init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
+      // Per the Fetch spec `new Request(input, init)` takes `init["signal"]` whenever it is present, and this
+      // wrapper always supplies one -- so a signal carried by a `Request` passed as `input` was overridden and
+      // silently stopped working: `fetch(new Request(url, { signal }))` then `abort()` cancelled nothing, in both
+      // web runtimes. Every caller-supplied signal is merged with this wrapper's own instead of only `init`'s.
+      const callerSignals: AbortSignal[] = [];
+      if (init?.signal) callerSignals.push(init.signal);
+      if (typeof Request === "function" && input instanceof Request && input.signal) callerSignals.push(input.signal);
+      const signal =
+        callerSignals.length > 0 ? AbortSignal.any([...callerSignals, controller.signal]) : controller.signal;
       const key = {};
       tracker.add(key, () => controller.abort());
       return f(input, { ...init, signal }).finally(() => tracker.remove(key));
@@ -201,14 +253,14 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
   if (typeof raf === "function" && typeof caf === "function") {
     g.requestAnimationFrame = Object.assign((fn: (time: number) => void) => {
       const id = raf((time: number) => {
-        tracker.remove(id);
+        frameKeys.remove(id);
         fn(time);
       });
-      tracker.add(id, () => caf(id));
+      frameKeys.add(id, () => caf(id));
       return id;
     }, raf);
     g.cancelAnimationFrame = (id?: unknown) => {
-      tracker.remove(id);
+      frameKeys.remove(id);
       caf(id);
     };
   }

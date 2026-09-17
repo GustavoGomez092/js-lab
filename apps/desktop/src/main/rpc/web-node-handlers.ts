@@ -241,6 +241,16 @@ export function createWebNodeRunner(deps: WebNodeRunnerDeps): WebNodeRunner {
    * command reports the same working directory under both runtimes rather than inheriting Main's stale one.
    */
   async function runChildProcess(id: number, method: string, args: unknown[]): Promise<void> {
+    // Ids are page-generated, and the schema only bounds them to a positive integer -- nothing makes one unique.
+    // A repeat while the first command is still running would overwrite its entry in `children` below, leaving the
+    // first process with no reachable kill handle: `abort(id)` and `abortAll()` would both only ever find the
+    // newcomer, so the original would outlive the run. Refusing the newcomer keeps the command already running
+    // abortable, exactly as `web-fetch-handlers.ts` does for a repeated request id. This sits **before** the spawn
+    // on purpose: refusing after the fact would still have started the process.
+    if (children.has(id)) {
+      refuse(id, new Error("Ignored a repeated call id; the command already running continues."));
+      return;
+    }
     const command = String(args[0]);
     const commandArgs = Array.isArray(args[1]) ? (args[1] as unknown[]).map(String) : [];
     const options = (args[args.length - 1] ?? {}) as WebNodeCommandOptions;

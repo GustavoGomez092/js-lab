@@ -107,8 +107,12 @@ interface BunResolveOrBuildMessage {
 
 /**
  * Bun.build's own resolve failure (a `ResolveMessage`) already carries the specifier and an accurate source
- * position (`position.line`/`position.column`, 0-indexed, plus `position.lineText`) -- there's no need to
- * reconstruct any of that ourselves for an ordinary missing package. Column is normalized to 1-indexed to match
+ * position -- there's no need to reconstruct any of that ourselves for an ordinary missing package. The two
+ * coordinates do NOT share an origin: `position.line` is **1-indexed** and `position.column` is **0-indexed**
+ * (an earlier version of this comment called both 0-indexed, which contradicted the code directly below it and
+ * would have invited a bogus `+ 1` on the line). That is exactly why `line` is passed through untouched while
+ * only `column` is normalized. `bundler.test.ts` pins it: an import on the first line of the entry reports
+ * `error.line === 1`. Column is normalized to 1-indexed to match
  * `Diagnostic.column` (`packages/transform/src/types.ts`), which the rest of the app's error presentation expects.
  */
 function fromBuildFailure(error: unknown): BundleError {

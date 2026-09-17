@@ -9,6 +9,8 @@ import { DEFAULT_BUILD_OPTIONS, transform } from "@jslab/transform";
 import { BunRunnerProcess } from "../../src/main/runs/bun-runner-process";
 import { RunCoordinator, type RunnerSettings } from "../../src/main/runs/run-coordinator";
 import { SparePool } from "../../src/main/runs/spare-pool";
+import type { RuntimeAdapter } from "../../src/main/runtimes/adapter";
+import { createRuntimeRegistry } from "../../src/main/runtimes/registry";
 
 const BOOTSTRAP = Bun.resolveSync("@jslab/runner-bun/bootstrap", import.meta.dir);
 
@@ -248,6 +250,69 @@ describe("RunCoordinator", () => {
       expect(outcome).toBe("exited");
     }
   }, 15_000);
+
+  /**
+   * Final review, finding D. `disposeTab` resolved its adapter with `#registry.get(undefined)`, which always
+   * returns the Bun adapter -- so closing a browser tab called `BunAdapter.dispose` (a no-op for a tab that never
+   * took a spare) and **never** `WebAdapter.dispose`, leaving the webview undestroyed and Main's own entry in
+   * place. Contrast `invalidate`, which was routed correctly all along.
+   *
+   * `web-adapter.test.ts`'s own "dispose() destroys the tab's webview" passes against the adapter in isolation and
+   * cannot see that nothing in production ever reaches it, so this asserts the wiring rather than the adapter.
+   */
+  test("closing a tab disposes it on every registered adapter, not just Bun's", () => {
+    const disposedByBun: string[] = [];
+    const disposedByBrowser: string[] = [];
+    const adapter = (id: RuntimeAdapter["id"], seen: string[]): RuntimeAdapter => ({
+      id,
+      prepare: async () => {},
+      start: async () => {
+        throw new Error("no run is started by this test");
+      },
+      invalidate: () => {},
+      dispose: async (tabId) => void seen.push(tabId),
+    });
+    const coordinator = new RunCoordinator({
+      transform: async () => {
+        throw new Error("nothing is transformed by this test");
+      },
+      spares: {
+        take: async () => {
+          throw new Error("no spare is taken by this test");
+        },
+        prepare: () => {},
+        invalidate: () => {},
+        dispose: () => {},
+      },
+      runsDir: join(tmpdir(), "jslab-dispose-routing"),
+      settings: () => ({
+        autoLog: true,
+        loopProtection: true,
+        loopProtectionMaxIterations: 2000,
+        maxEntries: 10_000,
+        unresponsiveTimeoutMs: 400,
+      }),
+      onEvents: () => {},
+      onState: () => {},
+      onDiagnostics: () => {},
+      runLock: { add: () => {}, remove: () => {} },
+      watchdogIntervalMs: 100_000,
+      runtimes: createRuntimeRegistry({
+        bun: adapter("bun", disposedByBun),
+        browser: adapter("browser", disposedByBrowser),
+      }),
+    });
+
+    try {
+      coordinator.disposeTab("t1");
+
+      // The half that was dead in production.
+      expect(disposedByBrowser).toEqual(["t1"]);
+      expect(disposedByBun).toEqual(["t1"]);
+    } finally {
+      coordinator.dispose();
+    }
+  });
 
   test("closing a tab while a runner is being taken leaves no runners behind", async () => {
     // onRunnerRequested fires while take() is awaiting the spare, which is the window this test is named for.

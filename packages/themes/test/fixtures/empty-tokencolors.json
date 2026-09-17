@@ -1,0 +1,9 @@
+{
+  "name": "JSLab Test Empty Tokens",
+  "type": "light",
+  "colors": {
+    "editor.background": "#FFFFFF",
+    "editor.foreground": "#1F2328"
+  },
+  "tokenColors": []
+}

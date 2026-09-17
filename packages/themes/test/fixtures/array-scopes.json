@@ -1,0 +1,13 @@
+{
+  "name": "JSLab Test Arrays",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#0F1115"
+  },
+  "tokenColors": [
+    { "scope": ["comment", "punctuation.definition.comment"], "settings": { "foreground": "#7A8290" } },
+    { "scope": "keyword, storage.type", "settings": { "foreground": "#C678DD" } },
+    { "scope": ["string", "string.regexp, constant.character.escape"], "settings": { "foreground": "#98C379" } },
+    { "scope": ["entity.name.function", "support.function"], "settings": { "foreground": "#61AFEF" } }
+  ]
+}

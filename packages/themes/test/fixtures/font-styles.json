@@ -1,0 +1,13 @@
+{
+  "name": "JSLab Test Font Styles",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#111318"
+  },
+  "tokenColors": [
+    { "scope": "comment", "settings": { "foreground": "#6B7280", "fontStyle": "italic" } },
+    { "scope": "keyword", "settings": { "foreground": "#C792EA", "fontStyle": "bold" } },
+    { "scope": "entity.name.tag", "settings": { "fontStyle": "underline" } },
+    { "scope": "entity.other.attribute-name", "settings": { "fontStyle": "italic underline" } }
+  ]
+}

@@ -6,6 +6,11 @@ export * from "./build";
 export * from "./contrast";
 export * from "./palettes";
 export * from "./tokens";
+// The VS Code importer (spec §9.3). Tasks 6-8 reach `convertVsCodeTheme` and the two modules it is built from
+// through this barrel, which is the only entry point `@jslab/themes` exposes.
+export * from "./vscode/convert";
+export * from "./vscode/derive";
+export * from "./vscode/scopes";
 
 // One source for the default theme ids: the settings defaults (Task 3) and theme resolution read the same constants.
 export { DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME };

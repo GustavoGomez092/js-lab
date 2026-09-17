@@ -617,3 +617,151 @@ describe("the vendor/app split", () => {
     expect(vendor.code).toContain("body { color: teal; }");
   });
 });
+
+/**
+ * The `browser` export condition at a package's entry point.
+ *
+ * `jslabResolve` resolves a bare specifier with `Bun.resolveSync` and hands `Bun.build` the resulting **file
+ * path**, which is what gives the plugin its working-directory-first precedence and its containment check against
+ * Bun's ancestor walk. The cost, until this was fixed: `Bun.resolveSync` is the *runtime* resolver and has no
+ * `browser` condition, so it picks the `default`/`node` branch of an `exports` map -- and because the plugin hands
+ * back a concrete path, `Bun.build({target:"browser"})` never gets to apply the `browser` condition it would have
+ * chosen on its own. Measured against the same fixture: plain `Bun.build` picks the browser entry, while
+ * `Bun.resolveSync` picks the node one.
+ *
+ * Reported as: `import { nanoid } from 'nanoid'` in a browser tab dying with
+ * `ReferenceError: Can't find variable: Buffer`. nanoid@6.0.1's `exports["."]` is
+ * `{ browser: "./index.browser.js", default: "./index.js" }`, and its `default` entry calls `Buffer.allocUnsafe`
+ * -- a **free global**, not an import, so `nodePolyfills`'s builtin-blocking resolve hook never sees it, the build
+ * succeeds, and the page throws at run time instead.
+ *
+ * These tests assert on the bundle **text** rather than executing it. Executing would be vacuous: `runJoinedModule`
+ * evaluates under Bun, which has a real `Buffer` global, so the node entry runs perfectly there and the assertion
+ * could never fail. The browser's missing `Buffer` is exactly what the test process cannot reproduce, so the
+ * presence of the node entry's source in the chunk is the thing to pin.
+ */
+describe("the browser export condition", () => {
+  /** A package with distinct node and browser entries, the node one referencing a browser-absent global. */
+  async function writeDualEntryPackage(nodeModulesDir: string, name: string, tag: string, pkgJson: object) {
+    const pkgDir = join(nodeModulesDir, name);
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(join(pkgDir, "package.json"), JSON.stringify({ name, type: "module", ...pkgJson }));
+    // `gen` is built by a factory CALLED AT MODULE INIT, mirroring nanoid's own
+    // `export const nanoid = customAlphabet(urlAlphabet)`. That shape is load-bearing: a `Buffer` reference
+    // reachable only from an unused export is tree-shaken out of the chunk, and the test would pass vacuously.
+    await writeFile(
+      join(pkgDir, "index.js"),
+      [
+        "function make() { return (n) => Buffer.allocUnsafe(n).toString('latin1'); }",
+        "export const gen = make();",
+        `export const which = '${tag}-NODE-ENTRY';`,
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(pkgDir, "index.browser.js"),
+      [`export const gen = (n) => 'x'.repeat(n);`, `export const which = '${tag}-BROWSER-ENTRY';`, ""].join("\n"),
+    );
+  }
+
+  /** nanoid@6.0.1's exact entry shape: a `browser` condition beside a `default` one. */
+  const BROWSER_CONDITION_EXPORTS = {
+    browser: { ".": { browser: "./index.browser.js", default: "./index.js" } },
+    browserField: { "./index.js": "./index.browser.js" },
+  };
+
+  for (const runtime of ["browser", "browser-node"] as const) {
+    test(`${runtime}: a package with a browser export condition bundles its browser entry, not its node one`, async () => {
+      await writeDualEntryPackage(packagesNodeModules, "dual-pkg", "P", {
+        exports: BROWSER_CONDITION_EXPORTS.browser,
+        browser: BROWSER_CONDITION_EXPORTS.browserField,
+      });
+      const entry = join(workingDirectory, "entry.js");
+      await writeFile(entry, "import { gen, which } from 'dual-pkg';\nglobalThis.__jlProbe = which + gen(3);\n");
+
+      const app = await bundleAppForWeb({ entry, runtime, workingDirectory, packagesNodeModules, dataDir });
+      expect("error" in app).toBe(false);
+      if ("error" in app) return;
+      const vendor = await bundleVendorForWeb({
+        imports: app.imports,
+        runtime,
+        workingDirectory,
+        packagesNodeModules,
+        dataDir,
+      });
+      expect("error" in vendor).toBe(false);
+      if ("error" in vendor) return;
+      const joined = joinVendorAndApp(vendor.code, app.code);
+
+      expect(joined).toContain("P-BROWSER-ENTRY");
+      expect(joined).not.toContain("P-NODE-ENTRY");
+      // The user-visible symptom: a free `Buffer` reference surviving into a chunk that runs in a page with none.
+      expect(joined).not.toContain("Buffer.allocUnsafe");
+    });
+  }
+
+  test("a subpath export with a browser condition also resolves to its browser entry", async () => {
+    const pkgDir = join(packagesNodeModules, "subpath-pkg");
+    await mkdir(join(pkgDir, "feature"), { recursive: true });
+    await writeFile(
+      join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "subpath-pkg",
+        type: "module",
+        exports: { "./feature": { browser: "./feature/browser.js", default: "./feature/node.js" } },
+      }),
+    );
+    await writeFile(join(pkgDir, "feature", "node.js"), "export const which = 'SUB-NODE-ENTRY';\n");
+    await writeFile(join(pkgDir, "feature", "browser.js"), "export const which = 'SUB-BROWSER-ENTRY';\n");
+    const entry = join(workingDirectory, "entry.js");
+    await writeFile(entry, "import { which } from 'subpath-pkg/feature';\nglobalThis.__jlProbe = which;\n");
+
+    expect(await runJoinedModule(await bundleAndJoin(entry))).toBe("SUB-BROWSER-ENTRY");
+  });
+
+  // The override must not reach past the containment check that keeps resolution inside the two intended
+  // directories. If it re-resolved from the wrong base, this would load the shared folder's copy instead.
+  test("working-directory precedence still wins for a package that has a browser condition in both places", async () => {
+    await writeDualEntryPackage(join(workingDirectory, "node_modules"), "dual-pkg", "WD", {
+      exports: BROWSER_CONDITION_EXPORTS.browser,
+    });
+    await writeDualEntryPackage(packagesNodeModules, "dual-pkg", "PKGS", {
+      exports: BROWSER_CONDITION_EXPORTS.browser,
+    });
+    const entry = join(workingDirectory, "entry.js");
+    await writeFile(entry, "import { which } from 'dual-pkg';\nglobalThis.__jlProbe = which;\n");
+
+    const app = await bundleAppForWeb({ entry, runtime: "browser", workingDirectory, packagesNodeModules, dataDir });
+    expect("error" in app).toBe(false);
+    if ("error" in app) return;
+    // Resolved out of the working directory, so the chunk stays unkeyable -- the override must not hide provenance.
+    expect(app.vendorCacheable).toBe(false);
+    expect(await runJoinedModule(await bundleAndJoin(entry))).toBe("WD-BROWSER-ENTRY");
+  });
+
+  // The override fires only for packages that actually declare a browser entry. Everything else must resolve
+  // exactly as it did before, or this fix would silently repoint packages it has no business touching.
+  test("a package with an exports map but no browser condition still resolves to its default entry", async () => {
+    const pkgDir = join(packagesNodeModules, "plain-exports-pkg");
+    await mkdir(pkgDir, { recursive: true });
+    await writeFile(
+      join(pkgDir, "package.json"),
+      JSON.stringify({ name: "plain-exports-pkg", type: "module", exports: { ".": { default: "./main.js" } } }),
+    );
+    await writeFile(join(pkgDir, "main.js"), "export const which = 'PLAIN-DEFAULT-ENTRY';\n");
+    const entry = join(workingDirectory, "entry.js");
+    await writeFile(entry, "import { which } from 'plain-exports-pkg';\nglobalThis.__jlProbe = which;\n");
+
+    expect(await runJoinedModule(await bundleAndJoin(entry))).toBe("PLAIN-DEFAULT-ENTRY");
+  });
+
+  test("a package with no exports map at all is untouched", async () => {
+    await writePackage(packagesNodeModules, "no-exports-pkg", "export const which = 'NO-EXPORTS-ENTRY';", {
+      type: "module",
+    });
+    const entry = join(workingDirectory, "entry.js");
+    await writeFile(entry, "import { which } from 'no-exports-pkg';\nglobalThis.__jlProbe = which;\n");
+
+    expect(await runJoinedModule(await bundleAndJoin(entry))).toBe("NO-EXPORTS-ENTRY");
+  });
+});

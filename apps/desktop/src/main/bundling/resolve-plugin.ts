@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import type { BunPlugin } from "bun";
 import type { BundleError } from "./bundler";
@@ -73,6 +73,133 @@ export interface ResolveContext {
 }
 
 /**
+ * The conditions a browser-targeted build matches. `node` is deliberately absent: selecting it is exactly the
+ * defect the functions below exist to close.
+ *
+ * Membership is tested against the **package's own key order**, never this set's, because the `exports` algorithm
+ * is "the first key of the object that the active condition set matches" -- a package listing `default` before
+ * `browser` means it, and reordering it here would be a different (wrong) answer.
+ */
+const BROWSER_CONDITIONS = new Set(["browser", "import", "module", "default"]);
+
+/** An `exports` object is a subpath map only when it is keyed by subpaths; otherwise it is a condition map for `.`. */
+function isSubpathMap(exports: Record<string, unknown>): boolean {
+  return Object.keys(exports).some((key) => key.startsWith("."));
+}
+
+/**
+ * Whether a `browser` condition appears anywhere in this export target. This is the **gate** on overriding at all:
+ * a package that never mentions `browser` keeps `Bun.resolveSync`'s answer byte for byte, so the overwhelming
+ * majority of packages resolve exactly as they did before this fix and cannot be repointed by it.
+ */
+function declaresBrowserCondition(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(declaresBrowserCondition);
+  if (node && typeof node === "object") {
+    return Object.entries(node as Record<string, unknown>).some(
+      ([key, value]) => key === "browser" || declaresBrowserCondition(value),
+    );
+  }
+  return false;
+}
+
+/** Walks an export target under the browser condition set, returning the first relative path it selects. */
+function selectBrowserTarget(node: unknown): string | undefined {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) {
+    for (const candidate of node) {
+      const selected = selectBrowserTarget(candidate);
+      if (selected !== undefined) return selected;
+    }
+    return undefined;
+  }
+  if (node && typeof node === "object") {
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (!BROWSER_CONDITIONS.has(key)) continue;
+      const selected = selectBrowserTarget(value);
+      if (selected !== undefined) return selected;
+    }
+  }
+  return undefined;
+}
+
+/** Splits `@scope/name/sub` into its package name and the `.`-relative subpath an `exports` map is keyed by. */
+function splitSpecifier(specifier: string): { packageName: string; subpath: string } {
+  const segments = specifier.split("/");
+  const nameSegments = specifier.startsWith("@") ? 2 : 1;
+  const rest = segments.slice(nameSegments).join("/");
+  return { packageName: segments.slice(0, nameSegments).join("/"), subpath: rest ? `./${rest}` : "." };
+}
+
+/** The export target for one subpath: an exact key, else the `*` pattern key that matches (with what `*` captured). */
+function exportsEntryFor(
+  exports: Record<string, unknown>,
+  subpath: string,
+): { target: unknown; star: string | null } | undefined {
+  if (!isSubpathMap(exports)) return subpath === "." ? { target: exports, star: null } : undefined;
+  if (exports[subpath] !== undefined) return { target: exports[subpath], star: null };
+  for (const [key, value] of Object.entries(exports)) {
+    const starIndex = key.indexOf("*");
+    if (starIndex < 0) continue;
+    const prefix = key.slice(0, starIndex);
+    const suffix = key.slice(starIndex + 1);
+    if (subpath.length < prefix.length + suffix.length) continue;
+    if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix)) continue;
+    return { target: value, star: subpath.slice(prefix.length, subpath.length - suffix.length) };
+  }
+  return undefined;
+}
+
+/**
+ * The `browser` entry a browser-targeted build would have chosen for `specifier`, or undefined to keep the path
+ * `Bun.resolveSync` already produced.
+ *
+ * **Why this exists.** `resolveBareSpecifier` resolves through `Bun.resolveSync`, which is Bun's *runtime*
+ * resolver: it has no `browser` condition, so it takes the `node`/`default` branch of an `exports` map. Because
+ * `jslabResolve` then hands `Bun.build` a concrete **file path**, `Bun.build({target:"browser"})` never gets the
+ * chance to apply the `browser` condition it would have chosen on its own -- the plugin has already decided.
+ * Measured on one fixture: plain `Bun.build` picks the browser entry where `Bun.resolveSync` picks the node one.
+ *
+ * Reported as `import { nanoid } from 'nanoid'` failing in a browser tab with
+ * `ReferenceError: Can't find variable: Buffer`: nanoid@6.0.1's `exports["."]` is
+ * `{ browser: "./index.browser.js", default: "./index.js" }`, and its `default` entry calls `Buffer.allocUnsafe`.
+ * That `Buffer` is a **free global rather than an import**, so `nodePolyfills`'s builtin-blocking resolve hook
+ * never sees it and the build succeeds -- the failure lands at run time in the page instead of at bundle time.
+ *
+ * Scope, deliberately: only the `exports` map is consulted. The top-level `browser` *field* is NOT honoured here,
+ * because Bun does not honour it either -- measured on a `{"main":"./index.js","browser":"./index.browser.js"}`
+ * package with **no plugin in the build at all**, where `Bun.build({target:"browser"})` still bundled the `main`
+ * entry. Reading that field here would make JSLab diverge from Bun rather than match it. It is recorded as a
+ * separate known gap instead.
+ */
+export function browserEntryFor(specifier: string, resolved: string): string | undefined {
+  const { packageName, subpath } = splitSpecifier(specifier);
+  const marker = `${sep}node_modules${sep}${packageName}${sep}`;
+  // `lastIndexOf`, so a nested `node_modules` copy names its own package root rather than an outer one's.
+  const index = resolved.lastIndexOf(marker);
+  if (index < 0) return undefined;
+  const packageRoot = resolved.slice(0, index + marker.length - 1);
+
+  let manifest: { exports?: unknown };
+  try {
+    manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { exports?: unknown };
+  } catch {
+    return undefined; // unreadable or unparseable manifest: keep Bun's answer rather than guess
+  }
+  if (!manifest.exports || typeof manifest.exports !== "object") return undefined;
+
+  const entry = exportsEntryFor(manifest.exports as Record<string, unknown>, subpath);
+  if (!entry || !declaresBrowserCondition(entry.target)) return undefined;
+  const selected = selectBrowserTarget(entry.target);
+  if (selected === undefined || !selected.startsWith("./")) return undefined;
+
+  const candidate = join(packageRoot, entry.star === null ? selected : selected.replaceAll("*", entry.star));
+  // An export target must stay inside its own package, and must actually exist. Either failing means the manifest
+  // is describing something this resolver does not understand, and Bun's original answer is the safer one.
+  if (!candidate.startsWith(packageRoot + sep) || !existsSync(candidate)) return undefined;
+  return candidate;
+}
+
+/**
  * Resolves a bare specifier with the same precedence `runnerEnvironment` gives `NODE_PATH` for the Bun runner
  * (`apps/desktop/src/main/app-paths.ts:102-104`): the working directory's `node_modules` first, then the app's
  * shared packages `node_modules`. Returns undefined when neither has it.
@@ -105,7 +232,9 @@ export function resolveBareSpecifier(specifier: string, ctx: ResolveContext): st
     const nodeModulesPrefix = join(realBase, "node_modules") + sep;
     try {
       const resolved = Bun.resolveSync(specifier, base);
-      if (realpathSync(resolved).startsWith(nodeModulesPrefix)) return resolved;
+      // The containment check runs against Bun's own answer, so precedence and the ancestor-walk guard are decided
+      // exactly as before; `browserEntryFor` only ever repoints within the package that check already accepted.
+      if (realpathSync(resolved).startsWith(nodeModulesPrefix)) return browserEntryFor(specifier, resolved) ?? resolved;
     } catch {
       // not found at this candidate; try the next one
     }

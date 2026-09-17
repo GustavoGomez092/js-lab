@@ -441,7 +441,7 @@ The encoding is JSON-safe and tagged. The full type is in Appendix B. Rules:
 |---|---|
 | Eager depth | 3 levels; deeper values become `handle` |
 | Properties per object eagerly | 100; the rest are available through a handle (`more: n`) |
-| Collection entries (Array/Map/Set/typed arrays) | 1,000 eagerly; the rest through a handle |
+| Collection entries (Array/Map/Set/typed arrays) | 1,000 eagerly; the rest through a handle, **a page at a time** — `run.expand` takes an `offset`, and each reply carries `from` (this page's first index), `more` (entries beyond it) and `next` (the offset for the following page). Object properties above are *not* paged: they report `more` and stop. |
 | String preview | 10,000 chars; full text through a handle, up to 1 MB |
 | Per-event encoded size | 256 KB; beyond that, the root becomes a handle with a preview |
 

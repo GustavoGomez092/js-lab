@@ -156,8 +156,11 @@ scenario; this pass checks them by eye.
 7. **`process.memoryUsage()` is not available in `browser-node`.** That runtime's `process` is a page-load
    snapshot (`env`, `cwd()`, `platform`, `argv`, `versions`, plus a microtask-queue `nextTick`); `memoryUsage` is
    implemented nowhere in `packages/runner-web`. It is available in `bun`, which runs a real Bun process.
-8. **Large collections still stop at 10,000 entries.** Paging for expanded collections was listed for M4 and did
-   not land; entries past the first 10,000 aren't reachable (parity OU-02).
+8. **Large collections page rather than stop (closed in M5).** An expanded Array, Map, Set or typed array offers
+   "… N more entries" and loads the next page through `run.expand`'s `offset`; the button always states the exact
+   remainder, so nothing is dropped silently. Object properties are deliberately **not** paged (spec §5.9 lists
+   them as a separate row) — an object past `maxProps` states its remainder without offering a page. The `browser`
+   and `browser-node` runtimes carry the same wire field but have no real-process integration test for it.
 
 ## Automated suites
 

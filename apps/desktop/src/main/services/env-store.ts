@@ -1,6 +1,7 @@
-import { chmod, readFile, rename, stat } from "node:fs/promises";
+import { chmod, rename, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { type EnvVars, envFileSchema, envVarsSchema } from "@jslab/shared";
+import { MAX_STATE_FILE_BYTES, readBoundedText } from "../files/bounded-read";
 import { type AtomicWriteOptions, writeFileAtomic } from "../persistence/atomic-write";
 
 export const ENV_FILE_MODE = 0o600;
@@ -24,7 +25,7 @@ export class EnvStore {
     const write = options.write ?? writeFileAtomic;
     let text: string | null;
     try {
-      text = await readFile(path, "utf8");
+      text = await readBoundedText(path, MAX_STATE_FILE_BYTES);
     } catch (error) {
       // FR-2: only a missing file means "no environment yet". Any other read failure (EACCES, EIO, EBUSY, ...)
       // must fail the caller instead of silently returning an empty store, since the next save() would then

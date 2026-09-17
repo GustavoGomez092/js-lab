@@ -13,6 +13,7 @@ import {
 } from "../bundling/bundler";
 import { resolveBareSpecifier, resolvedFromWorkingDirectory } from "../bundling/resolve-plugin";
 import { type CachedVendorChunk, hashBunLock, type VendorCache, vendorCacheKey } from "../bundling/vendor-cache";
+import { MAX_STATE_FILE_BYTES, readBoundedText } from "../files/bounded-read";
 import type { Redactor } from "../logging/redact";
 import type { Log } from "../rpc/validate";
 import { createWebFetchRunner, type WebFetchRunner } from "../rpc/web-fetch-handlers";
@@ -875,7 +876,11 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
 }
 
 async function readBunLockFile(path: string): Promise<string> {
-  return Bun.file(path).text();
+  // `bun.lock` is written into the packages folder by JSLab's own installs, so MAX_STATE_FILE_BYTES bounds it for
+  // the same reason it bounds the other files JSLab writes. Not `Bun.file(path).text()`: that reads the whole
+  // file before its size can be judged and cannot obtain O_NONBLOCK. A refusal is caught by `vendorKeyFor`'s own
+  // catch, which already treats an unreadable lock as "don't touch the cache for this run".
+  return readBoundedText(path, MAX_STATE_FILE_BYTES);
 }
 
 /**

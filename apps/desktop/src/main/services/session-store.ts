@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, unlink } from "node:fs/promises";
+import { mkdir, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   bufferFileName,
@@ -20,6 +20,7 @@ import {
   type WindowState,
   windowStateSchema,
 } from "@jslab/shared";
+import { MAX_STATE_FILE_BYTES, readBoundedText } from "../files/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 import {
   createDebouncedWriter,
@@ -207,7 +208,10 @@ export class SessionStore {
     if (!tab) return "";
     if (this.#repairErrors.has(tabId)) this.#failUnreadable(tabId, this.#repairErrors.get(tabId));
     try {
-      const content = await readFile(this.#bufferPath(tab), "utf8");
+      // A buffer holds one tab's text, which the RPC boundary already caps at MAX_TEXT_CHARS -- so
+      // MAX_STATE_FILE_BYTES is a tight bound here, not a loose one, and a FIFO or a multi-gigabyte file left at
+      // a buffer path is refused instead of read.
+      const content = await readBoundedText(this.#bufferPath(tab), MAX_STATE_FILE_BYTES);
       this.#unreadableBuffers.delete(tabId);
       return content;
     } catch (error) {
@@ -304,7 +308,7 @@ export class SessionStore {
     const { tab } = entry;
     const closedPath = join(this.dataDir, "buffers", closedBufferFileName(tab));
     // Same rule as readBuffer: a closed buffer that exists but can't be read is never replaced by an empty one.
-    const content = await readFile(closedPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    const content = await readBoundedText(closedPath, MAX_STATE_FILE_BYTES).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return "";
       throw error;
     });

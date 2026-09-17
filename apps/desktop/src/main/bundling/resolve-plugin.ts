@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import type { BunPlugin } from "bun";
+import { MAX_NODE_MODULES_FILE_BYTES, MAX_SOURCE_FILE_BYTES, readBoundedTextSync } from "../files/bounded-read";
 import type { BundleError } from "./bundler";
 import { buildCodeFrame, locateImport } from "./locate-import";
 import { isNodeBuiltin } from "./node-builtins";
@@ -296,7 +297,11 @@ export function browserEntryFor(
 
   let manifest: { exports?: unknown; browser?: unknown };
   try {
-    manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
+    // Bounded before it allocates, and opened with O_NONBLOCK: this runs on Main's own thread inside a
+    // `Bun.build` resolve callback, so a FIFO named `package.json` in `node_modules` would otherwise freeze the
+    // whole app, not merely fail this resolution. The refusal lands in the catch below like any unreadable
+    // manifest and Bun's own answer is kept.
+    manifest = JSON.parse(readBoundedTextSync(join(packageRoot, "package.json"), MAX_NODE_MODULES_FILE_BYTES)) as {
       exports?: unknown;
       browser?: unknown;
     };
@@ -459,9 +464,11 @@ export function jslabResolve(
 
         let location: ReturnType<typeof locateImport>;
         try {
-          location = locateImport(readFileSync(args.importer, "utf8"), args.path);
+          location = locateImport(readBoundedTextSync(args.importer, MAX_SOURCE_FILE_BYTES), args.path);
         } catch {
-          // best effort only; fall back to an unpositioned error below
+          // Best effort only; fall back to an unpositioned error below. Note the bound is NOT what this catch
+          // provides: catching a throw cannot rescue a *blocking* syscall, and `readFileSync` on a FIFO blocks
+          // Main's thread with nothing to catch. The bound comes from the reader, and the catch handles the rest.
         }
         onError({
           message: `Cannot find module '${args.path}'. It isn't installed in this project or the shared packages folder.`,

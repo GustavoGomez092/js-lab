@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileTooLargeError, NotARegularFileError, readBoundedText } from "../../src/main/files/bounded-read";
+import {
+  FileTooLargeError,
+  NotARegularFileError,
+  readBoundedText,
+  readBoundedTextSync,
+} from "../../src/main/files/bounded-read";
 
 let dir = "";
 beforeEach(async () => {
@@ -116,5 +121,97 @@ describe("readBoundedText (R-M5b-S2)", () => {
     expect(error).not.toBeInstanceOf(FileTooLargeError);
     expect(error).not.toBeInstanceOf(NotARegularFileError);
     expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  });
+});
+
+/**
+ * The two readers the sweep added. Each gets the same memory assertion `readBoundedText` gets, and for the same
+ * reason: the error type cannot tell a refusal from a read-then-refuse, because both throw FileTooLargeError.
+ * Only the cost separates them.
+ */
+describe("readBoundedBytes / readBoundedTextSync (R-M5b-S2 sweep)", () => {
+  test("readBoundedBytes refuses an over-cap file WITHOUT reading its bytes into memory", async () => {
+    const path = join(dir, "huge.bin");
+    await sparseFile(path, OVER_CAP);
+
+    // Measured in a *fresh process*, and that is load-bearing rather than tidy. RSS never shrinks, so once an
+    // earlier test in this file has mapped 512 MB, a second 512 MB read reuses those pages and the delta
+    // collapses to near zero. Measured: with the size check moved after the read, this assertion passed
+    // in-process at a 0 MB delta while the identical assertion one test above failed at 512 MB -- it was
+    // proving the order the tests happen to run in, not the reader. A child process has its own baseline.
+    const reader = join(import.meta.dir, "..", "..", "src", "main", "files", "bounded-read.ts");
+    const script = [
+      `const { readBoundedBytes } = await import(${JSON.stringify(reader)});`,
+      `const before = process.memoryUsage().rss;`,
+      `let bytes;`,
+      `try { bytes = await readBoundedBytes(${JSON.stringify(path)}, ${CAP}); }`,
+      `catch (error) { console.log("ERR:" + error.name); }`,
+      `const after = process.memoryUsage().rss;`,
+      // `bytes` is read only here, after the second sample, so a mutant's buffer stays reachable until measured.
+      `console.log("LEN:" + (bytes ? bytes.byteLength : 0));`,
+      `console.log("DELTA:" + Math.round((after - before) / ${MB}));`,
+    ].join("\n");
+    const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "ignore" });
+    await child.exited;
+    const out = await new Response(child.stdout).text();
+
+    expect(out).toContain("ERR:FileTooLargeError");
+    expect(out).toContain("LEN:0");
+    expect(Number(/DELTA:(-?\d+)/.exec(out)?.[1] ?? Number.NaN)).toBeLessThan(64);
+  });
+
+  test("readBoundedTextSync refuses an over-cap file WITHOUT reading its bytes into memory", async () => {
+    const path = join(dir, "huge-sync.json");
+    await sparseFile(path, OVER_CAP);
+
+    const before = process.memoryUsage().rss;
+    let text: string | undefined;
+    let error: unknown;
+    try {
+      text = readBoundedTextSync(path, CAP);
+    } catch (caught) {
+      error = caught;
+    }
+    const after = process.memoryUsage().rss;
+
+    expect(error).toBeInstanceOf(FileTooLargeError);
+    expect((error as FileTooLargeError).size).toBe(OVER_CAP);
+    expect(text?.length ?? 0).toBe(0);
+    expect((after - before) / MB).toBeLessThan(64);
+  });
+
+  test("readBoundedTextSync returns a file under the cap, and refuses a directory", async () => {
+    const path = join(dir, "small.ts");
+    await writeFile(path, "const a = 1;\n");
+    expect(readBoundedTextSync(path, CAP)).toBe("const a = 1;\n");
+    expect(readBoundedTextSync(path, 13)).toBe("const a = 1;\n");
+    expect(() => readBoundedTextSync(path, 12)).toThrow(FileTooLargeError);
+
+    const asDirectory = join(dir, "a-dir");
+    await mkdir(asDirectory);
+    expect(() => readBoundedTextSync(asDirectory, CAP)).toThrow(NotARegularFileError);
+  });
+
+  test("readBoundedTextSync refuses a FIFO rather than blocking Main's own thread", async () => {
+    const fifo = join(dir, "pipe.log");
+    expect(await Bun.spawn(["mkfifo", fifo]).exited).toBe(0);
+    // In a child with a hard kill, never in-process: this is the *sync* reader, so a lost O_NONBLOCK blocks the
+    // thread itself and no in-process timeout could ever reclaim it -- the gate would hang rather than fail.
+    const reader = join(import.meta.dir, "..", "..", "src", "main", "files", "bounded-read.ts");
+    const script = [
+      `const { readBoundedTextSync } = await import(${JSON.stringify(reader)});`,
+      `try { readBoundedTextSync(${JSON.stringify(fifo)}, 1024); console.log("READ"); }`,
+      `catch (error) { console.log(error.name); }`,
+    ].join("\n");
+    const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "ignore" });
+    // 3 s, deliberately under bun's 5 s per-test timeout: past it the timeout preempts this race and the SIGKILL
+    // below never runs, leaking a process parked on the FIFO forever.
+    const outcome = await Promise.race([child.exited.then(() => "exited"), Bun.sleep(3_000).then(() => "blocked")]);
+    if (outcome === "blocked") {
+      child.kill("SIGKILL");
+      await child.exited;
+    }
+    expect(outcome).toBe("exited");
+    expect((await new Response(child.stdout).text()).trim()).toBe("NotARegularFileError");
   });
 });

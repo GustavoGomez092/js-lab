@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 /*
  * Task 10 (spec §5.13): every import below reads a `packages/runner-web/src/polyfills/**` file's raw text at
@@ -50,6 +49,7 @@ import processSrc from "@jslab/runner-web/polyfills/process.ts.txt" with { type:
 import type { Runtime } from "@jslab/shared";
 import type { BunPlugin } from "bun";
 import { runnerEnvironment } from "../app-paths";
+import { MAX_SOURCE_FILE_BYTES, readBoundedTextSync } from "../files/bounded-read";
 import type { BundleError } from "./bundler";
 import { buildCodeFrame, locateImport } from "./locate-import";
 import { isNodeBuiltin, stripNodePrefix } from "./node-builtins";
@@ -439,9 +439,11 @@ export function nodePolyfills(
           if (!isNodeBuiltin(args.path)) return undefined;
           let location: ReturnType<typeof locateImport>;
           try {
-            location = locateImport(readFileSync(args.importer, "utf8"), args.path);
+            location = locateImport(readBoundedTextSync(args.importer, MAX_SOURCE_FILE_BYTES), args.path);
           } catch {
-            // best effort only; fall back to an unpositioned error below
+            // Best effort only; fall back to an unpositioned error below. The catch is not what bounds this: it
+            // cannot rescue a blocking syscall, and `readFileSync` on a FIFO blocks Main's own thread with
+            // nothing to catch. The reader supplies the bound; this handles everything after it.
           }
           onError({
             message: `Cannot find module '${args.path}'. Node built-ins aren't available in the Browser runtime.`,

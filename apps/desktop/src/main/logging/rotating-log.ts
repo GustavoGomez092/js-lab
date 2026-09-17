@@ -1,5 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { readBoundedTextSync } from "../files/bounded-read";
 import type { Redactor } from "./redact";
 
 export type LogLevel = "error" | "warn" | "info" | "debug";
@@ -105,8 +106,17 @@ export class RotatingLog {
       // A missing live file (deleted from under us, or not yet created) must not stop reading older rotated
       // files behind it (I-2): continue past it rather than breaking out of the loop.
       if (!existsSync(file)) continue;
-      const fileLines = readFileSync(file, "utf8").split("\n").filter(Boolean);
-      lines.unshift(...fileLines);
+      // Bounded by this log's own rotation size -- the one number that says how big a file this class intends to
+      // produce. A file past it is one whose rotation has been failing (see `write`, which keeps appending rather
+      // than throwing), and the debug report reads the older, bounded slots instead of pulling an unbounded file
+      // into Main. `readFileSync` here would block Main's thread outright on a FIFO left at a log path.
+      let text: string;
+      try {
+        text = readBoundedTextSync(file, this.options.maxBytes ?? 5 * 1024 * 1024);
+      } catch {
+        continue;
+      }
+      lines.unshift(...text.split("\n").filter(Boolean));
     }
     return lines.slice(-count);
   }

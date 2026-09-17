@@ -1,5 +1,6 @@
-import { copyFile, readFile } from "node:fs/promises";
+import { copyFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { MAX_STATE_FILE_BYTES, readBoundedText } from "../files/bounded-read";
 
 export type Recovery = "none" | "backup" | "defaults";
 
@@ -24,7 +25,10 @@ type ReadResult<T> = { ok: true; value: T } | { ok: false; reason: "missing" | "
 async function tryRead<T>(path: string, parser: Parser<T>): Promise<ReadResult<T>> {
   let text: string;
   try {
-    text = await readFile(path, "utf8");
+    // Bounded at the read (R-M5b-S2 follow-up): an oversized or non-regular file is refused from the opened
+    // handle's `fstat`, before any allocation, so it lands in the "corrupt" branch below without ever having
+    // been loaded. Reading first and judging afterwards would bound the parse and not the read.
+    text = await readBoundedText(path, MAX_STATE_FILE_BYTES);
   } catch (error) {
     return { ok: false, reason: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "corrupt" };
   }

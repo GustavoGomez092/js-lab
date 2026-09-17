@@ -1,6 +1,7 @@
-import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Runtime } from "@jslab/shared";
+import { readBoundedText } from "../files/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 
 /**
@@ -286,8 +287,11 @@ export class VendorCache {
     }
     try {
       const [code, map] = await Promise.all([
-        readFile(this.#codePath(key), "utf8"),
-        readFile(this.#mapPath(key), "utf8"),
+        // No single file in this directory may exceed the directory's own total cap, so that cap bounds each
+        // read; a `.js`/`.js.map` past it, or a FIFO left in a hand-edited cache dir, is refused before it is
+        // allocated and falls into the mismatch-repair branch below like any other unreadable half of a pair.
+        readBoundedText(this.#codePath(key), VENDOR_CACHE_MAX_TOTAL_BYTES),
+        readBoundedText(this.#mapPath(key), VENDOR_CACHE_MAX_TOTAL_BYTES),
       ]);
       return { code, map, closure: entry.closure ?? null };
     } catch {
@@ -384,7 +388,7 @@ export class VendorCache {
   async #readIndex(): Promise<VendorCacheIndex> {
     let raw: string;
     try {
-      raw = await readFile(this.#indexPath(), "utf8");
+      raw = await readBoundedText(this.#indexPath(), VENDOR_CACHE_MAX_TOTAL_BYTES);
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return {};
       return this.#rebuildIndexFromDisk();

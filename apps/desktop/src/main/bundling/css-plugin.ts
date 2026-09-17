@@ -1,4 +1,5 @@
 import type { BunPlugin } from "bun";
+import { MAX_SOURCE_FILE_BYTES, readBoundedText } from "../files/bounded-read";
 
 /**
  * Builds the JS source a `.css` import is replaced with: a module whose only job is to append a `<style>` element
@@ -23,7 +24,7 @@ export function cssInject(): BunPlugin {
     name: "jslab-css-inject",
     setup(build) {
       build.onLoad({ filter: /\.css$/ }, async (args) => {
-        const contents = await Bun.file(args.path).text();
+        const contents = await readBoundedText(args.path, MAX_SOURCE_FILE_BYTES);
         return { contents: cssModuleSource(contents), loader: "js" };
       });
     },

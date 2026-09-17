@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type DeepPartial,
@@ -8,6 +7,7 @@ import {
   type Settings,
   settingsParser,
 } from "@jslab/shared";
+import { MAX_STATE_FILE_BYTES, readBoundedText } from "../files/bounded-read";
 import { type AtomicWriteOptions, writeFileAtomic } from "../persistence/atomic-write";
 import {
   createDebouncedWriter,
@@ -20,7 +20,7 @@ import { strings } from "../strings";
 
 async function storedVersion(path: string): Promise<number | null> {
   try {
-    const raw = JSON.parse(await readFile(path, "utf8")) as { version?: unknown };
+    const raw = JSON.parse(await readBoundedText(path, MAX_STATE_FILE_BYTES)) as { version?: unknown };
     return typeof raw.version === "number" ? raw.version : 1;
   } catch {
     return null;

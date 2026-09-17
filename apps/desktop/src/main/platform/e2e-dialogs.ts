@@ -1,11 +1,12 @@
-import { readFile, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
+import { MAX_STATE_FILE_BYTES, readBoundedText } from "../files/bounded-read";
 
 /** JSLAB_E2E=1 only: native dialogs can't be driven over the socket, so the harness writes the answers. */
 async function take(dataDir: string, name: string): Promise<unknown> {
   const path = join(dataDir, name);
   try {
-    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+    const value = JSON.parse(await readBoundedText(path, MAX_STATE_FILE_BYTES)) as unknown;
     await rm(path, { force: true });
     return value;
   } catch {

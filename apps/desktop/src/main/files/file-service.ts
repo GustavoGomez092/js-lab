@@ -3,6 +3,7 @@ import { MAX_OPEN_FILE_BYTES } from "@jslab/rpc-schema";
 import { baseName, contentHash } from "@jslab/shared";
 import { writeFileAtomic } from "../persistence/atomic-write";
 import { strings } from "../strings";
+import { FileTooLargeError, readBoundedBytes } from "./bounded-read";
 
 export const OPEN_EXTENSIONS = ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "json", "txt"] as const;
 export const LARGE_FILE_BYTES = 5 * 1024 * 1024;
@@ -13,7 +14,8 @@ export const TOKEN_TTL_MS = 5 * 60_000;
 
 export interface FileSystem {
   stat(path: string): Promise<{ size: number; isFile: boolean }>;
-  readBytes(path: string): Promise<Uint8Array>;
+  /** Bounded at the *read*: refuses past `maxBytes` before allocating, never by measuring what it already read. */
+  readBytes(path: string, maxBytes: number): Promise<Uint8Array>;
   write(path: string, content: string): Promise<void>;
 }
 
@@ -22,7 +24,9 @@ export const nodeFileSystem: FileSystem = {
     const info = await stat(path);
     return { size: info.size, isFile: info.isFile() };
   },
-  readBytes: (path) => Bun.file(path).bytes(),
+  // Not `Bun.file(path).bytes()`: that reads the whole file before the size can be judged, and cannot obtain the
+  // `O_NONBLOCK` that keeps a FIFO left at the path from parking the read (R-M5b-S2).
+  readBytes: (path, maxBytes) => readBoundedBytes(path, maxBytes),
   write: async (path, content) => {
     // A symlinked tab file is written through to its real target, atomically, so the link itself survives
     // (m-4): writeFileAtomic renames onto `path`, which would otherwise replace the link with a plain file.
@@ -155,13 +159,17 @@ export class FileService {
   async #read(path: string, name: string): Promise<ReadyFile | { error: string }> {
     let bytes: Uint8Array;
     try {
-      bytes = await this.fs.readBytes(path);
-    } catch {
-      return { error: strings.files.unreadable(name) };
+      bytes = await this.fs.readBytes(path, this.#maxFileBytes);
+    } catch (error) {
+      // Still enforced at the read and not only at the initial stat -- a file can grow, or be swapped for a FIFO
+      // or a symlink, during the large-file token's 5-minute window, or between stat and read even on the small
+      // file path (I-1). What changed is *when*: the limit is applied from the opened handle's `fstat`, before
+      // the allocation, rather than by measuring bytes that are already in Main's heap. The initial `stat` above
+      // stays, because it is what decides whether to prompt -- it is not what makes the read safe.
+      return {
+        error: error instanceof FileTooLargeError ? strings.files.tooLarge(name) : strings.files.unreadable(name),
+      };
     }
-    // Re-checked here, not just at the initial stat: a file can grow (or be replaced) during the large-file
-    // token's 5-minute window, or between stat and read even on the small-file path (I-1).
-    if (bytes.length > this.#maxFileBytes) return { error: strings.files.tooLarge(name) };
     if (!isProbablyText(bytes)) return { error: strings.files.notText(name) };
     try {
       return { path, content: decoder.decode(bytes) };

@@ -1,42 +1,28 @@
-import { constants } from "node:fs";
-import { open, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { collectLocalTypes, collectPackageTypes, type TypesFs } from "@jslab/npm";
 import type { LocalTypesResult, PackageTypesResult } from "@jslab/rpc-schema";
-
-const MAX_TYPE_FILE_BYTES = 5 * 1024 * 1024;
+import { MAX_NODE_MODULES_FILE_BYTES, readBoundedText } from "../files/bounded-read";
 
 /**
- * Reads only regular files; a file over 5 MB is skipped, which the caller reports through its own `truncated` flag
- * — never silently treated as though the declaration didn't exist (R-M3-T13-FIX-3 N1). Opens the path once and
- * fstats and reads that same handle (R-M3-T13-FIX-1 M-2), so the size that was checked is the size that gets read,
- * and a path swapped to a symlink after the check can't redirect the read. Opens with `O_NONBLOCK` (R-M3-T13-FIX-2
- * #3) so a FIFO — for example a crafted `package.json` — returns null instead of blocking until a writer appears;
- * this doesn't affect reads of regular files.
+ * Reads only regular files; a file over MAX_NODE_MODULES_FILE_BYTES is skipped, which the caller reports through
+ * its own `truncated` flag — never silently treated as though the declaration didn't exist (R-M3-T13-FIX-3 N1).
+ *
+ * The open/fstat/refuse-then-allocate sequence this used to spell out inline is now `readBoundedText`
+ * (`../files/bounded-read.ts`), which is the same algorithm with the same two load-bearing properties:
+ * the size comes from the *opened handle* (R-M3-T13-FIX-1 M-2), so the size checked is the size read and a path
+ * swapped to a symlink after the check cannot redirect it; and `O_NONBLOCK` (R-M3-T13-FIX-2 #3) means a FIFO — a
+ * crafted `package.json`, say — is refused rather than blocking until a writer appears. Sharing the reader is the
+ * point: two hand-written copies of a check whose *order* is the whole guarantee is how one of them gets reversed.
+ *
+ * The `null` contract is unchanged: this seam reports "nothing usable here" for every failure, so the refusals
+ * `readBoundedText` throws are caught and flattened exactly like an ENOENT or an EACCES always were.
  */
 export const nodeTypesFs: TypesFs = {
   async readText(path) {
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
-      const info = await handle.stat();
-      if (!info.isFile() || info.size > MAX_TYPE_FILE_BYTES) return null;
-      const buffer = Buffer.alloc(info.size);
-      let read = 0;
-      while (read < buffer.length) {
-        const { bytesRead } = await handle.read(buffer, read, buffer.length - read, read);
-        if (bytesRead === 0) break;
-        read += bytesRead;
-      }
-      return buffer.subarray(0, read).toString("utf8");
+      return await readBoundedText(path, MAX_NODE_MODULES_FILE_BYTES);
     } catch {
       return null;
-    } finally {
-      // #7: closing must not escape the "any error returns null" contract.
-      try {
-        await handle?.close();
-      } catch {
-        // Closing failed (EIO/EBADF); the read already returned its result or null above.
-      }
     }
   },
   async isFile(path) {

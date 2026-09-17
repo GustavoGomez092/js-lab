@@ -3,6 +3,7 @@ import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
 import { effectiveRuntime, runnerSettings } from "@jslab/shared";
 import type { AppPaths } from "./app-paths";
 import { VendorCache } from "./bundling/vendor-cache";
+import { MAX_SOURCE_FILE_BYTES, readBoundedText } from "./files/bounded-read";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
 import { EXIT_KILL_GRACE_MS, RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
@@ -159,7 +160,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   const webviews = options.webviewBridge
     ? createUiWebviewSource({
         bridge: options.webviewBridge,
-        readBootstrap: () => Bun.file(paths.webRunnerBootstrap).text(),
+        readBootstrap: () => readBoundedText(paths.webRunnerBootstrap, MAX_SOURCE_FILE_BYTES),
       })
     : null;
   // Both web runtimes share the one source: a tab's runtime is fixed when the tab is created, so two adapters can

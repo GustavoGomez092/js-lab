@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
 import { emptyParamsSchema, npmrcSaveParamsSchema, type SaveResult } from "@jslab/rpc-schema";
 import { DEFAULT_NPMRC } from "@jslab/shared";
+import { MAX_NPMRC_BYTES, readBoundedText } from "../files/bounded-read";
 import { type AtomicWriteOptions, writeFileAtomic } from "../persistence/atomic-write";
 import { createValidators, type Log } from "./validate";
 
@@ -22,7 +22,9 @@ export function createNpmrcHandlers(deps: NpmrcHandlerDeps) {
     requests: {
       "npmrc.get": (input: unknown): Promise<{ content: string }> => {
         parse(emptyParamsSchema, "npmrc.get", input);
-        return readFile(deps.path, "utf8").then(
+        // `npmrc.save` refuses content over MAX_NPMRC_CHARS, so that character limit -- converted to bytes -- is
+        // the largest `.npmrc` JSLab can have written. Anything bigger is refused before it is allocated.
+        return readBoundedText(deps.path, MAX_NPMRC_BYTES).then(
           (content) => ({ content }),
           () => ({ content: DEFAULT_NPMRC }),
         );

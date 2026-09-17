@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   authTokenFor,
@@ -26,6 +25,12 @@ import type {
 } from "@jslab/rpc-schema";
 import { defaultPackagesManifest, type PackagesManifest } from "@jslab/shared";
 import type { AppPaths } from "../app-paths";
+import {
+  MAX_NODE_MODULES_FILE_BYTES,
+  MAX_NPMRC_BYTES,
+  MAX_STATE_FILE_BYTES,
+  readBoundedText,
+} from "../files/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 import { strings } from "../strings";
 import type { NpmSpawn, NpmSpawnResult } from "./npm-spawn";
@@ -399,7 +404,7 @@ export class NpmService {
   protected async readManifest(): Promise<PackagesManifest> {
     let raw: string;
     try {
-      raw = await readFile(this.deps.paths.packagesJson, "utf8");
+      raw = await readBoundedText(this.deps.paths.packagesJson, MAX_STATE_FILE_BYTES);
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return defaultPackagesManifest();
       throw new Error(strings.log.npmManifestUnreadable(this.deps.paths.packagesJson), { cause: error });
@@ -436,7 +441,12 @@ export class NpmService {
 
   protected async installedVersion(name: string): Promise<string | null> {
     try {
-      const pkg = JSON.parse(await readFile(join(this.deps.paths.packagesNodeModules, name, "package.json"), "utf8"));
+      const pkg = JSON.parse(
+        await readBoundedText(
+          join(this.deps.paths.packagesNodeModules, name, "package.json"),
+          MAX_NODE_MODULES_FILE_BYTES,
+        ),
+      );
       return typeof pkg.version === "string" ? pkg.version : null;
     } catch {
       return null;
@@ -542,7 +552,7 @@ export class NpmService {
    */
   async #readNpmrc(): Promise<string> {
     try {
-      return await readFile(this.deps.paths.packagesNpmrc, "utf8");
+      return await readBoundedText(this.deps.paths.packagesNpmrc, MAX_NPMRC_BYTES);
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "";
       throw new Error(strings.log.npmNpmrcUnreadable(this.deps.paths.packagesNpmrc), { cause: error });
@@ -588,7 +598,10 @@ export class NpmService {
   async #hasOwnTypes(name: string): Promise<boolean> {
     let pkg: { types?: unknown; typings?: unknown; exports?: unknown };
     try {
-      const text = await readFile(join(this.deps.paths.packagesNodeModules, name, "package.json"), "utf8");
+      const text = await readBoundedText(
+        join(this.deps.paths.packagesNodeModules, name, "package.json"),
+        MAX_NODE_MODULES_FILE_BYTES,
+      );
       pkg = JSON.parse(text) as { types?: unknown; typings?: unknown; exports?: unknown };
     } catch {
       return false;

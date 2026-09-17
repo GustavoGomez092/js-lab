@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { MAX_STATE_FILE_BYTES, readBoundedText } from "../files/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 
 /**
@@ -114,7 +114,10 @@ export class SystemFontsService {
 
   async #readCache(): Promise<{ at: number; fonts: SystemFontList } | null> {
     try {
-      const value = JSON.parse(await readFile(this.deps.cacheFile, "utf8")) as { at?: unknown; fonts?: SystemFontList };
+      const value = JSON.parse(await readBoundedText(this.deps.cacheFile, MAX_STATE_FILE_BYTES)) as {
+        at?: unknown;
+        fonts?: SystemFontList;
+      };
       if (typeof value.at !== "number" || !Array.isArray(value.fonts?.monospace) || !Array.isArray(value.fonts?.other))
         return null;
       return { at: value.at, fonts: value.fonts };

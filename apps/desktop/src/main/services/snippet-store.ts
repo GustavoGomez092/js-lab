@@ -1,5 +1,6 @@
-import { readFile, rename } from "node:fs/promises";
+import { rename } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { MAX_SNIPPETS_FILE_BYTES } from "@jslab/rpc-schema";
 import {
   MAX_SNIPPETS,
   parseSnippetsFile,
@@ -9,6 +10,7 @@ import {
   snippetSchema,
   snippetsFileContent,
 } from "@jslab/shared";
+import { readBoundedText } from "../files/bounded-read";
 import { type AtomicWriteOptions, writeFileAtomic } from "../persistence/atomic-write";
 import type { Recovery } from "../persistence/json-store";
 
@@ -29,7 +31,7 @@ function parseLibrary(text: string): Snippet[] | null {
 /** As above, for a file that is allowed to be missing or unreadable -- the `.bak`, never the primary. */
 async function tryRead(path: string): Promise<Snippet[] | null> {
   try {
-    return parseLibrary(await readFile(path, "utf8"));
+    return parseLibrary(await readBoundedText(path, MAX_SNIPPETS_FILE_BYTES));
   } catch {
     return null;
   }
@@ -61,7 +63,10 @@ export class SnippetStore {
     const write = options.write ?? writeFileAtomic;
     let text: string | null;
     try {
-      text = await readFile(path, "utf8");
+      // The same cap `snippets.importDialog` applies to a file the user picks (spec §13.4), now applied to the
+      // library JSLab loads at launch as well: one file format, one limit, enforced before the allocation rather
+      // than after it. Over the cap or not a regular file, it reaches the non-ENOENT branch and fails the caller.
+      text = await readBoundedText(path, MAX_SNIPPETS_FILE_BYTES);
     } catch (error) {
       // FR-2: only a missing file means "no library yet". Any other read failure (EACCES, EIO, EISDIR, ...) must
       // fail the caller instead of silently returning an empty store, since the next save() would then overwrite

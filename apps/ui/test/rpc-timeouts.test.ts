@@ -64,6 +64,10 @@ const BIG_PAYLOAD_PROBE: Record<keyof MainRequests, Probe> = {
   // body is rejected outright. The library is still buffer-class in aggregate -- MAX_SNIPPETS (2000) entries -- which
   // is a total no per-field probe can express, so this one is classified by the named list below too.
   "snippets.save": { kind: "big", params: { snippets: [{ id: "s1", name: "s", description: "", body: BIG }] } },
+  "theme.import": { kind: "none", why: "no params; Main opens its own dialog and the UI never names a path" },
+  // Rejected at this size rather than stripped: `path` is an archive entry name capped at 512 chars, so a 1 MB
+  // probe cannot parse -- which is the point, this request carries no MAX_TEXT_CHARS-class field.
+  "theme.importPick": { kind: "big", params: { token: crypto.randomUUID(), path: BIG } },
 };
 
 /** The requests that move `MAX_TEXT_CHARS`-class data, in either direction. */

@@ -12,7 +12,7 @@ import type {
   ViewMessages,
 } from "@jslab/rpc-schema";
 import { DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
-import { listThemes } from "@jslab/themes";
+import { listThemes, registerUserThemes } from "@jslab/themes";
 import Electrobun, {
   ApplicationMenu,
   BrowserView,
@@ -52,10 +52,12 @@ import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } fro
 import { createEnvHandlers } from "./rpc/env-handlers";
 import { createFileHandlers } from "./rpc/file-handlers";
 import { createFontHandlers } from "./rpc/font-handlers";
+import { createCommandPublishHandlers, createKeybindingHandlers } from "./rpc/keybinding-handlers";
 import { createNpmHandlers } from "./rpc/npm-handlers";
 import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
 import { createSnippetHandlers } from "./rpc/snippet-handlers";
+import { createThemeHandlers } from "./rpc/theme-handlers";
 import { createTypesHandlers } from "./rpc/types-handlers";
 import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
@@ -63,6 +65,7 @@ import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
+import { ThemeStore } from "./services/theme-store";
 import { startupNotices } from "./startup-notices";
 import { strings } from "./strings";
 import { afterUiFlush, createUiFlushHandlers, createUiFlushWaiter } from "./ui-flush";
@@ -242,6 +245,10 @@ async function start(): Promise<void> {
   }
   const keybindings = await KeybindingsStore.open(paths.dataDir);
   if (keybindings.invalid) log(strings.log.keybindingsInvalid(keybindings.path));
+  // Spec §9.3: registered in Main as well as in each window, so `listThemes()` below already offers the imported
+  // themes in the native Themes menu on the very first build (Finding T1).
+  const themes = await ThemeStore.open(paths.themesDir, log);
+  registerUserThemes(themes.themes);
   if (safeMode.active) logger.info(strings.log.safeMode(String(safeMode.reason)));
 
   // The UI gets a longer boot grace period for its first heartbeat (cold WKWebView init, bundle load, etc.);
@@ -301,6 +308,7 @@ async function start(): Promise<void> {
     logTail: (lines) => logger.tail(lines),
     settings,
     paths: { dataDir: paths.dataDir, logsDir },
+    keybindings,
     versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
     os: osInfo,
     redact,
@@ -345,6 +353,10 @@ async function start(): Promise<void> {
   // source exists, which is whenever a `webviewBridge` was passed above -- i.e. always, in a real app. Without
   // this group the UI's `webRunner.ready` / `.exit` / `.message` reach no handler at all, and a browser tab's run
   // hangs until `waitForReady` gives up rather than failing with anything a user could act on.
+  // Finding S1: the command registry lives in the MAIN window's React tree, which the Settings window cannot reach.
+  // Main holds the ids that window publishes and serves them to the Settings catalogue. Empty until its first
+  // publish, which is the honest answer when no main window is open.
+  let publishedCommands: readonly string[] = [];
   const webRunnerHandlers = services.webviews ? [createWebRunnerHandlers({ webviews: services.webviews, log })] : [];
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
@@ -369,8 +381,15 @@ async function start(): Promise<void> {
         },
         // The stores report what their own load found, including the corrupt copy saved this launch (FA-m4).
         notices: startupNotices({ settings, session }),
+        themes,
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
+      createCommandPublishHandlers({
+        onPublished: (ids) => {
+          publishedCommands = ids;
+        },
+        log,
+      }),
       ...webRunnerHandlers,
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createNpmHandlers({ npm, log }),
@@ -464,6 +483,31 @@ async function start(): Promise<void> {
         },
         log,
       }),
+      createThemeHandlers({
+        store: themes,
+        // Mirrors createFileHandlers' dialog branch above, E2E path included, so a scenario can script the choice.
+        openDialog: async () =>
+          e2eEnabled
+            ? await readE2EOpenDialog(paths.dataDir)
+            : await Utils.openFileDialog({
+                startingFolder: Utils.paths.documents,
+                allowedFileTypes: "json,vsix",
+                canChooseFiles: true,
+                canChooseDirectory: false,
+                allowsMultipleSelection: false,
+              }),
+        // R-M5d-B3: the size is what lets an oversized file be refused before it is read into memory.
+        fileSize: async (path) => (await stat(path).catch(() => null))?.size ?? null,
+        readFileBytes: (path) => Bun.file(path).bytes(),
+        onChanged: (all) => {
+          registerUserThemes(all);
+          rpc.send["theme.changed"]({ themes: [...all] });
+          // Task 4 finding 2: the Themes submenu is rebuilt from `listThemes()` on every refresh, so this one call
+          // is all it takes for an imported theme to reach the native menu.
+          menu.refresh();
+        },
+        log,
+      }),
     ),
   });
 
@@ -546,7 +590,9 @@ async function start(): Promise<void> {
   // `MenuItem` (menu.ts) is the devkit's own `ApplicationMenuItemConfig` shape at its source (final review T14),
   // proved at compile time by `MENU_IS_DEVKIT_CONFIG`, so a built menu is passed straight to
   // `ApplicationMenu.setApplicationMenu` with no adapter.
-  const resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, keybindings.rules);
+  // Finding K1: reassigned by `keybindings.onChange` below. `build` closes over it and re-reads on every
+  // `menu.refresh()`, so a saved keybindings.json reaches the native menu's shortcut text without a relaunch.
+  let resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, keybindings.rules);
   const menu = createMenuController({
     build: () =>
       buildMenu({
@@ -583,6 +629,7 @@ async function start(): Promise<void> {
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createFontHandlers({ fonts: systemFonts, log }),
       createNpmrcHandlers({ path: paths.packagesNpmrc, onSaved: () => npm.resetOutdated(), log }),
+      createKeybindingHandlers({ store: keybindings, registeredCommands: () => publishedCommands, log }),
       createSettingsAppHandlers(appHandlerDeps),
       createE2EResponseHandler(settingsE2E, log),
     ),
@@ -623,6 +670,16 @@ async function start(): Promise<void> {
   });
   settings.onChange((next) => {
     if (settingsWindow.isOpen()) settingsRpc.send["settings.changed"]({ settings: next });
+  });
+  // Finding K1: a saved keybindings.json takes effect in the running app. The menu is rebuilt from the freshly
+  // resolved bindings and BOTH windows are told, so the main window's dispatcher, palette keycaps and chrome keycaps
+  // follow -- and so does the Settings window's Keybindings pane, which must keep showing what is actually on disk
+  // even when the write came from somewhere other than the pane itself (Task 10 owns this second half).
+  keybindings.onChange((rules) => {
+    resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, rules);
+    menu.refresh();
+    if (mainWindow.isOpen()) rpc.send["keybindings.changed"]({ rules: [...rules] });
+    if (settingsWindow.isOpen()) settingsRpc.send["keybindings.changed"]({ rules: [...rules] });
   });
 
   // Spec §16.3: `jslab` opens files and code through the same session path as File → Open, so a CLI-opened tab is

@@ -1,8 +1,9 @@
-import type { CommandId, KeybindingRule, TabState } from "@jslab/shared";
+import type { CommandCategory, CommandId, KeybindingRule, TabState } from "@jslab/shared";
 import {
   DEFAULT_RUNTIME,
   type EnvVars,
   envVarsSchema,
+  keybindingRuleSchema,
   LANGUAGES,
   MAX_SNIPPETS,
   RUNTIMES,
@@ -12,6 +13,7 @@ import {
   type Snippet,
   snippetSchema,
 } from "@jslab/shared";
+import type { ThemeDefinition } from "@jslab/themes";
 import { z } from "zod";
 import type { RunEvent, RunState } from "./events";
 import type { EncodedValue } from "./values";
@@ -136,6 +138,7 @@ export const APP_ACTIONS = [
   "openSettings",
   "installCli",
   "uninstallCli",
+  "openKeybindingsFile",
 ] as const;
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });
@@ -145,6 +148,9 @@ export const SETTINGS_APP_ACTIONS = [
   "resetSettings",
   "openDataFolder",
   "restartSafeMode",
+  // Spec §6.5: Settings → Keybindings offers "Open keybindings.json", so this one is sent by the Settings window
+  // rather than the main window. It opens a file in the user's editor; it cannot touch the main window.
+  "openKeybindingsFile",
 ] as const satisfies readonly AppAction[];
 export type SettingsAppAction = (typeof SETTINGS_APP_ACTIONS)[number];
 export const settingsAppCommandSchema = z.object({ action: z.enum(SETTINGS_APP_ACTIONS) });
@@ -152,6 +158,73 @@ export const settingsAppCommandSchema = z.object({ action: z.enum(SETTINGS_APP_A
 export const fileSaveParamsSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });
 export const fileConfirmLargeSchema = z.object({ tokens: z.array(z.uuid()).min(1).max(100) });
 export const fileConfirmSaveAsSchema = z.object({ token: z.uuid(), confirmed: z.boolean() });
+
+// ---------- M5d Task 10: the command catalogue and keybindings on the Settings wire (spec §6.5) ----------
+
+/**
+ * One row of Settings → Keybindings.
+ *
+ * Rows are derived from `COMMANDS` in @jslab/shared -- the single list every milestone already extends, since
+ * `isCommandId` gates binding, dispatch and menu clicks -- so a command added by another milestone appears in the
+ * editor with no change to M5d's code (R-M5D-REGISTRY-1). Nothing here enumerates commands by hand.
+ */
+export interface CommandCatalogEntry {
+  id: CommandId;
+  title: string;
+  category: CommandCategory;
+  /** True when the running main window has this command registered. */
+  registered: boolean;
+}
+
+/**
+ * `commands.published` (UI → Main): the ids the main window's `CommandRegistry` actually holds. Validated because it
+ * crosses into Main (spec §18). The catalogue only ever *annotates* its rows with these, so an id Main does not
+ * recognise is harmless -- it simply matches no row.
+ */
+export const commandsPublishedSchema = z.object({ ids: z.array(z.string().min(1).max(100)).max(1000) });
+
+/**
+ * `keybindings.save`: the whole override set, replacing the file's contents rather than patching it.
+ * `keybindingRuleSchema` is the same per-rule validator the read path uses, so the Settings window cannot write a
+ * rule that a later launch would silently drop.
+ */
+export const keybindingsSaveParamsSchema = z.object({
+  rules: z.array(keybindingRuleSchema).max(500),
+});
+
+// ---------- M5d Task 8: Themes → Import VS Code Theme… (spec §9.3) ----------
+
+/** What the UI is told about a theme that was just imported; its full definition arrives on `theme.changed`. */
+export interface ImportedTheme {
+  id: string;
+  name: string;
+  type: "dark" | "light";
+}
+
+/** One `contributes.themes` entry offered when a `.vsix` declares more than one. `path` is an archive entry name. */
+export interface VsixChoice {
+  label: string;
+  path: string;
+}
+
+/**
+ * Three outcomes: the theme was imported, a multi-theme `.vsix` needs the user to choose, or nothing was imported.
+ *
+ * `ok: false` with an EMPTY `error` is a cancelled dialog -- a non-event the UI must report as nothing at all, not
+ * as a failure. `notes` carries the honest caveats about what the conversion could not preserve (R-M5d-AA-1 and the
+ * dropped `semanticTokenColors`), so a theme that converts to something plainer than the file says why.
+ */
+export type ThemeImportResult =
+  | { ok: true; theme: ImportedTheme; notes: string[] }
+  | { ok: true; choices: VsixChoice[]; token: string }
+  | { ok: false; error: string };
+
+export const themeImportPickParamsSchema = z.object({
+  token: z.uuid(),
+  // An archive entry name the manifest declared, never a filesystem path (spec §18).
+  path: z.string().min(1).max(512),
+});
+export type ThemeImportPickParams = z.infer<typeof themeImportPickParamsSchema>;
 
 // ---------- M4 Task 9a: the Main ⇄ UI web-runner bridge (spec §5.12) ----------
 
@@ -361,6 +434,14 @@ export type SettingsWindowRequests = {
   "npmrc.get": { params: Record<string, never>; response: { content: string } };
   "npmrc.save": { params: { content: string }; response: SaveResult };
   "npmrc.reset": { params: Record<string, never>; response: { content: string } };
+  /** Every command in the shared catalogue, annotated with what the running main window registered (Finding S1). */
+  "commands.catalog": { params: Record<string, never>; response: { commands: CommandCatalogEntry[] } };
+  "keybindings.get": {
+    params: Record<string, never>;
+    /** `invalid` is true when keybindings.json could not be parsed at startup, so Settings must not write over it. */
+    response: { rules: KeybindingRule[]; defaults: KeybindingRule[]; path: string; invalid: boolean };
+  };
+  "keybindings.save": { params: { rules: KeybindingRule[] }; response: SaveResult };
 };
 
 export type SettingsWindowMessages = {
@@ -371,6 +452,12 @@ export type SettingsWindowMessages = {
 export type SettingsViewMessages = {
   "settings.changed": { settings: Settings };
   "e2e.request": E2ERequest;
+  /**
+   * Finding K1 on the Settings side: the whole override set after a save, never a delta. The main window gets the
+   * same push through `ViewMessages`; this is what keeps the Keybindings pane showing what is actually on disk when
+   * the file is changed by something other than the pane itself.
+   */
+  "keybindings.changed": { rules: KeybindingRule[] };
 };
 
 export const STARTUP_NOTICE_IDS = [
@@ -489,6 +576,8 @@ export interface BootstrapPayload {
   e2e?: boolean;
   keybindings?: KeybindingRule[];
   notices?: StartupNotice[];
+  /** Spec §9.3: the themes imported into `<appdata>/themes/`, so the first paint already offers them (Finding T1). */
+  userThemes?: ThemeDefinition[];
 }
 
 /** Requests handled by Main, called by the UI. */
@@ -516,6 +605,10 @@ export type MainRequests = {
   "env.save": { params: { variables: EnvVars }; response: SaveResult };
   "snippets.list": { params: Record<string, never>; response: { snippets: Snippet[] } };
   "snippets.save": { params: { snippets: Snippet[] }; response: SaveResult };
+  /** Spec §9.3: Main opens its own file dialog -- the UI never names a path (spec §18). */
+  "theme.import": { params: Record<string, never>; response: ThemeImportResult };
+  /** The second half of a multi-theme `.vsix` import: `token` names the archive Main already holds. */
+  "theme.importPick": { params: ThemeImportPickParams; response: ThemeImportResult };
 };
 
 /**
@@ -545,6 +638,8 @@ export const MAIN_REQUEST_PARAMS_SCHEMAS: Record<keyof MainRequests, z.ZodType> 
   "run.transpiled": runTranspiledParamsSchema,
   "snippets.list": emptyParamsSchema,
   "snippets.save": snippetsSaveParamsSchema,
+  "theme.import": emptyParamsSchema,
+  "theme.importPick": themeImportPickParamsSchema,
 };
 
 /** The `MainRequests` method names at runtime, derived from the exhaustive table above so they cannot drift. */
@@ -599,6 +694,12 @@ export type MainMessages = {
    * `webRunnerMessageParamsSchema` has validated it on Main's side.
    */
   "webRunner.message": { tabId: string; raw: unknown };
+  /**
+   * M5d Task 10: the ids the main window's `CommandRegistry` holds, published on every registry build. The registry
+   * lives in the main window's React tree and the keybindings editor lives in the *Settings* window (Finding S1), so
+   * this message is how the catalogue served to Settings can say which of its rows the running window really has.
+   */
+  "commands.published": { ids: string[] };
 };
 
 /** Messages received by the UI, sent by Main. */
@@ -621,6 +722,17 @@ export type ViewMessages = {
   "file.saveCancelled": { tabId: string };
   "file.saveFailed": { tabId: string; error: string };
   "app.notice": StartupNotice;
+  /**
+   * Spec §9.3: the whole set of imported themes after one was added, never a delta -- `registerUserThemes` replaces
+   * the registry wholesale, and the four surfaces of Finding T1 read it on their next lookup.
+   */
+  "theme.changed": { themes: ThemeDefinition[] };
+  /**
+   * Finding K1: the whole override set after a save, never a delta -- the UI re-resolves it against
+   * `DEFAULT_KEYBINDINGS`, so the key dispatcher, the palette's keycaps and the chrome's keycaps all follow a
+   * saved keybindings.json without a relaunch.
+   */
+  "keybindings.changed": { rules: KeybindingRule[] };
   "npm.op": NpmOperation;
   "npm.log": { opId: string; text: string };
   "npm.changed": NpmListResult;

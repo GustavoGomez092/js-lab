@@ -167,7 +167,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
-| ST-01 | Settings window with tabs (General, Editor, Formatting, Appearance, AI, NPM, Advanced) | Docs, Strings | + Keybindings, Build | §8 | M2 | E | 🚧 General/Editor/Formatting/Appearance/Advanced in M2, NPM/Build in M3; Keybindings/AI M5 |
+| ST-01 | Settings window with tabs (General, Editor, Formatting, Appearance, AI, NPM, Advanced) | Docs, Strings | + Keybindings, Build | §8 | M2 | E | 🚧 General/Editor/Formatting/Appearance/Advanced in M2, NPM/Build in M3, Keybindings in M5; AI M5 |
 | ST-02 | Tooltips/help text on options | CL 2.5.0 | Help text per setting | §8, §17 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q24) |
 | ST-03 | Theme picker + Themes menu with icons | Docs, CL 2.2.2 | Themes menu + Appearance tab | §9 | M2 | E | ✅ `packages/e2e/scenarios/themes.test.ts`, `packages/e2e/scenarios/menu.test.ts` |
 | ST-04 | Themes (Dracula default, others) | Docs | Graphite pair + 19 built-in themes, all free | §9.2 | M2 | M | 🚧 pending user manual QA (docs/qa/m2-checklist.md Q25) |
@@ -223,8 +223,8 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | Capability | Requested in | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|
-| XT-01 | Custom themes: VS Code theme importer (.json/.vsix), themes folder | #62, #616 | §9.3 | M5 | U, E | ⬜ |
-| XT-02 | Custom keybindings UI + `keybindings.json` | #446, #636 | §6.5 | M2/M5 | U, E | 🚧 keybindings.json overrides in M2; editing UI M5 |
+| XT-01 | Custom themes: VS Code theme importer (.json/.vsix), themes folder | #62, #616 | §9.3 | M5 | U, E | ✅ `packages/themes/test/vscode-convert.test.ts`, `apps/desktop/test/themes/zip.test.ts`, `packages/e2e/scenarios/theme-import.test.ts` — the multi-theme `.vsix` picker is manual only (`docs/qa/m5d-checklist.md` Q2) |
+| XT-02 | Custom keybindings UI + `keybindings.json` | #446, #636 | §6.5 | M2/M5 | U, E | ✅ `apps/ui/test/keybinding-rows.test.ts`, `apps/ui/test/key-capture.test.ts`, `packages/e2e/scenarios/keybindings-ui.test.ts`; the M2 `keybindings.json` override half stays covered by `packages/e2e/scenarios/keybindings.test.ts` |
 | XT-03 | `jslab` CLI (open, stdin, `--run`, `--runtime`, `--cwd`) | #23, #747, #594 | §16 | M5 | E | ✅ `packages/e2e/scenarios/cli.test.ts` (open, stdin, `--run`, all three `--runtime` values, `--cwd`, `--title`, install/uninstall); unit: `apps/desktop/test/cli/`, `packages/rpc-schema/test/cli.test.ts` |
 | XT-04 | GitHub Gist publish/update/open | #115 | §15 | M5 | I, E | ⬜ |
 | XT-05 | Format on save | #742 | §6.4 | M2 | E | ✅ `packages/e2e/scenarios/format.test.ts` |

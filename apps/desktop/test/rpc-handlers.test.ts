@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
+import { convertVsCodeTheme } from "@jslab/themes";
 import { createRpcHandlers, InvalidPayloadError, type RpcHandlerDeps, RunRefusedError } from "../src/main/rpc-handlers";
 import { strings } from "../src/main/strings";
 
@@ -86,6 +87,35 @@ describe("requests", () => {
     expect(payload.unreadableBuffers).toEqual(["t2"]);
     expect(payload.notices).toEqual([{ id: "buffersUnreadable", message: strings.notices.buffersUnreadable(1) }]);
     expect(logged).toContain("Couldn't read a tab's buffer at startup");
+  });
+
+  test("app.bootstrap carries the imported themes, and omits the key when there are none", async () => {
+    const { deps } = setup();
+    const converted = convertVsCodeTheme({ name: "Deep Dark", type: "dark", colors: {} });
+    if (!converted.ok) throw new Error(converted.error);
+    // Finding T1: without this the first paint offers only the built-ins, and an imported theme shows up only
+    // once some later import happens to push `theme.changed`.
+    const withThemes = createRpcHandlers({ ...deps, themes: { themes: [converted.theme] } });
+    expect((await withThemes.requests["app.bootstrap"]()).userThemes).toEqual([converted.theme]);
+    // A fresh install has imported nothing, and must not send an empty array for it either.
+    const none = createRpcHandlers({ ...deps, themes: { themes: [] } });
+    expect((await none.requests["app.bootstrap"]()).userThemes).toBeUndefined();
+  });
+
+  // Finding K1: the UI resolves its keymap from this payload, so a launch must already carry the user's overrides.
+  // Unlike `userThemes` above, an empty set is still sent -- the key is omitted only when Main has no store at all.
+  test("app.bootstrap carries the user's keybinding overrides as a copy", async () => {
+    const { deps } = setup();
+    const rules = [{ key: "cmd+j", command: "run.start" }];
+    const withRules = createRpcHandlers({ ...deps, keybindings: { rules } });
+    const payload = await withRules.requests["app.bootstrap"]();
+    expect(payload.keybindings).toEqual(rules);
+    // A copy, not the store's own array: the payload crosses the RPC boundary as mutable `KeybindingRule[]`, and
+    // handing out the live set would let a caller edit what Main believes is on disk.
+    expect(payload.keybindings).not.toBe(rules);
+    const empty = createRpcHandlers({ ...deps, keybindings: { rules: [] } });
+    expect((await empty.requests["app.bootstrap"]()).keybindings).toEqual([]);
+    expect((await createRpcHandlers({ ...deps }).requests["app.bootstrap"]()).keybindings).toBeUndefined();
   });
 
   test("run.start validates and forwards only the run fields", () => {

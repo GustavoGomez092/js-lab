@@ -1,0 +1,9 @@
+{
+  "name": "JSLab Test Inferred",
+  "colors": {
+    "editor.background": "#FDFDFD",
+    "editor.foreground": "#24292F",
+    "focusBorder": "#0969DA"
+  },
+  "tokenColors": [{ "scope": "comment", "settings": { "foreground": "#6E7781" } }]
+}

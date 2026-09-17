@@ -51,6 +51,9 @@ export function createRpcApi(): MainApi {
     reorderTabs: (tabOrder) => rpc.send["tab.reorder"]({ tabOrder }),
     saveViewState: (tabId, viewState) => rpc.send["tab.viewState"]({ tabId, viewState }),
     updateSettings: (patch) => rpc.request["settings.update"]({ patch }, requestOptions("settings.update")),
+    importTheme: () => rpc.request["theme.import"]({}, requestOptions("theme.import")),
+    importThemePick: (token, path) =>
+      rpc.request["theme.importPick"]({ token, path }, requestOptions("theme.importPick")),
     saveFile: (tabId, content) => rpc.request["file.save"]({ tabId, content }, requestOptions("file.save")),
     openFileDialog: () => rpc.send["file.openDialog"]({}),
     confirmLargeFiles: (tokens) => rpc.send["file.confirmLarge"]({ tokens }),
@@ -81,6 +84,7 @@ export function createRpcApi(): MainApi {
     pickWorkingDirectory: (tabId) => rpc.send["wd.pick"]({ tabId }),
     clearWorkingDirectory: (tabId) => rpc.send["wd.clear"]({ tabId }),
     appCommand: (action) => rpc.send["app.command"]({ action }),
+    publishCommands: (ids) => rpc.send["commands.published"]({ ids }),
     e2eRespond: (response) => rpc.send["e2e.response"](response),
     webRunnerReady: (tabId, generation) => rpc.send["webRunner.ready"]({ tabId, generation }),
     webRunnerExit: (tabId, generation) => rpc.send["webRunner.exit"]({ tabId, generation }),

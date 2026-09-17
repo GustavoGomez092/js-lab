@@ -3,10 +3,12 @@ import {
   appCommandSchema,
   appNoticeSchema,
   bufferChangedSchema,
+  commandsPublishedSchema,
   e2eResponseSchema,
   fileConfirmLargeSchema,
   fileConfirmSaveAsSchema,
   fileSaveParamsSchema,
+  keybindingsSaveParamsSchema,
   MAX_OPEN_FILE_BYTES,
   MAX_TEXT_CHARS,
   runExpandParamsSchema,
@@ -215,7 +217,7 @@ describe("inbound validators", () => {
   });
 
   test("the Settings window's app.command accepts only the Settings actions (FA-m11)", () => {
-    for (const action of ["resetSettings", "openDataFolder", "restartSafeMode"]) {
+    for (const action of ["resetSettings", "openDataFolder", "restartSafeMode", "openKeybindingsFile"]) {
       expect(settingsAppCommandSchema.safeParse({ action }).success).toBe(true);
     }
     for (const action of ["closeWindow", "toggleFullScreen", "openSettings", "copyDebugLog", "exec"]) {
@@ -232,6 +234,40 @@ describe("inbound validators", () => {
       expect(settingsAppCommandSchema.safeParse({ action }).success).toBe(false);
     }
     expect(appNoticeSchema.safeParse({ id: "cliInstall", message: "jslab is installed." }).success).toBe(true);
+  });
+
+  // M5d Task 10: both payloads cross into Main and are bounded there (spec §18).
+  test("commands.published accepts a bounded id list and nothing else", () => {
+    expect(commandsPublishedSchema.safeParse({ ids: [] }).success).toBe(true);
+    expect(commandsPublishedSchema.safeParse({ ids: ["run.start"] }).success).toBe(true);
+    expect(commandsPublishedSchema.safeParse({ ids: "run.start" }).success).toBe(false);
+    expect(commandsPublishedSchema.safeParse({ ids: [""] }).success).toBe(false);
+    expect(commandsPublishedSchema.safeParse({ ids: ["x".repeat(101)] }).success).toBe(false);
+    expect(commandsPublishedSchema.safeParse({ ids: Array.from({ length: 1000 }, () => "x") }).success).toBe(true);
+    expect(commandsPublishedSchema.safeParse({ ids: Array.from({ length: 1001 }, () => "x") }).success).toBe(false);
+  });
+
+  test("keybindings.save validates each rule and caps the override set", () => {
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: [] }).success).toBe(true);
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: [{ key: "cmd+j", command: "run.start" }] }).success).toBe(
+      true,
+    );
+    // `when` is optional, and a removal rule ("-<id>") is a legitimate command value.
+    expect(
+      keybindingsSaveParamsSchema.safeParse({ rules: [{ key: "cmd+j", command: "-run.start", when: "editorFocus" }] })
+        .success,
+    ).toBe(true);
+    expect(keybindingsSaveParamsSchema.safeParse({}).success).toBe(false);
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: "nope" }).success).toBe(false);
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: [{ key: "cmd+j" }] }).success).toBe(false);
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: [{ key: "", command: "run.start" }] }).success).toBe(false);
+    const rule = { key: "cmd+j", command: "run.start" };
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: Array.from({ length: 500 }, () => rule) }).success).toBe(
+      true,
+    );
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: Array.from({ length: 501 }, () => rule) }).success).toBe(
+      false,
+    );
   });
 
   test("app.notice carries a known notice id and bounded text (FA-I3)", () => {

@@ -15,6 +15,8 @@ export const VIEW_MESSAGES = [
   "file.saveCancelled",
   "file.saveFailed",
   "app.notice",
+  "theme.changed",
+  "keybindings.changed",
   "npm.op",
   "npm.log",
   "npm.changed",

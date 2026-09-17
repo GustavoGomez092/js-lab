@@ -34,7 +34,7 @@ These apply to every milestone plan:
 | M2 Workspace | `2026-09-13-jslab-m2-workspace.md` | Complete (manual QA items pending user) |
 | M3 Language & packages | `2026-09-14-jslab-m3-language-packages.md` | Complete (manual QA items pending user) |
 | M4 Browser runtimes | `2026-09-16-jslab-m4-browser-runtimes.md` | Complete (manual QA items pending user; WV-06 tile-header drag not built) |
-| M5 Productivity & extras | `2026-09-16-jslab-m5a-editor-productivity.md` (M5a: logpoint gutter, Show Transpiled Output, welcome tab) · `2026-09-16-jslab-m5b-snippets.md` (M5b: snippets panel, Tab expansion, completion provider, import/export) | M5a and M5b complete; AI chat, Gist, CLI, theme importer, keybindings UI and i18n outstanding |
+| M5 Productivity & extras | `2026-09-16-jslab-m5a-editor-productivity.md` (M5a: logpoint gutter, Show Transpiled Output, welcome tab) · `2026-09-16-jslab-m5b-snippets.md` (M5b: snippets panel, Tab expansion, completion provider, import/export) · `2026-09-16-jslab-m5d-theming-keybindings.md` (M5d: VS Code theme importer, Keybindings settings UI) | M5a, M5b, M5c (`jslab` CLI) and M5d complete (M5d manual QA items pending user, `docs/qa/m5d-checklist.md`); AI chat, Gist and i18n outstanding |
 | M6 Ship | to be written at M5 completion | Not started |
 
 ## Dependency graph

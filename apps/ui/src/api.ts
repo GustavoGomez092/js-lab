@@ -18,6 +18,7 @@ import type {
   TabCreateParams,
   TabPatch,
   TabWithContent,
+  ThemeImportResult,
   ViewMessages,
 } from "@jslab/rpc-schema";
 import type { Settings, TabState } from "@jslab/shared";
@@ -52,6 +53,11 @@ export interface MainApi {
 
   updateSettings(patch: SettingsUpdateParams["patch"]): Promise<Settings>;
 
+  /** Spec §9.3: Main opens the dialog and converts the file -- the UI never names a path (spec §18). */
+  importTheme(): Promise<ThemeImportResult>;
+  /** Answers a multi-theme `.vsix` with the entry the user picked; `token` names the archive Main still holds. */
+  importThemePick(token: string, path: string): Promise<ThemeImportResult>;
+
   saveFile(tabId: string, content: string): Promise<FileSaveResult>;
   openFileDialog(): void;
   confirmLargeFiles(tokens: string[]): void;
@@ -84,6 +90,12 @@ export interface MainApi {
   clearWorkingDirectory(tabId: string): void;
 
   appCommand(action: AppAction): void;
+  /**
+   * The command ids this window's registry actually holds (spec §6.5). Settings → Keybindings annotates its
+   * catalogue with these: the registry lives in this window's React tree, so the Settings window -- a separate
+   * window with its own narrower RPC -- can only learn them through Main (Finding S1).
+   */
+  publishCommands(ids: string[]): void;
   e2eRespond(response: E2EResponse): void;
 
   // M4 §5.12: what this tab's `<electrobun-webview>` did, reported back to the runtime driving it in Main

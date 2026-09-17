@@ -64,6 +64,12 @@ export const REQUEST_PAYLOAD_CLASS: Record<keyof MainRequests, RequestPayloadCla
   // failure for work that in fact completed, which is exactly the F1 failure this table exists to prevent.
   "snippets.list": "buffer",
   "snippets.save": "buffer",
+  // Small both ways: no params at all, and the reply is one converted theme (a colour map) or a `.vsix` chooser
+  // list -- never tab text. `theme.import` does open a native file dialog, so the bound also has to outlast the
+  // user picking a file; it keeps the 10 s default M5d shipped and was green with rather than being widened here
+  // on a guess, since widening it is a behaviour change no test on either side asks for.
+  "theme.import": "small",
+  "theme.importPick": "small",
 };
 
 export function maxRequestTimeFor(method: keyof MainRequests): number {

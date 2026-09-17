@@ -1830,3 +1830,99 @@ button:disabled {
 .npmrc-status-error {
   color: var(--fg-error);
 }
+
+.keybindings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.keybindings h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.keybindings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+/* `thead th` / `tbody td` rather than bare `th` / `td`: the earlier `.npm-installed thead th` is (0, 1, 2), so a
+   later (0, 1, 1) selector here would be a descending-specificity hazard (biome lint/style/noDescendingSpecificity). */
+.keybindings-table thead th,
+.keybindings-table tbody td {
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.keybindings-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-chrome);
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+.keybindings-table tbody td:nth-child(3) {
+  color: var(--fg-muted);
+  font: 500 11px / 1.4 var(--mono);
+}
+
+.keybindings-note,
+.keybindings-conflict {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.keybindings-note {
+  color: var(--fg-muted);
+}
+
+.keybindings-conflict {
+  color: var(--fg-warn);
+}
+
+.keybindings-empty,
+.keybindings-status {
+  font-size: 12px;
+}
+
+.keybindings-empty {
+  color: var(--fg-muted);
+}
+
+.keybindings-status {
+  color: var(--fg-error);
+}
+
+/* Every chord bound to the command sits in this cell, so the row can wrap rather than widen the table
+   (R-M5d-ALIAS-1: a command with two chords shows both). */
+.keybindings-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.keybindings-capture {
+  width: 132px;
+  font: 500 11px / 1 var(--mono);
+}
+
+.keybindings-action {
+  padding: 2px 8px;
+  border-color: var(--border-default);
+  font-size: 11px;
+}
+
+.keybindings-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}

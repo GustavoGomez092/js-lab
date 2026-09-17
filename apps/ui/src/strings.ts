@@ -115,6 +115,15 @@ export const strings = {
     // JetBrains Mono" from JetBrains Mono.
     bundledUnavailable: "The bundled code font couldn't load; using the system monospace font.",
   },
+  /** Themes → Import VS Code Theme… (spec §9.3). */
+  themes: {
+    imported: (name: string) => `Imported ${name}.`,
+    pickTitle: "Choose a theme",
+    pickHelp: (count: number) => `That extension contains ${count} themes. Choose the one to import.`,
+    cancel: "Cancel",
+    // The caveats an import reports (low-contrast syntax, dropped semantic colours) are Main's own strings: Main
+    // decides which of them apply and sends them as ready-to-show text on the result.
+  },
   shell: {
     run: "Run",
     stop: "Stop",
@@ -506,9 +515,36 @@ export const strings = {
       editor: "Editor",
       formatting: "Formatting",
       appearance: "Appearance",
+      keybindings: "Keybindings",
       npm: "NPM",
       build: "Build",
       advanced: "Advanced",
+    },
+    keybindings: {
+      title: "Keybindings",
+      help: "Every JSLab command and the keys that run it.",
+      search: "Search keybindings",
+      columns: { command: "Command", keybinding: "Keybinding", when: "When", source: "Source" },
+      source: { default: "Default", user: "User", none: "Not bound" },
+      unregistered: "Not available in this window",
+      conflict: (titles: string) => `Also bound to ${titles}`,
+      openFile: "Open keybindings.json",
+      empty: "No commands match this search",
+      loadFailed: "Couldn't read the keybindings.",
+      change: "Change",
+      capture: (title: string) => `Change the shortcut for ${title}`,
+      capturing: (title: string) => `Recording a shortcut for ${title}`,
+      captureHint: "Press the keys you want, or Escape to cancel.",
+      reset: "Reset",
+      resetRow: (title: string) => `Reset ${title} to its default shortcut`,
+      resetAll: "Reset All Keybindings",
+      rejected: {
+        bareKey: "Add a modifier (⌘, ⌃ or ⌥) to that key, or use a function key.",
+        reserved: "That key is reserved and can't be used as a shortcut.",
+      },
+      saveFailed: "Couldn't save your keybindings.",
+      // Spec §18: the path is never quoted here -- Main logs the raw cause instead.
+      fileInvalid: "keybindings.json isn't valid JSON, so it can't be edited here. Open it, fix it, then relaunch.",
     },
     groups: {
       dark: "Dark",

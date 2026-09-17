@@ -161,6 +161,7 @@ export const COMMANDS = [
   { id: "language.jsx", title: "Language: JSX", category: "language" },
 
   { id: "theme.select", title: "Select Theme", category: "theme", palette: false },
+  { id: "theme.import", title: "Import VS Code Theme…", category: "theme" },
   { id: "theme.toggleFollowSystem", title: "Follow System Appearance", category: "theme" },
 
   { id: "help.copyDebugLog", title: "Copy Debug Log", category: "help" },

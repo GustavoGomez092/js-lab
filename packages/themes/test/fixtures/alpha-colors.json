@@ -1,0 +1,16 @@
+{
+  "name": "JSLab Test Alpha",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#101418",
+    "editor.selectionBackground": "#264F7840",
+    "editor.lineHighlightBackground": "#FFFFFF0A",
+    "editorIndentGuide.background1": "#FFFFFF1A",
+    "list.hoverBackground": "#FFFFFF12",
+    "editorCursor.foreground": "#5AF"
+  },
+  "tokenColors": [
+    { "scope": "comment", "settings": { "foreground": "#5C6370" } },
+    { "scope": "string", "settings": { "foreground": "#98C379CC" } }
+  ]
+}

@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { type BootstrapPayload, MAX_TEXT_CHARS, type TabCloseResult } from "@jslab/rpc-schema";
 import {
+  COMMANDS,
   parseChord as chordOf,
   createTab,
   DEFAULT_KEYBINDINGS,
   defaultSession,
   defaultSettings,
   formatChord,
+  formatChordParts,
   type KeybindingRule,
   MAX_CLOSED_TABS,
   mergeSettings,
@@ -15,6 +17,7 @@ import {
   shortcutFor,
   type TabState,
 } from "@jslab/shared";
+import { convertVsCodeTheme, listThemes, registerUserThemes } from "@jslab/themes";
 import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type ComponentType, Profiler } from "react";
 import type { MainApi } from "../src/api";
@@ -133,6 +136,32 @@ function fileDataTransfer(files: File[], folderNames: string[] = []) {
 const textDataTransfer = { types: ["text/plain"], files: [], items: [] };
 
 describe("App shell", () => {
+  // R-M5D-REGISTRY-1 / Finding S1: the keybindings editor lives in the Settings window, which cannot reach this
+  // window's registry, so the ids go to Main. Publishing the REGISTRY's own list rather than COMMANDS is what lets a
+  // catalogue row say that a command exists in the shared list but is not registered in the running window.
+  test("publishes the registry's command ids to Main, so Settings can annotate its catalogue", () => {
+    const { api } = renderApp();
+    expect(api.publishCommands).toHaveBeenCalled();
+    const ids = api.publishCommands.mock.calls.at(-1)?.[0] ?? [];
+    expect(ids).toContain("run.start");
+    expect(ids).toContain("view.commandPalette");
+    // Every published id is a real command id, and none is published twice.
+    for (const id of ids) expect(COMMANDS.some((command) => command.id === id)).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("theme.changed registers the imported themes, so every surface sees them (spec §9.3)", async () => {
+    const converted = convertVsCodeTheme({ name: "Deep Dark", type: "dark", colors: {} });
+    if (!converted.ok) throw new Error(converted.error);
+    const { emit } = renderApp();
+    // renderApp hydrates without any imported themes, which clears the registry -- so this is genuinely absent
+    // until the message arrives, and the assertion below cannot pass by accident.
+    expect(listThemes().some((theme) => theme.id === "deep-dark")).toBe(false);
+    await emit("theme.changed", { themes: [converted.theme] });
+    expect(listThemes().some((theme) => theme.id === "deep-dark")).toBe(true);
+    registerUserThemes([]);
+  });
+
   test("Cmd+R starts a manual run with the current code and the tab's logpoints", () => {
     const { store, api } = renderApp();
     act(() => store.getState().toggleLogpoint(1));
@@ -935,6 +964,67 @@ describe("App shell", () => {
     renderApp();
     const button = screen.getByRole("button", { name: strings.shell.snippets });
     expect(button.getAttribute("title")).toBe(`${strings.shell.snippets} (⌘B)`);
+  });
+
+  /**
+   * Finding K1. `bindings` was `useMemo(..., [store])` reading `store.getState().keybindings` imperatively, so it
+   * ran once at mount and a saved binding could not take effect before a relaunch. Every keybinding test above
+   * passes its rules at HYDRATE time, i.e. before mount, which is exactly why they all passed despite the defect;
+   * these change the bindings on an already mounted app.
+   */
+  test("a rebound chord dispatches to the new command as soon as the store changes (K1)", () => {
+    const { store, api } = renderApp();
+    press("KeyR");
+    expect(api.startRun).toHaveBeenCalledTimes(1);
+    act(() => store.getState().setKeybindings([{ key: "cmd+r", command: "run.stop" }]));
+    press("KeyR");
+    // Both halves matter: asserting only that Stop fired would also pass for an app that still fires Run too.
+    expect(api.startRun).toHaveBeenCalledTimes(1);
+    expect(api.stop).toHaveBeenCalledWith("t1");
+  });
+
+  test("a removal rule added after mount stops the default chord from firing at all (K1)", () => {
+    const { store, api } = renderApp();
+    act(() => store.getState().setKeybindings([{ key: "cmd+r", command: "-run.start" }]));
+    press("KeyR");
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  test("a keybindings.changed broadcast from Main rebinds the running app (K1)", async () => {
+    const { store, api, emit } = renderApp();
+    await emit("keybindings.changed", { rules: [{ key: "cmd+r", command: "run.stop" }] });
+    expect(store.getState().keybindings).toEqual([{ key: "cmd+r", command: "run.stop" }]);
+    press("KeyR");
+    expect(api.startRun).not.toHaveBeenCalled();
+    expect(api.stop).toHaveBeenCalledWith("t1");
+  });
+
+  // The chrome's keycaps are one of the four surfaces this task owes. FB-m3 above pins them at hydrate time;
+  // this pins them on a LIVE rebind, which is the case Finding K1 broke.
+  test("the chrome keycaps follow a rebind made after mount (K1)", () => {
+    const { store } = renderApp();
+    expect(document.querySelector(".toolbar .tb-btn.run .kbd")?.textContent).toBe("⌘R");
+    const rules = [{ key: "cmd+enter", command: "run.start" }];
+    const run = formatChord(shortcutFor(resolveKeybindings(DEFAULT_KEYBINDINGS, rules), "run.start") ?? chordOf("x"));
+    expect(run).not.toBe("⌘R");
+    act(() => store.getState().setKeybindings(rules));
+    expect(document.querySelector(".toolbar .tb-btn.run .kbd")?.textContent).toBe(run);
+    expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.paused(run));
+  });
+
+  // The palette's keycaps are the fourth surface: it reads `bindings` through the same memo chain, so a rebind
+  // made while it is closed must show on the next open.
+  test("the palette's keycaps follow a rebind made after mount (K1)", () => {
+    const { store } = renderApp();
+    const rules = [{ key: "cmd+enter", command: "run.start" }];
+    const parts = formatChordParts(
+      shortcutFor(resolveKeybindings(DEFAULT_KEYBINDINGS, rules), "run.start") ?? chordOf("x"),
+    );
+    expect(parts).not.toEqual(["⌘", "R"]);
+    act(() => store.getState().setKeybindings(rules));
+    press("KeyP", { shiftKey: true });
+    const row = screen.getAllByRole("option").find((o) => o.querySelector(".palette-title")?.textContent === "Run");
+    expect([...(row?.querySelectorAll(".palette-keys b") ?? [])].map((b) => b.textContent)).toEqual(parts);
   });
 });
 

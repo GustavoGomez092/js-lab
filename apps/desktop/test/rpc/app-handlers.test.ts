@@ -1,14 +1,28 @@
 import { describe, expect, mock, test } from "bun:test";
-import { defaultSettings } from "@jslab/shared";
+import { defaultSettings, type KeybindingRule } from "@jslab/shared";
 import { createRedactor } from "../../src/main/logging/redact";
 import { appBundlePath, relaunchCommand } from "../../src/main/platform/relaunch";
 import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } from "../../src/main/rpc/app-handlers";
 
-function setup() {
+/**
+ * The keybindings store as `openKeybindingsFile` sees it. Built by a helper rather than mutated in place: under
+ * `satisfies AppHandlerDeps` an inline `invalid: false` keeps the literal type `false`, so a test could not set it.
+ */
+function keybindingsFake(overrides: { rules?: readonly KeybindingRule[]; invalid?: boolean; path?: string } = {}) {
+  return {
+    path: overrides.path ?? "/data/keybindings.json",
+    rules: overrides.rules ?? ([] as readonly KeybindingRule[]),
+    invalid: overrides.invalid ?? false,
+    save: mock(async (_rules: readonly KeybindingRule[]) => {}),
+  };
+}
+
+function setup(keybindings = keybindingsFake()) {
   const deps = {
     logTail: mock((_lines: number) => ["a", "Authorization: Bearer secret"]),
     settings: { current: defaultSettings(), reset: mock(async () => defaultSettings()) },
     paths: { dataDir: "/data", logsDir: "/data/logs" },
+    keybindings,
     versions: { app: "0.2.0", bun: "1.4.0", electrobun: "2.0.1" },
     os: { macOS: "26.5.2", arch: "arm64" },
     clipboard: mock((_text: string) => {}),
@@ -90,6 +104,41 @@ describe("app.command", () => {
     await Bun.sleep(0);
     expect(deps.installCli).not.toHaveBeenCalled();
     expect(deps.uninstallCli).not.toHaveBeenCalled();
+  });
+
+  // Spec §6.5: Settings → Keybindings offers "Open keybindings.json". On a fresh install the file has never been
+  // written, and `openPath` on a missing file shows the user an OS error instead of an editor.
+  test("openKeybindingsFile creates the file when there are no overrides yet, then opens it", async () => {
+    const { deps } = setup();
+    createSettingsAppHandlers(deps).messages["app.command"]({ action: "openKeybindingsFile" });
+    await Bun.sleep(0);
+    expect(deps.keybindings.save).toHaveBeenCalledWith([]);
+    expect(deps.openPath).toHaveBeenCalledWith("/data/keybindings.json");
+  });
+
+  test("openKeybindingsFile never rewrites a file that already exists", async () => {
+    const withRules = setup(keybindingsFake({ rules: [{ key: "cmd+j", command: "run.start" }] }));
+    createSettingsAppHandlers(withRules.deps).messages["app.command"]({ action: "openKeybindingsFile" });
+    await Bun.sleep(0);
+    expect(withRules.deps.keybindings.save).not.toHaveBeenCalled();
+    expect(withRules.deps.openPath).toHaveBeenCalledWith("/data/keybindings.json");
+
+    // `invalid` means the file IS there and failed to parse. Whoever opens it is on their way to repair it by hand,
+    // so rewriting it with [] would destroy exactly what they meant to fix.
+    const broken = setup(keybindingsFake({ invalid: true }));
+    createSettingsAppHandlers(broken.deps).messages["app.command"]({ action: "openKeybindingsFile" });
+    await Bun.sleep(0);
+    expect(broken.deps.keybindings.save).not.toHaveBeenCalled();
+    expect(broken.deps.openPath).toHaveBeenCalledWith("/data/keybindings.json");
+  });
+
+  // The path comes from the store, never re-derived here, so this action and the keybindings handlers cannot end up
+  // pointing at different files.
+  test("openKeybindingsFile opens the store's own path", async () => {
+    const { deps } = setup(keybindingsFake({ path: "/elsewhere/keybindings.json" }));
+    createSettingsAppHandlers(deps).messages["app.command"]({ action: "openKeybindingsFile" });
+    await Bun.sleep(0);
+    expect(deps.openPath).toHaveBeenCalledWith("/elsewhere/keybindings.json");
   });
 
   test("unknown actions are logged and dropped", () => {

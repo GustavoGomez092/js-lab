@@ -1,0 +1,198 @@
+import { inflateRawSync } from "node:zlib";
+
+/**
+ * A deliberately minimal, read-only ZIP reader for `.vsix` import (spec §9.3).
+ *
+ * Ruling R-M5D-ZIP-1: no zip dependency is added. A `.vsix` needs two members read and nothing extracted, so this
+ * is a central-directory walk plus `inflateRawSync`. Writing it — rather than taking a library or shelling out to
+ * `unzip` — is what makes the refusals below testable, mandatory and fail-closed.
+ *
+ * Everything here treats the archive as hostile: names are validated before use, sizes are checked before
+ * allocation, and no byte is ever written to disk. This module never opens a path — it is handed bytes — so it
+ * cannot block on a FIFO or a slow device, and every bound it enforces is its own rather than a caller's timeout.
+ */
+export interface ZipLimits {
+  maxEntries: number;
+  maxEntryBytes: number;
+  maxTotalBytes: number;
+  maxRatio: number;
+}
+
+export const ZIP_LIMITS: ZipLimits = {
+  maxEntries: 2000,
+  maxEntryBytes: 2 * 1024 * 1024,
+  maxTotalBytes: 16 * 1024 * 1024,
+  maxRatio: 200,
+};
+
+/**
+ * Every refusal in this module throws one of these.
+ *
+ * The `message` is user-facing: Task 6's `withArchive` hands it to the UI verbatim, so it never contains an entry
+ * name, a path separator or any other archive-controlled text. The offending name travels on `entryName` instead,
+ * for the log — the same split `main/strings.ts` already uses for file errors, where the raw message may carry an
+ * absolute path and the user is shown a readable line.
+ */
+export class ZipError extends Error {
+  readonly entryName: string | undefined;
+
+  constructor(message: string, entryName?: string) {
+    super(message);
+    this.name = "ZipError";
+    this.entryName = entryName;
+  }
+}
+
+const MAX_NAME_BYTES = 512;
+const SIG_EOCD = 0x06054b50;
+const SIG_CENTRAL = 0x02014b50;
+const SIG_LOCAL = 0x04034b50;
+
+const NOT_ARCHIVE = "That file isn't a valid .vsix archive.";
+const DAMAGED = "That .vsix archive is damaged.";
+const UNSAFE_PATH = "That archive contains an entry with an unsafe path.";
+const DUPLICATE_NAME = "That archive contains two entries with the same name.";
+const ENTRY_TOO_LARGE = "An entry in that archive is too large.";
+const ARCHIVE_TOO_LARGE = "That archive is too large to read.";
+const SUSPICIOUS_RATIO = "An entry in that archive has a suspicious compression ratio.";
+const NO_SUCH_ENTRY = "That archive doesn't contain the requested entry.";
+const SIZE_MISMATCH = "An entry's size didn't match its header.";
+
+const nameEncoder = new TextEncoder();
+
+/**
+ * Zip-slip and friends. An entry name is usable only if it is a plain relative POSIX path: no absolute form, no
+ * drive letter, no backslash, no `.`/`..` segment, no control characters.
+ *
+ * The length cap counts UTF-8 bytes, which is what the archive actually declares — `name.length` would count UTF-16
+ * code units and let a 1,536-byte name of three-byte characters through a "512 bytes" limit.
+ */
+export function isSafeEntryName(name: string): boolean {
+  if (name.length === 0) return false;
+  if (name.startsWith("/") || name.includes("\\")) return false;
+  if (/^[A-Za-z]:/.test(name)) return false;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control bytes in an entry name are exactly what we refuse
+  if (/[\x00-\x1f\x7f]/.test(name)) return false;
+  if (nameEncoder.encode(name).length > MAX_NAME_BYTES) return false;
+  const segments = name.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+interface Entry {
+  name: string;
+  method: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  localHeaderOffset: number;
+}
+
+export interface ZipArchive {
+  names(): string[];
+  has(name: string): boolean;
+  read(name: string): Uint8Array;
+}
+
+/**
+ * Walks back from the end looking for the end-of-central-directory record. The scan is bounded by the 65,535 bytes
+ * a zip comment may occupy, so a large file cannot turn this into an unbounded backwards scan.
+ */
+function findEocd(view: DataView, length: number): number {
+  const earliest = Math.max(0, length - 22 - 0xffff);
+  for (let at = length - 22; at >= earliest; at--) {
+    if (view.getUint32(at, true) === SIG_EOCD) return at;
+  }
+  throw new ZipError(NOT_ARCHIVE);
+}
+
+export function openZip(bytes: Uint8Array, limits: ZipLimits = ZIP_LIMITS): ZipArchive {
+  // No explicit "shorter than an EOCD" guard: findEocd starts at length - 22, so anything smaller never enters
+  // its loop and is refused there with the same message. An inverse probe confirmed the guard changed nothing.
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const eocd = findEocd(view, bytes.length);
+  const count = view.getUint16(eocd + 10, true);
+  const directoryOffset = view.getUint32(eocd + 16, true);
+  if (count > limits.maxEntries) throw new ZipError(`That archive has too many entries (limit ${limits.maxEntries}).`);
+  if (directoryOffset >= bytes.length) throw new ZipError(DAMAGED);
+
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  const entries = new Map<string, Entry>();
+  let at = directoryOffset;
+  let total = 0;
+  for (let index = 0; index < count; index++) {
+    if (at + 46 > bytes.length || view.getUint32(at, true) !== SIG_CENTRAL) {
+      throw new ZipError(DAMAGED);
+    }
+    const method = view.getUint16(at + 10, true);
+    const compressedSize = view.getUint32(at + 20, true);
+    const uncompressedSize = view.getUint32(at + 24, true);
+    const nameLength = view.getUint16(at + 28, true);
+    const extraLength = view.getUint16(at + 30, true);
+    const commentLength = view.getUint16(at + 32, true);
+    const localHeaderOffset = view.getUint32(at + 42, true);
+    if (at + 46 + nameLength > bytes.length) throw new ZipError(DAMAGED);
+    const name = decoder.decode(bytes.subarray(at + 46, at + 46 + nameLength));
+
+    /**
+     * A directory record ends in "/" and carries no data, but its name is still validated: exempting it would let
+     * an archive containing `../../../etc/` through untouched, and "refuse the whole archive on an unsafe name"
+     * has to be total to mean anything. Only the single trailing slash is exempt, never the path in front of it.
+     */
+    const isDirectory = name.endsWith("/");
+    if (!isSafeEntryName(isDirectory ? name.slice(0, -1) : name)) throw new ZipError(UNSAFE_PATH, name);
+
+    // The remaining limits guard an allocation, and only a file entry is ever read, so only a file entry needs them.
+    if (!isDirectory) {
+      if (method !== 0 && method !== 8) {
+        throw new ZipError(`That archive uses an unsupported compression method (${method}).`, name);
+      }
+      if (uncompressedSize > limits.maxEntryBytes) throw new ZipError(ENTRY_TOO_LARGE, name);
+      total += uncompressedSize;
+      if (total > limits.maxTotalBytes) throw new ZipError(ARCHIVE_TOO_LARGE, name);
+      // No `compressedSize > 0` guard: a record claiming zero compressed bytes for a non-empty entry is an
+      // impossible header, and the resulting Infinity is exactly the refusal it deserves. A genuinely empty
+      // stored entry gives 0/0, which is NaN, and NaN fails this comparison, so it still opens.
+      if (uncompressedSize / compressedSize > limits.maxRatio) {
+        throw new ZipError(SUSPICIOUS_RATIO, name);
+      }
+      // Readers disagree about whether the first or the last record wins, so a duplicate name can present one file
+      // to JSLab and a different one to anything else that opens the same archive. Refuse the ambiguity outright.
+      if (entries.has(name)) throw new ZipError(DUPLICATE_NAME, name);
+      entries.set(name, { name, method, compressedSize, uncompressedSize, localHeaderOffset });
+    }
+    at += 46 + nameLength + extraLength + commentLength;
+  }
+
+  const read = (name: string): Uint8Array => {
+    const entry = entries.get(name);
+    if (!entry) throw new ZipError(NO_SUCH_ENTRY, name);
+    const start = entry.localHeaderOffset;
+    if (start + 30 > bytes.length || view.getUint32(start, true) !== SIG_LOCAL) {
+      throw new ZipError(DAMAGED, name);
+    }
+    // The local header's own name and extra lengths locate the data; the central directory's may differ.
+    const nameLength = view.getUint16(start + 26, true);
+    const extraLength = view.getUint16(start + 28, true);
+    const dataStart = start + 30 + nameLength + extraLength;
+    const dataEnd = dataStart + entry.compressedSize;
+    if (dataEnd > bytes.length) throw new ZipError(DAMAGED, name);
+    const raw = bytes.subarray(dataStart, dataEnd);
+
+    let out: Uint8Array;
+    if (entry.method === 0) {
+      // A copy, not a window: a stored entry must not hand the caller a view that keeps the whole archive alive.
+      out = raw.slice();
+    } else {
+      try {
+        out = new Uint8Array(inflateRawSync(raw, { maxOutputLength: limits.maxEntryBytes }));
+      } catch {
+        // A corrupt or over-long deflate stream is a damaged archive, not an unhandled zlib failure.
+        throw new ZipError(DAMAGED, name);
+      }
+    }
+    // A header that lied about its size does not get to be trusted after the fact either.
+    if (out.length !== entry.uncompressedSize) throw new ZipError(SIZE_MISMATCH, name);
+    return out;
+  };
+
+  return { names: () => [...entries.keys()], has: (name) => entries.has(name), read };
+}

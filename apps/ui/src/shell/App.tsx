@@ -7,6 +7,7 @@ import {
   shortcutFor,
   tabLabel,
 } from "@jslab/shared";
+import { registerUserThemes } from "@jslab/themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
@@ -43,6 +44,7 @@ import { createTabActions } from "../tabs/tab-actions";
 import { createTabSummaryCache } from "../tabs/tab-summary";
 import { startThemeSync } from "../themes/apply";
 import { startAppearanceSync } from "../themes/fonts";
+import { ThemePickDialog } from "../themes/ThemePickDialog";
 import { createThemeCommands } from "../themes/theme-commands";
 import { ActivityBar } from "./ActivityBar";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -247,7 +249,11 @@ export function App({
     return () => tabs.setBeforeClose(null);
   }, [tabs, flows, bufferSync]);
 
-  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
+  // Finding K1: this was `useMemo(..., [store])` reading state imperatively, so it ran once at mount and a saved
+  // binding could not take effect before a relaunch. Subscribing is what makes Settings -> Keybindings work;
+  // everything downstream (keysFor, the resolver, the keycaps, the palette) already follows `bindings`.
+  const keybindingRules = useStore(store, (s) => s.keybindings);
+  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, keybindingRules), [keybindingRules]);
   // R23-1: hoisted above the registry so app-commands' npm.install status message can show its keycap too.
   const keysFor = useCallback(
     (command: string) => {
@@ -388,6 +394,18 @@ export function App({
         registry.execute(command, args);
       }),
       api.on("settings.changed", ({ settings }) => store.getState().receiveSettings(settings)),
+      // Finding K1: a keybindings.json write in Main reaches the running app here. The dispatcher, the palette's
+      // keycaps and the chrome's keycaps all derive from `bindings`, which now follows the store.
+      api.on("keybindings.changed", ({ rules }) => store.getState().setKeybindings(rules)),
+      // Spec §9.3: a theme was imported, so the whole imported set is re-registered and the current selection is
+      // re-applied -- that is what makes the picker, the palette and Monaco show it without a settings change.
+      api.on("theme.changed", ({ themes }) => {
+        registerUserThemes(themes);
+        const current = store.getState().settings;
+        // `updateSettings`, not `receiveSettings`: this must not bump `settingsRevision` and so invalidate the
+        // `writeSettings` that is in flight selecting the theme that just arrived.
+        if (current) store.getState().updateSettings({ ...current });
+      }),
       // Task 26: Main's npm list changed; receiveNpmList bumps packagesRevision itself when names/versions change,
       // so the type feeder's package cache still invalidates without a separate, redundant bump here.
       api.on("npm.changed", (list) => store.getState().receiveNpmList(list)),
@@ -427,6 +445,14 @@ export function App({
       for (const unsubscribe of unsubscribers) unsubscribe();
     };
   }, [store, api, registry, flows, coalescer, bufferSync, keycaps]);
+
+  // R-M5D-REGISTRY-1 / Finding S1: Settings → Keybindings renders a catalogue derived from COMMANDS, annotated with
+  // what this window actually registered. The registry lives here, in the main window's React tree, and Settings is a
+  // separate window with its own narrower RPC -- so the ids travel through Main. Published on every registry build,
+  // which is precisely when a command could have appeared or gone away.
+  useEffect(() => {
+    api.publishCommands(registry.list().map((spec) => spec.id));
+  }, [api, registry]);
 
   useEffect(() => {
     if (!e2e) return;
@@ -688,6 +714,7 @@ export function App({
         />
       )}
       <RenameDialog store={store} />
+      <ThemePickDialog store={store} api={api} />
       <ConfirmDialog store={store} dialogs={dialogs} />
       <EnvVarsSheet store={store} api={api} />
       <NpmSheet store={store} api={api} />

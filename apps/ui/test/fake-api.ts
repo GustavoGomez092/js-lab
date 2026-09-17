@@ -13,6 +13,7 @@ import type {
   TabCloseResult,
   TabCreateParams,
   TabWithContent,
+  ThemeImportResult,
   ViewMessages,
 } from "@jslab/rpc-schema";
 import { createTab, defaultSettings } from "@jslab/shared";
@@ -52,6 +53,12 @@ export function createFakeApi() {
     reorderTabs: mock((_order: string[]) => {}),
     saveViewState: mock((_tabId: string, _viewState: unknown) => {}),
     updateSettings: mock(async (_patch: unknown) => defaultSettings()),
+    // The default is the cancelled-dialog answer (an empty error), so a test that doesn't care about importing
+    // never accidentally asserts against a success it didn't ask for.
+    importTheme: mock(async (): Promise<ThemeImportResult> => ({ ok: false, error: "" })),
+    importThemePick: mock(
+      async (_token: string, _path: string): Promise<ThemeImportResult> => ({ ok: false, error: "" }),
+    ),
     saveFile: mock(async (_tabId: string, _content: string): Promise<FileSaveResult> => ({ needsSaveAs: true })),
     openFileDialog: mock(() => {}),
     confirmLargeFiles: mock((_tokens: string[]) => {}),
@@ -89,6 +96,7 @@ export function createFakeApi() {
     pickWorkingDirectory: mock((_tabId: string) => {}),
     clearWorkingDirectory: mock((_tabId: string) => {}),
     appCommand: mock((_action: AppAction) => {}),
+    publishCommands: mock((_ids: string[]) => {}),
     e2eRespond: mock((_response: E2EResponse) => {}),
     webRunnerReady: mock((_tabId: string, _generation: number) => {}),
     webRunnerExit: mock((_tabId: string, _generation: number) => {}),

@@ -42,6 +42,8 @@ export const strings = {
     vendorCacheInvalidateFailed: "Couldn't clear the web runner's vendor cache after a package change",
     loginShellFailed: (reason: string) =>
       `Couldn't read the login shell environment (${reason}); using the app's environment`,
+    /** Spec §9.3: the raw cause can quote an absolute path, so it goes here and never to the user (spec §18). */
+    themeUnreadable: "Couldn't read the selected theme file",
   },
   dialogs: {
     startupFailed: (message: string) => `JSLab couldn't start: ${message}`,
@@ -62,6 +64,27 @@ export const strings = {
   },
   snippets: {
     tooLarge: "That file is larger than 5 MB, so it isn't a snippet library.",
+  },
+  /** Themes → Import VS Code Theme… (spec §9.3). Never quotes a path: the raw cause goes to the log instead. */
+  themes: {
+    unreadable: "That theme file couldn't be read.",
+    tooLarge: "That file is too large to import.",
+    notJson: "That file isn't a valid VS Code theme.",
+    pickExpired: "That import expired. Choose the file again.",
+    /**
+     * Task 4 finding 1: a theme whose name slugs onto a built-in id is written, reported as imported, and then
+     * hidden forever -- `listThemes` lets a built-in win, so the file exists but no surface ever offers it.
+     * Refusing up front is the disclosure that finding asked for: nothing is written and the user is told why.
+     */
+    builtinName: "JSLab already has a built-in theme with that name. Rename the theme and import it again.",
+    /**
+     * R-M5d-AA-1: imported syntax colours are painted exactly as the theme wrote them, so unlike the built-ins they
+     * are not lifted to WCAG AA in the editor. Saying so is cheaper than silently lifting them, which would make a
+     * theme the user chose for its appearance look wrong to them.
+     */
+    lowContrastSyntax: "Some of its syntax colours are hard to read on its editor background.",
+    /** `semanticTokenColors` is accepted by the format and then dropped, which nothing else would explain. */
+    semanticDropped: "Its semantic token colours aren't supported, so some code may look plainer.",
   },
   notices: {
     copySaved: (file: string) => ` A copy was saved as ${file}`,
@@ -104,6 +127,17 @@ export const strings = {
   cli: {
     /** Shown as a notice after Help → Install/Uninstall `jslab` Command… (spec §16.1). */
     installFailed: (message: string) => `Couldn't install the jslab command: ${message}`,
+  },
+  /** Settings → Keybindings (spec §6.5). Never quotes a path: the raw cause goes to the log instead (spec §18). */
+  keybindings: {
+    saveFailed: "Couldn't save your keybindings. Your changes are still here.",
+    /**
+     * Refusing to write over a keybindings.json we could not parse.
+     *
+     * When the file is unparseable the store holds no rules, so any save from Settings would replace the user's
+     * broken file with a set derived from nothing -- destroying the very text they opened the file to repair.
+     */
+    fileInvalid: "keybindings.json isn't valid JSON. Open it, fix it, then relaunch JSLab.",
   },
   runs: {
     /** Spec §12.2. */

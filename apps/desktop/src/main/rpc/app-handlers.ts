@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { type AppAction, appCommandSchema, settingsAppCommandSchema } from "@jslab/rpc-schema";
 import { buildDebugReport } from "../logging/debug-report";
 import type { Redactor } from "../logging/redact";
+import type { KeybindingsStore } from "../services/keybindings-store";
 import type { SettingsStore } from "../services/settings-store";
 import { createValidators, type Log } from "./validate";
 
@@ -9,6 +10,11 @@ export interface AppHandlerDeps {
   logTail(lines: number): string[];
   settings: Pick<SettingsStore, "current" | "reset">;
   paths: { dataDir: string; logsDir: string };
+  /**
+   * Settings → Keybindings "Open keybindings.json" (spec §6.5). The store owns the path, so this action and the
+   * keybindings handlers can never disagree about which file they mean.
+   */
+  keybindings: Pick<KeybindingsStore, "path" | "rules" | "save" | "invalid">;
   versions: { app: string; bun: string; electrobun: string };
   os: { macOS: string; arch: string };
   clipboard(text: string): void;
@@ -91,6 +97,15 @@ async function runAppAction(deps: AppHandlerDeps, action: AppAction): Promise<vo
       return;
     case "uninstallCli":
       deps.uninstallCli();
+      return;
+    case "openKeybindingsFile":
+      // A fresh install has never written keybindings.json, and `openPath` on a missing file gives the user an OS
+      // error instead of an editor. Writing the empty override set first is idempotent and leaves the running app
+      // exactly as it was. A file that exists but failed to parse is deliberately NEVER rewritten: `invalid` means
+      // the file is there and unreadable, and someone opening it is on their way to repair it by hand -- rewriting
+      // it would destroy the very thing they meant to fix.
+      if (deps.keybindings.rules.length === 0 && !deps.keybindings.invalid) await deps.keybindings.save([]);
+      deps.openPath(deps.keybindings.path);
       return;
   }
 }

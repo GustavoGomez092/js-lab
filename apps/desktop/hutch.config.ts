@@ -1,4 +1,10 @@
 const bundles = [
+  // Spec §16.1's binary is compiled by the root `bun run build:cli` under real Bun, never here: Cottontail's
+  // `build` rejects flags it doesn't know (`--format` fails the whole build with "unsupported cottontail build
+  // option"), and `bunx` can't reach real Bun's bundler without pulling a package off the public registry. A
+  // missing binary must be loud — a bundle that silently ships without its CLI looks fine until someone runs
+  // `jslab` and gets "command not found" with no explanation.
+  'test -x dist/bin/jslab || { echo "dist/bin/jslab is missing: run \\`bun run build:cli\\` from the repo root first" >&2; exit 1; }',
   "bun build ../../packages/runner-bun/src/bootstrap.ts --target bun --outfile dist/runner/bootstrap.js",
   // M4 §5.12: the web runner, in the one form `executeJavascript` can evaluate -- a classic script, since that
   // call is not a module context. `--target browser` because it lands in a WKWebView page, not a Bun process.

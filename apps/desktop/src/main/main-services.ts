@@ -50,13 +50,17 @@ export interface MainServicesOptions {
   log?: (message: string, detail?: unknown) => void;
   /**
    * How Main tells the USER something after startup (`app.notice`). `index.ts` binds this to the main window's RPC
-   * once that window exists; it defaults to a no-op, which is what headless tests get.
+   * once that window exists; it defaults to a sender that delivers nothing, which is what headless tests get.
    *
    * D1: raised for a settings write refused as too large. That refusal is the one write failure the user cannot
    * otherwise discover -- `update()` still resolves, the RPC still reports success, the UI still shows the change,
    * and the only trace is a line in the rotating log. Logging it is not telling them.
+   *
+   * Returns whether the notice actually REACHED the user. Before the main window exists there is nowhere to show
+   * one, and a caller that rations its telling has to tell that apart from having told them -- see the latch on
+   * `toldSettingsTooLarge` below, which is the bug this return value exists to prevent.
    */
-  notify?: (notice: StartupNotice) => void;
+  notify?: (notice: StartupNotice) => boolean;
   /**
    * Fix round 1 (Task 13, security): masks anything recorded about a `browser-node` fetch (spec §18) before it
    * reaches the log or the page. `index.ts` passes its own `redact`; defaults to a no-op so tests that never touch
@@ -113,10 +117,17 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   const { paths } = options;
   const log = options.log ?? ((message: string, detail?: unknown) => console.error(`[jslab] ${message}`, detail ?? ""));
   const runLock = new RunLock(paths.runLock);
-  const notify = options.notify ?? (() => {});
+  const notify = options.notify ?? (() => false);
   // D1: the refusal recurs on every later settings change, so the telling must not -- once per session. The UI's
   // own `addNotice` also dedupes by id, but leaning on that would make a Main-side flood invisible rather than
   // absent, and would tie a Main guarantee to a UI implementation detail.
+  //
+  // The latch is on DELIVERY, never on the attempt, and that distinction is the whole of D1/D3. `SettingsStore.open`
+  // below rewrites settings.json when the file was recovered or is being migrated -- inside this function, before
+  // `index.ts` has a window or an RPC to show anything with. Latching on the attempt spent the single telling on a
+  // notice nobody could see: a user upgrading across a SETTINGS_VERSION bump with a near-cap settings.json then had
+  // every later settings change fail silently, with no banner ever. The flag has to mean what its name says, "the
+  // user has been told", not "we tried".
   let toldSettingsTooLarge = false;
   const settings = await SettingsStore.open(paths.dataDir, {
     onWriteError: (error) => {
@@ -125,9 +136,11 @@ export async function createMainServices(options: MainServicesOptions): Promise<
       // change may well succeed, so it stays a log line. `code` is how bounded-read's refusals are told apart
       // everywhere else in Main.
       if ((error as NodeJS.ErrnoException).code !== "EFBIG" || toldSettingsTooLarge) return;
-      toldSettingsTooLarge = true;
       const refusal = error as FileTooLargeError;
-      notify({ id: "settingsTooLarge", message: strings.notices.settingsTooLarge(refusal.size, refusal.maxBytes) });
+      toldSettingsTooLarge = notify({
+        id: "settingsTooLarge",
+        message: strings.notices.settingsTooLarge(refusal.size, refusal.maxBytes),
+      });
     },
   });
   const session = await SessionStore.open(paths.dataDir, {

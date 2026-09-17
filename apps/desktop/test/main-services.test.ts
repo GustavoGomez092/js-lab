@@ -93,7 +93,12 @@ describe("main services (composition root)", () => {
       shiftHeld: Promise.resolve(false),
       realHome: join(dir, "home"),
       log: () => {},
-      notify: (notice) => notices.push(notice),
+      // Returns true: this test's window is notionally open, so the notice is delivered. The D1/D3 test below is
+      // the one that exercises a notify with nowhere to show it.
+      notify: (notice) => {
+        notices.push(notice);
+        return true;
+      },
       onEvents: () => {},
       onState: () => {},
       onDiagnostics: () => {},
@@ -119,6 +124,70 @@ describe("main services (composition root)", () => {
     await services.settings.update({ editor: { lineWrap: true } });
     await services.settings.update({ appearance: { fontSize: 18 } });
     expect(notices.map((notice) => notice.id)).toEqual(["settingsTooLarge"]);
+  });
+
+  test("a refusal with nowhere to show it does not spend the one telling the user gets (D1/D3)", async () => {
+    const paths = resolveAppPaths({
+      resourcesFolder: join(dir, "Resources"),
+      userData: dir,
+      execPath: process.execPath,
+      env: {},
+    });
+    // `version: 2` is below SETTINGS_VERSION, so `SettingsStore.open` MIGRATES the file -- rewriting it during
+    // createMainServices, before any window or RPC exists. That is the path the once-per-session guard used to be
+    // spent on: the refusal was raised into `index.ts`'s pre-window no-op, the flag was burned, and every later
+    // change returned at the guard. A user upgrading across a SETTINGS_VERSION bump with a near-cap settings.json
+    // then lost every subsequent settings change with no banner, ever. Recovery from a near-cap .bak does the same.
+    const unknown: Record<string, unknown> = {};
+    for (let index = 0; index < 25_000; index++) unknown[`experimentalFeatureFlag${index}`] = index;
+    const base = defaultSettings();
+    await mkdir(paths.dataDir, { recursive: true });
+    await writeFile(
+      join(paths.dataDir, "settings.json"),
+      JSON.stringify({ ...base, version: 2, run: { ...base.run, ...unknown } }),
+    );
+
+    const raised: StartupNotice[] = [];
+    const delivered: StartupNotice[] = [];
+    // Exactly `index.ts`'s shape: until the main window exists there is nowhere to show a notice, and the sender
+    // reports that by returning false rather than by silently swallowing it.
+    let windowOpen = false;
+    services = await createMainServices({
+      paths,
+      env: {},
+      shiftHeld: Promise.resolve(false),
+      realHome: join(dir, "home"),
+      log: () => {},
+      notify: (notice) => {
+        raised.push(notice);
+        if (!windowOpen) return false;
+        delivered.push(notice);
+        return true;
+      },
+      onEvents: () => {},
+      onState: () => {},
+      onDiagnostics: () => {},
+      onNpmOperation: () => {},
+      onNpmLog: () => {},
+      onNpmChanged: () => {},
+      startRunner: () => Promise.reject(new Error("no runners in this test")),
+      transformHost: { transform: () => Promise.reject(new Error("no transforms in this test")), dispose: () => {} },
+    });
+
+    // The migration rewrite was refused at open, and correctly showed nobody anything: there was no window yet.
+    expect(raised.map((notice) => notice.id)).toEqual(["settingsTooLarge"]);
+    expect(delivered).toEqual([]);
+
+    // Now there is a window, and the user changes a setting. The change will not persist, so they must be told --
+    // the undelivered attempt above must not have spent the telling.
+    windowOpen = true;
+    await services.settings.update({ editor: { lineWrap: false } });
+    expect(delivered.map((notice) => notice.id)).toEqual(["settingsTooLarge"]);
+
+    // And still exactly once, however many further changes fail the same way.
+    await services.settings.update({ appearance: { fontSize: 18 } });
+    await services.settings.update({ editor: { lineWrap: true } });
+    expect(delivered.map((notice) => notice.id)).toEqual(["settingsTooLarge"]);
   });
 
   test("saving env.json replaces the active tab's pre-started runner", async () => {

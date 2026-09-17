@@ -106,9 +106,12 @@ let showUnexpectedErrorNotice: () => void = () => {};
  * callbacks do would turn a refused write into a TDZ crash during startup.
  *
  * Dropping a notice raised before the window exists is correct rather than merely tolerable: the condition is
- * permanent, so the next settings change re-raises it with somewhere to show it.
+ * permanent, so the next settings change raises it again -- but that is only true because `main-services.ts`
+ * latches its once-per-session guard on DELIVERY rather than on the attempt. This sender therefore has to report
+ * whether the notice was actually shown. Returning void let an undelivered startup notice spend that guard, after
+ * which the user saw no banner at all, ever (D1/D3).
  */
-let sendAppNotice: (notice: StartupNotice) => void = () => {};
+let sendAppNotice: (notice: StartupNotice) => boolean = () => false;
 
 /**
  * Spec §20 (FA-I3, error-policy.ts). A rejection anywhere in `start()` -- a failing store recovery rewrite, for
@@ -457,7 +460,10 @@ async function start(): Promise<void> {
   // D1: the same channel, for a notice raised by the composition root (a settings write refused as too large).
   // The UI's `addNotice` shows one banner per id, and main-services raises this once per session anyway.
   sendAppNotice = (notice) => {
-    if (mainWindow.isOpen()) rpc.send["app.notice"](notice);
+    // Reporting delivery, not attempting it: main-services spends its one telling only on a notice that landed.
+    if (!mainWindow.isOpen()) return false;
+    rpc.send["app.notice"](notice);
+    return true;
   };
 
   // `MenuItem` (menu.ts) is the devkit's own `ApplicationMenuItemConfig` shape at its source (final review T14),

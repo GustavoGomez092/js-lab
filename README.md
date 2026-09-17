@@ -69,6 +69,15 @@ See [Bun vs Node](docs/user/bun-vs-node.md) for what differs between the three.
 
 Press <kbd>⌘⇧P</kbd> to search every command. Matches are highlighted, results are grouped by section, toggles show whether they are currently on, and each command shows its shortcut.
 
+### Snippets
+
+<kbd>⌘B</kbd> opens the snippet library in the side bar. Search by name or description, and Insert, Insert in New Tab, Copy, Edit or Delete the one you pick — a delete is confirmed, and undoable until your next change.
+
+- A snippet's **name is its trigger**: type it in the editor and press <kbd>Tab</kbd> to expand it. Names also appear in autocomplete, including after you've typed the whole name.
+- Bodies can carry **cursor placeholders** — `$0`, `$1` and `${1:like this}` — and a body with none is inserted literally, with `$` left alone.
+- **Create Snippet…** (Edit menu, or the editor's context menu) starts a new snippet from the selection, or from the whole buffer when nothing is selected.
+- **Import and export** the whole library as JSON. Importing merges: name conflicts ask whether to overwrite, keep both or skip, and everything imported is given a fresh id.
+
 ### Tabs and files
 
 - Multiple tabs: <kbd>⌘T</kbd> for a new one, <kbd>⌘1</kbd>–<kbd>⌘9</kbd> to jump, drag to reorder, and reopen closed tabs. Rename, Close Others and Close to the Right live in the tab's context menu.
@@ -165,7 +174,7 @@ Scripted launches must use a working directory on an internal disk. From an exte
 | M2 | Workspace: tabs, files, settings, themes, formatting, command palette | ✅ Done |
 | M3 | Language & packages: npm, types and autocomplete, working directory, env vars | ✅ Done (manual QA items pending user) |
 | M4 | Browser runtimes: DOM, canvas, React and a live web view | ✅ Done (manual QA items pending user) |
-| M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | 🚧 In progress — logpoints, Show Transpiled Output and the first-run welcome tab are done |
+| M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | 🚧 In progress — logpoints, Show Transpiled Output, the first-run welcome tab and snippets are done |
 | M6 | Ship: signing, notarization, auto-update, 1.0 | Planned |
 
 Details are in the [roadmap](docs/superpowers/plans/2026-09-12-jslab-roadmap.md).

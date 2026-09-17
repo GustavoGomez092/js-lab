@@ -707,6 +707,52 @@ describe("App shell", () => {
     expect(api.updateSettings.mock.calls.length).toBe(1);
     expect(document.querySelector(".transpiled-panel")).not.toBeNull();
   });
+
+  test("⌘B opens the Snippets panel, switches to it from Transpiled, then hides the side bar (R-M5b-3)", async () => {
+    const { store, api, emit } = renderApp();
+    api.updateSettings.mockImplementation(async (patch: unknown) =>
+      mergeSettings(store.getState().settings ?? defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+    );
+    const shown = () => document.querySelector(".snippets-panel") !== null;
+    expect([shown(), api.updateSettings.mock.calls.length]).toEqual([false, 0]);
+
+    await act(async () => {
+      press("KeyB");
+      await Bun.sleep(1);
+    });
+    expect([shown(), store.getState().sideBarPanel]).toEqual([true, "snippets"]);
+    expect(api.updateSettings).toHaveBeenCalledWith({ view: { sideBar: true } });
+
+    // Open on another panel: ⌘B SWITCHES, and writes no setting -- `view.sideBar` has one owner, and it is already
+    // true. A second mechanism writing it directly (the shape ruling R-M5b-D3/D4-FIX-a forbids) fails this line.
+    await emit("menu.command", { command: "view.showTranspiled" });
+    expect(store.getState().sideBarPanel).toBe("transpiled");
+    const writes = api.updateSettings.mock.calls.length;
+    await act(async () => {
+      press("KeyB");
+      await Bun.sleep(1);
+    });
+    expect([shown(), store.getState().sideBarPanel, api.updateSettings.mock.calls.length]).toEqual([
+      true,
+      "snippets",
+      writes,
+    ]);
+
+    // Open on Snippets: ⌘B hides the side bar -- exactly what the activity-bar button does.
+    await act(async () => {
+      press("KeyB");
+      await Bun.sleep(1);
+    });
+    expect([shown(), api.updateSettings.mock.calls.length]).toEqual([false, writes + 1]);
+  });
+
+  // The activity bar's Snippets tooltip gains the ⌘B keycap (FB-m3's rule, applied to the new binding). Nothing
+  // else asserts this button's `title`, so without this test dropping `snippetsKeys` is a silent, surviving mutant.
+  test("the activity bar's Snippets tooltip carries the ⌘B keycap, keeping its aria-label intact (FB-m3)", () => {
+    renderApp();
+    const button = screen.getByRole("button", { name: strings.shell.snippets });
+    expect(button.getAttribute("title")).toBe(`${strings.shell.snippets} (⌘B)`);
+  });
 });
 
 describe("runStateLabel", () => {

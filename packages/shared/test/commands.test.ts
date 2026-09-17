@@ -68,4 +68,27 @@ describe("command catalogue", () => {
     });
     expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.command === "view.showTranspiled")).toEqual([]);
   });
+
+  test("M5b adds the snippet commands, ⌘B and the Tab expansion (spec §13, §6.5)", () => {
+    expect(commandMeta("tools.snippets")).toMatchObject({ title: "Snippets…", category: "tools" });
+    expect(commandMeta("snippets.create")).toMatchObject({
+      title: "Create Snippet…",
+      category: "edit",
+      context: "editor",
+    });
+    expect(commandMeta("snippets.import")).toMatchObject({ title: "Import Snippets…", category: "tools" });
+    expect(commandMeta("snippets.export")).toMatchObject({ title: "Export Snippets…", category: "tools" });
+    // Hidden from the palette: it only means anything with a trigger word already typed.
+    expect(commandMeta("snippets.expand")).toMatchObject({ palette: false });
+    // The three palette-visible ones must NOT be hidden, which `palette: false` on the wrong entry would make them.
+    for (const id of ["tools.snippets", "snippets.create", "snippets.import", "snippets.export"]) {
+      expect([id, commandMeta(id)?.palette ?? true]).toEqual([id, true]);
+    }
+    expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.key === "cmd+b")).toEqual([
+      { key: "cmd+b", command: "tools.snippets" },
+    ]);
+    expect(DEFAULT_KEYBINDINGS.filter((rule) => rule.key === "tab")).toEqual([
+      { key: "tab", command: "snippets.expand", when: "editorFocus" },
+    ]);
+  });
 });

@@ -27,6 +27,8 @@ export interface UiState {
   // biome-ignore lint/suspicious/noExplicitAny: scenarios read arbitrary settings paths
   settings: Record<string, any> | null;
   cursor?: { line: number; column: number } | null;
+  /** Spec §13; emitted by `apps/ui/src/e2e/snapshot.ts` since M5b Task 9. */
+  snippetCount?: number;
   [key: string]: unknown;
 }
 

@@ -203,6 +203,12 @@ export const DEFAULT_KEYBINDINGS: readonly KeybindingRule[] = [
   { key: "alt+shift+f", command: "format.document" },
   { key: "cmd+k", command: "output.clear" },
   { key: "cmd+i", command: "tools.npmPackages" },
+  { key: "cmd+b", command: "tools.snippets" },
+  // Bare Tab is safe: `snippets.expand` reports isEnabled() === false unless a snippet name sits immediately before
+  // the caret, and App.tsx's key handler skips preventDefault for a disabled command, so Monaco still indents. The
+  // resolver additionally skips modifier-less chords while a text input has focus, so Tab in the panel's own search
+  // box is never intercepted either.
+  { key: "tab", command: "snippets.expand", when: editor },
   { key: "cmd+/", command: "edit.toggleLineComment", when: editor },
   { key: "cmd+alt+/", command: "edit.toggleBlockComment", when: editor },
   { key: "cmd+alt+shift+/", command: "edit.toggleMagicComment", when: editor },

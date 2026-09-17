@@ -283,6 +283,37 @@ export function Editor({ store, api, onLargePaste, onInstall, vimSlot }: EditorP
         return model && position ? model.getOffsetAt(position) : 0;
       },
       getCursorLine: () => editor.getPosition()?.lineNumber ?? null,
+      textBeforeCursor: () => {
+        const model = editor.getModel();
+        const position = editor.getPosition();
+        if (!model || !position) return "";
+        return model.getValueInRange(new monaco.Range(position.lineNumber, 1, position.lineNumber, position.column));
+      },
+      insertSnippet: (template, deleteBefore = 0) => {
+        const model = editor.getModel();
+        const position = editor.getPosition();
+        if (!model || !position) return false;
+        // `snippetController2` is Monaco's own snippet-insertion contribution; it is what the suggest widget uses
+        // for an InsertAsSnippet completion. A build without it still gets plain text from the caller.
+        const controller = editor.getContribution("snippetController2") as { insert?(template: string): void } | null;
+        if (!controller || typeof controller.insert !== "function") return false;
+        if (deleteBefore > 0) {
+          const offset = model.getOffsetAt(position);
+          const start = model.getPositionAt(Math.max(0, offset - deleteBefore));
+          editor.pushUndoStop();
+          editor.executeEdits("snippets", [{ range: monaco.Range.fromPositions(start, position), text: "" }]);
+        }
+        editor.focus();
+        controller.insert(template);
+        return true;
+      },
+      selectedTextOrAll: () => {
+        const model = editor.getModel();
+        if (!model) return "";
+        const selection = editor.getSelection();
+        if (!selection || selection.isEmpty()) return model.getValue();
+        return model.getValueInRange(selection);
+      },
       getSelectedLineRange: () => {
         const selection = editor.getSelection();
         if (!selection) return null;

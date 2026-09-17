@@ -230,4 +230,36 @@ describe("application menu", () => {
     const actions = menu.find((item) => item.label === "Actions")?.submenu ?? [];
     expect(actions[actions.length - 1]?.label?.split("    ")[0]).toBe("Show Transpiled Output");
   });
+
+  test("Tools lists Snippets… with ⌘B, and Edit offers Create Snippet… after the logpoint items (§7.4, §13.1)", () => {
+    const menu = buildMenu(model());
+    expect(byLabel(menu, "Snippets…")?.label).toBe("Snippets…    ⌘B");
+    expect(byLabel(menu, "Snippets…")?.action).toBe(menuAction("tools.snippets"));
+    expect(byLabel(menu, "Import Snippets…")?.action).toBe(menuAction("snippets.import"));
+    expect(byLabel(menu, "Export Snippets…")?.action).toBe(menuAction("snippets.export"));
+    expect(byLabel(menu, "Create Snippet…")?.action).toBe(menuAction("snippets.create"));
+    const labels = flatten(menu).map((item) => item.label?.split("    ")[0]);
+    // M5a owns the two items above it. Create Snippet… goes AFTER them -- never between them and Toggle Magic
+    // Comment, and never in place of them. The M5a test above asserts that adjacency from its side; this asserts
+    // it from M5b's, so a Task 9 edit that displaces either item fails here too.
+    expect(labels.indexOf("Toggle Logpoint")).toBe(labels.indexOf("Toggle Magic Comment") + 1);
+    expect(labels.indexOf("Clear All Logpoints")).toBe(labels.indexOf("Toggle Logpoint") + 1);
+    expect(labels.indexOf("Create Snippet…")).toBeGreaterThan(labels.indexOf("Clear All Logpoints"));
+    // Create Snippet… belongs to EDIT, and the three library items to TOOLS -- a block pasted into the wrong
+    // submenu keeps every assertion above true, so the owning submenu is asserted directly.
+    const submenu = (label: string) =>
+      (menu.find((item) => item.label === label)?.submenu ?? []).map((item) => item.label?.split("    ")[0]);
+    expect(submenu("Edit")).toContain("Create Snippet…");
+    expect(submenu("Tools")).toEqual([
+      "NPM Packages…",
+      "Environment Variables…",
+      "Snippets…",
+      undefined,
+      "Import Snippets…",
+      "Export Snippets…",
+    ]);
+    // And M5a's Actions item is still last, which an inattentive Tools edit can push off the end.
+    const actions = menu.find((item) => item.label === "Actions")?.submenu ?? [];
+    expect(actions[actions.length - 1]?.label?.split("    ")[0]).toBe("Show Transpiled Output");
+  });
 });

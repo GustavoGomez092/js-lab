@@ -41,6 +41,7 @@ export function ActivityBar(props: {
   /** True while the NPM Packages sheet is open. */
   npmOpen?: boolean;
   npmKeys?: string | null;
+  snippetsKeys?: string | null;
   onRun(): void;
   onStop(): void;
   onPanel(panel: "snippets" | "ai"): void;
@@ -72,7 +73,7 @@ export function ActivityBar(props: {
       {props.busy && <output className="activity-spinner" aria-label={strings.shell.running} />}
       <button
         type="button"
-        title={strings.shell.snippets}
+        title={strings.shell.withKeys(strings.shell.snippets, props.snippetsKeys ?? null)}
         aria-label={strings.shell.snippets}
         aria-pressed={open("snippets")}
         onClick={() => props.onPanel("snippets")}

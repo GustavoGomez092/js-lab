@@ -164,6 +164,8 @@ export function buildMenu(model: MenuModel): MenuItem[] {
         item("edit.toggleLogpoint"),
         item("edit.clearLogpoints"),
         separator,
+        item("snippets.create"),
+        separator,
         item("output.clear"),
         item("editor.clear"),
       ],
@@ -203,7 +205,14 @@ export function buildMenu(model: MenuModel): MenuItem[] {
     },
     {
       label: "Tools",
-      submenu: [item("tools.npmPackages"), item("tools.environmentVariables")],
+      submenu: [
+        item("tools.npmPackages"),
+        item("tools.environmentVariables"),
+        item("tools.snippets"),
+        separator,
+        item("snippets.import"),
+        item("snippets.export"),
+      ],
     },
     {
       label: "View",

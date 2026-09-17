@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { RunEvent } from "@jslab/rpc-schema";
-import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
+import { createTab, defaultSession, defaultSettings, type Snippet } from "@jslab/shared";
 import { createE2EAgent } from "../src/e2e/agent";
 import { keyEventInit } from "../src/e2e/keys";
 import type { EditorHandle } from "../src/editor/editor-handle";
@@ -31,6 +31,28 @@ describe("E2E agent", () => {
       tabOrder: ["t1"],
       tabs: [{ id: "t1", title: "scratch", code: "1 + 1", runState: null, entryCount: 0, autoRunArmed: false }],
     });
+  });
+
+  /**
+   * `snippetCount` is consumed by M5b Task 11's scenarios and by nothing else in the UI, so without this test the
+   * field is unpinned: hardcoding it to a constant passed the entire 518-test `apps/ui/test` suite (measured --
+   * mutation P1 survived). TWO different sizes are asserted, so no constant can satisfy both.
+   */
+  test("state reports the snippet library size, and it tracks the library (spec §13)", async () => {
+    const { agent, store } = setup();
+    expect(await agent("state", {})).toMatchObject({ snippetCount: 0 });
+    const at = "2026-09-16T10:00:00.000Z";
+    const snippet = (name: string): Snippet => ({
+      id: name,
+      name,
+      description: "",
+      body: "x",
+      language: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+    store.getState().receiveSnippets([snippet("a"), snippet("b"), snippet("c")]);
+    expect(await agent("state", {})).toMatchObject({ snippetCount: 3 });
   });
 
   test("output renders visible entries as text with their lines", async () => {

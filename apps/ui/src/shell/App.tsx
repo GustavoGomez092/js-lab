@@ -30,6 +30,7 @@ import { OutputTiles } from "../output/OutputTiles";
 import { WebViewHosts, type WebviewDock } from "../output/WebViewHosts";
 import { recordAppRender, webViewTileCounters } from "../output/WebViewTile";
 import { CommandPalette } from "../palette/CommandPalette";
+import { createSnippetActions, createSnippetCommands } from "../snippets/snippet-actions";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
 import { createEventCoalescer, createFrameScheduler } from "../state/event-coalescer";
@@ -251,15 +252,38 @@ export function App({
     [bindings],
   );
 
+  // Only `insert` / `insertInNewTab` reach the panel, and neither touches the side bar -- so this can be built
+  // before the registry exists. Side-bar control lives in the command deps below (ruling R-M5b-D3/D4-FIX-b).
+  const snippetActions = useMemo(() => createSnippetActions({ store, editor: getEditorHandle, tabs }), [store, tabs]);
+
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>
       store.getState().setStatusMessage(strings.commands.failed(commandMeta(id)?.title ?? id, error)),
     );
+    // `view.sideBar` keeps ONE writer -- the `view.toggleSideBar` command -- exactly as `view.showTranspiled` below
+    // does. A second mechanism writing the setting directly is what ruling R-M5b-D3/D4-FIX-a forbids.
+    const snippetDeps = {
+      store,
+      api,
+      editor: getEditorHandle,
+      tabs,
+      panelShowing: () =>
+        Boolean(store.getState().settings?.view.sideBar) && store.getState().sideBarPanel === "snippets",
+      openPanel: () => {
+        const state = store.getState();
+        state.setSideBarPanel("snippets");
+        if (!state.settings?.view.sideBar) created.execute("view.toggleSideBar");
+      },
+      closePanel: () => {
+        if (store.getState().settings?.view.sideBar) created.execute("view.toggleSideBar");
+      },
+    };
     created.register(
       ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle, keysFor }),
       ...createEditorCommands(getEditorHandle, store),
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
+      ...createSnippetCommands(snippetDeps),
       ...createFileCommands(flows, api),
       ...createOutputCommands(store),
       {
@@ -315,6 +339,7 @@ export function App({
       stop: keysFor("run.stop"),
       settings: keysFor("app.settings"),
       npm: keysFor("tools.npmPackages"),
+      snippets: keysFor("tools.snippets"),
     }),
     [keysFor],
   );
@@ -422,6 +447,8 @@ export function App({
         // (R-M5a-7) whether it is currently admitting that what it shows is output for code that has since changed.
         transpiledPanel: document.querySelector(".transpiled-panel") !== null,
         transpiledStale: document.querySelector(".transpiled-stale-label") !== null,
+        // Spec §13.1: the snippets panel, so a scenario can tell it is on screen.
+        snippetsPanel: document.querySelector(".snippets-panel") !== null,
         // M4 Task 16: the Web View tile's docking placeholder, which `OutputTiles` renders only for a runtime that
         // can host a webview and only while that tab's own Web View toggle is on -- so this is what an E2E
         // scenario reads to tell "the tile is on screen" from "a bun tab never gets one" (spec §7.1, parity WV-01).
@@ -582,6 +609,7 @@ export function App({
             settingsKeys={keycaps.settings}
             npmOpen={npmOpen}
             npmKeys={keycaps.npm}
+            snippetsKeys={keycaps.snippets}
             onRun={() => registry.execute("run.start")}
             onStop={() => registry.execute("run.stop")}
             onPanel={togglePanel}
@@ -589,7 +617,9 @@ export function App({
             onNpm={() => registry.execute("tools.npmPackages")}
           />
         )}
-        {settings.view.sideBar && <SideBar panel={sideBarPanel} store={store} api={api} />}
+        {settings.view.sideBar && (
+          <SideBar panel={sideBarPanel} store={store} api={api} dialogs={dialogs} actions={snippetActions} />
+        )}
         <SplitPane
           orientation={orientation}
           size={editorSize}

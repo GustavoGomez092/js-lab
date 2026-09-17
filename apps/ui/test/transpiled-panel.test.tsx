@@ -3,6 +3,7 @@ import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TranspiledPanel } from "../src/output/TranspiledPanel";
 import { SideBar } from "../src/shell/SideBar";
+import type { AppState } from "../src/state/store";
 import { createAppStore } from "../src/state/store";
 import { strings } from "../src/strings";
 import { createFakeApi } from "./fake-api";
@@ -100,23 +101,53 @@ describe("transpiled output panel (spec §7.4)", () => {
     expect(screen.getByText(strings.transpiled.empty)).toBeTruthy();
   });
 
-  // R-M5a-6: the panel is reached through the side bar's existing panel switch, so that wiring is what makes it
-  // reachable at all -- without this, `SideBar` could quietly keep rendering the placeholder for every panel.
-  test("the side bar shows the transpiled panel for that panel, and the placeholder for the others", async () => {
+  /**
+   * REGRESSION GUARD (ruling R-M5b-D3/D4-FIX). The side bar is the one component two milestones each add a branch
+   * to, and NEITHER branch is enforced by the type system: `panel` is the whole `AppState["sideBarPanel"]` union, so
+   * a SideBar that has forgotten a member still compiles and silently renders the AI Chat placeholder for it. That
+   * is exactly how M5b Task 9's original rewrite would have deleted M5a's transpiled panel -- with no type error and
+   * no merge conflict. This test is what makes a dropped branch visible.
+   */
+  test("the side bar renders a panel for every member of the union, and the placeholder only for AI Chat", async () => {
     const { store, api } = setup();
-    // Seeded with empty divs rather than null, so a render that never happened fails these assertions instead of
-    // satisfying them: an empty div has neither the panel nor the placeholder text.
-    let transpiledContainer: HTMLElement = document.createElement("div");
-    let snippetsContainer: HTMLElement = document.createElement("div");
+    const dialogs = { confirm: async () => "cancel" };
+    const actions = { insert: () => {}, insertInNewTab: async () => {} };
+    const show = (panel: AppState["sideBarPanel"]) =>
+      render(<SideBar panel={panel} store={store} api={api} dialogs={dialogs} actions={actions} />).container;
+
+    // Seeded with empty divs rather than null, so a render that never happened FAILS these assertions instead of
+    // satisfying them: an empty div has neither a panel nor the placeholder text.
+    let transpiled: HTMLElement = document.createElement("div");
+    let snippets: HTMLElement = document.createElement("div");
+    let ai: HTMLElement = document.createElement("div");
     await act(async () => {
-      transpiledContainer = render(<SideBar panel="transpiled" store={store} api={api} />).container;
-      snippetsContainer = render(<SideBar panel="snippets" store={store} api={api} />).container;
+      transpiled = show("transpiled");
+      snippets = show("snippets");
+      ai = show("ai");
       await Bun.sleep(1);
     });
-    expect(transpiledContainer.querySelector(".transpiled-panel")).not.toBeNull();
-    expect(transpiledContainer.textContent).toContain("__jl.log(1, const a = 5);");
-    expect(snippetsContainer.querySelector(".transpiled-panel")).toBeNull();
-    expect(snippetsContainer.textContent).toContain(strings.shell.sideBarPlaceholder);
+
+    // M5a's branch. THIS is the assertion that dies if a SideBar rewrite drops `if (panel === "transpiled")`.
+    expect(transpiled.querySelector(".transpiled-panel")).not.toBeNull();
+    expect(transpiled.textContent).toContain("__jl.log(1, const a = 5);");
+    expect(transpiled.querySelector(".snippets-panel")).toBeNull();
+
+    // M5b's branch, and that it did not swallow M5a's.
+    expect(snippets.querySelector(".snippets-panel")).not.toBeNull();
+    expect(snippets.querySelector(".transpiled-panel")).toBeNull();
+
+    // The placeholder is AI Chat's alone now: "snippets" stopped being a placeholder when the panel landed.
+    expect(ai.textContent).toContain(strings.shell.sideBarPlaceholder);
+    expect(ai.querySelector(".transpiled-panel")).toBeNull();
+    expect(ai.querySelector(".snippets-panel")).toBeNull();
+    // ...and the two real panels are NOT the placeholder, so a fallback that swallowed a branch fails here too.
+    expect(transpiled.textContent).not.toContain(strings.shell.sideBarPlaceholder);
+    expect(snippets.textContent).not.toContain(strings.shell.sideBarPlaceholder);
+
+    // Every panel keeps the `side-bar` class: apps/ui/isolated/app.test.tsx decides the side bar is open by it.
+    for (const container of [transpiled, snippets, ai]) {
+      expect(container.querySelector(".side-bar")).not.toBeNull();
+    }
   });
 
   /**

@@ -142,6 +142,14 @@ export const COMMANDS = [
   { id: "tools.npmPackages", title: "NPM Packages…", category: "tools" },
   { id: "tools.environmentVariables", title: "Environment Variables…", category: "tools" },
   { id: "npm.install", title: "Install Package", category: "tools", palette: false },
+  { id: "tools.snippets", title: "Snippets…", category: "tools" },
+  { id: "snippets.import", title: "Import Snippets…", category: "tools" },
+  { id: "snippets.export", title: "Export Snippets…", category: "tools" },
+  // Category "edit" (they belong in the Edit menu and the palette's Edit section); the `snippets.` prefix keeps them
+  // out of `apps/ui/test/commands.test.ts`'s "every edit.* command is implemented by createEditorCommands" rule,
+  // which they could not satisfy -- both need the snippet library, which that factory has no access to.
+  { id: "snippets.create", title: "Create Snippet…", category: "edit", context: "editor" },
+  { id: "snippets.expand", title: "Expand Snippet", category: "edit", context: "editor", palette: false },
 
   { id: "runtime.bun", title: "Runtime: Bun", category: "runtime" },
   { id: "runtime.browserNode", title: "Runtime: Browser & Node APIs", category: "runtime" },

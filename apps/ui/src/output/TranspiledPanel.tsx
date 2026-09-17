@@ -23,7 +23,7 @@ export function TranspiledPanel({ store, api }: { store: AppStore; api: Pick<Mai
   const runId = useStore(store, (s) => s.output.runId);
   const code = useStore(store, (s) => s.code);
   const [hideInstrumentation, setHideInstrumentation] = useState(false);
-  const [entry, setEntry] = useState<{ code: string; source: string } | null>(null);
+  const [entry, setEntry] = useState<{ tabId: string; code: string; source: string } | null>(null);
   const [failed, setFailed] = useState(false);
 
   // `runId` is deliberately a dependency this effect never reads. It is the *reason* the effect re-runs: a new run
@@ -39,7 +39,7 @@ export function TranspiledPanel({ store, api }: { store: AppStore; api: Pick<Mai
     setFailed(false);
     api.transpiled(tabId, hideInstrumentation).then(
       (result) => {
-        if (current) setEntry(result);
+        if (current) setEntry(result && { tabId, ...result });
       },
       () => {
         if (current) {
@@ -53,7 +53,14 @@ export function TranspiledPanel({ store, api }: { store: AppStore; api: Pick<Mai
     };
   }, [api, tabId, runId, hideInstrumentation]);
 
-  const stale = entry !== null && entry.source !== code;
+  // A tab switch re-runs the effect but does not clear `entry`: React keeps the previous state until the new
+  // request lands, so for one round trip the state still holds the *previous* tab's output. Rendering it would
+  // attribute tab A's code to tab B, and because `stale` compares the entry's `source` against the active tab's
+  // buffer it would also flash "Stale" at a tab that is not stale. Stamping each response with the tab it was
+  // requested for, and showing it only while that still matches, makes the panel say "not run yet" for that
+  // window instead -- which is the truth about tab B until its own output arrives.
+  const shown = entry !== null && entry.tabId === tabId ? entry : null;
+  const stale = shown !== null && shown.source !== code;
 
   return (
     <section className="side-bar transpiled-panel" aria-label={strings.transpiled.title}>
@@ -69,11 +76,11 @@ export function TranspiledPanel({ store, api }: { store: AppStore; api: Pick<Mai
           {strings.transpiled.hideInstrumentation}
         </label>
       </header>
-      {entry === null ? (
+      {shown === null ? (
         <p className="transpiled-empty">{failed ? strings.transpiled.failed : strings.transpiled.empty}</p>
       ) : (
         // Read-only by construction: a <pre>, never an editor (spec §7.4).
-        <pre className="transpiled-code">{entry.code}</pre>
+        <pre className="transpiled-code">{shown.code}</pre>
       )}
     </section>
   );

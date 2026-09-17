@@ -1,5 +1,5 @@
 import type * as Monaco from "monaco-editor";
-import { hollowLogpointLines, linesFromRanges, logpointDecorations } from "./logpoints";
+import { linesFromRanges, logpointDecorations } from "./logpoints";
 
 export interface LogpointGutterDeps {
   /** The tab's logpoint lines right now (the store's `logpoints` mirror). */
@@ -76,5 +76,3 @@ export function attachLogpointGutter(
     },
   };
 }
-
-export { hollowLogpointLines };

@@ -229,8 +229,10 @@ export class SessionStore {
     const tab = this.#session.tabs[tabId];
     if (!tab || this.#unreadableBuffers.has(tabId)) return;
     // R-M5a-REGRESSION-2: the welcome tab stops being pristine as soon as it no longer holds what JSLab wrote
-    // there. Comparing the content, rather than treating any write as an edit, keeps the UI's own flushes -- which
-    // resend identical bytes -- from retiring the flag behind the user's back.
+    // there. Comparing the content, rather than treating any write as an edit, is defensive rather than
+    // load-bearing: `createBufferSync` only flushes what `pushContent` pushed from `onDidChangeContent`, so an
+    // untouched welcome tab never sends `buffer.changed` at all and no identical-bytes write is known to reach
+    // here. The comparison means that if one ever did, it still could not retire the flag behind the user's back.
     if (tab.pristine && content !== this.#firstRunContent)
       this.#commit({ ...this.#session, tabs: { ...this.#session.tabs, [tabId]: { ...tab, pristine: false } } });
     this.#writerFor(tabId).schedule(content);

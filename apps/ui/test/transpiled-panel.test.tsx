@@ -71,6 +71,35 @@ describe("transpiled output panel (spec §7.4)", () => {
     expect(screen.getByText(strings.transpiled.empty)).toBeTruthy();
   });
 
+  /**
+   * U-1: switching tabs re-runs the effect, but React keeps `entry` until the new request resolves. For that one
+   * round trip the panel would otherwise render the PREVIOUS tab's transpiled output under the new tab, and --
+   * because staleness compares the entry's `source` against the active buffer -- flash "Stale" at a tab that is
+   * not stale. Every other test here uses a single tab, so nothing else can catch this.
+   */
+  test("a tab switch never shows the previous tab's output, or a false 'Stale', while the new request is in flight", async () => {
+    const { store, api } = setup();
+    await act(async () => {
+      render(<TranspiledPanel store={store} api={api} />);
+      await Bun.sleep(1);
+    });
+    expect(screen.getByText("__jl.log(1, const a = 5);")).toBeTruthy();
+
+    // Held unresolved on purpose: this IS the window the bug lives in, and letting it resolve would race the
+    // assertions against the correct output arriving.
+    api.transpiled.mockImplementation(() => new Promise<{ code: string; source: string } | null>(() => {}));
+    await act(async () => {
+      // A different buffer from t1's SOURCE, so t1's `source` compared against it would read as stale.
+      store.getState().openTab(createTab({ id: "t2" }), "const b = 9");
+      await Bun.sleep(1);
+    });
+
+    expect(api.transpiled).toHaveBeenLastCalledWith("t2", false);
+    expect(screen.queryByText("__jl.log(1, const a = 5);")).toBeNull();
+    expect(screen.queryByText(strings.transpiled.stale)).toBeNull();
+    expect(screen.getByText(strings.transpiled.empty)).toBeTruthy();
+  });
+
   // R-M5a-6: the panel is reached through the side bar's existing panel switch, so that wiring is what makes it
   // reachable at all -- without this, `SideBar` could quietly keep rendering the placeholder for every panel.
   test("the side bar shows the transpiled panel for that panel, and the placeholder for the others", async () => {

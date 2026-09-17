@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
-import { type CliOptions, parseArgs, USAGE } from "./args";
+import { type CliOptions, codeProblem, parseArgs, USAGE } from "./args";
 import { bunTransport, type CliTransport, connectOrLaunch, launchAllowed } from "./client";
 import { candidateSocketPaths } from "./socket-path";
 
@@ -64,7 +64,17 @@ export async function run(io: CliIo): Promise<number> {
   }
 
   const { options } = parsed;
-  const params = openParams(options, io.cwd, options.stdin ? await io.readStdin() : undefined);
+  const code = options.stdin ? await io.readStdin() : undefined;
+  // Checked here, before anything connects, so an over-long script is a usage error (exit 2) with a size message
+  // rather than a socket that closes mid-request and is reported as a transport failure (exit 1).
+  if (code !== undefined) {
+    const problem = codeProblem(code);
+    if (problem !== undefined) {
+      io.err(problem);
+      return 2;
+    }
+  }
+  const params = openParams(options, io.cwd, code);
   const paths = candidateSocketPaths(io.env, io.home);
   // A scripted or sandboxed run (the E2E suite included) must never launch the user's installed JSLab.
   const connection = await connectOrLaunch(paths, io.transport, launchAllowed(io.env));

@@ -1,6 +1,5 @@
 import { LANGUAGES, RUNTIMES } from "@jslab/shared";
 import { z } from "zod";
-import { MAX_TEXT_CHARS } from "./ui-rpc";
 
 /** Spec §16.2 takes `ts|js|tsx|jsx`; the wire and `TabState.language` take the full names. The CLI translates. */
 export const CLI_LANG_ALIASES = {
@@ -17,6 +16,22 @@ export const MAX_CLI_PATH_CHARS = 4096;
  * error (exit 2) rather than sailing past `parseArgs` and being rejected here as a server error (exit 1). */
 export const MAX_CLI_TITLE_CHARS = 200;
 
+/**
+ * The NDJSON line cap the socket enforces in BOTH directions (`LineBuffer` in `apps/desktop/src/main/cli/ndjson.ts`
+ * reads this, rather than repeating the number). A line over this is not deliverable at all: the server throws
+ * "Request line too long" and ends the socket, which reaches the user as "The JSLab socket closed before replying".
+ */
+export const MAX_CLI_LINE_CHARS = 5_000_000;
+
+/**
+ * `code`'s bound (spec §16.2's `-`). Deliberately BELOW `MAX_CLI_LINE_CHARS`, because code travels JSON-escaped
+ * inside one request line alongside the envelope and every other param, so the line is always longer than the code
+ * itself. It is NOT `MAX_TEXT_CHARS` (64 MiB, the in-app buffer bound): a `code` that large passes this schema and
+ * is then undeliverable, so `cat big-bundle.js | jslab --run -` fails as a socket error rather than a size message.
+ * `args.ts`'s `codeProblem` checks the same constant one layer earlier, so the user gets the size message instead.
+ */
+export const MAX_CLI_CODE_CHARS = 4_000_000;
+
 const absolute = z.string().min(1).max(MAX_CLI_PATH_CHARS).startsWith("/", "must be an absolute path");
 
 /**
@@ -29,7 +44,7 @@ const absolute = z.string().min(1).max(MAX_CLI_PATH_CHARS).startsWith("/", "must
 export const cliOpenParamsSchema = z
   .object({
     files: z.array(absolute).max(MAX_CLI_FILES).optional(),
-    code: z.string().max(MAX_TEXT_CHARS).optional(),
+    code: z.string().max(MAX_CLI_CODE_CHARS).optional(),
     run: z.boolean().optional(),
     runtime: z.enum(RUNTIMES).optional(),
     lang: z.enum(LANGUAGES).optional(),

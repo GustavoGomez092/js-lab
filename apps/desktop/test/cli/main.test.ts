@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cliOpenParamsSchema, MAX_CLI_TITLE_CHARS } from "@jslab/rpc-schema";
+import { cliOpenParamsSchema, MAX_CLI_CODE_CHARS, MAX_CLI_TITLE_CHARS } from "@jslab/rpc-schema";
 import type { CliConnection, CliTransport } from "../../src/cli/client";
 import { type CliIo, openParams, run } from "../../src/cli/main";
 
@@ -117,6 +117,30 @@ describe("jslab: the branches that answer without JSLab", () => {
     expect(await run(io)).toBe(2);
     expect(err).toEqual([`A title is longer than ${MAX_CLI_TITLE_CHARS} characters`]);
     expect(out).toEqual([]);
+  });
+
+  test("a piped script over MAX_CLI_CODE_CHARS is a usage error with exit 2, never a socket round trip", async () => {
+    // `code` was the one argument with no client-side bound: `cliOpenParamsSchema` allowed MAX_TEXT_CHARS (64 MiB)
+    // while the whole request travels as ONE NDJSON line capped far lower. So `cat 6mb-bundle.js | jslab --run -`
+    // was schema-legal and undeliverable -- the server threw "Request line too long" and ended the socket, and the
+    // CLI reported "The JSLab socket closed before replying" with exit 1, blaming the transport for a size problem.
+    // `unusedTransport()` throws the moment anything connects, so this also pins that the check lands FIRST.
+    const { io, out, err } = makeIo(["--run", "-"], unusedTransport(), {
+      readStdin: async () => "x".repeat(MAX_CLI_CODE_CHARS + 1),
+    });
+    expect(await run(io)).toBe(2);
+    expect(err).toEqual([`The piped script is longer than ${MAX_CLI_CODE_CHARS} characters`]);
+    expect(out).toEqual([]);
+  });
+
+  test("a piped script at exactly MAX_CLI_CODE_CHARS is still sent, so the bound is not off by one", async () => {
+    const { connection, sent } = fakeConnection({ ok: true, tabIds: ["t1"] });
+    const { transport } = makeTransport(connection);
+    const { io } = makeIo(["-"], transport, { readStdin: async () => "x".repeat(MAX_CLI_CODE_CHARS) });
+    expect(await run(io)).toBe(0);
+    expect(sent).toHaveLength(1);
+    const params = sent[0]?.params as { code?: string } | undefined;
+    expect(params?.code).toHaveLength(MAX_CLI_CODE_CHARS);
   });
 });
 

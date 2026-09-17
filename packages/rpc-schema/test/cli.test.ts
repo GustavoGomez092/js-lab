@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { CLI_LANG_ALIASES, cliOpenParamsSchema, MAX_CLI_FILES, MAX_TEXT_CHARS } from "../src";
+import {
+  CLI_LANG_ALIASES,
+  cliOpenParamsSchema,
+  MAX_CLI_CODE_CHARS,
+  MAX_CLI_FILES,
+  MAX_CLI_LINE_CHARS,
+  MAX_TEXT_CHARS,
+} from "../src";
 
 describe("cliOpenParamsSchema", () => {
   test("accepts the full §16.2 parameter set", () => {
@@ -46,9 +53,19 @@ describe("cliOpenParamsSchema", () => {
     expect(() =>
       cliOpenParamsSchema.parse({ files: Array.from({ length: MAX_CLI_FILES + 1 }, () => "/tmp/a.ts") }),
     ).toThrow();
-    expect(() => cliOpenParamsSchema.parse({ code: "x".repeat(MAX_TEXT_CHARS + 1) })).toThrow();
+    expect(() => cliOpenParamsSchema.parse({ code: "x".repeat(MAX_CLI_CODE_CHARS + 1) })).toThrow();
     expect(() => cliOpenParamsSchema.parse({ code: "1", runtime: "deno" })).toThrow();
     expect(() => cliOpenParamsSchema.parse({ code: "1", lang: "ts" })).toThrow();
+  });
+
+  test("`code` is bounded to fit one NDJSON line, not to the 64 MiB in-app buffer bound", () => {
+    // The whole request travels as ONE NDJSON line, and `LineBuffer` caps that at MAX_CLI_LINE_CHARS. Bounding
+    // `code` at MAX_TEXT_CHARS instead made a schema-legal request undeliverable: the server threw "Request line
+    // too long" and ended the socket, so `cat 6mb-bundle.js | jslab --run -` reported "The JSLab socket closed
+    // before replying" (exit 1) -- the transport blamed for a size problem. These two bounds must stay ordered.
+    expect(MAX_CLI_CODE_CHARS).toBeLessThan(MAX_CLI_LINE_CHARS);
+    expect(MAX_CLI_LINE_CHARS).toBeLessThan(MAX_TEXT_CHARS);
+    expect(cliOpenParamsSchema.parse({ code: "x".repeat(MAX_CLI_CODE_CHARS) }).code).toHaveLength(MAX_CLI_CODE_CHARS);
   });
 
   test("CLI_LANG_ALIASES maps the §16.2 spellings onto the internal languages", () => {

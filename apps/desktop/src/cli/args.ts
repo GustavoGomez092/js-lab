@@ -1,4 +1,10 @@
-import { CLI_LANG_ALIASES, MAX_CLI_FILES, MAX_CLI_PATH_CHARS, MAX_CLI_TITLE_CHARS } from "@jslab/rpc-schema";
+import {
+  CLI_LANG_ALIASES,
+  MAX_CLI_CODE_CHARS,
+  MAX_CLI_FILES,
+  MAX_CLI_PATH_CHARS,
+  MAX_CLI_TITLE_CHARS,
+} from "@jslab/rpc-schema";
 import { type Language, RUNTIMES, type Runtime } from "@jslab/shared";
 
 export interface CliOptions {
@@ -56,6 +62,18 @@ function pathProblem(value: string): string | undefined {
  */
 function titleProblem(value: string): string | undefined {
   return value.length > MAX_CLI_TITLE_CHARS ? `A title is longer than ${MAX_CLI_TITLE_CHARS} characters` : undefined;
+}
+
+/**
+ * Same job again, for the one input that never came from argv: the script piped into `jslab -`. `main.ts` calls this
+ * on what `readStdin` returned, before anything connects. Without it an over-long script is schema-legal but larger
+ * than one NDJSON line, so the server ends the socket and the user is told "The JSLab socket closed before replying"
+ * — the transport blamed for a size problem. `cliOpenParamsSchema` bounds `code` against this same constant.
+ */
+export function codeProblem(value: string): string | undefined {
+  return value.length > MAX_CLI_CODE_CHARS
+    ? `The piped script is longer than ${MAX_CLI_CODE_CHARS} characters`
+    : undefined;
 }
 
 /**

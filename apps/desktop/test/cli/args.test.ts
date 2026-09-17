@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { CLI_LANG_ALIASES, MAX_CLI_FILES, MAX_CLI_PATH_CHARS, MAX_CLI_TITLE_CHARS } from "@jslab/rpc-schema";
+import {
+  CLI_LANG_ALIASES,
+  MAX_CLI_CODE_CHARS,
+  MAX_CLI_FILES,
+  MAX_CLI_PATH_CHARS,
+  MAX_CLI_TITLE_CHARS,
+} from "@jslab/rpc-schema";
 import { RUNTIMES } from "@jslab/shared";
-import { type CliOptions, parseArgs, USAGE } from "../../src/cli/args";
+import { type CliOptions, codeProblem, parseArgs, USAGE } from "../../src/cli/args";
 
 describe("parseArgs", () => {
   test("no arguments is an error that shows the usage", () => {
@@ -168,5 +174,18 @@ describe("parseArgs", () => {
     expect(listed(runtimeMessage)).toEqual([...RUNTIMES].sort());
     const langMessage = (parseArgs(["--lang", "cobol", "-"]) as { message: string }).message;
     expect(listed(langMessage)).toEqual(Object.keys(CLI_LANG_ALIASES).sort());
+  });
+});
+
+describe("codeProblem", () => {
+  test("bounds the piped script at MAX_CLI_CODE_CHARS, the constant the wire schema reads too", () => {
+    // `code` is the one input that never comes from argv, so `parseArgs` never sees it and it was the only argument
+    // with no client-side bound. The schema used to allow MAX_TEXT_CHARS (64 MiB) while the request travels as one
+    // NDJSON line capped far lower, so an over-long script was schema-legal and undeliverable: the server ended the
+    // socket and the CLI reported "The JSLab socket closed before replying" instead of naming the size.
+    expect(codeProblem("x".repeat(MAX_CLI_CODE_CHARS))).toBeUndefined();
+    expect(codeProblem("x".repeat(MAX_CLI_CODE_CHARS + 1))).toBe(
+      `The piped script is longer than ${MAX_CLI_CODE_CHARS} characters`,
+    );
   });
 });

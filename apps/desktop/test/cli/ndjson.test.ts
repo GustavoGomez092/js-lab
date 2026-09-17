@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MAX_CLI_CODE_CHARS, MAX_CLI_LINE_CHARS } from "@jslab/rpc-schema";
 import { assertSocketPath, handleLine, LineBuffer, MAX_SOCKET_PATH_BYTES } from "../../src/main/cli/ndjson";
 
 describe("LineBuffer", () => {
@@ -6,6 +7,15 @@ describe("LineBuffer", () => {
     const buffer = new LineBuffer();
     expect(buffer.push('{"a":1}\n\n{"b"')).toEqual(['{"a":1}']);
     expect(buffer.push(":2}\n")).toEqual(['{"b":2}']);
+  });
+
+  test("caps a line at the SHARED MAX_CLI_LINE_CHARS, so the validator and the transport cannot drift", () => {
+    // The default is `@jslab/rpc-schema`'s constant, not a second literal that happens to agree today. Pinning the
+    // exact boundary here is what makes a change to either side fail rather than silently make `code` unsendable.
+    expect(() => new LineBuffer().push("x".repeat(MAX_CLI_LINE_CHARS + 1))).toThrow("Request line too long");
+    expect(new LineBuffer().push(`${"x".repeat(MAX_CLI_LINE_CHARS - 1)}\n`)).toHaveLength(1);
+    // The reason the code bound is lower: escaping and the `{"v":1,"id":…,"method":…}` envelope both add to the line.
+    expect(MAX_CLI_CODE_CHARS).toBeLessThan(MAX_CLI_LINE_CHARS);
   });
 });
 

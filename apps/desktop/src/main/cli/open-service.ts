@@ -4,7 +4,7 @@ import type { Log } from "../rpc/validate";
 import type { SessionStore } from "../services/session-store";
 
 export interface OpenServiceDeps {
-  session: Pick<SessionStore, "createTab" | "findTabByPath">;
+  session: Pick<SessionStore, "createTab" | "findTabByPath" | "activateTab" | "patchTab">;
   readFile(path: string): Promise<string>;
   /** `run.defaultLanguage` / `run.defaultRuntime` at the moment of the call (spec §8, §16.2). */
   defaults(): { language: Language; runtime: Runtime };
@@ -34,6 +34,11 @@ export function createOpenService(deps: OpenServiceDeps): (params: CliOpenParams
       if (existing) {
         focusTabId = existing.id;
         tabIds.push(existing.id);
+        // R-M5c-TITLE-1: `--title` names the tab the user asked for, so an already-open tab takes it too. Returning
+        // here without applying it would discard a flag the user typed, with no diagnostic anywhere.
+        if (params.title !== undefined) {
+          await deps.session.patchTab(existing.id, { title: params.title, titleIsCustom: true });
+        }
         continue;
       }
       let content: string;
@@ -73,6 +78,14 @@ export function createOpenService(deps: OpenServiceDeps): (params: CliOpenParams
     // Nothing opened and something was asked for: that is a failed request, and `handleLine` turns this throw into
     // the spec's `{ id, ok: false, error }` reply rather than a success with an empty list.
     if (tabIds.length === 0) throw new Error(errors.join(" · ") || "Nothing to open");
+
+    // Main's `activeTabId` only ever moves inside `createTab` (session-store.ts:213), so a request that opened no new
+    // tab would leave the previously-active tab active -- and `--run` runs the ACTIVE tab. With the window closed,
+    // `file.opened` is skipped (index.ts:574), so the UI's `handleOpened` -- the only code that honours `focusTabId`
+    // (file-flows.ts:143) -- never runs to correct it, and `jslab --run already-open.ts` would execute whatever tab
+    // happened to be active. Activating here mirrors `handleOpened`'s own precedence (`focusTabId` wins over the last
+    // created tab), so Main and the UI agree whether the window was open or closed.
+    if (focusTabId !== null) deps.session.activateTab(focusTabId);
 
     deps.announce({ tabs, focusTabId, large: [], errors });
     deps.present({ run: params.run === true });

@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MAX_CLI_CODE_CHARS, MAX_CLI_LINE_CHARS } from "@jslab/rpc-schema";
 import type { Socket } from "bun";
 import {
   bunTransport,
@@ -214,6 +215,45 @@ describe("bunTransport", () => {
     expect(reply).toEqual({ id: "1", ok: true, size: 1_000_000 });
     connected?.close();
   }, 10000);
+
+  test("a request line over MAX_CLI_LINE_CHARS is refused by size before it reaches the socket", async () => {
+    const path = join(dir, "jslab.sock");
+    const logged: string[] = [];
+    server = await startSocketServer({
+      path,
+      log: (message) => logged.push(message),
+      methods: { open: async () => ({ tabIds: ["t1"] }) },
+    });
+    const connected = await bunTransport.connect(path);
+
+    // The gap the final review named: nothing covered a request line between the transport's cap and the old 64 MiB
+    // schema bound (the existing large-request test uses 1M, and the 4MB socket-server case is a REPLY). This is the
+    // review's own `cat 6mb-bundle.js | jslab --run -`: unguarded, the line is written, `LineBuffer` throws "Request
+    // line too long", the server calls `socket.end()`, and the caller is told "The JSLab socket closed before
+    // replying" (exit 1) -- the transport blamed for a size the CLI could have named exactly.
+    const overCap = "c".repeat(MAX_CLI_LINE_CHARS + 1_000_000);
+    await expect((connected as CliConnection).call("open", { code: overCap }, 4000)).rejects.toThrow(
+      /JSLab's socket takes at most/,
+    );
+
+    // Deliberately well over the cap, not a few characters over. `LineBuffer` tests the buffer still PENDING at each
+    // chunk boundary, so a line barely over the cap completes in one last chunk and is accepted -- the server-side
+    // limit is chunk-dependent, which is the other reason the bound worth enforcing is this client-side one, measured
+    // on the whole encoded line before a byte is written.
+
+    // And why the guard measures the ENCODED line rather than `code`: JSON escaping doubles every quote, so a script
+    // comfortably inside the code bound can still overflow the line cap. Bounding `code` alone would not catch this.
+    const quoteHeavy = '"'.repeat(MAX_CLI_CODE_CHARS);
+    expect(quoteHeavy).toHaveLength(MAX_CLI_CODE_CHARS);
+    expect(JSON.stringify({ code: quoteHeavy }).length).toBeGreaterThan(MAX_CLI_LINE_CHARS);
+    await expect((connected as CliConnection).call("open", { code: quoteHeavy }, 4000)).rejects.toThrow(
+      /JSLab's socket takes at most/,
+    );
+
+    // Neither attempt reached the server: both were refused before a byte was written, so nothing was logged there.
+    expect(logged).toEqual([]);
+    connected?.close();
+  }, 15000);
 
   test("a server error reply becomes a rejection carrying the server's own message", async () => {
     const path = join(dir, "jslab.sock");

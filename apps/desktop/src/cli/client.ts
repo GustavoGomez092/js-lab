@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { MAX_CLI_LINE_CHARS } from "@jslab/rpc-schema";
 import { LineBuffer, MAX_SOCKET_PATH_BYTES } from "../main/cli/ndjson";
 import { APP_BUNDLE_ID } from "./socket-path";
 
@@ -159,6 +160,18 @@ async function bunConnect(path: string): Promise<CliConnection | null> {
 
   return {
     call(method, params, timeoutMs = CALL_TIMEOUT_MS) {
+      // JSON escaping can more than double a quote-heavy script, so bounding `code` alone cannot guarantee the
+      // ENCODED line fits — checking the line itself is what makes "schema-legal implies sendable" true. Over the
+      // cap the server throws "Request line too long" and ends the socket, and the caller would be told the socket
+      // closed before replying: the transport blamed for a size problem it can describe exactly.
+      const line = `${JSON.stringify({ v: 1, id: "1", method, params })}\n`;
+      if (line.length > MAX_CLI_LINE_CHARS) {
+        return Promise.reject(
+          new Error(
+            `This ${method} request is ${line.length} characters; JSLab's socket takes at most ${MAX_CLI_LINE_CHARS}`,
+          ),
+        );
+      }
       return new Promise<Record<string, unknown>>((resolve, reject) => {
         const buffer = new LineBuffer();
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -190,7 +203,7 @@ async function bunConnect(path: string): Promise<CliConnection | null> {
 
         // macOS's unix-socket send buffer is ~8 KB, so a piped script larger than that only arrives in full if the
         // unwritten remainder is resent on `drain` — otherwise the server waits forever for a line it never gets.
-        let pending = Buffer.from(`${JSON.stringify({ v: 1, id: "1", method, params })}\n`);
+        let pending = Buffer.from(line);
         const pump = () => {
           while (pending.length > 0) {
             const written = socket.write(pending);

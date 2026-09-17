@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cliOpenParamsSchema } from "@jslab/rpc-schema";
+import { cliOpenParamsSchema, MAX_CLI_TITLE_CHARS } from "@jslab/rpc-schema";
 import type { CliConnection, CliTransport } from "../../src/cli/client";
 import { type CliIo, openParams, run } from "../../src/cli/main";
 
@@ -103,6 +103,19 @@ describe("jslab: the branches that answer without JSLab", () => {
     // Exit 2 is the spec's usage code: 0 would tell a script the tab opened, 1 would look like a socket failure.
     expect(await run(io)).toBe(2);
     expect(err).toEqual(["--runtime takes bun, browser or browser-node, not deno"]);
+    expect(out).toEqual([]);
+  });
+
+  test("an over-long --title is a usage error on stderr with exit 2, never a socket round trip", async () => {
+    // `unusedTransport()` throws the moment anything tries to connect. Before the client-side bound existed, an
+    // over-long title sailed past `parseArgs` and reached exactly that call -- in production it would instead reach
+    // the real socket, where the server's `cliOpenParamsSchema` (`.max(MAX_CLI_TITLE_CHARS)`) rejects it, `run`'s
+    // promise rejects, and the top-level handler in `main.ts` exits 1: a server error for what is a malformed
+    // argument, where every other bad argument here exits 2 instead.
+    const long = "a".repeat(MAX_CLI_TITLE_CHARS + 1);
+    const { io, out, err } = makeIo(["--title", long, "/abs/a.ts"], unusedTransport());
+    expect(await run(io)).toBe(2);
+    expect(err).toEqual([`A title is longer than ${MAX_CLI_TITLE_CHARS} characters`]);
     expect(out).toEqual([]);
   });
 });

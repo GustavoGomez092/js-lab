@@ -34,8 +34,14 @@ against a symlink inside the launch's own data folder.
   administrator privileges is the user's decision, not an automatic flow; the user-scope install needs no escalation.
   A user who wants `/usr/local/bin` adds `~/.local/bin` to `PATH` instead, which the notice already spells out. The
   third item above therefore has no UI to reach today — it is recorded for whenever that scope is wired up.
-- **An over-long `--title` exits 1, not 2.** `args.ts` bounds no title while the wire schema bounds it at 200
-  characters, so a title past 200 is refused by the server as an error rather than by the CLI as a usage error.
 - **A directory in the way gives the generic message.** `pathExists` uses `Bun.file().exists()`, which reports false
   for a directory, so a *directory* named `jslab` in `~/.local/bin` falls to "Couldn't install" instead of the
   tailored "something is already there" refusal. Nothing is deleted or overwritten either way.
+- **A very long install/uninstall error is silently dropped from the UI.** `installCli`'s and `uninstallCli`'s error
+  paths build their notice with `String(error)`, which has no length bound, while the `app.notice` message it travels
+  as is validated against `appNoticeSchema`'s `.max(2000)`, and `App.tsx`'s `safeParse` on receipt has no `else`
+  branch for a failed parse. A message over 2000 characters fails that validation and the notice never appears — the
+  user sees nothing happen after Help → Install/Uninstall `jslab` Command…, though `reportCliResult` still writes the
+  same message to the log either way. Every error `installCli`/`uninstallCli` can actually raise today (a missing
+  directory, a permission error, a symlink race) is far short of 2000 characters, so this is unreachable in practice
+  and is recorded rather than fixed here.

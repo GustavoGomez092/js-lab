@@ -13,6 +13,9 @@ export const CLI_LANG_ALIASES = {
 /** One `jslab` invocation opens at most this many files, and each path is bounded like every other path on the wire. */
 export const MAX_CLI_FILES = 50;
 export const MAX_CLI_PATH_CHARS = 4096;
+/** `--title`'s bound. The CLI (`args.ts`'s `titleProblem`) checks the same constant so an over-long title is a usage
+ * error (exit 2) rather than sailing past `parseArgs` and being rejected here as a server error (exit 1). */
+export const MAX_CLI_TITLE_CHARS = 200;
 
 const absolute = z.string().min(1).max(MAX_CLI_PATH_CHARS).startsWith("/", "must be an absolute path");
 
@@ -31,7 +34,7 @@ export const cliOpenParamsSchema = z
     runtime: z.enum(RUNTIMES).optional(),
     lang: z.enum(LANGUAGES).optional(),
     cwd: absolute.optional(),
-    title: z.string().min(1).max(200).optional(),
+    title: z.string().min(1).max(MAX_CLI_TITLE_CHARS).optional(),
   })
   .refine((params) => (params.files?.length ?? 0) > 0 || params.code !== undefined, {
     message: "open needs at least one file, or code from stdin",

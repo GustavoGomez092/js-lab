@@ -1,4 +1,4 @@
-import { CLI_LANG_ALIASES, MAX_CLI_FILES, MAX_CLI_PATH_CHARS } from "@jslab/rpc-schema";
+import { CLI_LANG_ALIASES, MAX_CLI_FILES, MAX_CLI_PATH_CHARS, MAX_CLI_TITLE_CHARS } from "@jslab/rpc-schema";
 import { type Language, RUNTIMES, type Runtime } from "@jslab/shared";
 
 export interface CliOptions {
@@ -46,6 +46,16 @@ const error = (message: string): CliParse => ({ kind: "error", message });
  */
 function pathProblem(value: string): string | undefined {
   return value.length > MAX_CLI_PATH_CHARS ? `A path is longer than ${MAX_CLI_PATH_CHARS} characters` : undefined;
+}
+
+/**
+ * Same job as `pathProblem`, for `--title`: `cliOpenParamsSchema` bounds it at `MAX_CLI_TITLE_CHARS` too (one
+ * constant, imported rather than re-inlined), but by the time it sees the value the reply is a socket error rather
+ * than a usage message. An empty title is already caught earlier, by the generic "needs a value" check every value
+ * flag gets, which is this parser's answer to the schema's `.min(1)`.
+ */
+function titleProblem(value: string): string | undefined {
+  return value.length > MAX_CLI_TITLE_CHARS ? `A title is longer than ${MAX_CLI_TITLE_CHARS} characters` : undefined;
 }
 
 /**
@@ -111,6 +121,8 @@ export function parseArgs(argv: string[]): CliParse {
       if (problem !== undefined) return error(problem);
       options.cwd = value;
     } else {
+      const problem = titleProblem(value);
+      if (problem !== undefined) return error(problem);
       options.title = value;
     }
   }

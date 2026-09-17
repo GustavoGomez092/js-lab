@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CLI_LANG_ALIASES, MAX_CLI_FILES, MAX_CLI_PATH_CHARS } from "@jslab/rpc-schema";
+import { CLI_LANG_ALIASES, MAX_CLI_FILES, MAX_CLI_PATH_CHARS, MAX_CLI_TITLE_CHARS } from "@jslab/rpc-schema";
 import { RUNTIMES } from "@jslab/shared";
 import { type CliOptions, parseArgs, USAGE } from "../../src/cli/args";
 
@@ -136,6 +136,26 @@ describe("parseArgs", () => {
     expect(parseArgs(["--cwd", long, "-"])).toEqual({ kind: "error", message });
     // The bound itself is still allowed: resolving may lengthen it, and that is the schema's call, not the parser's.
     expect(parseArgs(["b".repeat(MAX_CLI_PATH_CHARS)]).kind).toBe("open");
+  });
+
+  test("a --title longer than MAX_CLI_TITLE_CHARS is refused client-side, like an over-long path", () => {
+    // Before this check existed, an over-long title sailed past `parseArgs`, was rejected by the server's
+    // `cliOpenParamsSchema` (`.max(MAX_CLI_TITLE_CHARS)`), and the CLI exited 1 -- a server error -- for what is a
+    // malformed argument, which every other bad argument here reports as exit 2 instead (`main.ts`'s `run`).
+    const long = "a".repeat(MAX_CLI_TITLE_CHARS + 1);
+    expect(parseArgs(["--title", long, "-"])).toEqual({
+      kind: "error",
+      message: `A title is longer than ${MAX_CLI_TITLE_CHARS} characters`,
+    });
+    // The bound itself is still allowed, matching the server schema's own `.max(MAX_CLI_TITLE_CHARS)`.
+    expect(
+      (parseArgs(["--title", "a".repeat(MAX_CLI_TITLE_CHARS), "-"]) as { options: { title?: string } }).options.title,
+    ).toHaveLength(MAX_CLI_TITLE_CHARS);
+  });
+
+  test("an empty --title is refused client-side too, mirroring the schema's `.min(1)`", () => {
+    expect(parseArgs(["--title", "", "-"])).toEqual({ kind: "error", message: "--title needs a value" });
+    expect(parseArgs(["--title=", "-"])).toEqual({ kind: "error", message: "--title needs a value" });
   });
 
   test("the rejection messages list exactly the shared vocabularies, so neither can drift", () => {

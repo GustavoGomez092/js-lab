@@ -84,7 +84,7 @@ export function vendorCacheKey(
  * recorded" branch as defence in depth against an index rebuilt from filenames rather than an ordinary path that a
  * whole stale generation of entries would otherwise keep exercising.
  */
-const VENDOR_CACHE_FORMAT = "vendor-chunk-v4";
+const VENDOR_CACHE_FORMAT = "vendor-chunk-v5";
 
 /**
  * Spec §5.12: the lockfile-pinning half of the key. Hashed rather than used raw so the key stays a fixed-length,

@@ -574,6 +574,7 @@ export function App({
         {settings.view.sideBar && <SideBar panel={sideBarPanel} />}
         <SplitPane
           orientation={orientation}
+          label={strings.shell.splitter.editorOutput}
           size={editorSize}
           secondVisible={outputVisible}
           onResize={(size) => store.getState().setEditorSize(size)}

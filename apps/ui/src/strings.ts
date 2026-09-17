@@ -109,6 +109,31 @@ export const strings = {
     safeMode: "Safe Mode",
     sideBarPlaceholder: "This panel arrives in a later version.",
     split: { horizontal: "Side by side", vertical: "Stacked" },
+    /**
+     * Accessible names for the two draggable splitters (`SplitPane`'s `role="separator"`).
+     *
+     * Both are on screen together whenever a browser-runtime tab shows the Web View preview: the Editor/Output
+     * splitter and the Output/Web View one. An unnamed focusable separator is announced only as its role and
+     * value ("separator, 55"), which is identical for both, so a screen reader user cannot tell which one they
+     * are on. MDN's separator_role is explicit that a focusable separator "should include `aria-label` if there
+     * is more than one focusable separator".
+     *
+     * These name what the splitter RESIZES, not what it is -- the role is already announced, so a trailing
+     * "divider" would only repeat it. They reuse the names those panes already carry elsewhere (`output.region`
+     * "Output", `output.webViewTab` "Web View", `palette.context.editor` "Editor") so a splitter is described in
+     * the same words as the things it moves.
+     *
+     * `aria-label` rather than `aria-labelledby`: the APG windowsplitter pattern prefers `aria-labelledby` only
+     * when the primary pane has a *visible* label. Neither primary pane has one -- the Editor carries no label,
+     * role or id at all, and the Output `<section>` is named by its own `aria-label` (not visible text) and has
+     * no `id` to reference -- so the pattern's "otherwise ... `aria-label`" branch is the one that applies.
+     *
+     * These two MUST stay distinct from each other; `split-pane.test.tsx` pins that.
+     */
+    splitter: {
+      editorOutput: "Editor and Output",
+      outputWebView: "Output and Web View",
+    },
     // M4 Task 8 (ruling R-M4-T8-DISABLED-1): mirrors the runtime <select>'s own disabled-option idiom -- native
     // `disabled` plus this string as the button's `title`, for the one runtime that never creates a webview.
     webView: {

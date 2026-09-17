@@ -104,6 +104,9 @@ describe("layout", () => {
     const { rerender } = render(
       <SplitPane
         orientation="horizontal"
+        // Mirrors what `App.tsx` passes. Rendering `SplitPane` directly cannot prove `App.tsx` passes it --
+        // nothing renders `<App>`; the prop being REQUIRED is what makes dropping it there a typecheck failure.
+        label={strings.shell.splitter.editorOutput}
         size={70}
         secondVisible
         onResize={() => {}}
@@ -112,11 +115,13 @@ describe("layout", () => {
         second={<div>output</div>}
       />,
     );
-    fireEvent.doubleClick(screen.getByRole("separator"));
+    // Addressed by name rather than by bare role: the outer splitter is the one under test here.
+    fireEvent.doubleClick(screen.getByRole("separator", { name: strings.shell.splitter.editorOutput }));
     expect(onReset).toHaveBeenCalledTimes(1);
     rerender(
       <SplitPane
         orientation="horizontal"
+        label={strings.shell.splitter.editorOutput}
         size={70}
         secondVisible={false}
         onResize={() => {}}

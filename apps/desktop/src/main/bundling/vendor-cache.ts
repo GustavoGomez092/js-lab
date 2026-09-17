@@ -54,10 +54,12 @@ export function vendorCacheKey(
   imports: readonly string[],
   runtime: Runtime,
   workingDirectory: string | null,
+  /** Test seam for `VENDOR_CACHE_FORMAT`; production always uses the constant. */
+  format?: string,
 ): string {
   return String(
     Bun.hash(
-      `${VENDOR_CACHE_FORMAT}\n${runtime}\n${workingDirectory ?? ""}\n${lockHash}\n${[...imports].sort().join("\n")}`,
+      `${format ?? VENDOR_CACHE_FORMAT}\n${runtime}\n${workingDirectory ?? ""}\n${lockHash}\n${[...imports].sort().join("\n")}`,
     ),
   );
 }
@@ -83,8 +85,20 @@ export function vendorCacheKey(
  * `CachedVendorChunk.closure`). Every live entry therefore carries provenance, which keeps the "no closure
  * recorded" branch as defence in depth against an index rebuilt from filenames rather than an ordinary path that a
  * whole stale generation of entries would otherwise keep exercising.
+ *
+ * **The standing rule: a change to how a chunk is RESOLVED needs a bump here, exactly like a change to how one is
+ * shaped.** The other four key inputs -- the lockfile hash, the import set, the runtime and the working directory
+ * -- describe *what* was bundled, never *how* it was resolved. A resolver change leaves all four byte-identical,
+ * so the old key stays computable and the stale chunk wins forever; the cache cannot self-heal, because nothing
+ * about it is wrong from its own point of view.
+ *
+ * Bumped to `v5` for the browser-resolution fixes in `resolve-plugin.ts` (the `browser` export condition, the
+ * top-level `browser` field in both forms, `*` pattern specificity, array fallbacks, and the resolution kind).
+ * The first of those shipped *without* a bump, and the consequence was exactly the above: chunks written by the
+ * previous resolver still held the node entry and its `Buffer.allocUnsafe`, and kept being replayed into the page
+ * even though the corrected resolver was present and correct in the build. The user saw no change at all.
  */
-const VENDOR_CACHE_FORMAT = "vendor-chunk-v5";
+export const VENDOR_CACHE_FORMAT = "vendor-chunk-v5";
 
 /**
  * Spec §5.12: the lockfile-pinning half of the key. Hashed rather than used raw so the key stays a fixed-length,

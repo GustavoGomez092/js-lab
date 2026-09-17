@@ -286,8 +286,8 @@ describe("OutputTiles / WebViewHosts", () => {
     // A plain mutable holder, not two separate `let`s: TypeScript can't see that `renderTiles` below (via React's
     // effects) is what invokes `FakeResizeObserver`'s constructor/`observe`, so a bare `let` narrows to its
     // initializer's literal type (`null`) at every read after -- a property on an object isn't narrowed that way.
-    const captured: { observedTarget: Element | null; fire: (() => void) | null } = {
-      observedTarget: null,
+    const captured: { observedTargets: Element[]; fire: (() => void) | null } = {
+      observedTargets: [],
       fire: null,
     };
     class FakeResizeObserver {
@@ -295,7 +295,7 @@ describe("OutputTiles / WebViewHosts", () => {
         captured.fire = callback;
       }
       observe(target: Element) {
-        captured.observedTarget = target;
+        captured.observedTargets.push(target);
       }
       unobserve() {}
       disconnect() {}
@@ -310,7 +310,9 @@ describe("OutputTiles / WebViewHosts", () => {
 
       const dockNode = document.querySelector(".webview-tile-dock");
       expect(dockNode).toBeTruthy();
-      expect(captured.observedTarget).toBe(dockNode); // the real dock node, not some other element
+      // The dock node itself is observed -- along with each of its ancestors, so a size change anywhere in the
+      // chain that positions it re-measures too (pinned by `webview-tile-tracking.test.tsx`).
+      expect(captured.observedTargets).toContain(dockNode as Element);
       expect(captured.fire).toBeTruthy();
 
       const tile = screen.getByTestId("webview-tile-t1");

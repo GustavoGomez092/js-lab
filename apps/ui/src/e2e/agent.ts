@@ -40,6 +40,8 @@ export interface OverlayDiagnostics {
    */
   counters: {
     measures: number;
+    /** How many of those `measures` got past the rect equality guard and actually committed new state. */
+    rectCommits: number;
     renders: number;
     hosts: number;
     app: number;

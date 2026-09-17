@@ -28,6 +28,7 @@ import { NpmSheet } from "../npm/NpmSheet";
 import { operationStatusMessage } from "../npm/npm-panel";
 import { OutputTiles } from "../output/OutputTiles";
 import { WebViewHosts, type WebviewDock } from "../output/WebViewHosts";
+import { recordAppRender, webViewTileCounters } from "../output/WebViewTile";
 import { CommandPalette } from "../palette/CommandPalette";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
@@ -103,6 +104,30 @@ export function App({
   // Fix round 1 (F1/F2): lifted here, not into OutputTiles, specifically so it survives OutputTiles unmounting
   // (hiding the Output panel) -- see WebViewHosts.tsx's doc comment for the full mechanism.
   const [webviewDock, setWebviewDock] = useState<WebviewDock | null>(null);
+
+  // M4 diagnostics (see `recordAppRender`): every input that can re-render this component, recorded once per render
+  // so an idle-window sample names WHICH subscription drove the shell's churn rather than only that it churned.
+  // A ref (not state) holds the previous values, so this measures the render loop without joining it.
+  const previousInputs = useRef<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    const current: Record<string, unknown> = {
+      tabId,
+      orientation,
+      editorSize,
+      outputVisible,
+      toolbarTitle,
+      runState,
+      safeMode,
+      notices,
+      settings,
+      sideBarPanel,
+      tabCount,
+      npmOpen,
+      webviewDock,
+    };
+    recordAppRender(current, previousInputs.current);
+    previousInputs.current = current;
+  });
 
   const lastTypedAt = useRef(0);
   // T16-rr1: the React-owned slot the Editor puts the Vim status node into, always rendered before the status bar.
@@ -384,6 +409,32 @@ export function App({
         // scenario reads to tell "the tile is on screen" from "a bun tab never gets one" (spec §7.1, parity WV-01).
         webViewTile: document.querySelector(".webview-tile-dock") !== null,
       }),
+      // M4 diagnostics (see `OverlayDiagnostics`): the three boxes that settle whether the native webview frame JS
+      // ships overlaps the console pane, plus the tile's re-measure counters. Read only by E2E scenarios.
+      overlayDiagnostics: () => {
+        const box = (selector: string) => {
+          const element = document.querySelector(selector);
+          if (!element) return null;
+          const { x, y, width, height } = element.getBoundingClientRect();
+          return { x, y, width, height };
+        };
+        return {
+          rects: {
+            // Where JSLab thinks the docked tile is.
+            webViewTile: box('.webview-tile[aria-hidden="false"]'),
+            // The exact element `OverlaySyncController.sync()` measures and ships as the native frame. Queried
+            // both inside the docked tile and as a bare tag: with one web tab they are the same element, and
+            // `webviewCount` below is what proves that rather than assuming it.
+            webviewSurfaceDocked: box('.webview-tile[aria-hidden="false"] electrobun-webview'),
+            webviewSurfaceFirst: box("electrobun-webview"),
+            // The console pane.
+            output: box(".output"),
+          },
+          webviewCount: document.querySelectorAll("electrobun-webview").length,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          counters: webViewTileCounters(),
+        };
+      },
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {
       agent(method, params).then(

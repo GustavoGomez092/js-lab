@@ -241,6 +241,20 @@ button:disabled {
   background: var(--bg-lineHover);
 }
 
+/* M4 (user report): the node Monaco is given as `overflowWidgetsDomNode` (`editor/Editor.tsx`), holding every
+   overflowing hover/suggest/parameter-hint widget. Contributes no box of its own -- each widget inside is
+   positioned by Monaco itself -- so it must not take part in layout. The `z-index` sits above the editor and the
+   output but below every shell overlay (`.dialog-backdrop` 50, `.context-menu` 60, `.palette-scrim` 70,
+   `.palette` 71), which is the correct order: a modal should cover an editor hover, not the other way round.
+   None of this arbitrates against a docked `<electrobun-webview>`, which paints above all HTML whatever its
+   `z-index` -- that is `widget-occlusion.ts`'s job, not this rule's. */
+.jslab-overflow-widgets {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 40;
+}
+
 /* ---------- output ---------- */
 .output {
   display: flex;
@@ -257,6 +271,24 @@ button:disabled {
    component allowed to unmount is exactly what let hiding Output or switching tabs destroy the webview). */
 .webview-tile-dock {
   height: 100%;
+}
+
+/* R-WEBVIEW-TAB-1: the same single dock node, now filling the output panel instead of a split pane. `.output` is
+   a flex column whose first child is the toolbar, so here the dock is a flex ITEM that must take the space the
+   header leaves -- `height: 100%` would measure against the whole panel and overflow it by the header's height.
+   `min-height: 0` for the same reason `.output-scroller` needs it (see that rule). */
+.webview-tile-dock-full {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The filter chips and the Web View control, as one row (see FilterChips.tsx for why they are two controls and
+   not one five-member group). */
+.output-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* The actual tile: always a child of `.webview-parking` (see below), positioned with `position: fixed` and
@@ -311,8 +343,12 @@ button:disabled {
   border-bottom: 1px solid var(--border-default);
 }
 
+/* `min-height: 0` is load-bearing, not tidiness. A flex item's default `min-height: auto` refuses to shrink below
+   its content, so without it this scroller grows past `.output`'s own box as rows accumulate -- overflowing the
+   panel instead of scrolling inside it, which puts rows underneath whatever sits below the panel. */
 .output-scroller {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   font-family: var(--mono);
 }
@@ -656,6 +692,35 @@ button:disabled {
   font-size: 14px;
 }
 
+/* Ruling 2: the header carries the title and the sheet's own exit, parked at the trailing edge. */
+.sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Quiet until hovered or focused, and shaped nothing like a package row's Remove button, so the two exits
+   (close the sheet / uninstall a dependency) can never be mistaken for each other. */
+.sheet-close {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+.sheet-close:hover {
+  background: var(--bg-hover);
+  color: var(--fg-default);
+}
+
+.sheet-close:focus-visible {
+  border-color: var(--border-default);
+  color: var(--fg-default);
+}
+
 .sheet-help,
 .sheet-status {
   margin: 0;
@@ -746,6 +811,32 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* "Update All" read as body text sitting beside the two checkboxes. It keeps its disabled logic and its title;
+   this only gives it a control's shape and parks it at the trailing edge, clear of the checkboxes. */
+.npm-toolbar button {
+  margin-left: auto;
+  padding: 3px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+}
+
+.npm-toolbar button:disabled {
+  color: var(--fg-muted);
+  opacity: 0.7;
+}
+
+/* The row's destructive action, set apart from the sheet's close control: a word, in the error colour. */
+.npm-remove {
+  padding: 2px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  color: var(--fg-error);
+}
+
+.npm-remove:hover:not(:disabled) {
+  background: var(--bg-errorRow);
 }
 
 .npm-installed {

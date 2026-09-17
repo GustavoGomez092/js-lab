@@ -18,6 +18,9 @@ export function handleCountAction(
 /** Tracks handles that keep a run "active" (timers, rAF loops, AudioContexts, media elements, sockets, requests). */
 export class HandleTracker {
   readonly #active = new Map<unknown, () => void>();
+  #batchDepth = 0;
+  #batchEntryCount = 0;
+  #untrackedDepth = 0;
 
   constructor(private readonly onChange: (count: number) => void) {}
 
@@ -25,14 +28,105 @@ export class HandleTracker {
     return this.#active.size;
   }
 
-  add(key: unknown, dispose: () => void): void {
-    if (this.#active.has(key)) return;
-    this.#active.set(key, dispose);
+  #notify(): void {
+    if (this.#batchDepth > 0) return;
     this.onChange(this.#active.size);
   }
 
+  /**
+   * Runs `body` as ONE atomic change to the handle set: `onChange` is held for its synchronous duration and then
+   * fired at most once, and only if the count actually ended up different from what it was on entry.
+   *
+   * This exists because a firing timer or frame is not two independent events. The wrappers below retire a handle
+   * and then invoke the user's callback, and a *self-rescheduling* callback (`setTimeout(tick)` that calls
+   * `setTimeout(tick)` again, the standard rAF loop) registers its successor inside that callback. Without this,
+   * the count visibly dips 1 -> 0 -> 1 on every single tick, and `handleCountAction`'s two exactly inverse rules
+   * (`settled && count === 0 -> "idle"`, `idle && count > 0 -> "settled"`) turn each dip into an `idle` state
+   * message immediately followed by a `settled` one. At 60 fps that is 120 state messages a second, and because
+   * the UI's `BUSY_STATES` contains `settled` but not `idle`, its `busy` flag flips with every one of them --
+   * remounting the activity-bar spinner (restarting its CSS animation, so it "reloads instead of animating"),
+   * swapping the Stop button for the Run button and back, and rewriting the status text, ~60 times a second.
+   *
+   * Holding the notification is not a debounce and hides nothing: the scope is lexically bound to the callback's
+   * own synchronous execution, not to a timeout, and the single notification it ends with reports the true count.
+   * A loop that stops rescheduling still drops to 0 and still reports `idle` on that very tick.
+   *
+   * The retire-then-run order is deliberately preserved rather than inverted to retire *after* the callback. The
+   * platform is free to reuse a fired timer's id for a timer created inside that callback, and `HandleKeys` below
+   * early-returns for an id it already holds -- so retiring afterwards would silently leave the successor of a
+   * self-rescheduling loop untracked, and the run would report `idle` while still animating. That is the exact
+   * failure `HandleKeys`' own doc comment was written for.
+   */
+  batch<T>(body: () => T): T {
+    if (this.#batchDepth === 0) this.#batchEntryCount = this.#active.size;
+    this.#batchDepth += 1;
+    try {
+      return body();
+    } finally {
+      this.#batchDepth -= 1;
+      if (this.#batchDepth === 0 && this.#active.size !== this.#batchEntryCount) this.onChange(this.#active.size);
+    }
+  }
+
+  /** Whether handle creation is currently suspended — see `untracked` below. */
+  get suspended(): boolean {
+    return this.#untrackedDepth > 0;
+  }
+
+  /**
+   * Runs `body` with handle *creation* suspended: anything it registers is JSLab's own infrastructure, not the
+   * run's activity, and must not keep the page "active" or move the run state.
+   *
+   * **Why this exists.** `bootstrap.ts` already takes care that JSLab's own scheduling is invisible to this
+   * tracker, by capturing `setTimeout`/`setInterval` *before* `installHandleTracking` replaces them (its `timers`
+   * and `rawInterval`), so the `EventBuffer` flush timer and the heartbeat are never counted. That covers the
+   * timers JSLab schedules itself. It does not cover the one it causes something *else* to schedule on its behalf.
+   *
+   * The host transport is exactly that case. Electrobun's preload owns the outbound channel: `initHostMessageBridge`
+   * (`apps/desktop/.hutch/devkit/api/preload/events.ts`) installs `window.__electrobunSendToHost` as a call to
+   * `emitWebviewEvent`, and `emitWebviewEvent` defers every single emission through a bare `setTimeout(...)`. That
+   * identifier is free, so it is resolved on the global **at call time** — which, by the time any message is sent,
+   * is the tracked wrapper this module installed. Every outbound message therefore registered a handle.
+   *
+   * That closes a feedback loop, because one of the things the page sends is the run state itself:
+   *
+   *   1. `setState` sends a `state` message → the preload schedules a timer → `add` → count 0 → 1.
+   *   2. `idle && count > 0` → `"settled"` → `setState` sends *another* message → another timer.
+   *   3. The timers fire and retire → count → 0 → `settled && count === 0` → `"idle"` → another message → …
+   *
+   * Steps 2 and 3 are each other's cause, so it never stops: with **no user code alive at all**, an idle browser
+   * tab put a perfectly alternating `idle`/`settled` pair on the wire for as long as the page lived. Because the
+   * UI's `BUSY_STATES` contains `settled` but not `idle`, its `busy` flag flipped with every pair, remounting the
+   * activity-bar spinner and restarting its CSS animation — the user's "reloading instead of animating", and why
+   * "not running the web view gets rid of the reload error" was an accurate bisection: no webview, no page, no loop.
+   *
+   * **Why suspension rather than `batch`.** `batch` suppresses a dip that is an artefact of retire-then-run within
+   * one tick. This dip is not an artefact: the count genuinely returns to 0 between two messages, with nothing
+   * pending, which is indistinguishable from a loop that really stopped. Widening `batch` across the gap would
+   * therefore have to suppress real `idle`s too. The handle should never have been counted in the first place.
+   *
+   * Only `add` is suspended. `remove` is not, so a handle registered *outside* this scope still reports its
+   * retirement from inside one — a genuine `idle` can never be swallowed by it. The scope is also lexically bound
+   * to `body`'s synchronous execution, and `bootstrap.ts` uses it around nothing but its own `bridge.send`, whose
+   * whole body is building a JSON envelope and handing it to the host hook.
+   */
+  untracked<T>(body: () => T): T {
+    this.#untrackedDepth += 1;
+    try {
+      return body();
+    } finally {
+      this.#untrackedDepth -= 1;
+    }
+  }
+
+  add(key: unknown, dispose: () => void): void {
+    if (this.suspended || this.#active.has(key)) return;
+    this.#active.set(key, dispose);
+    this.#notify();
+  }
+
   remove(key: unknown): void {
-    if (this.#active.delete(key)) this.onChange(this.#active.size);
+    if (this.#active.delete(key)) this.#notify();
   }
 
   disposeAll(): void {
@@ -43,7 +137,7 @@ export class HandleTracker {
         dispose();
       } catch {}
     }
-    this.onChange(0);
+    this.#notify();
   }
 }
 
@@ -192,8 +286,13 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
   g.setTimeout = Object.assign((fn: AnyFn, ms?: number, ...args: unknown[]) => {
     const id = st(
       (...a: unknown[]) => {
-        timerKeys.remove(id);
-        fn(...a);
+        // Retiring this timer and running its callback are one atomic change to the handle set (`batch`'s own doc
+        // comment): a `setTimeout` chain that reschedules itself here must not dip the count to 0 in between and
+        // emit a spurious `idle`/`settled` pair on every single tick.
+        tracker.batch(() => {
+          timerKeys.remove(id);
+          fn(...a);
+        });
       },
       ms,
       ...args,
@@ -253,8 +352,12 @@ export function installHandleTracking(tracker: HandleTracker, g: any = globalThi
   if (typeof raf === "function" && typeof caf === "function") {
     g.requestAnimationFrame = Object.assign((fn: (time: number) => void) => {
       const id = raf((time: number) => {
-        frameKeys.remove(id);
-        fn(time);
+        // The rAF loop is the case the user actually hit: see `batch`'s doc comment. Retiring this frame and
+        // running its callback (which reschedules the next one) is one atomic change, not two.
+        tracker.batch(() => {
+          frameKeys.remove(id);
+          fn(time);
+        });
       });
       frameKeys.add(id, () => caf(id));
       return id;

@@ -92,8 +92,6 @@ export const tabPatchSchema = z.object({
           // takes the *whole* tab.patch down with it, language/runtime/title included.
           tiles: z
             .object({
-              arrangement: z.enum(["stacked", "side-by-side"]),
-              order: z.array(z.enum(["console", "webview"])).length(2),
               webviewVisible: z.boolean(),
               consoleSize: z.number().min(10).max(90),
             })

@@ -159,8 +159,8 @@ describe("NPM Packages sheet (spec §11.2)", () => {
     expect(api.npmInstall).toHaveBeenCalledWith("git+https://ghp_FAKE@github.com/o/r.git");
   });
 
-  test("↑/↓ selects a result for Return to install, and Escape clears a non-empty search before closing the sheet (R26-2)", async () => {
-    const { store, api } = setup();
+  test("↑/↓ selects a result for Return to install", async () => {
+    const { api } = setup();
     await screen.findByText("fixture-a");
     const search = screen.getByRole("searchbox", { name: strings.npm.searchLabel }) as HTMLInputElement;
     fireEvent.change(search, { target: { value: "zod" } });
@@ -169,12 +169,54 @@ describe("NPM Packages sheet (spec §11.2)", () => {
     fireEvent.keyDown(search, { key: "ArrowDown" });
     fireEvent.keyDown(search, { key: "Enter" });
     expect(api.npmInstall).toHaveBeenCalledWith("zod");
+  });
 
+  // The user's report ("there is no way to close this popup panel") supersedes R26-2, which gave clearing the
+  // query priority over closing: the document Escape handler stepped aside whenever the focused search field held
+  // a non-empty query, so the first press silently cleared a field and nothing closed. A type="search" input
+  // already carries a native clear control; Escape's only effect is now closing. This fails if either the
+  // handler's carve-out or the field's own Escape branch comes back.
+  test("Escape closes the sheet even while the focused search field holds a query", async () => {
+    const { store } = setup();
+    await screen.findByText("fixture-a");
+    const search = screen.getByRole("searchbox", { name: strings.npm.searchLabel }) as HTMLInputElement;
     fireEvent.change(search, { target: { value: "zo" } });
     act(() => search.focus());
+    // The precondition the old carve-out keyed on: this exact field focused, holding a non-empty query.
+    expect(document.activeElement).toBe(search);
+    expect(search.value).toBe("zo");
     fireEvent.keyDown(search, { key: "Escape" });
-    expect(search.value).toBe("");
+    expect(store.getState().modal).toBeNull();
+  });
+
+  // Ruling 2: a visible exit in the header. This fails if no button carries the Close name, or if one does but
+  // never reaches closeModal.
+  test("the header Close button closes the sheet", async () => {
+    const { store } = setup();
+    await screen.findByText("fixture-a");
+    const close = screen.getByRole("button", { name: strings.npm.close });
+    // It must be its own control, not the row's destructive action answering to a second name — confusing the two
+    // is what let a user hunting for an exit uninstall a dependency.
+    expect(close).not.toBe(screen.getByRole("button", { name: strings.npm.remove("fixture-a") }));
+    fireEvent.click(close);
+    expect(store.getState().modal).toBeNull();
+  });
+
+  // Ruling 3: the backdrop dismisses, but only when the press lands on the backdrop itself. A press inside the
+  // sheet bubbles to the same element, so an unguarded handler would close the sheet on every click in it — the
+  // first assertion is what catches that.
+  test("a press on the backdrop closes the sheet, and a press inside the sheet does not", async () => {
+    const { store } = setup();
+    await screen.findByText("fixture-a");
+    const sheet = screen.getByRole("dialog", { name: strings.npm.title });
+    const backdrop = sheet.parentElement as HTMLElement;
+    expect(backdrop.classList.contains("dialog-backdrop")).toBe(true);
+
+    fireEvent.mouseDown(sheet);
     expect(store.getState().modal).toEqual({ kind: "npm" });
+
+    fireEvent.mouseDown(backdrop);
+    expect(store.getState().modal).toBeNull();
   });
 
   test("a running operation shows in its row, disables that row's buttons, and the status line counts anything queued (R26-3)", async () => {

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { RunnerState } from "@jslab/rpc-schema";
 import { AudioController, HandleTracker, handleCountAction, installHandleTracking } from "../src/handles";
 
 // The test environment (bun:test) has no DOM: every host API the web runner touches is a small fake built here,
@@ -523,6 +524,119 @@ test("clearing a timer leaves a rAF loop with the same raw id tracked and still 
   expect(frames).toBe(1);
 });
 
+/**
+ * The user-reported M4 defect ("the interface items that track the auto-run are stuck on a re-render loop"): the
+ * activity-bar spinner, the Stop button and the run-state text all flickering on a `browser` tab.
+ *
+ * Every sandbox above constructs `new HandleTracker(() => {})` -- it throws the notifications away and asserts only
+ * `tracker.count` *at rest*. That is precisely why this went unseen: at rest the count really is 1 and everything
+ * above passes. The defect lives entirely in the transitions emitted *between* two resting points.
+ *
+ * This fixture is `bootstrap.ts`'s own tracker wiring, verbatim:
+ *
+ *     const tracker = new HandleTracker((count) => {
+ *       if (!run) return;
+ *       const action = handleCountAction(run.state, false, count);
+ *       if (action === "dispose") tracker.disposeAll();
+ *       else if (action) setState(action);
+ *     });
+ *
+ * and `setState` assigns `run.state` and then sends one `state` message to the host. So `states` below is exactly
+ * the sequence of `state` messages a real page would put on the wire, which is what the UI re-renders from.
+ */
+function stateRecordingSandbox(initial: RunnerState) {
+  const states: RunnerState[] = [];
+  const run = { state: initial };
+  const tracker: HandleTracker = new HandleTracker((count) => {
+    const action = handleCountAction(run.state, false, count);
+    if (action === "dispose") tracker.disposeAll();
+    else if (action) {
+      run.state = action;
+      states.push(action);
+    }
+  });
+  const raf = fakeRaf();
+  const timers = fakeTimers();
+  const audio = new AudioController(() => {});
+  const g = {
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    setInterval: timers.setInterval,
+    clearInterval: timers.clearInterval,
+    requestAnimationFrame: raf.requestAnimationFrame,
+    cancelAnimationFrame: raf.cancelAnimationFrame,
+    // biome-ignore lint/suspicious/noExplicitAny: sandboxed global object
+  } as any;
+  installHandleTracking(tracker, g, audio);
+  return { states, run, tracker, raf, timers, g };
+}
+
+// The loop itself. A run that ended `settled` with one frame pending -- any ordinary animation -- used to emit an
+// `idle` and a `settled` on EVERY frame, because the wrapper retired the frame before running the callback that
+// reschedules it, dipping the count 1 -> 0 -> 1. `settled` is in the UI's BUSY_STATES and `idle` is not, so `busy`
+// flipped 120 times a second and remounted the spinner (restarting its CSS animation) with it.
+test("a self-rescheduling rAF loop emits no state messages at all while it keeps looping", () => {
+  const { states, tracker, raf, g } = stateRecordingSandbox("settled");
+  const loop = () => {
+    g.requestAnimationFrame(loop);
+  };
+  g.requestAnimationFrame(loop);
+  states.length = 0;
+
+  for (let frame = 0; frame < 5; frame += 1) raf.fire();
+
+  // Asserting the exact sequence, not "contains no idle" or "the last one is settled": the whole defect is extra
+  // transitions, so a superset assertion would accept the broken state (five idle/settled pairs) as a pass.
+  expect(states).toEqual([]);
+  expect(tracker.count).toBe(1);
+});
+
+test("a self-rescheduling setTimeout chain emits no state messages at all while it keeps looping", () => {
+  const { states, tracker, timers, g } = stateRecordingSandbox("settled");
+  const tick = () => {
+    g.setTimeout(tick, 16);
+  };
+  g.setTimeout(tick, 16);
+  states.length = 0;
+
+  for (let round = 0; round < 5; round += 1) timers.fire();
+
+  expect(states).toEqual([]);
+  expect(tracker.count).toBe(1);
+});
+
+// The other half: holding the notification for the callback's duration must not SUPPRESS the real transition. A
+// loop that stops rescheduling has genuinely gone idle on that tick, and must say so -- exactly once.
+test("a rAF loop that stops rescheduling still reports idle, exactly once", () => {
+  const { states, tracker, raf, g } = stateRecordingSandbox("settled");
+  let frames = 0;
+  const loop = () => {
+    frames += 1;
+    if (frames < 3) g.requestAnimationFrame(loop);
+  };
+  g.requestAnimationFrame(loop);
+  states.length = 0;
+
+  raf.fire(); // reschedules
+  raf.fire(); // reschedules
+  raf.fire(); // does not reschedule: the run is genuinely idle now
+
+  expect(frames).toBe(3);
+  expect(states).toEqual(["idle"]);
+  expect(tracker.count).toBe(0);
+});
+
+test("a one-shot setTimeout still reports idle, exactly once", () => {
+  const { states, tracker, timers, g } = stateRecordingSandbox("settled");
+  g.setTimeout(() => {}, 16);
+  states.length = 0;
+
+  timers.fire();
+
+  expect(states).toEqual(["idle"]);
+  expect(tracker.count).toBe(0);
+});
+
 test("handleCountAction disposes new handles after a stop, and tracks idle/settled otherwise", () => {
   const cases: Array<[Parameters<typeof handleCountAction>[0], boolean, number, ReturnType<typeof handleCountAction>]> =
     [
@@ -538,4 +652,59 @@ test("handleCountAction disposes new handles after a stop, and tracks idle/settl
   for (const [state, exiting, count, expected] of cases) {
     expect(handleCountAction(state, exiting, count)).toBe(expected);
   }
+});
+
+/**
+ * `HandleTracker.untracked` -- the unit-level half of the idle-strobe fix whose end-to-end half is
+ * `host-bridge-churn.test.ts`. See the method's own doc comment for the mechanism it exists to close: JSLab's
+ * outbound host messages were registering tracked handles, because Electrobun's preload defers every emission
+ * through the page's (by then wrapped) global `setTimeout`.
+ */
+test("a handle created inside untracked is never tracked and emits no state messages", () => {
+  const { states, tracker, timers, g } = stateRecordingSandbox("idle");
+  tracker.untracked(() => {
+    g.setTimeout(() => {}, 0);
+  });
+
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: [], count: 0 });
+
+  // And firing it stays silent too -- a handle that was never added must not look like one retiring.
+  timers.fire();
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: [], count: 0 });
+});
+
+/**
+ * The property that keeps this from being a silencer: suspension applies to `add` only. A handle registered
+ * outside the scope still reports its retirement, so a genuine `idle` can never be swallowed by it.
+ */
+test("untracked does not suppress the idle for a handle created outside it", () => {
+  const { states, tracker, timers, g } = stateRecordingSandbox("idle");
+  g.setTimeout(() => {}, 16);
+  expect(states).toEqual(["settled"]);
+  states.length = 0;
+
+  // A JSLab message goes out while the run's own timer is still pending -- the ordinary case, since `setState`
+  // above sent one. It must change nothing.
+  tracker.untracked(() => {
+    g.setTimeout(() => {}, 0);
+  });
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: [], count: 1 });
+
+  timers.fire();
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: ["idle"], count: 0 });
+});
+
+/** Suspension is strictly scoped to the call, including when `body` throws -- otherwise one failed send would
+ * silently stop the page tracking anything at all for the rest of its life. */
+test("untracked restores tracking even when its body throws", () => {
+  const { states, tracker, g } = stateRecordingSandbox("idle");
+  expect(() =>
+    tracker.untracked(() => {
+      throw new Error("send failed");
+    }),
+  ).toThrow("send failed");
+  expect(tracker.suspended).toBe(false);
+
+  g.setTimeout(() => {}, 16);
+  expect({ states: [...states], count: tracker.count }).toEqual({ states: ["settled"], count: 1 });
 });

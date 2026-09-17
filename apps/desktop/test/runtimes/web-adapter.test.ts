@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { EncodedValue, HostToWebMessage, RunEvent, RunState, WebToHostMessage } from "@jslab/rpc-schema";
+import type {
+  EncodedValue,
+  HostToWebMessage,
+  RawRunEvent,
+  RunEvent,
+  RunState,
+  WebToHostMessage,
+} from "@jslab/rpc-schema";
 import {
   type AppBundleResult,
   type BundleOptions,
@@ -704,6 +711,214 @@ describe("WebAdapter", () => {
       raw.emit(4, { type: "ready" });
       await start2;
       expect(raw.executed.some((js) => js.includes('"type":"run"'))).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The user-reported defect (M4): a `browser` tab's status bar sat at "Running: 1 active handle" indefinitely.
+   *
+   * The page stamps every state message with its OWN run id (`packages/runner-web/src/bootstrap.ts`'s `setState`),
+   * but this session used to ignore that field entirely: `case "state"` removed the lock for `this.run.runId` --
+   * the *session's* id -- and relayed `sink.state(message.state, message.activeHandles)` with no run id at all.
+   * The webview is persistent (Task 8's invariant) and a session only unwires itself once it reaches `stopped`, so
+   * a run that finishes `idle`/`settled` leaves its listener attached while the next run's session listens on the
+   * same host. With Auto Run on, runs overlap on every keystroke -- so run N's late `settled`, carrying run N's
+   * handle count, was relayed as if it belonged to run N+1 and stuck there (`settled` is in the UI's
+   * `BUSY_STATES`, so it presents as a run that never stopped).
+   *
+   * Same defect family, and the same shape of fix, as T9e's generation gate on `ready`/`exit`
+   * (`webview-source.ts`): compare the identity the message carries against the identity of the thing receiving
+   * it, and drop a mismatch *before* any side effect runs.
+   */
+  test("M4: a stale 'state' from the previous run is not relayed against the run that replaced it (user report)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
+    try {
+      const webviews = new FakeWebviewSource();
+      const locks = new Set<string>();
+      const adapter = createWebAdapter({
+        webviews,
+        runtime: "browser",
+        runsDir: dir,
+        packagesNodeModules: join(dir, "node_modules"),
+        bunLockPath: join(dir, "bun.lock"),
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true, closure: [] }),
+        runLock: { add: (id) => locks.add(id), remove: (id) => locks.delete(id) },
+        directoryExists: async () => true,
+        readBunLock: async () => LOCK_TEXT,
+        bundle: async () => ({ code: "x", map: "", imports: [], vendorCacheable: true }),
+      });
+      // One sink per run, the way `RunCoordinator` gives each run its own: cross-talk between two runs is only
+      // observable if the two sinks are distinct.
+      const makeSink = () => {
+        const states: { state: RunState; activeHandles?: number }[] = [];
+        let exited = 0;
+        const sink: RunEventSink = {
+          attached: () => {},
+          events: () => {},
+          state: (state, activeHandles) => states.push({ state, activeHandles }),
+          heartbeat: () => {},
+          exited: () => {
+            exited++;
+          },
+        };
+        return { sink, states, exited: () => exited };
+      };
+      const one = makeSink();
+      const two = makeSink();
+      const run1: PreparedRun = {
+        runId: "run-1",
+        tabId: "t1",
+        code: "1 + 1",
+        maxEntries: 10_000,
+        workingDirectory: null,
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+      await adapter.start(run1, one.sink);
+      const raw = webviews.raws.get("t1");
+      if (!raw) throw new Error("expected a webview to have been created for t1");
+
+      // Run 1 ends the way the user's run did: `settled`, still holding a handle -- NOT `stopped`, so its session
+      // is never retired and stays wired to the persistent webview.
+      raw.emit(2, { type: "state", runId: "run-1", state: "settled", activeHandles: 1 });
+      expect(one.states.at(-1)).toEqual({ state: "settled", activeHandles: 1 });
+
+      // Run 2 begins on the SAME webview -- Auto Run's overlap, reproduced.
+      const run2: PreparedRun = { ...run1, runId: "run-2" };
+      await adapter.start(run2, two.sink);
+      const twoBefore = two.states.length;
+
+      // The straggler: run 1's state, still in flight across the host boundary when run 2 began.
+      raw.emit(3, { type: "state", runId: "run-1", state: "settled", activeHandles: 1 });
+
+      // It must not reach run 2's sink -- that relay is exactly what pinned "Running: 1 active handle".
+      expect(two.states.length).toBe(twoBefore);
+      // None of the case's other side effects may fire against run 2 either: its lock must still be held (dropping
+      // it would let a quit proceed over a live run) and its handle must not be retired.
+      expect(locks.has("run-2")).toBe(true);
+      expect(two.exited()).toBe(0);
+
+      // ...and dropping it strands nothing, which is the half that makes the drop safe: the straggler still
+      // reached the run it actually belongs to, on that run's own still-wired session, so run 1 settles, unlocks
+      // and (when it stops) retires itself exactly as before.
+      expect(one.states.at(-1)).toEqual({ state: "settled", activeHandles: 1 });
+      const oneBefore = one.states.length;
+
+      // The half a too-eager guard breaks -- an earlier M4 defect wedged a connection precisely by skipping state a
+      // rejected message still needed. Run 2's OWN states are relayed normally, lock release included.
+      raw.emit(4, { type: "state", runId: "run-2", state: "idle", activeHandles: 0 });
+      expect(two.states.at(-1)).toEqual({ state: "idle", activeHandles: 0 });
+      expect(locks.has("run-2")).toBe(false);
+      // ...and run 2's own graceful stop still settles and retires its handle exactly once.
+      raw.emit(5, { type: "state", runId: "run-2", state: "stopped", activeHandles: 0 });
+      expect(two.states.at(-1)).toEqual({ state: "stopped", activeHandles: 0 });
+      expect(two.exited()).toBe(1);
+
+      // The gate is symmetric: run 1's still-wired session never saw run 2's states either.
+      expect(one.states.length).toBe(oneBefore);
+      expect(one.exited()).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The same cross-talk the `state` test above pins, on the other message that carries a `runId`: a stray console
+   * line from a superseded run landing in the live run's output.
+   *
+   * `packages/runner-web/src/bootstrap.ts` stamps every batch with its own run id (the `EventBuffer` sink sends
+   * `{ type: "events", runId: message.runId, events }`), but `case "events"` used to ignore that field entirely and
+   * relay whatever arrived. The webview is persistent (Task 8's invariant) and a session only unwires itself once
+   * it reaches `stopped`, so a run that finishes `idle`/`settled` leaves its listener attached while the next run's
+   * session listens on the same host -- and with Auto Run on, runs overlap on every keystroke.
+   */
+  test("M4: a stale 'events' batch from the previous run is not relayed into the run that replaced it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
+    try {
+      const webviews = new FakeWebviewSource();
+      const locks = new Set<string>();
+      const adapter = createWebAdapter({
+        webviews,
+        runtime: "browser",
+        runsDir: dir,
+        packagesNodeModules: join(dir, "node_modules"),
+        bunLockPath: join(dir, "bun.lock"),
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true, closure: [] }),
+        runLock: { add: (id) => locks.add(id), remove: (id) => locks.delete(id) },
+        directoryExists: async () => true,
+        readBunLock: async () => LOCK_TEXT,
+        bundle: async () => ({ code: "x", map: "", imports: [], vendorCacheable: true }),
+      });
+      // One sink per run, the way `RunCoordinator` gives each run its own: cross-talk between two runs is only
+      // observable if the two sinks are distinct.
+      const makeSink = () => {
+        const events: RunEvent[] = [];
+        const sink: RunEventSink = {
+          attached: () => {},
+          events: (batch) => events.push(...batch),
+          state: () => {},
+          heartbeat: () => {},
+          exited: () => {},
+        };
+        return { sink, events };
+      };
+      const one = makeSink();
+      const two = makeSink();
+      const line = (text: string, seq: number) =>
+        ({
+          kind: "console",
+          level: "log",
+          line: 1,
+          groupDepth: 0,
+          args: [{ t: "string", v: text }],
+          seq,
+          t: 0,
+        }) as unknown as RawRunEvent;
+      const run1: PreparedRun = {
+        runId: "run-1",
+        tabId: "t1",
+        code: "1 + 1",
+        maxEntries: 10_000,
+        workingDirectory: null,
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+      await adapter.start(run1, one.sink);
+      const raw = webviews.raws.get("t1");
+      if (!raw) throw new Error("expected a webview to have been created for t1");
+
+      // Run 1's own output reaches run 1, as it always did.
+      raw.emit(2, { type: "events", runId: "run-1", events: [line("from run 1", 1)] });
+      expect(one.events).toHaveLength(1);
+
+      // Run 2 begins on the SAME webview -- Auto Run's overlap, reproduced. Run 1 never reached `stopped`, so its
+      // session is still wired to this host.
+      const run2: PreparedRun = { ...run1, runId: "run-2" };
+      await adapter.start(run2, two.sink);
+      const twoBefore = two.events.length;
+
+      // The straggler: run 1's console line, still in flight across the host boundary when run 2 began.
+      raw.emit(3, { type: "events", runId: "run-1", events: [line("straggler from run 1", 2)] });
+
+      // It must not reach run 2's sink -- that relay is exactly what puts a superseded run's output in a live run's
+      // console.
+      expect(two.events.length).toBe(twoBefore);
+
+      // ...and dropping it strands nothing, which is the half that makes the drop safe: the straggler still reached
+      // the run it actually belongs to, on that run's own still-wired session.
+      expect(one.events).toHaveLength(2);
+      expect(one.events.at(-1)).toMatchObject({ kind: "console", args: [{ t: "string", v: "straggler from run 1" }] });
+
+      // The half a too-eager guard breaks: run 2's OWN output is relayed normally.
+      raw.emit(4, { type: "events", runId: "run-2", events: [line("from run 2", 3)] });
+      expect(two.events.at(-1)).toMatchObject({ kind: "console", args: [{ t: "string", v: "from run 2" }] });
+
+      // The gate is symmetric: run 1's still-wired session never saw run 2's output either.
+      expect(one.events).toHaveLength(2);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

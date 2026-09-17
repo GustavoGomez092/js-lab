@@ -76,6 +76,8 @@ export interface MenuModel {
   bindings: readonly ResolvedBinding[];
   themes: readonly { id: string; name: string }[];
   canReopen: boolean;
+  /** Spec §16.1: the one slot reads "Uninstall…" once a symlink to this build is detected. */
+  cliInstalled: boolean;
 }
 
 const PREFIX = "command:";
@@ -265,7 +267,14 @@ export function buildMenu(model: MenuModel): MenuItem[] {
     },
     {
       label: "Help",
-      submenu: [item("help.copyDebugLog"), item("help.openLogsFolder"), separator, item("help.restartSafeMode")],
+      submenu: [
+        item("help.copyDebugLog"),
+        item("help.openLogsFolder"),
+        separator,
+        model.cliInstalled ? item("help.uninstallCli") : item("help.installCli"),
+        separator,
+        item("help.restartSafeMode"),
+      ],
     },
   ];
 }

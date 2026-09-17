@@ -165,6 +165,23 @@ bun run e2e          # end-to-end scenarios against a dev build
 
 Scripted launches must use a working directory on an internal disk. From an external volume, macOS asks for removable-volume access, and a background launch can't show that prompt. The E2E harness handles this for you.
 
+### The `jslab` command
+
+```bash
+bun run build:cli    # compile apps/desktop/dist/bin/jslab (real Bun; run it before `hutch run build`)
+```
+
+The binary ships inside the app at `Resources/app/bin/jslab`. Help → Install `jslab` Command… symlinks it into
+`~/.local/bin`; if that folder isn't on your `PATH`, the message tells you the line to add.
+
+```bash
+jslab notes.ts                       # open a file in a new tab
+echo 'fetch("…")' | jslab --run -    # run code from stdin
+jslab --runtime browser --cwd . app.tsx
+```
+
+Code runs only when `--run` is passed. `jslab` starts JSLab if it isn't already running.
+
 ## Roadmap
 
 | Milestone | Scope | Status |

@@ -133,6 +133,8 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
 
     { id: "help.copyDebugLog", run: () => deps.api.appCommand("copyDebugLog") },
     { id: "help.openLogsFolder", run: () => deps.api.appCommand("openLogsFolder") },
+    { id: "help.installCli", run: () => deps.api.appCommand("installCli") },
+    { id: "help.uninstallCli", run: () => deps.api.appCommand("uninstallCli") },
     { id: "help.restartSafeMode", run: () => deps.api.appCommand("restartSafeMode") },
     { id: "app.openDataFolder", run: () => deps.api.appCommand("openDataFolder") },
     { id: "app.settings", run: () => deps.api.appCommand("openSettings") },

@@ -21,6 +21,7 @@ export const VIEW_MESSAGES = [
   "wd.changed",
   "snippets.imported",
   "snippets.exported",
+  "tab.updated",
   "app.flushState",
   "webRunner.ensure",
   "webRunner.execute",

@@ -30,6 +30,8 @@ describe("resolveAppPaths", () => {
       webRunnerBootstrap: "/Applications/JSLab.app/Contents/Resources/app/runner/web-bootstrap.js",
       transformWorker: "/Applications/JSLab.app/Contents/Resources/app/workers/transform-worker.js",
       bunBinary: "/Applications/JSLab.app/Contents/MacOS/bun",
+      // Spec §16.1: the symlink target Help -> Install `jslab` Command… creates.
+      cliBinary: "/Applications/JSLab.app/Contents/Resources/app/bin/jslab",
     });
   });
 
@@ -45,6 +47,7 @@ describe("resolveAppPaths", () => {
     expect(paths.runnerBootstrap).toBe("/src/bootstrap.ts");
     expect(paths.transformWorker).toBe("/src/worker.ts");
     expect(paths.bunBinary).toBe("/bin/bun");
+    expect(resolveAppPaths({ ...input, env: { JSLAB_CLI_BINARY: "/src/jslab" } }).cliBinary).toBe("/src/jslab");
   });
 
   test("JSLAB_USER_DATA relocates every data path", () => {

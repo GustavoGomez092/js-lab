@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import rootPackage from "../../../package.json";
 import viteConfig from "../../ui/vite.config";
 import electrobunConfig from "../electrobun.config";
 import hutchConfig from "../hutch.config";
@@ -103,5 +104,30 @@ describe("build wiring: the runner-web bootstrap Main injects", () => {
       env: { JSLAB_WEB_RUNNER_BOOTSTRAP: "/elsewhere/web-bootstrap.js" },
     });
     expect(overridden.webRunnerBootstrap).toBe("/elsewhere/web-bootstrap.js");
+  });
+});
+
+describe("build wiring: the jslab CLI binary", () => {
+  test("electrobun.config.ts copies dist/bin into the bundle's app/bin folder", () => {
+    // Spec §16.1: the symlink points at JSLab.app/Contents/Resources/app/bin/jslab, and `copy`'s destinations are
+    // relative to Resources/app — the same reason "dist/runner": "runner" produces app/runner/bootstrap.js.
+    expect(electrobunConfig.build?.copy?.["dist/bin"]).toBe("bin");
+  });
+
+  test("the root build:cli script compiles the entry to that staged folder with real Bun", () => {
+    const scripts = (rootPackage.scripts ?? {}) as Record<string, string>;
+    expect(scripts["build:cli"]).toBe(
+      "bun build apps/desktop/src/cli/main.ts --compile --outfile apps/desktop/dist/bin/jslab",
+    );
+  });
+
+  test("build:bundles refuses to build a bundle whose CLI binary was never staged", () => {
+    // Cottontail rejects build flags it doesn't know (see hutch.config.ts's own notes on --format), so --compile
+    // never runs inside it. The guard turns a forgotten `bun run build:cli` into a loud failure instead of an app
+    // that ships without its CLI.
+    const bundles = (hutchConfig.scripts as Record<string, string>)["build:bundles"] ?? "";
+    expect(bundles).toContain("test -x dist/bin/jslab");
+    expect(bundles).toContain("bun run build:cli");
+    expect(bundles).not.toContain("--compile");
   });
 });

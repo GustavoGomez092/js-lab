@@ -1,3 +1,4 @@
+export * from "./cli";
 export * from "./events";
 export * from "./runner-ipc";
 export * from "./ui-rpc";

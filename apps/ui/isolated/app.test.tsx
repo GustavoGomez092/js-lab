@@ -13,6 +13,7 @@ import {
   resolveKeybindings,
   type Settings,
   shortcutFor,
+  type TabState,
 } from "@jslab/shared";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type ComponentType, Profiler } from "react";
@@ -370,6 +371,32 @@ describe("App shell", () => {
     await emit("menu.command", { command: "tab.close" });
     expect(api.closeTab).toHaveBeenCalledWith("t1");
     expect([store.getState().tabOrder, store.getState().activeTabId]).toEqual([["t2"], "t2"]);
+  });
+
+  // M5c F3 (spec §16.3): `jslab --title renamed-by-cli a.ts` on an ALREADY-OPEN file renames the tab in Main, which
+  // pushes `tab.updated`. This asserts App *subscribes* to that push. tab-patch.test.ts calls `applyTabUpdate`
+  // directly, so it still passes with App's `api.on("tab.updated", ...)` deleted -- and nothing else would notice:
+  // F3 narrowed `computeTabPatch` to send `title` only when it actually changed, removing the (wrong, but
+  // converging) unconditional title push that used to drag Main back into agreement. Without the subscription Main
+  // holds "renamed-by-cli", the tab bar keeps "a.ts", and no further event reconciles them until a restart.
+  test("a tab.updated push from Main renames the tab in the store and the tab bar (M5c F3)", async () => {
+    const { store, emit } = renderApp();
+    const opened: TabState = {
+      ...(store.getState().tabs.t1 as TabState),
+      filePath: "/w/a.ts",
+      title: "a.ts",
+      titleIsCustom: false,
+    };
+    act(() => store.setState({ tabs: { t1: opened } }));
+    expect(document.querySelector(".tab-title")?.textContent).toBe("a.ts");
+
+    await emit("tab.updated", { tabId: "t1", tab: { ...opened, title: "renamed-by-cli", titleIsCustom: true } });
+
+    expect([store.getState().tabs.t1?.title, store.getState().tabs.t1?.titleIsCustom]).toEqual([
+      "renamed-by-cli",
+      true,
+    ]);
+    expect(document.querySelector(".tab-title")?.textContent).toBe("renamed-by-cli");
   });
 
   test("run messages for a background tab update only that tab", async () => {

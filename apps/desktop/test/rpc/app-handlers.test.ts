@@ -17,6 +17,8 @@ function setup() {
     toggleFullScreen: mock(() => {}),
     closeWindow: mock(() => {}),
     openSettings: mock(() => {}),
+    installCli: mock(() => {}),
+    uninstallCli: mock(() => {}),
     redact: createRedactor(),
     log: mock(() => {}),
   } satisfies AppHandlerDeps;
@@ -69,6 +71,25 @@ describe("app.command", () => {
       (call) => call[0] === "Rejected invalid app.command payload",
     );
     expect(rejected).toHaveLength(3);
+  });
+
+  test("installCli and uninstallCli reach Main, and nothing else changes", async () => {
+    const { handlers, deps } = setup();
+    handlers.messages["app.command"]({ action: "installCli" });
+    handlers.messages["app.command"]({ action: "uninstallCli" });
+    await Bun.sleep(0);
+    expect(deps.installCli).toHaveBeenCalledTimes(1);
+    expect(deps.uninstallCli).toHaveBeenCalledTimes(1);
+  });
+
+  test("the Settings window can never install the CLI (spec §7.5, §16.1)", async () => {
+    const { deps } = setup();
+    const handlers = createSettingsAppHandlers(deps);
+    handlers.messages["app.command"]({ action: "installCli" });
+    handlers.messages["app.command"]({ action: "uninstallCli" });
+    await Bun.sleep(0);
+    expect(deps.installCli).not.toHaveBeenCalled();
+    expect(deps.uninstallCli).not.toHaveBeenCalled();
   });
 
   test("unknown actions are logged and dropped", () => {

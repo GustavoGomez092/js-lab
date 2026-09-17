@@ -134,6 +134,8 @@ export const APP_ACTIONS = [
   "toggleFullScreen",
   "closeWindow",
   "openSettings",
+  "installCli",
+  "uninstallCli",
 ] as const;
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });
@@ -387,6 +389,11 @@ export const STARTUP_NOTICE_IDS = [
    * `startupNotices`; unlike it, the condition persists, so it is raised once per session rather than per change.
    */
   "settingsTooLarge",
+  /**
+   * Spec §16.1: the result of Help → Install/Uninstall `jslab` Command…. `app.notice` is the one Main → UI message
+   * the UI re-validates before showing (FA-I3), so this id has to be listed here or the install result is dropped.
+   */
+  "cliInstall",
 ] as const;
 
 /**
@@ -620,6 +627,13 @@ export type ViewMessages = {
   "wd.changed": { tabId: string; tab: TabState };
   "snippets.imported": SnippetsImported;
   "snippets.exported": SnippetsExported;
+  /**
+   * Spec §16.3: a tab Main changed on its own, so the UI's store can follow. `jslab --title` on an ALREADY-OPEN file
+   * is the first sender -- `file.opened` announces only tabs that were just created, and the UI's `openTab` ignores
+   * an id it already holds, so without this the tab bar kept the old title and the UI's own `tab.patch` pushed that
+   * stale title back over the rename. Same shape and same UI handler (`applyTabUpdate`) as `wd.changed`.
+   */
+  "tab.updated": { tabId: string; tab: TabState };
   "app.flushState": Record<string, never>;
   /**
    * M4 §5.12: make sure this tab has a live `<electrobun-webview>`, creating one if the tab's own Web View toggle

@@ -47,6 +47,8 @@ export interface CreateTabOptions {
   filePath?: string | null;
   lastSavedHash?: string | null;
   content?: string;
+  /** Spec §12.2, reachable from the CLI's `--cwd` (spec §16.2). */
+  workingDirectory?: string | null;
   /** Defaults to true. */
   activate?: boolean;
 }

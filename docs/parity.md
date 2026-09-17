@@ -225,7 +225,7 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 |---|---|---|---|---|---|---|
 | XT-01 | Custom themes: VS Code theme importer (.json/.vsix), themes folder | #62, #616 | §9.3 | M5 | U, E | ⬜ |
 | XT-02 | Custom keybindings UI + `keybindings.json` | #446, #636 | §6.5 | M2/M5 | U, E | 🚧 keybindings.json overrides in M2; editing UI M5 |
-| XT-03 | `jslab` CLI (open, stdin, `--run`, `--runtime`, `--cwd`) | #23, #747, #594 | §16 | M5 | E | ⬜ |
+| XT-03 | `jslab` CLI (open, stdin, `--run`, `--runtime`, `--cwd`) | #23, #747, #594 | §16 | M5 | E | ✅ `packages/e2e/scenarios/cli.test.ts` (open, stdin, `--run`, all three `--runtime` values, `--cwd`, `--title`, install/uninstall); unit: `apps/desktop/test/cli/`, `packages/rpc-schema/test/cli.test.ts` |
 | XT-04 | GitHub Gist publish/update/open | #115 | §15 | M5 | I, E | ⬜ |
 | XT-05 | Format on save | #742 | §6.4 | M2 | E | ✅ `packages/e2e/scenarios/format.test.ts` |
 | XT-06 | Loop protection covers `for…of`/`for…in`/`for await` | #744 | §5.5 | M1 | U | ✅ `packages/transform/test/transform.test.ts`, `packages/transform/test/semantics.test.ts` |

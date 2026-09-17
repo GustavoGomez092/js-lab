@@ -17,6 +17,9 @@ export interface AppHandlerDeps {
   toggleFullScreen(): void;
   closeWindow(): void;
   openSettings(): void;
+  /** Spec §16.1: Help → Install `jslab` Command…. Defaults to ~/.local/bin and never escalates. */
+  installCli(): void;
+  uninstallCli(): void;
   redact: Redactor;
   /** The home folder written as `~` in the debug report (FA-m12); defaults to `os.homedir()`. */
   home?: string;
@@ -82,6 +85,12 @@ async function runAppAction(deps: AppHandlerDeps, action: AppAction): Promise<vo
       return;
     case "openSettings":
       deps.openSettings();
+      return;
+    case "installCli":
+      deps.installCli();
+      return;
+    case "uninstallCli":
+      deps.uninstallCli();
       return;
   }
 }

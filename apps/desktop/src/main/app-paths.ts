@@ -36,6 +36,8 @@ export interface AppPaths {
   webRunnerBootstrap: string;
   transformWorker: string;
   bunBinary: string;
+  /** Spec §16.1: the Bun-compiled `jslab` binary the install symlink points at. */
+  cliBinary: string;
 }
 
 /**
@@ -66,6 +68,7 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     webRunnerBootstrap: input.env.JSLAB_WEB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "web-bootstrap.js"),
     transformWorker: input.env.JSLAB_TRANSFORM_WORKER ?? join(appDir, "workers", "transform-worker.js"),
     bunBinary: input.env.JSLAB_BUN_PATH ?? input.execPath,
+    cliBinary: input.env.JSLAB_CLI_BINARY ?? join(appDir, "bin", "jslab"),
   };
 }
 

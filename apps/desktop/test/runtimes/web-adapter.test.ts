@@ -709,6 +709,115 @@ describe("WebAdapter", () => {
     }
   });
 
+  /**
+   * The user-reported defect (M4): a `browser` tab's status bar sat at "Running: 1 active handle" indefinitely.
+   *
+   * The page stamps every state message with its OWN run id (`packages/runner-web/src/bootstrap.ts`'s `setState`),
+   * but this session used to ignore that field entirely: `case "state"` removed the lock for `this.run.runId` --
+   * the *session's* id -- and relayed `sink.state(message.state, message.activeHandles)` with no run id at all.
+   * The webview is persistent (Task 8's invariant) and a session only unwires itself once it reaches `stopped`, so
+   * a run that finishes `idle`/`settled` leaves its listener attached while the next run's session listens on the
+   * same host. With Auto Run on, runs overlap on every keystroke -- so run N's late `settled`, carrying run N's
+   * handle count, was relayed as if it belonged to run N+1 and stuck there (`settled` is in the UI's
+   * `BUSY_STATES`, so it presents as a run that never stopped).
+   *
+   * Same defect family, and the same shape of fix, as T9e's generation gate on `ready`/`exit`
+   * (`webview-source.ts`): compare the identity the message carries against the identity of the thing receiving
+   * it, and drop a mismatch *before* any side effect runs.
+   */
+  test("M4: a stale 'state' from the previous run is not relayed against the run that replaced it (user report)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
+    try {
+      const webviews = new FakeWebviewSource();
+      const locks = new Set<string>();
+      const adapter = createWebAdapter({
+        webviews,
+        runtime: "browser",
+        runsDir: dir,
+        packagesNodeModules: join(dir, "node_modules"),
+        bunLockPath: join(dir, "bun.lock"),
+        vendorCache: { get: async () => null, set: async () => {} },
+        bundleVendor: async () => ({ code: "VENDOR", map: "VMAP", vendorCacheable: true, closure: [] }),
+        runLock: { add: (id) => locks.add(id), remove: (id) => locks.delete(id) },
+        directoryExists: async () => true,
+        readBunLock: async () => LOCK_TEXT,
+        bundle: async () => ({ code: "x", map: "", imports: [], vendorCacheable: true }),
+      });
+      // One sink per run, the way `RunCoordinator` gives each run its own: cross-talk between two runs is only
+      // observable if the two sinks are distinct.
+      const makeSink = () => {
+        const states: { state: RunState; activeHandles?: number }[] = [];
+        let exited = 0;
+        const sink: RunEventSink = {
+          attached: () => {},
+          events: () => {},
+          state: (state, activeHandles) => states.push({ state, activeHandles }),
+          heartbeat: () => {},
+          exited: () => {
+            exited++;
+          },
+        };
+        return { sink, states, exited: () => exited };
+      };
+      const one = makeSink();
+      const two = makeSink();
+      const run1: PreparedRun = {
+        runId: "run-1",
+        tabId: "t1",
+        code: "1 + 1",
+        maxEntries: 10_000,
+        workingDirectory: null,
+        mapEvent: identityMap,
+        isCancelled: () => false,
+      };
+      await adapter.start(run1, one.sink);
+      const raw = webviews.raws.get("t1");
+      if (!raw) throw new Error("expected a webview to have been created for t1");
+
+      // Run 1 ends the way the user's run did: `settled`, still holding a handle -- NOT `stopped`, so its session
+      // is never retired and stays wired to the persistent webview.
+      raw.emit(2, { type: "state", runId: "run-1", state: "settled", activeHandles: 1 });
+      expect(one.states.at(-1)).toEqual({ state: "settled", activeHandles: 1 });
+
+      // Run 2 begins on the SAME webview -- Auto Run's overlap, reproduced.
+      const run2: PreparedRun = { ...run1, runId: "run-2" };
+      await adapter.start(run2, two.sink);
+      const twoBefore = two.states.length;
+
+      // The straggler: run 1's state, still in flight across the host boundary when run 2 began.
+      raw.emit(3, { type: "state", runId: "run-1", state: "settled", activeHandles: 1 });
+
+      // It must not reach run 2's sink -- that relay is exactly what pinned "Running: 1 active handle".
+      expect(two.states.length).toBe(twoBefore);
+      // None of the case's other side effects may fire against run 2 either: its lock must still be held (dropping
+      // it would let a quit proceed over a live run) and its handle must not be retired.
+      expect(locks.has("run-2")).toBe(true);
+      expect(two.exited()).toBe(0);
+
+      // ...and dropping it strands nothing, which is the half that makes the drop safe: the straggler still
+      // reached the run it actually belongs to, on that run's own still-wired session, so run 1 settles, unlocks
+      // and (when it stops) retires itself exactly as before.
+      expect(one.states.at(-1)).toEqual({ state: "settled", activeHandles: 1 });
+      const oneBefore = one.states.length;
+
+      // The half a too-eager guard breaks -- an earlier M4 defect wedged a connection precisely by skipping state a
+      // rejected message still needed. Run 2's OWN states are relayed normally, lock release included.
+      raw.emit(4, { type: "state", runId: "run-2", state: "idle", activeHandles: 0 });
+      expect(two.states.at(-1)).toEqual({ state: "idle", activeHandles: 0 });
+      expect(locks.has("run-2")).toBe(false);
+      // ...and run 2's own graceful stop still settles and retires its handle exactly once.
+      raw.emit(5, { type: "state", runId: "run-2", state: "stopped", activeHandles: 0 });
+      expect(two.states.at(-1)).toEqual({ state: "stopped", activeHandles: 0 });
+      expect(two.exited()).toBe(1);
+
+      // The gate is symmetric: run 1's still-wired session never saw run 2's states either.
+      expect(one.states.length).toBe(oneBefore);
+      expect(one.exited()).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("C2: start() fails the run when the webview crashes during the reset/ready window", async () => {
     const dir = await mkdtemp(join(tmpdir(), "jslab-web-adapter-"));
     try {

@@ -639,6 +639,22 @@ class WebRunSession implements RunHandle {
         this.#nodeRunner?.abort(message.id);
         return;
       case "state": {
+        // The user-reported defect (M4), gated the same way T9e gates `ready`/`exit` (`webview-source.ts`):
+        // compare the identity the message carries against the identity of the thing receiving it, and drop a
+        // mismatch. The page stamps every state with the run it belongs to (`bootstrap.ts`'s `setState`) and this
+        // session belongs to exactly one run -- but the webview is persistent and a session only unwires itself
+        // once it reaches `stopped`, so a run that finished `idle`/`settled` is still listening when the next run
+        // starts and *both* sessions see every message. Relaying one blindly reported run N's handle count
+        // against run N+1, parking the status bar on "Running: N active handles" for a run already over (`settled`
+        // is in the UI's `BUSY_STATES`); under Auto Run, where runs overlap on every keystroke, that stuck.
+        //
+        // Dropped ahead of every side effect below, because each is scoped to `this.run`, never to the message:
+        // `#settleStop` settles *this* run's pending `stop()`, `runLock.remove` releases *this* run's lock, and
+        // `#retireHandle` retires *this* run's handle. Running any of them on a stranger's state is the wedge
+        // rather than the cure -- it would release a live run's lock and retire its handle mid-run. Nothing is
+        // stranded by the drop either: the run the message really belongs to is wired to this same host and
+        // settles, unlocks and retires itself on its own session.
+        if (message.runId !== this.run.runId) return;
         if (message.state === "stopped") {
           clearTimeout(this.#stopTimer);
           this.#settleStop();

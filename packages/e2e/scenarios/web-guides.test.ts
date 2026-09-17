@@ -71,7 +71,15 @@ describe("browser guides without packages (WV-04)", () => {
 
     // Ten real animation frames, and the pixel that came back is the one the guide painted.
     expect(await waitForConsole(target, "canvas:")).toBe("canvas:10:255,0,0,255");
-    await target.waitForRunState(["idle", "settled"], 30_000);
+    // `idle`, not "idle or settled" -- tightened for the same reason the `browser` scenario in web-runtime.test.ts
+    // was: accepting either is how a run that finishes holding a phantom handle stays invisible (`settled` is in
+    // `apps/ui/src/shell/labels.ts`'s `BUSY_STATES`, so it presents as a run that never stopped). Nothing this
+    // guide allocates outlives it: `handles.ts` retires each frame's key *before* the callback runs
+    // (`frameKeys.remove(id)`), and the loop stops rescheduling at frame 10, so the count is back to zero; the
+    // `<canvas>` element itself is not a tracked handle (only timers, rAF loops, AudioContexts, media elements,
+    // sockets and requests are). So zero handles is the only correct outcome here.
+    await target.waitForRunState(["idle"], 30_000);
+    expect(activeTab(await target.state()).activeHandles).toBe(0);
     await target.screenshot("web-guide-canvas");
   });
 

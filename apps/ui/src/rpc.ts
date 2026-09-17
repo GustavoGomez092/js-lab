@@ -67,6 +67,11 @@ export function createRpcApi(): MainApi {
     localTypes: (tabId, specifiers) => rpc.request["types.local"]({ tabId, specifiers }),
     getEnv: () => rpc.request["env.get"]({}).then((reply) => reply.variables),
     saveEnv: (variables) => rpc.request["env.save"]({ variables }),
+    snippetsList: () => rpc.request["snippets.list"]({}).then((reply) => reply.snippets),
+    // A library save is an atomic write with a .bak, like a file save: it gets the longer bound (FB-m11).
+    snippetsSave: (snippets) => rpc.request["snippets.save"]({ snippets }, { maxRequestTime: SAVE_REQUEST_TIME_MS }),
+    snippetsImportDialog: () => rpc.send["snippets.importDialog"]({}),
+    snippetsExportDialog: (snippets) => rpc.send["snippets.exportDialog"]({ snippets }),
     pickWorkingDirectory: (tabId) => rpc.send["wd.pick"]({ tabId }),
     clearWorkingDirectory: (tabId) => rpc.send["wd.clear"]({ tabId }),
     appCommand: (action) => rpc.send["app.command"]({ action }),

@@ -13,6 +13,7 @@ import type {
   RunStartParams,
   SaveResult,
   SettingsUpdateParams,
+  Snippet,
   TabCloseResult,
   TabCreateParams,
   TabPatch,
@@ -66,6 +67,13 @@ export interface MainApi {
 
   getEnv(): Promise<EnvVars>;
   saveEnv(variables: EnvVars): Promise<SaveResult>;
+
+  /** Spec §13: the snippet library. The UI holds it whole and writes it back on every mutation (R-M5b-6). */
+  snippetsList(): Promise<Snippet[]>;
+  snippetsSave(snippets: Snippet[]): Promise<SaveResult>;
+  /** Spec §13.1 Options menu. Answered by the `snippets.imported` / `snippets.exported` messages, never inline. */
+  snippetsImportDialog(): void;
+  snippetsExportDialog(snippets: Snippet[]): void;
 
   pickWorkingDirectory(tabId: string): void;
   clearWorkingDirectory(tabId: string): void;

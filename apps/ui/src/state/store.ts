@@ -14,6 +14,7 @@ import {
   type Language,
   type Runtime,
   type Settings,
+  type Snippet,
   type TabState,
   tabAfterClose,
 } from "@jslab/shared";
@@ -147,6 +148,17 @@ function evictOperations(operations: readonly NpmOperation[]): NpmOperation[] {
   return operations.filter((_, index) => !removeAt.has(index));
 }
 
+/**
+ * The one channel the snippet commands use to reach the panel (Task 9). `nonce` is bumped on every request for the
+ * same reason `revealRequest` carries one: pressing ⌘B twice, or Create Snippet… twice over the same selection, must
+ * reach the panel twice even though the payload is identical.
+ */
+export interface SnippetsRequest {
+  kind: "focusSearch" | "newSnippet";
+  body: string;
+  nonce: number;
+}
+
 export interface AppState {
   ready: boolean;
   settings: Settings | null;
@@ -180,6 +192,13 @@ export interface AppState {
   packagesRevision: number;
   /** The NPM Packages sheet (spec §11.2, Task 26). */
   npm: NpmUiState;
+  /** Spec §13: the whole snippet library, mirrored from Main (R-M5b-6). App state, not tab state. */
+  snippets: Snippet[];
+  /** False until the first `snippets.list` answers, so the panel shows nothing instead of "no snippets yet". */
+  snippetsLoaded: boolean;
+  snippetsRequest: SnippetsRequest | null;
+  /** Counts snippet requests. Separate from `snippetsRequest` so clearing the request never rewinds the count. */
+  snippetsNonce: number;
 
   // Mirrors of the active tab, so M1 components keep reading a single tab.
   tab: TabState | null;
@@ -262,6 +281,10 @@ export interface AppState {
   receiveNpmOperation(operation: NpmOperation): void;
   /** Fix round 3: complete lines are masked and stored; the text after the last line break is carried. */
   appendNpmLog(opId: string, text: string): void;
+
+  receiveSnippets(snippets: Snippet[]): void;
+  requestSnippets(kind: SnippetsRequest["kind"], body?: string): void;
+  clearSnippetsRequest(): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -371,6 +394,10 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       sideBarPanel: "snippets",
       packagesRevision: 0,
       npm: initialNpm(),
+      snippets: [],
+      snippetsLoaded: false,
+      snippetsRequest: null,
+      snippetsNonce: 0,
       tab: null,
       code: "",
       autoRunArmed: false,
@@ -771,6 +798,19 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
             }
           : previous.logs;
         set({ npm: { ...previous, logs, carries: { ...previous.carries, [opId]: carry } } });
+      },
+
+      receiveSnippets(snippets) {
+        set({ snippets, snippetsLoaded: true });
+      },
+
+      requestSnippets(kind, body = "") {
+        const nonce = get().snippetsNonce + 1;
+        set({ snippetsNonce: nonce, snippetsRequest: { kind, body, nonce } });
+      },
+
+      clearSnippetsRequest() {
+        set({ snippetsRequest: null });
       },
     };
   });

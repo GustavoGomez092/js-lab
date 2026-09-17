@@ -11,7 +11,7 @@ import type {
   ViewMessages,
 } from "@jslab/rpc-schema";
 import { DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
-import { listThemes } from "@jslab/themes";
+import { listThemes, registerUserThemes } from "@jslab/themes";
 import Electrobun, {
   ApplicationMenu,
   BrowserView,
@@ -48,6 +48,7 @@ import { createFontHandlers } from "./rpc/font-handlers";
 import { createNpmHandlers } from "./rpc/npm-handlers";
 import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
+import { createThemeHandlers } from "./rpc/theme-handlers";
 import { createTypesHandlers } from "./rpc/types-handlers";
 import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
@@ -55,6 +56,7 @@ import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers
 import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
+import { ThemeStore } from "./services/theme-store";
 import { startupNotices } from "./startup-notices";
 import { strings } from "./strings";
 import { afterUiFlush, createUiFlushHandlers, createUiFlushWaiter } from "./ui-flush";
@@ -210,6 +212,10 @@ async function start(): Promise<void> {
   }
   const keybindings = await KeybindingsStore.open(paths.dataDir);
   if (keybindings.invalid) log(strings.log.keybindingsInvalid(keybindings.path));
+  // Spec §9.3: registered in Main as well as in each window, so `listThemes()` below already offers the imported
+  // themes in the native Themes menu on the very first build (Finding T1).
+  const themes = await ThemeStore.open(paths.themesDir, log);
+  registerUserThemes(themes.themes);
   if (safeMode.active) logger.info(strings.log.safeMode(String(safeMode.reason)));
 
   // The UI gets a longer boot grace period for its first heartbeat (cold WKWebView init, bundle load, etc.);
@@ -299,6 +305,7 @@ async function start(): Promise<void> {
         },
         // The stores report what their own load found, including the corrupt copy saved this launch (FA-m4).
         notices: startupNotices({ settings, session }),
+        themes,
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
       ...webRunnerHandlers,
@@ -366,6 +373,31 @@ async function start(): Promise<void> {
           saveAsConfirm: (payload) => rpc.send["file.saveAsConfirm"](payload),
           saveCancelled: (payload) => rpc.send["file.saveCancelled"](payload),
           saveFailed: (payload) => rpc.send["file.saveFailed"](payload),
+        },
+        log,
+      }),
+      createThemeHandlers({
+        store: themes,
+        // Mirrors createFileHandlers' dialog branch above, E2E path included, so a scenario can script the choice.
+        openDialog: async () =>
+          e2eEnabled
+            ? await readE2EOpenDialog(paths.dataDir)
+            : await Utils.openFileDialog({
+                startingFolder: Utils.paths.documents,
+                allowedFileTypes: "json,vsix",
+                canChooseFiles: true,
+                canChooseDirectory: false,
+                allowsMultipleSelection: false,
+              }),
+        // R-M5d-B3: the size is what lets an oversized file be refused before it is read into memory.
+        fileSize: async (path) => (await stat(path).catch(() => null))?.size ?? null,
+        readFileBytes: (path) => Bun.file(path).bytes(),
+        onChanged: (all) => {
+          registerUserThemes(all);
+          rpc.send["theme.changed"]({ themes: [...all] });
+          // Task 4 finding 2: the Themes submenu is rebuilt from `listThemes()` on every refresh, so this one call
+          // is all it takes for an imported theme to reach the native menu.
+          menu.refresh();
         },
         log,
       }),

@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
+import { convertVsCodeTheme } from "@jslab/themes";
 import { createRpcHandlers, InvalidPayloadError, type RpcHandlerDeps, RunRefusedError } from "../src/main/rpc-handlers";
 
 function setup(safeMode: RpcHandlerDeps["safeMode"] = { active: false, reason: null }) {
@@ -41,6 +42,19 @@ describe("requests", () => {
       safeMode: { active: false, reason: null },
       versions: { app: "0.0.1", bun: "1.3.13" },
     });
+  });
+
+  test("app.bootstrap carries the imported themes, and omits the key when there are none", async () => {
+    const { deps } = setup();
+    const converted = convertVsCodeTheme({ name: "Deep Dark", type: "dark", colors: {} });
+    if (!converted.ok) throw new Error(converted.error);
+    // Finding T1: without this the first paint offers only the built-ins, and an imported theme shows up only
+    // once some later import happens to push `theme.changed`.
+    const withThemes = createRpcHandlers({ ...deps, themes: { themes: [converted.theme] } });
+    expect((await withThemes.requests["app.bootstrap"]()).userThemes).toEqual([converted.theme]);
+    // A fresh install has imported nothing, and must not send an empty array for it either.
+    const none = createRpcHandlers({ ...deps, themes: { themes: [] } });
+    expect((await none.requests["app.bootstrap"]()).userThemes).toBeUndefined();
   });
 
   test("run.start validates and forwards only the run fields", () => {

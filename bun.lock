@@ -83,6 +83,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@jslab/shared": "workspace:*",
+        "@jslab/themes": "workspace:*",
         "zod": "4.6.4",
       },
     },

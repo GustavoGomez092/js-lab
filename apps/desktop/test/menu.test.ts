@@ -224,6 +224,21 @@ describe("application menu", () => {
     expect(byLabel(withWd, "Environment Variables…")?.action).toBe(menuAction("tools.environmentVariables"));
   });
 
+  test("the Themes menu offers Import VS Code Theme… after the theme list (spec §9.3)", () => {
+    const submenu = buildMenu(model()).find((entry) => entry.label === "Themes")?.submenu ?? [];
+    const labels = submenu.map((entry) => entry.label?.split("    ")[0]);
+    expect(labels).toContain("Import VS Code Theme…");
+    expect(submenu.find((entry) => entry.label?.startsWith("Import VS Code Theme"))?.action).toBe(
+      menuAction("theme.import"),
+    );
+    // It belongs after every theme and before the follow-system toggle, so the themes stay one uninterrupted group
+    // and the import sits with the action that changes what that group contains.
+    const themes = model().themes;
+    const importAt = labels.indexOf("Import VS Code Theme…");
+    expect(importAt).toBeGreaterThan(labels.indexOf(themes[themes.length - 1]?.name ?? ""));
+    expect(labels.indexOf("Follow System Appearance")).toBeGreaterThan(importAt);
+  });
+
   test("Actions ends with Show Transpiled Output (spec §7.4)", () => {
     const menu = buildMenu(model());
     expect(byLabel(menu, "Show Transpiled Output")?.action).toBe(menuAction("view.showTranspiled"));

@@ -247,6 +247,8 @@ export function buildMenu(model: MenuModel): MenuItem[] {
           checked: !appearance.followSystem && appearance.theme === theme.id,
         })),
         separator,
+        item("theme.import"),
+        separator,
         item("theme.toggleFollowSystem", { checked: appearance.followSystem }),
       ],
     },

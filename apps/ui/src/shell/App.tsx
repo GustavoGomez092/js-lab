@@ -7,6 +7,7 @@ import {
   shortcutFor,
   tabLabel,
 } from "@jslab/shared";
+import { registerUserThemes } from "@jslab/themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
@@ -41,6 +42,7 @@ import { createTabActions } from "../tabs/tab-actions";
 import { createTabSummaryCache } from "../tabs/tab-summary";
 import { startThemeSync } from "../themes/apply";
 import { startAppearanceSync } from "../themes/fonts";
+import { ThemePickDialog } from "../themes/ThemePickDialog";
 import { createThemeCommands } from "../themes/theme-commands";
 import { ActivityBar } from "./ActivityBar";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -358,6 +360,15 @@ export function App({
         registry.execute(command, args);
       }),
       api.on("settings.changed", ({ settings }) => store.getState().receiveSettings(settings)),
+      // Spec §9.3: a theme was imported, so the whole imported set is re-registered and the current selection is
+      // re-applied -- that is what makes the picker, the palette and Monaco show it without a settings change.
+      api.on("theme.changed", ({ themes }) => {
+        registerUserThemes(themes);
+        const current = store.getState().settings;
+        // `updateSettings`, not `receiveSettings`: this must not bump `settingsRevision` and so invalidate the
+        // `writeSettings` that is in flight selecting the theme that just arrived.
+        if (current) store.getState().updateSettings({ ...current });
+      }),
       // Task 26: Main's npm list changed; receiveNpmList bumps packagesRevision itself when names/versions change,
       // so the type feeder's package cache still invalidates without a separate, redundant bump here.
       api.on("npm.changed", (list) => store.getState().receiveNpmList(list)),
@@ -631,6 +642,7 @@ export function App({
         />
       )}
       <RenameDialog store={store} />
+      <ThemePickDialog store={store} api={api} />
       <ConfirmDialog store={store} dialogs={dialogs} />
       <EnvVarsSheet store={store} api={api} />
       <NpmSheet store={store} api={api} />

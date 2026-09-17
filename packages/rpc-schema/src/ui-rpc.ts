@@ -9,6 +9,7 @@ import {
   type Session,
   type Settings,
 } from "@jslab/shared";
+import type { ThemeDefinition } from "@jslab/themes";
 import { z } from "zod";
 import type { RunEvent, RunState } from "./events";
 import type { EncodedValue } from "./values";
@@ -147,6 +148,40 @@ export const settingsAppCommandSchema = z.object({ action: z.enum(SETTINGS_APP_A
 export const fileSaveParamsSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });
 export const fileConfirmLargeSchema = z.object({ tokens: z.array(z.uuid()).min(1).max(100) });
 export const fileConfirmSaveAsSchema = z.object({ token: z.uuid(), confirmed: z.boolean() });
+
+// ---------- M5d Task 8: Themes → Import VS Code Theme… (spec §9.3) ----------
+
+/** What the UI is told about a theme that was just imported; its full definition arrives on `theme.changed`. */
+export interface ImportedTheme {
+  id: string;
+  name: string;
+  type: "dark" | "light";
+}
+
+/** One `contributes.themes` entry offered when a `.vsix` declares more than one. `path` is an archive entry name. */
+export interface VsixChoice {
+  label: string;
+  path: string;
+}
+
+/**
+ * Three outcomes: the theme was imported, a multi-theme `.vsix` needs the user to choose, or nothing was imported.
+ *
+ * `ok: false` with an EMPTY `error` is a cancelled dialog -- a non-event the UI must report as nothing at all, not
+ * as a failure. `notes` carries the honest caveats about what the conversion could not preserve (R-M5d-AA-1 and the
+ * dropped `semanticTokenColors`), so a theme that converts to something plainer than the file says why.
+ */
+export type ThemeImportResult =
+  | { ok: true; theme: ImportedTheme; notes: string[] }
+  | { ok: true; choices: VsixChoice[]; token: string }
+  | { ok: false; error: string };
+
+export const themeImportPickParamsSchema = z.object({
+  token: z.uuid(),
+  // An archive entry name the manifest declared, never a filesystem path (spec §18).
+  path: z.string().min(1).max(512),
+});
+export type ThemeImportPickParams = z.infer<typeof themeImportPickParamsSchema>;
 
 // ---------- M4 Task 9a: the Main ⇄ UI web-runner bridge (spec §5.12) ----------
 
@@ -426,6 +461,8 @@ export interface BootstrapPayload {
   e2e?: boolean;
   keybindings?: KeybindingRule[];
   notices?: StartupNotice[];
+  /** Spec §9.3: the themes imported into `<appdata>/themes/`, so the first paint already offers them (Finding T1). */
+  userThemes?: ThemeDefinition[];
 }
 
 /** Requests handled by Main, called by the UI. */
@@ -451,6 +488,10 @@ export type MainRequests = {
   "types.local": { params: { tabId: string; specifiers: string[] }; response: LocalTypesResult };
   "env.get": { params: Record<string, never>; response: { variables: EnvVars } };
   "env.save": { params: { variables: EnvVars }; response: SaveResult };
+  /** Spec §9.3: Main opens its own file dialog -- the UI never names a path (spec §18). */
+  "theme.import": { params: Record<string, never>; response: ThemeImportResult };
+  /** The second half of a multi-theme `.vsix` import: `token` names the archive Main already holds. */
+  "theme.importPick": { params: ThemeImportPickParams; response: ThemeImportResult };
 };
 
 /** Messages received by Main, sent by the UI. */
@@ -520,6 +561,11 @@ export type ViewMessages = {
   "file.saveCancelled": { tabId: string };
   "file.saveFailed": { tabId: string; error: string };
   "app.notice": StartupNotice;
+  /**
+   * Spec §9.3: the whole set of imported themes after one was added, never a delta -- `registerUserThemes` replaces
+   * the registry wholesale, and the four surfaces of Finding T1 read it on their next lookup.
+   */
+  "theme.changed": { themes: ThemeDefinition[] };
   "npm.op": NpmOperation;
   "npm.log": { opId: string; text: string };
   "npm.changed": NpmListResult;

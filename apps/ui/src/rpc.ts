@@ -49,6 +49,8 @@ export function createRpcApi(): MainApi {
     reorderTabs: (tabOrder) => rpc.send["tab.reorder"]({ tabOrder }),
     saveViewState: (tabId, viewState) => rpc.send["tab.viewState"]({ tabId, viewState }),
     updateSettings: (patch) => rpc.request["settings.update"]({ patch }),
+    importTheme: () => rpc.request["theme.import"]({}),
+    importThemePick: (token, path) => rpc.request["theme.importPick"]({ token, path }),
     saveFile: (tabId, content) =>
       rpc.request["file.save"]({ tabId, content }, { maxRequestTime: SAVE_REQUEST_TIME_MS }),
     openFileDialog: () => rpc.send["file.openDialog"]({}),

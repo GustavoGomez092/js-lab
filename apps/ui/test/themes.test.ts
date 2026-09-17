@@ -1,8 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
-import { getTheme, toCssVariables } from "@jslab/themes";
+import { convertVsCodeTheme, getTheme, listThemes, registerUserThemes, toCssVariables } from "@jslab/themes";
 import { createAppStore } from "../src/state/store";
 import { applyThemeVariables, startThemeSync } from "../src/themes/apply";
 import { createThemeCommands } from "../src/themes/theme-commands";
@@ -132,5 +132,119 @@ describe("theme application", () => {
     expect(api.updateSettings).toHaveBeenLastCalledWith({ appearance: { followSystem: true } });
     // The mock echoes the patch onto defaults, so the store now has followSystem: true.
     expect(commands.get("theme.toggleFollowSystem")?.description?.()).toBe("currently on");
+  });
+});
+
+describe("importing a VS Code theme (spec §9.3)", () => {
+  // The registry is module-level, so it is cleared between tests rather than left for the next one to trip over.
+  afterEach(() => registerUserThemes([]));
+
+  const imported = (name: string) => {
+    const result = convertVsCodeTheme({ name, type: "dark", colors: { "editor.background": "#101010" } });
+    if (!result.ok) throw new Error(result.error);
+    return result.theme;
+  };
+  const commandsFor = (store: ReturnType<typeof hydrated>, api: ReturnType<typeof createFakeApi>["api"]) =>
+    new Map(createThemeCommands(store, api).map((spec) => [spec.id, spec]));
+
+  test("theme.import asks Main to import and never writes the setting itself", async () => {
+    const store = hydrated();
+    const { api } = createFakeApi();
+    await commandsFor(store, api).get("theme.import")?.run();
+    expect(api.importTheme).toHaveBeenCalledTimes(1);
+    // The fake answers with the cancelled-dialog shape, which must change nothing at all.
+    expect(api.updateSettings).not.toHaveBeenCalled();
+    expect([store.getState().statusMessage, store.getState().modal]).toEqual([null, null]);
+  });
+
+  test("an imported theme is selectable, which the module-level KNOWN set prevented (Task 4 finding)", async () => {
+    const store = hydrated();
+    const { api } = createFakeApi();
+    api.updateSettings.mockImplementation(async (patch: unknown) =>
+      mergeSettings(defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+    );
+    // Registered AFTER the module was imported -- exactly the ordering the old snapshot could never see.
+    registerUserThemes([imported("Deep Dark")]);
+    expect(listThemes().some((theme) => theme.id === "deep-dark")).toBe(true);
+    await commandsFor(store, api).get("theme.select")?.run({ themeId: "deep-dark" });
+    expect(api.updateSettings).toHaveBeenLastCalledWith({ appearance: { theme: "deep-dark", followSystem: false } });
+    expect(store.getState().settings?.appearance.theme).toBe("deep-dark");
+  });
+
+  test("a successful import selects the theme and reports it with whatever was lost", async () => {
+    const store = hydrated();
+    const { api } = createFakeApi();
+    api.updateSettings.mockImplementation(async (patch: unknown) =>
+      mergeSettings(defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+    );
+    api.importTheme.mockImplementation(async () => ({
+      ok: true,
+      theme: { id: "deep-dark", name: "Deep Dark", type: "dark" },
+      notes: ["Its semantic token colours aren't supported."],
+    }));
+    await commandsFor(store, api).get("theme.import")?.run();
+    expect(api.updateSettings).toHaveBeenLastCalledWith({ appearance: { theme: "deep-dark", followSystem: false } });
+    expect(store.getState().statusMessage).toBe("Imported Deep Dark. Its semantic token colours aren't supported.");
+  });
+
+  test("a multi-theme .vsix opens the picker instead of importing anything", async () => {
+    const store = hydrated();
+    const { api } = createFakeApi();
+    const choices = [
+      { label: "Deep Dark", path: "extension/themes/deep.json" },
+      { label: "Pale Light", path: "extension/themes/pale.json" },
+    ];
+    api.importTheme.mockImplementation(async () => ({ ok: true, token: "t-1", choices }));
+    await commandsFor(store, api).get("theme.import")?.run();
+    expect(store.getState().modal).toEqual({ kind: "themePick", token: "t-1", choices });
+    expect(api.updateSettings).not.toHaveBeenCalled();
+  });
+
+  test("a refusal is reported, but a cancelled dialog's empty error says nothing", async () => {
+    const store = hydrated();
+    const { api } = createFakeApi();
+    api.importTheme.mockImplementation(async () => ({ ok: false, error: "That theme file couldn't be read." }));
+    await commandsFor(store, api).get("theme.import")?.run();
+    expect(store.getState().statusMessage).toBe("That theme file couldn't be read.");
+
+    store.getState().setStatusMessage(null);
+    api.importTheme.mockImplementation(async () => ({ ok: false, error: "" }));
+    await commandsFor(store, api).get("theme.import")?.run();
+    expect(store.getState().statusMessage).toBeNull();
+  });
+
+  test("a successful import closes the picker but never some other open dialog", async () => {
+    const store = hydrated();
+    const { api } = createFakeApi();
+    api.updateSettings.mockImplementation(async (patch: unknown) =>
+      mergeSettings(defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+    );
+    api.importTheme.mockImplementation(async () => ({
+      ok: true,
+      theme: { id: "deep-dark", name: "Deep Dark", type: "dark" },
+      notes: [],
+    }));
+    // The palette is usually what runs this command, and closing it stays the palette's own business.
+    store.getState().openModal({ kind: "palette", context: "editor" });
+    await commandsFor(store, api).get("theme.import")?.run();
+    expect(store.getState().modal).toEqual({ kind: "palette", context: "editor" });
+
+    // The picker, though, has just been answered and must go.
+    store.getState().openModal({ kind: "themePick", token: "t-1", choices: [] });
+    await commandsFor(store, api).get("theme.import")?.run();
+    expect(store.getState().modal).toBeNull();
+  });
+
+  test("hydrate registers the themes the bootstrap carried, so the first paint offers them", () => {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "t1" })),
+      buffers: { t1: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+      userThemes: [imported("Deep Dark")],
+    });
+    expect(listThemes().some((theme) => theme.id === "deep-dark")).toBe(true);
   });
 });

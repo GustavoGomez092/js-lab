@@ -110,6 +110,15 @@ export const strings = {
     // JetBrains Mono" from JetBrains Mono.
     bundledUnavailable: "The bundled code font couldn't load; using the system monospace font.",
   },
+  /** Themes → Import VS Code Theme… (spec §9.3). */
+  themes: {
+    imported: (name: string) => `Imported ${name}.`,
+    pickTitle: "Choose a theme",
+    pickHelp: (count: number) => `That extension contains ${count} themes. Choose the one to import.`,
+    cancel: "Cancel",
+    // The caveats an import reports (low-contrast syntax, dropped semantic colours) are Main's own strings: Main
+    // decides which of them apply and sends them as ready-to-show text on the result.
+  },
   shell: {
     run: "Run",
     stop: "Stop",

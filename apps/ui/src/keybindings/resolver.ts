@@ -23,7 +23,7 @@ export function contextFromState(state: AppState, activeElement: Element | null,
     outputFocus: Boolean(activeElement?.closest?.(".output")),
     modalOpen: state.modal !== null,
     paletteOpen: state.modal?.kind === "palette",
-    dialogOpen: state.modal?.kind === "confirm" || state.modal?.kind === "rename",
+    dialogOpen: state.modal?.kind === "confirm" || state.modal?.kind === "rename" || state.modal?.kind === "themePick",
     textInputFocus: editable && !editorHasFocus,
   };
 }

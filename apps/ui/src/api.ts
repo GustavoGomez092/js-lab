@@ -17,6 +17,7 @@ import type {
   TabCreateParams,
   TabPatch,
   TabWithContent,
+  ThemeImportResult,
   ViewMessages,
 } from "@jslab/rpc-schema";
 import type { Settings, TabState } from "@jslab/shared";
@@ -50,6 +51,11 @@ export interface MainApi {
   saveViewState(tabId: string, viewState: unknown): void;
 
   updateSettings(patch: SettingsUpdateParams["patch"]): Promise<Settings>;
+
+  /** Spec §9.3: Main opens the dialog and converts the file -- the UI never names a path (spec §18). */
+  importTheme(): Promise<ThemeImportResult>;
+  /** Answers a multi-theme `.vsix` with the entry the user picked; `token` names the archive Main still holds. */
+  importThemePick(token: string, path: string): Promise<ThemeImportResult>;
 
   saveFile(tabId: string, content: string): Promise<FileSaveResult>;
   openFileDialog(): void;

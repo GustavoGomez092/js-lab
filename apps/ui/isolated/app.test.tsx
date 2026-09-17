@@ -14,6 +14,7 @@ import {
   type Settings,
   shortcutFor,
 } from "@jslab/shared";
+import { convertVsCodeTheme, listThemes, registerUserThemes } from "@jslab/themes";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type ComponentType, Profiler } from "react";
 import type { MainApi } from "../src/api";
@@ -106,6 +107,18 @@ function fakeEditor(store: AppStore, tabId: string, focused = true) {
 }
 
 describe("App shell", () => {
+  test("theme.changed registers the imported themes, so every surface sees them (spec §9.3)", async () => {
+    const converted = convertVsCodeTheme({ name: "Deep Dark", type: "dark", colors: {} });
+    if (!converted.ok) throw new Error(converted.error);
+    const { emit } = renderApp();
+    // renderApp hydrates without any imported themes, which clears the registry -- so this is genuinely absent
+    // until the message arrives, and the assertion below cannot pass by accident.
+    expect(listThemes().some((theme) => theme.id === "deep-dark")).toBe(false);
+    await emit("theme.changed", { themes: [converted.theme] });
+    expect(listThemes().some((theme) => theme.id === "deep-dark")).toBe(true);
+    registerUserThemes([]);
+  });
+
   test("Cmd+R starts a manual run with the current code and the tab's logpoints", () => {
     const { store, api } = renderApp();
     act(() => store.getState().toggleLogpoint(1));

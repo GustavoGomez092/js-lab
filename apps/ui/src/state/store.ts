@@ -8,6 +8,7 @@ import type {
   RunEvent,
   RunState,
   StartupNotice,
+  VsixChoice,
 } from "@jslab/rpc-schema";
 import {
   type KeybindingRule,
@@ -17,6 +18,7 @@ import {
   type TabState,
   tabAfterClose,
 } from "@jslab/shared";
+import { registerUserThemes } from "@jslab/themes";
 import { createStore } from "zustand/vanilla";
 import { MAX_NPM_LOG_CHARS, MAX_NPM_OPERATIONS, maskCredentials, splitLogChunk } from "../npm/npm-panel";
 import type { TimerApi } from "./auto-run";
@@ -86,7 +88,9 @@ export type Modal =
   | { kind: "confirm"; id: string; title: string; message: string; buttons: ConfirmButton[] }
   | { kind: "rename"; tabId: string }
   | { kind: "npm" }
-  | { kind: "env" };
+  | { kind: "env" }
+  /** Spec §9.3: a `.vsix` declared more than one theme, so the user chooses which one to import. */
+  | { kind: "themePick"; token: string; choices: VsixChoice[] };
 
 export interface NpmUiState {
   /** False until the first list arrives, so the initial load highlights nothing. */
@@ -428,6 +432,9 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       hydrate(payload) {
         const { session } = payload;
+        // Finding T1: the imported themes have to be in the registry before the first paint reads `listThemes()`,
+        // or the picker, the palette and Monaco all render a set that is missing them until the next import.
+        registerUserThemes(payload.userThemes ?? []);
         const activeTabId = session.tabs[session.activeTabId] ? session.activeTabId : (session.tabOrder[0] ?? null);
         commit({
           ready: true,

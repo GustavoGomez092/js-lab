@@ -159,7 +159,8 @@ describe(".npmrc editor (spec §11.5)", () => {
       resetNpmrc: mock(async () => DEFAULT_NPMRC),
     };
     render(<NpmrcEditor api={api} createEditor={editor.create} />);
-    expect(await screen.findByText(strings.settings.npmrc.loadFailed)).toBeTruthy();
+    // The mock rejects with "EACCES: permission denied", so the code reaches the message rather than being dropped.
+    expect(await screen.findByText(strings.settings.npmrc.loadFailed("EACCES"))).toBeTruthy();
 
     const reset = screen.getByRole("button", { name: strings.settings.npmrc.reset }) as HTMLButtonElement;
     expect(reset.disabled).toBe(true);

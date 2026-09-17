@@ -27,9 +27,16 @@ export class FileTooLargeError extends Error {
   readonly path: string;
   readonly size: number;
   readonly maxBytes: number;
+  /**
+   * An errno-style code, so this refusal is distinguishable through the same `.code` check callers already apply
+   * to an fs error, and so the *leading token* of `message` identifies it. Settings shows only that leading code
+   * and never the raw message (an fs message can carry an absolute path), which is what lets an oversized `.npmrc`
+   * be told apart from a permission-denied one. `EFBIG` is the genuine POSIX errno for "file too large".
+   */
+  readonly code = "EFBIG";
 
   constructor(path: string, size: number, maxBytes: number) {
-    super(`${path} is ${size} bytes, over the ${maxBytes}-byte limit`);
+    super(`EFBIG: ${path} is ${size} bytes, over the ${maxBytes}-byte limit`);
     this.name = "FileTooLargeError";
     this.path = path;
     this.size = size;
@@ -40,9 +47,14 @@ export class FileTooLargeError extends Error {
 /** A FIFO, directory, device or socket at the path: refused rather than read (this is the FIFO hang's exit). */
 export class NotARegularFileError extends Error {
   readonly path: string;
+  /**
+   * As `FileTooLargeError.code`. No POSIX errno means "refused because it is not a regular file" -- opening a FIFO
+   * is not itself an error -- so this one is a JSLab token rather than a real errno.
+   */
+  readonly code = "ENOTREGULAR";
 
   constructor(path: string) {
-    super(`${path} is not a regular file`);
+    super(`ENOTREGULAR: ${path} is not a regular file`);
     this.name = "NotARegularFileError";
     this.path = path;
   }

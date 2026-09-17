@@ -57,6 +57,11 @@ describe("bounded reads", () => {
     expect(error.message).toContain("65");
     expect(error.message).toContain("64");
     expect(error.message).toContain(path);
+    // Settings shows only the *leading* code of a failed load, never the raw message, because that message can
+    // carry an absolute path. So the code is the only thing that can tell an oversized .npmrc apart from a
+    // permission-denied one, and both its presence and its position are load-bearing for the UI.
+    expect(error.code).toBe("EFBIG");
+    expect(error.message.startsWith("EFBIG:")).toBe(true);
 
     expect(() => readBoundedTextSync(path, 64)).toThrow(FileTooLargeError);
   });
@@ -79,6 +84,12 @@ describe("bounded reads", () => {
     await mkdir(sub);
     await expect(readBoundedText(sub, 1024)).rejects.toBeInstanceOf(NotARegularFileError);
     expect(() => readBoundedTextSync(sub, 1024)).toThrow(NotARegularFileError);
+
+    // The same leading-code contract FileTooLargeError carries, for the same reason: it is the only part of the
+    // failure Settings is willing to show. Pinned on the directory case because it cannot block.
+    const refusal = (await readBoundedText(sub, 1024).catch((reason: unknown) => reason)) as NotARegularFileError;
+    expect(refusal.code).toBe("ENOTREGULAR");
+    expect(refusal.message.startsWith("ENOTREGULAR:")).toBe(true);
   });
 
   test("the or-null forms collapse every failure, and the throwing forms keep ENOENT distinguishable", async () => {

@@ -454,6 +454,54 @@ describe("RunCoordinator", () => {
     });
   }, 15_000);
 
+  test("an expanded collection's later entries are reachable through a real runner (OU-02)", async () => {
+    const h = await createHarness();
+    // 12,000 entries: past EXPANDED_LIMITS.maxEntries (10,000), so one expansion cannot be the whole thing.
+    const { runId } = h.coordinator.start({
+      tabId: "t1",
+      code: "console.log(Array.from({ length: 12000 }, (_, i) => i));",
+      language: "typescript",
+      logpoints: [],
+    });
+    await h.waitForState("idle", runId);
+    await flush();
+
+    const logged = h.events.find((e) => e.kind === "console") as unknown as {
+      args: { more: number; next: number; handle: string }[];
+    };
+    const value = logged.args[0] as { more: number; next: number; handle: string };
+    // Eagerly capped at DEFAULT_LIMITS.maxEntries (1,000) — spec §5.9's "Collection entries" row. The runner
+    // builds its encoder with DEFAULT_LIMITS explicitly (`packages/runner-bun/src/bootstrap.ts:219`); the
+    // harness's own `maxEntries: 10_000` is the *console output* cap, a different limit entirely.
+    expect(value.more).toBe(11_000);
+    expect(value.next).toBe(1_000);
+
+    const first = (await h.coordinator.expand("t1", runId, value.handle)) as {
+      items: [number, { t: string; v: string }][];
+      more: number;
+      next: number;
+      handle: string;
+    };
+    // Read from the reply, never hard-coded: `#expandValue` halves maxEntries until the reply fits
+    // MAX_EXPAND_BYTES, so the real page size is whatever the encoder chose. A test that hard-coded 10,000
+    // would be asserting a number the code is allowed to lower.
+    expect(first.items[0]?.[0]).toBe(0);
+    expect(first.items.at(-1)?.[0]).toBe(first.next - 1);
+    expect(first.more).toBe(12_000 - first.next);
+
+    const second = (await h.coordinator.expand("t1", runId, first.handle, first.next)) as {
+      items: [number, { t: string; v: string }][];
+      from: number;
+      more?: number;
+    };
+    expect(second.from).toBe(first.next);
+    // The page really continues where the first stopped, and really reaches the end.
+    expect(second.items[0]?.[0]).toBe(first.next);
+    expect(second.items.at(-1)).toEqual([11_999, { t: "number", v: "11999" }]);
+    // Nothing left: `more` is omitted, not zero — the encoder writes it only when there is a remainder.
+    expect(second.more).toBeUndefined();
+  }, 15_000);
+
   // Task 15 (spec §5.12, EX-35): `RunCoordinator.mute()` is a harmless no-op for a runtime whose `RunHandle` has no
   // `mute` method at all (only `WebAdapter`'s sessions implement it) -- Bun has no audio concept, and the tab's
   // saved preference still persists in session.json (packages/shared) regardless of what's currently running.

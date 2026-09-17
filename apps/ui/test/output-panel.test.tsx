@@ -107,7 +107,9 @@ describe("OutputPanel", () => {
       store.getState().clearOutput("t1");
       store.getState().receiveEvents("r1", [log(5, 5)], "t1");
     });
-    fireEvent.click(screen.getByRole("radio", { name: "Results" }));
+    // R-UI9-COUNTS-1: the Results chip now always carries its count, and this scenario has zero results
+    // (one log event, no results), so its accessible name is "Results 0", not the bare label.
+    fireEvent.click(screen.getByRole("radio", { name: "Results 0" }));
     expect(rowLevels()).toEqual([]);
     expect(screen.getByTestId("output-empty").textContent).toContain(strings.output.noMatches);
     fireEvent.click(screen.getByRole("button", { name: strings.output.showAll }));

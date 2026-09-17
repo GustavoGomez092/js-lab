@@ -44,18 +44,60 @@ describe("output filters", () => {
     expect(applyFilter(entries, "all")).toBe(entries);
   });
 
-  test("chips show counts for All and Errors and report the chosen filter", () => {
+  test("all four chips show their count (R-UI9-COUNTS-1) and report the chosen filter", () => {
     const onChange = mock((_filter: string) => {});
     render(<FilterChips counts={{ all: 8, results: 1, logs: 3, errors: 4 }} filter="all" onChange={onChange} />);
     expect(screen.getAllByRole("radio").map((chip) => chip.textContent)).toEqual([
       "All 8",
-      "Results",
-      "Logs",
+      "Results 1",
+      "Logs 3",
       "Errors 4",
     ]);
     expect(screen.getByRole("radio", { name: "All 8" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("radio", { name: "Errors 4" }));
     expect(onChange).toHaveBeenCalledWith("errors");
+  });
+
+  test("a zero count still renders as a fact, not a bare label", () => {
+    render(<FilterChips counts={{ all: 3, results: 0, logs: 3, errors: 0 }} filter="all" onChange={() => {}} />);
+    expect(screen.getAllByRole("radio").map((chip) => chip.textContent)).toEqual([
+      "All 3",
+      "Results 0",
+      "Logs 3",
+      "Errors 0",
+    ]);
+  });
+
+  test("chip counts track the actual entry set through filterCounts, not a static prop", () => {
+    // Drives FilterChips through the real `filterCounts` lookup (not a hand-picked counts object) so a mutant
+    // that makes the count lookup return a constant is caught here: shrinking the entry set from 8 down to 3
+    // would leave every chip showing the first set's counts.
+    const { rerender } = render(<FilterChips counts={filterCounts(entries)} filter="all" onChange={() => {}} />);
+    expect(screen.getAllByRole("radio").map((chip) => chip.textContent)).toEqual([
+      "All 8",
+      "Results 1",
+      "Logs 3",
+      "Errors 4",
+    ]);
+
+    const shrunk = entries.slice(0, 3); // result, log, warn -> all: 3, results: 1, logs: 2, errors: 0
+    rerender(<FilterChips counts={filterCounts(shrunk)} filter="all" onChange={() => {}} />);
+    expect(screen.getAllByRole("radio").map((chip) => chip.textContent)).toEqual([
+      "All 3",
+      "Results 1",
+      "Logs 2",
+      "Errors 0",
+    ]);
+  });
+
+  test("a chip's accessible name includes its count, for assistive tech (matches e2519c9, 4f07b84)", () => {
+    render(<FilterChips counts={{ all: 8, results: 1, logs: 3, errors: 4 }} filter="all" onChange={() => {}} />);
+    // getByRole with `name` matches the accessible name -- for these buttons that's their text content, so
+    // this assertion fails if the count is ever dropped from the label or moved into a sibling node the
+    // accessible-name computation does not reach.
+    for (const name of ["All 8", "Results 1", "Logs 3", "Errors 4"]) {
+      expect(screen.getByRole("radio", { name })).toBeTruthy();
+    }
   });
 
   test("a failed compile labels the kept output as the last successful run, and only that output is dimmed (spec §5.11)", () => {

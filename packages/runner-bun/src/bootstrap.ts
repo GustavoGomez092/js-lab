@@ -243,7 +243,12 @@ process.on("message", (message: MainToRunner) => {
       run?.buffer.close();
       return;
     case "expand":
-      send({ type: "expanded", reqId: message.reqId, value: run?.encoder.expand(message.handleId) ?? null });
+      // OU-02: `expand`'s own `offset = 0` default absorbs an absent offset, so no spread is needed here.
+      send({
+        type: "expanded",
+        reqId: message.reqId,
+        value: run?.encoder.expand(message.handleId, message.offset) ?? null,
+      });
       return;
     case "dispose":
       exitProcess(0);

@@ -241,9 +241,21 @@ describe("BunAdapter", () => {
     try {
       const value: EncodedValue = { t: "number", v: "42" };
       const pending = h.handle.expand("h1");
-      expect(h.runner.sent.at(-1)).toEqual({ type: "expand", reqId: 1, handleId: "h1" });
+      const unpaged = h.runner.sent.at(-1) as MainToRunner;
+      expect(unpaged).toEqual({ type: "expand", reqId: 1, handleId: "h1" });
+      // OU-02: an absent offset must leave the message byte-identical to the pre-OU-02 shape -- checked
+      // structurally, because whether a matcher treats an explicitly-undefined key as a difference is a matcher
+      // detail, not a contract. This is the one place the contract is observable: `runner.send` hands this object
+      // over as-is, whereas the webview transport JSON-encodes it and would drop such a key regardless.
+      expect(Object.hasOwn(unpaged, "offset")).toBe(false);
       h.runner.emit({ type: "expanded", reqId: 1, value });
       expect(await pending).toEqual(value);
+
+      // OU-02: a caller-supplied offset reaches the wire.
+      const paged = h.handle.expand("h5", 10_000);
+      expect(h.runner.sent.at(-1)).toEqual({ type: "expand", reqId: 2, handleId: "h5", offset: 10_000 });
+      h.runner.emit({ type: "expanded", reqId: 2, value: null });
+      expect(await paged).toBeNull();
 
       const pendingOnExit = h.handle.expand("h2");
       h.runner.exit(0);

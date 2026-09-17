@@ -113,7 +113,7 @@ class BunRunSession implements RunHandle {
     this.killExpected();
   }
 
-  expand(handleId: string): Promise<EncodedValue | null> {
+  expand(handleId: string, offset?: number): Promise<EncodedValue | null> {
     const reqId = this.#nextReqId++;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -124,7 +124,10 @@ class BunRunSession implements RunHandle {
         clearTimeout(timer);
         resolve(value);
       });
-      this.runner.send({ type: "expand", reqId, handleId });
+      // OU-02: spread, never `offset` directly. `runner.send` hands this object straight to the runner process, so
+      // writing `offset: undefined` would put a real extra key on it rather than leaving the message byte-identical
+      // to the shape every pre-OU-02 runner already understands. Same idiom as `main-services.ts`'s deps spread.
+      this.runner.send({ type: "expand", reqId, handleId, ...(offset === undefined ? {} : { offset }) });
     });
   }
 

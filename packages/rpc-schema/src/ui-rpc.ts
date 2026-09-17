@@ -59,6 +59,12 @@ export const runExpandParamsSchema = z.object({
   tabId,
   runId: z.uuid(),
   handleId: z.string().regex(/^h\d+$/),
+  /**
+   * OU-02: the index of the first collection entry to return. Omitted means 0 -- exactly what every caller sent
+   * before this field existed. No upper bound is needed: the encoder clamps (`#take`), and an offset past the end
+   * is a well-defined empty page rather than an error.
+   */
+  offset: z.number().int().min(0).optional(),
 });
 
 /** Spec §7.4 / Appendix A: the latest Babel output for a tab, optionally without the instrumentation calls. */

@@ -314,3 +314,21 @@ describe("web runner bridge payloads", () => {
     expect(webRunnerMessageParamsSchema.safeParse({ tabId: "", raw: envelope }).success).toBe(false);
   });
 });
+
+// OU-02: `run.expand` may now name where in a collection the page should start.
+describe("run.expand offsets (OU-02)", () => {
+  const base = { tabId: "t1", runId: "00000000-0000-4000-8000-000000000000", handleId: "h7" };
+
+  test("an offset is optional, non-negative and an integer", () => {
+    // Absent is the pre-OU-02 shape: it must parse, and must stay absent rather than defaulting to a written 0.
+    expect(runExpandParamsSchema.parse(base).offset).toBeUndefined();
+    expect(runExpandParamsSchema.parse({ ...base, offset: 0 }).offset).toBe(0);
+    expect(runExpandParamsSchema.parse({ ...base, offset: 10_000 }).offset).toBe(10_000);
+    expect(runExpandParamsSchema.safeParse({ ...base, offset: -1 }).success).toBe(false);
+    expect(runExpandParamsSchema.safeParse({ ...base, offset: 1.5 }).success).toBe(false);
+    // A string must not be coerced: the UI reads `next` straight off an encoded page, and a coercing schema would
+    // let a malformed value through to the encoder's arithmetic instead of failing at the boundary.
+    expect(runExpandParamsSchema.safeParse({ ...base, offset: "10" }).success).toBe(false);
+    expect(runExpandParamsSchema.safeParse({ ...base, offset: null }).success).toBe(false);
+  });
+});

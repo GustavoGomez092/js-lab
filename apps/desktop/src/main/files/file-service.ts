@@ -1,9 +1,9 @@
 import { lstat, realpath, stat } from "node:fs/promises";
 import { MAX_OPEN_FILE_BYTES } from "@jslab/rpc-schema";
 import { baseName, contentHash } from "@jslab/shared";
+import { FileTooLargeError, readBoundedBytes } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 import { strings } from "../strings";
-import { FileTooLargeError, readBoundedBytes } from "../fs/bounded-read";
 
 export const OPEN_EXTENSIONS = ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "json", "txt"] as const;
 export const LARGE_FILE_BYTES = 5 * 1024 * 1024;

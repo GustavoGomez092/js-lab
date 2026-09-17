@@ -136,6 +136,51 @@ test("answers expand requests for deep values", async () => {
   });
 });
 
+// OU-02: the web runner's own hop, the mirror of the Bun runner's. Task B's `web-adapter.test.ts` addition pins
+// the message Main puts on the webview transport; this pins that the page actually honours its `offset`.
+test("an expand request's offset reaches the encoder, and each page agrees with the remainder it advertises", async () => {
+  type ArrayPage = {
+    items: [number, { t: string; v: string }][];
+    length: number;
+    from?: number;
+    more?: number;
+    next?: number;
+  };
+  /** A 12,000-entry array cannot fit one page, so its first page always carries both `more` and `next`. */
+  type PagedArray = ArrayPage & { more: number; next: number };
+  const TOTAL = 12_000;
+  beginRun(`__jl.log(1, Array.from({ length: ${TOTAL} }, (_, i) => i));`, "run-10");
+  await until((m) => m.type === "state" && m.state === "idle", 15_000);
+
+  const eager = (events().find((e) => e.kind === "result") as unknown as { value: ArrayPage & { handle: string } })
+    .value;
+  expect(typeof eager.handle).toBe("string");
+  expect(eager.length).toBe(TOTAL);
+
+  const expandAt = async (reqId: number, offset?: number): Promise<ArrayPage> => {
+    sendHost({ type: "expand", reqId, handleId: eager.handle, ...(offset === undefined ? {} : { offset }) });
+    await until((m) => m.type === "expanded" && m.reqId === reqId, 15_000);
+    const reply = sent.find((m) => m.type === "expanded" && m.reqId === reqId);
+    return (reply as unknown as { value: ArrayPage }).value;
+  };
+
+  const first = (await expandAt(11)) as PagedArray;
+  expect(first.from).toBeUndefined();
+  expect(first.items[0]?.[0]).toBe(0);
+  // The page and its advertised remainder must describe the same edge. The cast asserts nothing at runtime --
+  // were `more`/`next` actually absent, these comparisons would be against NaN and fail.
+  expect(first.items.at(-1)?.[0]).toBe(first.next - 1);
+  expect(first.items.length).toBe(first.next);
+  expect(first.items.length + first.more).toBe(TOTAL);
+
+  const second = await expandAt(12, first.next);
+  expect(second.from).toBe(first.next);
+  expect(second.items[0]?.[0]).toBe(first.next);
+  expect(second.items.at(-1)).toEqual([TOTAL - 1, { t: "number", v: String(TOTAL - 1) }]);
+  expect(second.items.length + (second.more ?? 0)).toBe(TOTAL - (second.from ?? 0));
+  expect(second.more).toBeUndefined();
+});
+
 // Fix round 1, I2: the expand registry must be scoped to the run, not to the bootstrap instance - a handle id
 // captured in one run must never resolve in a later one.
 test("a handle id from one run is not resolvable in a later run", async () => {

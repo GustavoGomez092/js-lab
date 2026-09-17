@@ -509,7 +509,14 @@ describe("WebAdapter", () => {
       h.raw.emit(3, { type: "expanded", reqId: 1, value });
       expect(await pending).toEqual(value);
 
-      const pendingOnExit = h.handle.expand("h2");
+      // OU-02: the offset reaches this transport too. Note that the *absence* of an offset is not observable here
+      // -- the message is JSON-encoded into the `__jslabHostMessage(...)` call, and JSON.stringify drops an
+      // explicitly-undefined key either way; `bun-adapter.test.ts` pins that half, where the object crosses as-is.
+      const pendingOnExit = h.handle.expand("h2", 10_000);
+      expect(parseHostMessageCall(h.raw.executed.at(-1) as string)).toEqual({
+        seq: 3,
+        message: { type: "expand", reqId: 2, handleId: "h2", offset: 10_000 },
+      });
       h.raw.crash();
       expect(await pendingOnExit).toBeNull();
       expect(h.exitedCalls()).toBe(1);

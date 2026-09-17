@@ -101,7 +101,12 @@ export interface RunHandle {
   stop(): Promise<void>;
   /** Immediate. */
   kill(): void;
-  expand(handleId: string): Promise<EncodedValue | null>;
+  /**
+   * OU-02: `offset` is the index of the first collection entry to return; absent means 0, which is exactly the
+   * behaviour every caller had before this parameter existed. The two inert `deadHandle` stubs satisfy the wider
+   * signature unchanged -- a zero-parameter function is assignable to it.
+   */
+  expand(handleId: string, offset?: number): Promise<EncodedValue | null>;
   /**
    * Task 15 (spec §5.12, EX-35): sets or clears mute for this run's runtime. Optional: only `WebAdapter`'s
    * `WebRunSession` implements it (Bun has no audio concept), so `RunCoordinator.mute()` calls it with `?.` and a

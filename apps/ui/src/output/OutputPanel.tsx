@@ -104,8 +104,12 @@ export function OutputPanel({
     if (pinnedToBottom.current && entries.length > 0) virtualizer.scrollToIndex(entries.length - 1, { align: "end" });
   }, [entries.length, virtualizer]);
 
-  const expand = (handle: string) =>
-    tabId && output.runId ? api.expand({ tabId, runId: output.runId, handleId: handle }) : Promise.resolve(null);
+  // OU-02: `offset` asks for a later page of a collection. Spread rather than written, so an absent offset leaves
+  // the request identical to the one every caller sent before the field existed.
+  const expand = (handle: string, offset?: number) =>
+    tabId && output.runId
+      ? api.expand({ tabId, runId: output.runId, handleId: handle, ...(offset === undefined ? {} : { offset }) })
+      : Promise.resolve(null);
 
   const copyAll = () => {
     // R-M2-T19A-1: the entries visible under the current filter chip -- the same owner the `output.copyAll`

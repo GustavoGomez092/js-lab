@@ -130,8 +130,8 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         });
       },
       "run.expand": (input: unknown): Promise<EncodedValue | null> => {
-        const { tabId, runId, handleId } = parse(runExpandParamsSchema, "run.expand", input);
-        return deps.coordinator.expand(tabId, runId, handleId);
+        const { tabId, runId, handleId, offset } = parse(runExpandParamsSchema, "run.expand", input);
+        return deps.coordinator.expand(tabId, runId, handleId, offset);
       },
       "run.transpiled": (input: unknown): Promise<{ code: string; source: string } | null> => {
         const { tabId, hideInstrumentation } = parse(runTranspiledParamsSchema, "run.transpiled", input);

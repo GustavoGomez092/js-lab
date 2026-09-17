@@ -110,8 +110,12 @@ export function childrenOf(value: EncodedValue): Child[] | null {
       );
     case "map":
       return value.entries.map(([k, v]) => ({ label: `${summarize(k)} =>`, value: v }));
-    case "set":
-      return value.items.map((v, i) => ({ label: String(i), value: v }));
+    case "set": {
+      // OU-02: the row's label is the entry's real index in the collection, so a later page reads 10000, 10001, …
+      // rather than restarting at 0. `array` items already carry true indices and `map` labels by key.
+      const from = value.from ?? 0;
+      return value.items.map((v, i) => ({ label: String(from + i), value: v }));
+    }
     case "promise":
       return value.value ? [{ label: "[[PromiseResult]]", value: value.value }] : null;
     case "error":
@@ -123,8 +127,10 @@ export function childrenOf(value: EncodedValue): Child[] | null {
       // Items are numbers, or strings for bigints and for NaN, ±Infinity and -0; the constructor decides the type.
       // Only these two hold bigints; a subclass such as `class BigData extends Uint8Array` holds numbers.
       const bigint = /^Big(Int|Uint)64Array$/.test(value.ctor);
+      // OU-02: as for `set`, the label is the entry's real index, not its position within this page.
+      const from = value.from ?? 0;
       return value.items.map((v, i) => ({
-        label: String(i),
+        label: String(from + i),
         value: bigint ? { t: "bigint", v: String(v) } : { t: "number", v: String(v) },
       }));
     }

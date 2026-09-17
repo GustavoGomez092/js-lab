@@ -11,6 +11,7 @@ import {
   sessionSchema,
   settingsSchema,
 } from "@jslab/shared";
+import { FileTooLargeError } from "../../src/main/fs/bounded-read";
 import {
   consumeSafeModeFlag,
   detectSafeMode,
@@ -184,13 +185,25 @@ describe("SettingsStore", () => {
     // Refused, not truncated and not written anyway: what is on disk is still a file this app can load.
     const written = await readFile(join(dir, "settings.json"), "utf8");
     expect(Buffer.byteLength(written, "utf8")).toBeLessThanOrEqual(MAX_SETTINGS_BYTES);
-    // Refused loudly, through the same channel every other failed settings write already reports on.
+    // Refused loudly, through the same channel every other failed settings write already reports on -- and as a
+    // TYPED refusal carrying an errno-style code, because main-services.ts has to tell this failure apart from an
+    // ordinary write error to decide whether the user needs telling (D1). A plain Error here would compile, pass
+    // every other assertion in this test, and silently disable that notice.
     expect(errors).toHaveLength(1);
+    const refusal = errors[0] as FileTooLargeError;
+    expect(refusal).toBeInstanceOf(FileTooLargeError);
+    expect(refusal.code).toBe("EFBIG");
+    expect(refusal.maxBytes).toBe(MAX_SETTINGS_BYTES);
+    expect(refusal.size).toBeGreaterThan(MAX_SETTINGS_BYTES);
 
-    // The point of all of it: the next launch is an ordinary one, and the newer build's keys are still there.
+    // The next launch is an ordinary one, and the newer build's keys are still there.
     const reopened = await SettingsStore.open(dir);
     expect([reopened.recovered, reopened.primary]).toEqual(["none", "ok"]);
     expect("experimentalFeatureFlag0" in (reopened.current.run as Record<string, unknown>)).toBe(true);
+    // D1, pinned deliberately rather than left implicit: the user's change does NOT survive the restart. That is
+    // the accepted cost of refusing the write -- the alternative lost more -- and it is exactly why the user has
+    // to be told at the time. main-services.test.ts pins the telling.
+    expect(reopened.current.editor.lineWrap).toBe(true);
   });
 });
 

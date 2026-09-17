@@ -1,9 +1,9 @@
 import { join } from "node:path";
-import type { NpmListResult, NpmOperation } from "@jslab/rpc-schema";
+import type { NpmListResult, NpmOperation, StartupNotice } from "@jslab/rpc-schema";
 import { effectiveRuntime, runnerSettings } from "@jslab/shared";
 import type { AppPaths } from "./app-paths";
 import { VendorCache } from "./bundling/vendor-cache";
-import { readRegularFileText } from "./fs/bounded-read";
+import { type FileTooLargeError, readRegularFileText } from "./fs/bounded-read";
 import { RunLock } from "./persistence/run-lock";
 import { BunRunnerProcess, type RunnerSpawnConfig } from "./runs/bun-runner-process";
 import { EXIT_KILL_GRACE_MS, RunCoordinator, type RunCoordinatorDeps } from "./runs/run-coordinator";
@@ -48,6 +48,15 @@ export interface MainServicesOptions {
   expandTimeoutMs?: RunCoordinatorDeps["expandTimeoutMs"];
   /** Main's log (index.ts passes the rotating log). Defaults to console.error. */
   log?: (message: string, detail?: unknown) => void;
+  /**
+   * How Main tells the USER something after startup (`app.notice`). `index.ts` binds this to the main window's RPC
+   * once that window exists; it defaults to a no-op, which is what headless tests get.
+   *
+   * D1: raised for a settings write refused as too large. That refusal is the one write failure the user cannot
+   * otherwise discover -- `update()` still resolves, the RPC still reports success, the UI still shows the change,
+   * and the only trace is a line in the rotating log. Logging it is not telling them.
+   */
+  notify?: (notice: StartupNotice) => void;
   /**
    * Fix round 1 (Task 13, security): masks anything recorded about a `browser-node` fetch (spec §18) before it
    * reaches the log or the page. `index.ts` passes its own `redact`; defaults to a no-op so tests that never touch
@@ -104,8 +113,22 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   const { paths } = options;
   const log = options.log ?? ((message: string, detail?: unknown) => console.error(`[jslab] ${message}`, detail ?? ""));
   const runLock = new RunLock(paths.runLock);
+  const notify = options.notify ?? (() => {});
+  // D1: the refusal recurs on every later settings change, so the telling must not -- once per session. The UI's
+  // own `addNotice` also dedupes by id, but leaning on that would make a Main-side flood invisible rather than
+  // absent, and would tie a Main guarantee to a UI implementation detail.
+  let toldSettingsTooLarge = false;
   const settings = await SettingsStore.open(paths.dataDir, {
-    onWriteError: (error) => log(strings.log.settingsWriteFailed, String(error)),
+    onWriteError: (error) => {
+      log(strings.log.settingsWriteFailed, String(error));
+      // Only the too-large refusal is silent AND permanent; an ordinary write error is transient, and the next
+      // change may well succeed, so it stays a log line. `code` is how bounded-read's refusals are told apart
+      // everywhere else in Main.
+      if ((error as NodeJS.ErrnoException).code !== "EFBIG" || toldSettingsTooLarge) return;
+      toldSettingsTooLarge = true;
+      const refusal = error as FileTooLargeError;
+      notify({ id: "settingsTooLarge", message: strings.notices.settingsTooLarge(refusal.size, refusal.maxBytes) });
+    },
   });
   const session = await SessionStore.open(paths.dataDir, {
     tabDefaults: () => ({

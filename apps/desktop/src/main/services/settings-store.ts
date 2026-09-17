@@ -7,7 +7,7 @@ import {
   type Settings,
   settingsParser,
 } from "@jslab/shared";
-import { readBoundedText } from "../fs/bounded-read";
+import { FileTooLargeError, readBoundedText } from "../fs/bounded-read";
 import { type AtomicWriteOptions, writeFileAtomic } from "../persistence/atomic-write";
 import {
   createDebouncedWriter,
@@ -181,9 +181,13 @@ export class SettingsStore {
     const data = this.#snapshot();
     const bytes = Buffer.byteLength(data, "utf8");
     if (bytes <= MAX_SETTINGS_BYTES) return data;
-    this.onWriteError(
-      new Error(`EFBIG: settings.json snapshot is ${bytes} bytes, over the ${MAX_SETTINGS_BYTES}-byte read limit`),
-    );
+    // A TYPED refusal rather than a plain Error (D1): this is the one write failure the user cannot otherwise
+    // discover -- it is silent, permanent and repeats for every later change -- so `main-services.ts` has to tell
+    // it apart from an ordinary, transient write error before showing a notice. It does that by `code`, the way
+    // every other refusal from `bounded-read.ts` is classified. FileTooLargeError already carries exactly this
+    // fact (path, size, limit, code "EFBIG"), so inventing a second class for it would be the duplication the
+    // shared reader exists to remove.
+    this.onWriteError(new FileTooLargeError(this.path, bytes, MAX_SETTINGS_BYTES));
     return null;
   }
 

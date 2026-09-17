@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NpmListResult } from "@jslab/rpc-schema";
+import type { NpmListResult, StartupNotice } from "@jslab/rpc-schema";
+import { defaultSettings } from "@jslab/shared";
 import { resolveAppPaths } from "../src/main/app-paths";
 import { createMainServices, type MainServices } from "../src/main/main-services";
 import { createRpcHandlers, InvalidPayloadError } from "../src/main/rpc-handlers";
 import type { BunRunnerProcess, RunnerSpawnConfig } from "../src/main/runs/bun-runner-process";
 import type { NpmSpawnOptions } from "../src/main/services/npm-spawn";
+import { MAX_SETTINGS_BYTES } from "../src/main/services/settings-store";
 
 let dir = "";
 let services: MainServices | null = null;
@@ -64,6 +66,59 @@ describe("main services (composition root)", () => {
       InvalidPayloadError,
     );
     expect(logged).toEqual(["Rejected invalid run.start payload"]);
+  });
+
+  test("a settings write refused as too large tells the user, once, instead of failing silently forever (D1)", async () => {
+    const paths = resolveAppPaths({
+      resourcesFolder: join(dir, "Resources"),
+      userData: dir,
+      execPath: process.execPath,
+      env: {},
+    });
+    // A settings.json the reader ACCEPTS, whose pretty-printed rewrite exceeds the cap: unknown keys from a newer
+    // build survive looseObject parsing and expand on the way back out (see services.test.ts for the measurement).
+    const unknown: Record<string, unknown> = {};
+    for (let index = 0; index < 25_000; index++) unknown[`experimentalFeatureFlag${index}`] = index;
+    const base = defaultSettings();
+    await mkdir(paths.dataDir, { recursive: true });
+    await writeFile(
+      join(paths.dataDir, "settings.json"),
+      JSON.stringify({ ...base, run: { ...base.run, ...unknown } }),
+    );
+
+    const notices: StartupNotice[] = [];
+    services = await createMainServices({
+      paths,
+      env: {},
+      shiftHeld: Promise.resolve(false),
+      realHome: join(dir, "home"),
+      log: () => {},
+      notify: (notice) => notices.push(notice),
+      onEvents: () => {},
+      onState: () => {},
+      onDiagnostics: () => {},
+      onNpmOperation: () => {},
+      onNpmLog: () => {},
+      onNpmChanged: () => {},
+      startRunner: () => Promise.reject(new Error("no runners in this test")),
+      transformHost: { transform: () => Promise.reject(new Error("no transforms in this test")), dispose: () => {} },
+    });
+
+    await services.settings.update({ editor: { lineWrap: false } });
+    // The change applies in memory, so the UI shows it as done -- which is precisely why the user has to be told
+    // it was not saved. Before this, update() resolved, the RPC reported success, and the only trace was a line in
+    // the rotating log the user never sees.
+    expect(services.settings.current.editor.lineWrap).toBe(false);
+    expect(notices.map((notice) => notice.id)).toEqual(["settingsTooLarge"]);
+    // The user's real question is "why can't I change my settings?", so the message has to name the file and the
+    // reason, not merely say a write failed.
+    expect(notices[0]?.message).toContain("settings.json");
+    expect(notices[0]?.message).toContain(String(MAX_SETTINGS_BYTES));
+
+    // The failure RECURS on every later change, so the telling must not. One notice, however many changes.
+    await services.settings.update({ editor: { lineWrap: true } });
+    await services.settings.update({ appearance: { fontSize: 18 } });
+    expect(notices.map((notice) => notice.id)).toEqual(["settingsTooLarge"]);
   });
 
   test("saving env.json replaces the active tab's pre-started runner", async () => {

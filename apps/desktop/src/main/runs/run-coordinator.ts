@@ -185,10 +185,11 @@ export class RunCoordinator {
     this.#setState(run, run.resumeState ?? "evaluating", run.activeHandles);
   }
 
-  expand(tabId: string, runId: string, handleId: string): Promise<EncodedValue | null> {
+  /** OU-02: `offset` is forwarded untouched; absent means 0, the pre-OU-02 behaviour. */
+  expand(tabId: string, runId: string, handleId: string, offset?: number): Promise<EncodedValue | null> {
     const run = this.#runs.get(tabId);
     if (!run?.handle || run.runId !== runId || run.state === "killed") return Promise.resolve(null);
-    return run.handle.expand(handleId);
+    return run.handle.expand(handleId, offset);
   }
 
   /**

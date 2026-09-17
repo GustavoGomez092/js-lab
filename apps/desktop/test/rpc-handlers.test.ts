@@ -120,10 +120,30 @@ describe("requests", () => {
       t: "number",
       v: "1",
     });
-    expect(deps.coordinator.expand).toHaveBeenCalledWith("t1", runId, "h3");
+    // OU-02: the handler now forwards a fourth argument, `offset`, which is `undefined` for a caller that sent
+    // none -- so the expectation names four arguments even though only three were on the request.
+    expect(deps.coordinator.expand).toHaveBeenCalledWith("t1", runId, "h3", undefined);
     expect(() => handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "nope" })).toThrow(
       InvalidPayloadError,
     );
+  });
+
+  test("run.expand forwards the offset, and omits it when the caller sent none (OU-02)", async () => {
+    const { handlers, deps } = setup();
+    const runId = crypto.randomUUID();
+    await handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "h3", offset: 10_000 });
+    expect(deps.coordinator.expand).toHaveBeenLastCalledWith("t1", runId, "h3", 10_000);
+    await handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "h3" });
+    expect(deps.coordinator.expand).toHaveBeenLastCalledWith("t1", runId, "h3", undefined);
+    // The schema, not the handler, is what refuses a malformed offset -- and it refuses it before the coordinator
+    // is reached at all, which the call count proves.
+    expect(() => handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "h3", offset: -1 })).toThrow(
+      InvalidPayloadError,
+    );
+    expect(() => handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "h3", offset: 1.5 })).toThrow(
+      InvalidPayloadError,
+    );
+    expect(deps.coordinator.expand).toHaveBeenCalledTimes(2);
   });
 
   test("run.start passes the tab's working directory and script name from the session (spec §5.3)", () => {

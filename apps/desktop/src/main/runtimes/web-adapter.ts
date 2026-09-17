@@ -452,7 +452,7 @@ class WebRunSession implements RunHandle {
     this.host.send({ type: "mute", muted });
   }
 
-  expand(handleId: string): Promise<EncodedValue | null> {
+  expand(handleId: string, offset?: number): Promise<EncodedValue | null> {
     const reqId = this.#nextReqId++;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -463,7 +463,10 @@ class WebRunSession implements RunHandle {
         clearTimeout(timer);
         resolve(value);
       });
-      this.host.send({ type: "expand", reqId, handleId });
+      // OU-02: the same spread as BunRunSession, so both transports build the identical message object. On this
+      // one the object is then JSON.stringify'd into the `__jslabHostMessage(...)` call, which drops an
+      // explicitly-undefined key anyway -- the spread is what makes the two adapters agree before that point.
+      this.host.send({ type: "expand", reqId, handleId, ...(offset === undefined ? {} : { offset }) });
     });
   }
 

@@ -212,3 +212,25 @@ test("the entry point cannot be reassigned or deleted by page code", () => {
     delete g.__jslabHostMessage;
   }).toThrow();
 });
+
+// OU-02: `expand` gained an optional `offset`. Because `isHostToWeb` checks the seq and the payload together, a
+// rejected offset must leave the sequence counter untouched -- proved here by the accepted message that follows
+// two rejections on the same seq.
+test("an expand may carry an offset, and a malformed offset is rejected without burning a seq (OU-02)", () => {
+  const { g } = sandbox();
+  const received: HostToWebMessage[] = [];
+  createHostBridge((message) => received.push(message), g);
+  g.__jslabHostMessage({ seq: 1, message: { type: "expand", reqId: 1, handleId: "h1", offset: 10_000 } });
+  g.__jslabHostMessage({ seq: 2, message: { type: "expand", reqId: 2, handleId: "h1" } });
+  // `-1` fails the range check; `"10"` would pass `>= 0` on its own (JS coerces it), so it fails only because of
+  // `isInt`; `1.5` fails `isInt` too. All three must leave seq 3 free.
+  g.__jslabHostMessage({ seq: 3, message: { type: "expand", reqId: 3, handleId: "h1", offset: -1 } });
+  g.__jslabHostMessage({ seq: 3, message: { type: "expand", reqId: 4, handleId: "h1", offset: "10" } });
+  g.__jslabHostMessage({ seq: 3, message: { type: "expand", reqId: 5, handleId: "h1", offset: 1.5 } });
+  g.__jslabHostMessage({ seq: 3, message: { type: "expand", reqId: 6, handleId: "h1", offset: 0 } });
+  expect(received).toEqual([
+    { type: "expand", reqId: 1, handleId: "h1", offset: 10_000 },
+    { type: "expand", reqId: 2, handleId: "h1" },
+    { type: "expand", reqId: 6, handleId: "h1", offset: 0 },
+  ]);
+});

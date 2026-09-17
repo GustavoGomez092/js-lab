@@ -54,6 +54,12 @@ export const runExpandParamsSchema = z.object({
   tabId,
   runId: z.uuid(),
   handleId: z.string().regex(/^h\d+$/),
+  /**
+   * OU-02: the index of the first collection entry to return. Omitted means 0 -- exactly what every caller sent
+   * before this field existed. No upper bound is needed: the encoder clamps (`#take`), and an offset past the end
+   * is a well-defined empty page rather than an error.
+   */
+  offset: z.number().int().min(0).optional(),
 });
 
 export const bufferChangedSchema = z.object({ tabId, content: z.string().max(MAX_TEXT_CHARS) });

@@ -560,6 +560,22 @@ describe("RunCoordinator", () => {
     expect(Date.now() - started).toBeLessThan(1000);
   }, 15_000);
 
+  // OU-02: the coordinator's own forwarding hop. Nothing else in this change reaches it -- `rpc-handlers.test.ts`
+  // mocks the coordinator away, and the adapter tests call `RunHandle.expand` directly -- so without this, dropping
+  // `offset` in `RunCoordinator.expand` would leave every other test green while every page request silently asked
+  // for page 1 again. The stand-in runner echoes back the offset it received, so no 10,000-entry collection is
+  // needed to observe it.
+  test("expand forwards the caller's offset to the runner, and forwards its absence as absence (OU-02)", async () => {
+    const h = await createHarness({}, { bootstrapPath: join(import.meta.dir, "fixtures/expand-echo-runner.ts") });
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1", language: "typescript", logpoints: [] });
+    await h.waitForState("idle", runId);
+    expect(await h.coordinator.expand("t1", runId, "h1", 10_000)).toEqual({ t: "number", v: "10000" });
+    // A genuine 0 must arrive as 0 rather than being conflated with "no offset" -- the fixture reports -1 for an
+    // absent field, so these two assertions cannot both pass unless the value really crossed the wire.
+    expect(await h.coordinator.expand("t1", runId, "h1", 0)).toEqual({ t: "number", v: "0" });
+    expect(await h.coordinator.expand("t1", runId, "h1")).toEqual({ t: "number", v: "-1" });
+  }, 15_000);
+
   test("labels logpoint results and captures stdout writes", async () => {
     const h = await createHarness({ autoLog: false });
     const { runId } = h.coordinator.start({

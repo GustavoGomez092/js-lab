@@ -1,5 +1,5 @@
 import type { EncodedValue } from "@jslab/rpc-schema";
-import { useRef, useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, useRef, useState } from "react";
 import { strings } from "../strings";
 import { childrenOf, formatPrimitive, summarize } from "./format";
 
@@ -15,6 +15,33 @@ interface ValueViewProps {
 
 const EXPIRED = "Value no longer available. Re-run to inspect.";
 const EXPAND_FAILED = "Couldn't expand value. Try again.";
+
+/**
+ * §11 arrow-key navigation. The tree's rows are the `.v-toggle` buttons; a primitive row is a bare `<span>` and
+ * cannot hold focus, so "the first child" can only mean the first row that can.
+ *
+ * These read the rendered DOM rather than threading refs through the recursion on purpose: every `ValueView` owns
+ * its own `open` state and nothing else's, so a parent holds no handle on a child's row and a child none on its
+ * parent's. The DOM is the one place the relationship already exists.
+ */
+const nodeOf = (button: HTMLElement) => button.closest<HTMLElement>(".v-node");
+
+const ownToggle = (node: Element | null | undefined) => {
+  const own = [...(node?.children ?? [])].find((child) => child.classList.contains("v-toggle"));
+  return own instanceof HTMLButtonElement && !own.disabled ? own : null;
+};
+
+/** The first focusable row inside this node's own children container, or null when it has none. */
+function firstChildToggle(button: HTMLElement): HTMLButtonElement | null {
+  const children = [...(nodeOf(button)?.children ?? [])].find((child) => child.classList.contains("v-children"));
+  // A row's own toggle precedes its descendants' in document order, so the first enabled toggle under this
+  // container always belongs to a DIRECT child -- never to a grandchild of an already-open sibling.
+  const toggles = children ? [...children.querySelectorAll<HTMLButtonElement>(".v-toggle")] : [];
+  return toggles.find((toggle) => !toggle.disabled) ?? null;
+}
+
+/** The row of the node that contains this one, or null at the root of an entry. */
+const parentToggle = (button: HTMLElement) => ownToggle(nodeOf(button)?.parentElement?.closest(".v-node"));
 
 export function ValueView({ value, expand, nested = false, label }: ValueViewProps) {
   const [open, setOpen] = useState(false);
@@ -135,9 +162,49 @@ export function ValueView({ value, expand, nested = false, label }: ValueViewPro
     setOpen(!open);
   };
 
+  // §11: Right expands and then moves inward; Left collapses and then moves outward -- the mapping Chrome
+  // DevTools and Firefox's Web Console have both used for years, so it is what a user arrives already knowing.
+  // Anything this does not handle is left completely untouched: no `preventDefault`, no `stopPropagation`. That
+  // is what keeps Tab able to leave the tree, and keeps a modified chord reaching the window-level resolver in
+  // `App.tsx` rather than being eaten here.
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key === "ArrowRight") {
+      if (!open) {
+        // A collapsed lazy handle costs exactly the one `run.expand` a click would have cost -- no more.
+        if (!expandable) return;
+        event.preventDefault();
+        void toggle();
+        return;
+      }
+      const child = firstChildToggle(event.currentTarget);
+      if (!child) return;
+      event.preventDefault();
+      child.focus();
+      return;
+    }
+    if (event.key !== "ArrowLeft") return;
+    if (open) {
+      event.preventDefault();
+      void toggle();
+      return;
+    }
+    const parent = parentToggle(event.currentTarget);
+    if (!parent) return;
+    event.preventDefault();
+    parent.focus();
+  };
+
   return (
     <div className="v-node">
-      <button type="button" className="v-toggle" aria-expanded={open} disabled={!expandable} onClick={toggle}>
+      <button
+        type="button"
+        className="v-toggle"
+        aria-expanded={open}
+        disabled={!expandable}
+        onClick={toggle}
+        onKeyDown={onKeyDown}
+      >
         {expandable ? (open ? "▾ " : "▸ ") : ""}
         {labelNode}
         <span className={`v v-${shown.t}`}>{summarize(shown)}</span>

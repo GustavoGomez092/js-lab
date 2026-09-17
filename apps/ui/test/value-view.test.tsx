@@ -308,6 +308,142 @@ describe("ValueView", () => {
 });
 
 /**
+ * §11. Arrow-key navigation over the value tree. Right expands, or moves into the first child once open; Left
+ * collapses, or moves to the parent once closed. Chrome DevTools and Firefox's Web Console both use exactly this
+ * mapping, so it is what a user arrives already knowing.
+ *
+ * The rows are `<button className="v-toggle">`, not a `role="tree"`: Tab already reaches them and Enter/Space
+ * already toggles them, and claiming `tree` would owe the APG the rest of the pattern (roving tabindex,
+ * `aria-level`, `aria-setsize`, Home/End, typeahead) that this widget does not implement. These pin the
+ * behaviour on the structure that actually ships.
+ */
+describe("ValueView: arrow-key navigation (§11)", () => {
+  /** An object two levels deep, all of it already loaded -- so nothing here can reach `expand`. */
+  const nested = (): EncodedValue => ({
+    t: "object",
+    id: 1,
+    ctor: "Outer",
+    props: [
+      [{ k: "first" }, { t: "object", id: 2, ctor: "Inner", props: [[{ k: "leaf" }, num("1")]] }],
+      [{ k: "second" }, num("2")],
+    ],
+  });
+
+  const togglesIn = (container: HTMLElement) => [...container.querySelectorAll<HTMLButtonElement>(".v-toggle")];
+
+  test("Right expands a collapsed node, exactly as Enter does", () => {
+    const { container } = render(<ValueView value={nested()} expand={noExpand} />);
+    const root = togglesIn(container)[0] as HTMLButtonElement;
+    expect(root.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    expect(root.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("second: 2");
+  });
+
+  test("Right on an open node moves focus into its first child rather than re-toggling it", () => {
+    const { container } = render(<ValueView value={nested()} expand={noExpand} />);
+    const root = togglesIn(container)[0] as HTMLButtonElement;
+    root.focus();
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    // Still open: the second Right must navigate, not collapse what the first one opened.
+    expect(root.getAttribute("aria-expanded")).toBe("true");
+    const inner = togglesIn(container).find((button) => button.textContent?.includes("Inner"));
+    expect(document.activeElement).toBe(inner as HTMLButtonElement);
+  });
+
+  test("Left collapses an open node, then moves to the parent from the closed child", () => {
+    const { container } = render(<ValueView value={nested()} expand={noExpand} />);
+    const root = togglesIn(container)[0] as HTMLButtonElement;
+    root.focus();
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    const inner = togglesIn(container).find((b) => b.textContent?.includes("Inner")) as HTMLButtonElement;
+
+    inner.focus();
+    fireEvent.keyDown(inner, { key: "ArrowRight" });
+    expect(inner.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.keyDown(inner, { key: "ArrowLeft" });
+    expect(inner.getAttribute("aria-expanded")).toBe("false");
+    // Focus has not moved yet: the first Left spent itself on the collapse.
+    expect(document.activeElement).toBe(inner);
+
+    fireEvent.keyDown(inner, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(root);
+    // Collapsing the child must not have collapsed the parent on the way past.
+    expect(root.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("Right into a child skips primitive rows, which are spans and cannot hold focus", () => {
+    // `first` is an object (focusable); `second` is a number rendered as a bare <span>. Moving "into the first
+    // child" can only mean the first row that can actually take focus.
+    const { container } = render(
+      <ValueView
+        value={{
+          t: "object",
+          id: 1,
+          ctor: "Outer",
+          props: [
+            [{ k: "alpha" }, num("1")],
+            [{ k: "beta" }, { t: "object", id: 2, ctor: "Inner", props: [[{ k: "leaf" }, num("2")]] }],
+          ],
+        }}
+        expand={noExpand}
+      />,
+    );
+    const root = togglesIn(container)[0] as HTMLButtonElement;
+    root.focus();
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(togglesIn(container).find((b) => b.textContent?.includes("Inner")) ?? null);
+  });
+
+  test("Right expands a lazy handle through exactly one expand, the same as a click", async () => {
+    const expand = mock(
+      async () => ({ t: "object", id: 2, ctor: "Deep", props: [[{ k: "d" }, num("1")]] }) as EncodedValue,
+    );
+    const { container } = render(
+      <ValueView value={{ t: "handle", handle: "h1", preview: "Object {…}" }} expand={expand} />,
+    );
+    const root = togglesIn(container)[0] as HTMLButtonElement;
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    await waitFor(() => expect(container.textContent).toContain("d: 1"));
+    // One keystroke, one RPC -- Right must not both toggle and separately fetch.
+    expect(expand).toHaveBeenCalledTimes(1);
+    expect(expand).toHaveBeenCalledWith("h1");
+  });
+
+  test("the arrows never trap focus: at the root Left does nothing and leaves other keys alone", () => {
+    const { container } = render(<ValueView value={nested()} expand={noExpand} />);
+    const root = togglesIn(container)[0] as HTMLButtonElement;
+    root.focus();
+
+    // Collapsed root, no parent to move to: the key must fall through untouched so nothing swallows it.
+    expect(fireEvent.keyDown(root, { key: "ArrowLeft" })).toBe(true);
+    expect(document.activeElement).toBe(root);
+    expect(root.getAttribute("aria-expanded")).toBe("false");
+
+    // Tab must stay the browser's, or the tree becomes a focus trap.
+    expect(fireEvent.keyDown(root, { key: "Tab" })).toBe(true);
+    // A modified Right belongs to whoever bound it, not to the tree.
+    expect(fireEvent.keyDown(root, { key: "ArrowRight", metaKey: true })).toBe(true);
+    expect(root.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  test("a non-expandable row ignores both arrows instead of throwing", () => {
+    const { container } = render(
+      <ValueView value={{ t: "object", id: 1, ctor: "Empty", props: [] }} expand={noExpand} />,
+    );
+    const root = togglesIn(container)[0] as HTMLButtonElement;
+    expect(root.disabled).toBe(true);
+    expect(fireEvent.keyDown(root, { key: "ArrowRight" })).toBe(true);
+    expect(root.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+/**
  * Task 14 shipped the `dom` encoding with no consumer in the UI, so `console.log(someElement)` arrived as an
  * output entry that rendered as the empty string. Spec §5.9 asks for tag, attributes, child count and an
  * outerHTML preview; these assert what the user actually sees, not what the serializer emits.

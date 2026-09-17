@@ -450,6 +450,12 @@ export function App({
         transpiledStale: document.querySelector(".transpiled-stale-label") !== null,
         // Spec §13.1: the snippets panel, so a scenario can tell it is on screen.
         snippetsPanel: document.querySelector(".snippets-panel") !== null,
+        // Spec §13.4 / ruling R-M5b-8: the overwrite / keep both / skip chooser, and a refused import's alert. Both
+        // exist so an E2E scenario can wait for a POSITIVE signal that an import round trip landed. Without them the
+        // only observables are `snippetCount` and `snippets.json`, which are *already* at their expected values
+        // before the import is even dispatched -- so an assertion on those alone passes whether or not the import ran.
+        snippetsConflicts: document.querySelector(".snippets-conflicts") !== null,
+        snippetsError: document.querySelector('.snippets-status[role="alert"]') !== null,
         // M4 Task 16: the Web View tile's docking placeholder, which `OutputTiles` renders only for a runtime that
         // can host a webview and only while that tab's own Web View toggle is on -- so this is what an E2E
         // scenario reads to tell "the tile is on screen" from "a bun tab never gets one" (spec §7.1, parity WV-01).

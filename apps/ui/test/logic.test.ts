@@ -153,6 +153,27 @@ describe("startAutoRun", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  // Fix round 1: the identity-preserving case above cannot tell the logpoint clause apart from its absence --
+  // normalizeLogpoints returns the SAME array either way, so `changed` is false with or without it. This is the
+  // case that actually exercises `state.logpoints !== previous.logpoints`: a reconciliation whose set genuinely
+  // differs returns a NEW array, and on an armed tab that reschedules. Harmless in practice (sticky lines only
+  // move because of an edit, which already scheduled a run, and auto-run.ts cancels before rescheduling), but it
+  // is the clause's real observable behaviour, so it is pinned rather than left to inference.
+  test("reconciliation that genuinely moves logpoint lines reschedules on an armed tab", () => {
+    const store = hydratedStore();
+    const run = mock(() => {});
+    const clock = manualTimers();
+    startAutoRun(store, run, clock.timers);
+    store.getState().setLogpoints([4]);
+    store.getState().armAutoRun();
+    expect(clock.pending.size).toBe(0);
+
+    store.getState().setLogpoints([5]);
+    expect(clock.pending.size).toBe(1);
+    clock.fireAll();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   test("toggling a logpoint in Safe Mode never schedules a run", () => {
     const run = mock(() => {});
     const clock = manualTimers();

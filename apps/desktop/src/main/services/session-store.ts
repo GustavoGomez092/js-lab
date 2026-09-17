@@ -303,7 +303,7 @@ export class SessionStore {
     if (!tab) return;
     // Fix round 1 (F5): `tiles` gets its own merge, not a spread -- `{ ...tab.layout, ...patch.layout }` alone
     // would replace the whole `tiles` object with whatever the patch carries, silently dropping any field the
-    // patch omitted (a partial `{ webviewVisible: true }` patch would reset arrangement/order/consoleSize to
+    // patch omitted (a partial `{ webviewVisible: true }` patch would reset consoleSize to
     // their schema defaults instead of leaving them alone).
     const layout = patch.layout
       ? { ...tab.layout, ...patch.layout, tiles: { ...tab.layout.tiles, ...patch.layout.tiles } }

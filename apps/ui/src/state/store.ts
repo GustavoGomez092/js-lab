@@ -67,6 +67,12 @@ function withWorkingDirectoryMissing(
 
 export type FocusArea = "editor" | "output" | "other";
 export type OutputFilter = "all" | "results" | "logs" | "errors";
+/**
+ * R-WEBVIEW-TAB-1: which body the output panel shows -- the (filtered) log list, or the Web View filling the
+ * whole panel. Not a third arrangement of two tiles: the Web View's *position* is fixed (the bottom preview
+ * pane), and this chooses only whether it takes the panel over instead.
+ */
+export type OutputView = "console" | "webview";
 export type ConfirmButton = { id: string; label: string; role?: "primary" | "danger" | "cancel" };
 export type Modal =
   | { kind: "palette"; context: "editor" | "output" }
@@ -167,6 +173,12 @@ export interface AppState {
   focus: FocusArea;
   modal: Modal | null;
   outputFilter: OutputFilter;
+  /**
+   * App-level and deliberately not persisted, exactly like `outputFilter` beside it: it is a choice about how to
+   * look at the panel right now, not a property of the document in the tab. A tab whose Web View is off, or whose
+   * runtime is `bun`, simply renders its log list regardless of this (see `OutputTiles`).
+   */
+  outputView: OutputView;
   statusMessage: string | null;
   statusSticky: boolean;
   cursor: { line: number; column: number } | null;
@@ -243,6 +255,8 @@ export interface AppState {
   openModal(modal: Modal): void;
   closeModal(): void;
   setOutputFilter(filter: OutputFilter): void;
+  /** R-WEBVIEW-TAB-1: selects the output panel's body. Selecting `webview` also shows the Web View if it was hidden. */
+  setOutputView(view: OutputView): void;
   /**
    * Shows a status-bar message (FB-m5). A non-sticky message clears after STATUS_MESSAGE_MS, on the next edit, or when
    * a run starts; a sticky one (a busy indicator, a font fallback) stays until replaced or cleared.
@@ -362,6 +376,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       focus: "editor",
       modal: null,
       outputFilter: "all",
+      outputView: "console",
       statusMessage: null,
       statusSticky: false,
       cursor: null,
@@ -474,6 +489,11 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
 
       toggleWebviewVisible() {
         updateLayout((layout) => ({ tiles: { ...layout.tiles, webviewVisible: !layout.tiles.webviewVisible } }));
+        // R-WEBVIEW-TAB-1: the tab and this toggle must not fight. Turning the Web View OFF means "hide it", so it
+        // also leaves the full-screen tab -- otherwise the panel would go on showing a Web View that the status
+        // bar, the View menu and the palette have all just started describing as hidden. Turning it ON never
+        // selects the tab: that stays a separate choice, and the preview appears at the bottom exactly as before.
+        if (!get().tab?.layout.tiles.webviewVisible) set({ outputView: "console" });
       },
 
       toggleMuted(tabId) {
@@ -658,7 +678,28 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       },
 
       setOutputFilter(outputFilter) {
-        set({ outputFilter });
+        // R-WEBVIEW-TAB-1: the chips and the Web View control share one row and behave as one tab strip -- picking
+        // a filter means "show me the log list, filtered this way", so it leaves the Web View. The palette's own
+        // output.show* commands route through here too, so they agree without needing a second rule.
+        set({ outputFilter, outputView: "console" });
+      },
+
+      setOutputView(view) {
+        if (view !== "webview") {
+          set({ outputView: "console" });
+          return;
+        }
+        // spec §7.1: a `bun` tab never has a Web View, so it has no Web View tab to select either.
+        const tab = get().tab;
+        if (!tab || tab.runtime === "bun") return;
+        // R-WEBVIEW-TAB-1: selecting the tab while the preview is hidden SHOWS the Web View -- full screen rather
+        // than at the bottom. "Shown" stays one fact (`tiles.webviewVisible`), which the status bar, the View menu
+        // and the palette all keep reading. Without this, the panel would dock a webview for a tab `WebViewHosts`
+        // never armed (its `everEnabled` gate keys off exactly this flag), and the Web View would render blank.
+        if (!tab.layout.tiles.webviewVisible) {
+          updateLayout((layout) => ({ tiles: { ...layout.tiles, webviewVisible: true } }));
+        }
+        set({ outputView: "webview" });
       },
 
       setStatusMessage(statusMessage, options) {

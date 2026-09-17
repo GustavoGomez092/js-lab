@@ -17,10 +17,8 @@ export function computeTabPatch(before: TabState, next: TabState): Parameters<Ma
     next.layout.orientation !== before.layout.orientation ||
     next.layout.editorSize !== before.layout.editorSize ||
     next.layout.outputVisible !== before.layout.outputVisible ||
-    next.layout.tiles.arrangement !== before.layout.tiles.arrangement ||
     next.layout.tiles.webviewVisible !== before.layout.tiles.webviewVisible ||
     next.layout.tiles.consoleSize !== before.layout.tiles.consoleSize ||
-    next.layout.tiles.order.join(",") !== before.layout.tiles.order.join(",") ||
     next.layout.muted !== before.layout.muted;
   if (
     next.language === before.language &&

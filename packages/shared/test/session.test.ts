@@ -172,7 +172,7 @@ describe("session", () => {
       parseSession({ version: 2, tabOrder: ["t2"], activeTabId: "t2", tabs: { t2: { id: "t2" } } }).session.tabs.t2
         ?.workingDirectory,
     ).toBeNull();
-    expect(SESSION_VERSION).toBe(3);
+    expect(SESSION_VERSION).toBe(4);
   });
 
   test("layout.tiles defaults independently via .catch(), and the v2 → v3 migration is a no-op bump (R-M4-T8-VERSION-1)", () => {
@@ -186,27 +186,56 @@ describe("session", () => {
     });
     expect(migrated.fileVersion).toBe(2);
     expect(migrated.session.version).toBe(SESSION_VERSION);
-    expect(migrated.session.tabs.a?.layout.tiles).toEqual({
-      arrangement: "stacked",
-      order: ["console", "webview"],
-      webviewVisible: false,
-      consoleSize: 55,
-    });
+    expect(migrated.session.tabs.a?.layout.tiles).toEqual({ webviewVisible: false, consoleSize: 55 });
 
-    // Each tiles field defaults on its own: a bad `order` (a duplicate) resets only `order`, and leaves the other,
-    // valid fields alone -- exactly what lets Task 15 add `muted` beside `tiles` with no second version bump.
+    // Each tiles field still defaults on its own: an out-of-range `consoleSize` resets only `consoleSize` and
+    // leaves a valid `webviewVisible` alone -- what lets a field be added beside `tiles` with no second bump.
     const partiallyBad = tabLayoutSchema.parse({
       orientation: "horizontal",
       editorSize: 55,
       outputVisible: true,
-      tiles: { arrangement: "side-by-side", order: ["console", "console"], webviewVisible: true, consoleSize: 40 },
+      tiles: { webviewVisible: true, consoleSize: 500 },
     });
-    expect(partiallyBad.tiles).toEqual({
-      arrangement: "side-by-side",
-      order: ["console", "webview"],
-      webviewVisible: true,
-      consoleSize: 40,
+    expect(partiallyBad.tiles).toEqual({ webviewVisible: true, consoleSize: 55 });
+  });
+
+  // R-WEBVIEW-TAB-1: `arrangement` and `order` are retired. The Web View is always the bottom area now (or the
+  // whole panel, which is a UI-level view choice, not a stored one), so there is nothing left for them to say.
+  test("a v3 session carrying the retired tiles.arrangement / tiles.order loads without error onto the new shape", () => {
+    const migrated = parseSession({
+      version: 3,
+      tabOrder: ["a"],
+      activeTabId: "a",
+      tabs: {
+        a: {
+          id: "a",
+          layout: {
+            orientation: "horizontal",
+            editorSize: 55,
+            outputVisible: true,
+            // Exactly what a session written by the previous build could contain: the non-default arrangement AND
+            // a reversed order, the two shapes most likely to survive on a real user's disk.
+            tiles: {
+              arrangement: "side-by-side",
+              order: ["webview", "console"],
+              webviewVisible: true,
+              consoleSize: 40,
+            },
+            muted: false,
+          },
+        },
+      },
     });
+
+    expect(migrated.fileVersion).toBe(3);
+    expect(migrated.session.version).toBe(SESSION_VERSION);
+    // Both retired keys are gone -- `tabTilesSchema` is a plain `z.object`, which strips what it does not name --
+    // and the two fields that still mean something are carried across untouched, NOT reset to their defaults.
+    // `toEqual` rather than `toMatchObject` is the point: a surviving `arrangement` key would fail this.
+    expect(migrated.session.tabs.a?.layout.tiles).toEqual({ webviewVisible: true, consoleSize: 40 });
+    // The rest of the layout is undisturbed by the bump.
+    expect(migrated.session.tabs.a?.layout.muted).toBe(false);
+    expect(migrated.session.tabs.a?.layout.editorSize).toBe(55);
   });
 
   test("a session from a newer build reads layout.tiles with defaults rather than being discarded (downgrade case)", () => {
@@ -219,12 +248,7 @@ describe("session", () => {
     });
     expect(future.newerThanBuild).toBe(true);
     expect(future.session.version).toBe(SESSION_VERSION + 1);
-    expect(future.session.tabs.a?.layout.tiles).toEqual({
-      arrangement: "stacked",
-      order: ["console", "webview"],
-      webviewVisible: false,
-      consoleSize: 55,
-    });
+    expect(future.session.tabs.a?.layout.tiles).toEqual({ webviewVisible: false, consoleSize: 55 });
     expect((future.session as Record<string, unknown>).somethingFromTheFuture).toBe(true);
   });
 
@@ -245,14 +269,14 @@ describe("session", () => {
       orientation: "vertical",
       editorSize: 40,
       outputVisible: false,
-      tiles: { arrangement: "side-by-side", order: ["console", "webview"], webviewVisible: true, consoleSize: 30 },
+      tiles: { webviewVisible: true, consoleSize: 30 },
       muted: "yes",
     });
     expect(parsed).toEqual({
       orientation: "vertical",
       editorSize: 40,
       outputVisible: false,
-      tiles: { arrangement: "side-by-side", order: ["console", "webview"], webviewVisible: true, consoleSize: 30 },
+      tiles: { webviewVisible: true, consoleSize: 30 },
       muted: false,
     });
     // A valid `true` is preserved.

@@ -192,6 +192,8 @@ export const strings = {
   output: {
     filters: { all: "All", results: "Results", logs: "Logs", errors: "Errors" },
     filterLabel: "Output filter",
+    /** R-WEBVIEW-TAB-1: the control beside the filter chips that fills the output panel with the Web View. */
+    webViewTab: "Web View",
     copyAll: "Copy All",
     clear: "Clear",
     jumpToLine: (line: number) => `Go to line ${line}`,

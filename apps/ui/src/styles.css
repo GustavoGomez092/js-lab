@@ -273,6 +273,24 @@ button:disabled {
   height: 100%;
 }
 
+/* R-WEBVIEW-TAB-1: the same single dock node, now filling the output panel instead of a split pane. `.output` is
+   a flex column whose first child is the toolbar, so here the dock is a flex ITEM that must take the space the
+   header leaves -- `height: 100%` would measure against the whole panel and overflow it by the header's height.
+   `min-height: 0` for the same reason `.output-scroller` needs it (see that rule). */
+.webview-tile-dock-full {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The filter chips and the Web View control, as one row (see FilterChips.tsx for why they are two controls and
+   not one five-member group). */
+.output-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* The actual tile: always a child of `.webview-parking` (see below), positioned with `position: fixed` and
    `top`/`left`/`width`/`height` set inline to track `.webview-tile-dock`'s box when docked, or collapsed to a 1x1
    box when not (`WebViewTile.tsx`'s `COLLAPSED_STYLE` -- not literally 0x0, see that constant's own doc comment
@@ -325,8 +343,12 @@ button:disabled {
   border-bottom: 1px solid var(--border-default);
 }
 
+/* `min-height: 0` is load-bearing, not tidiness. A flex item's default `min-height: auto` refuses to shrink below
+   its content, so without it this scroller grows past `.output`'s own box as rows accumulate -- overflowing the
+   panel instead of scrolling inside it, which puts rows underneath whatever sits below the panel. */
 .output-scroller {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   font-family: var(--mono);
 }

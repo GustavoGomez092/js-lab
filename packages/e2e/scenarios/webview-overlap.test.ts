@@ -91,7 +91,7 @@ async function showWebViewFor(userData: string, tabId: string) {
   const path = join(userData, "session.json");
   const session = await readJson(path);
   const layout = session.tabs[tabId].layout;
-  layout.tiles = { ...layout.tiles, webviewVisible: true, arrangement: "side-by-side", consoleSize: 40 };
+  layout.tiles = { ...layout.tiles, webviewVisible: true, consoleSize: 40 };
   await writeFile(path, JSON.stringify(session));
 }
 

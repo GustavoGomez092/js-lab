@@ -36,7 +36,7 @@ function tabWith(id: string): TabState {
       orientation: "horizontal",
       editorSize: 55,
       outputVisible: true,
-      tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: true, consoleSize: 55 },
+      tiles: { webviewVisible: true, consoleSize: 55 },
       muted: false,
     },
   });

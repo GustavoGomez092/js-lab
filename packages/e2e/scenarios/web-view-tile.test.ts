@@ -28,7 +28,7 @@ const readJson = async (path: string): Promise<Record<string, any>> => JSON.pars
 
 /** The active tab's tile settings. `TabSnapshot.layout` is deliberately open-ended in the harness, so name the shape. */
 const tilesOf = async (app: LaunchedApp) =>
-  activeTab(await app.state()).layout.tiles as { webviewVisible: boolean; arrangement: string; consoleSize: number };
+  activeTab(await app.state()).layout.tiles as { webviewVisible: boolean; consoleSize: number };
 
 async function useRuntime(target: LaunchedApp, command: string, runtime: string) {
   await target.command(command);
@@ -43,7 +43,7 @@ async function showWebViewFor(userData: string, tabIds: string[]) {
   const session = await readJson(path);
   for (const id of tabIds) {
     const layout = session.tabs[id].layout;
-    layout.tiles = { ...layout.tiles, webviewVisible: true, arrangement: "side-by-side", consoleSize: 40 };
+    layout.tiles = { ...layout.tiles, webviewVisible: true, consoleSize: 40 };
   }
   await writeFile(path, JSON.stringify(session));
 }
@@ -67,12 +67,8 @@ describe("the Web View tile (spec §7.1)", () => {
     await showWebViewFor(first.userData, [tabId]);
     const app = await launchApp({ userData: first.userData });
     apps.push(app);
-    // The stored toggle and arrangement came back, and the tile is really on screen.
-    expect(activeTab(await app.state()).layout.tiles).toMatchObject({
-      webviewVisible: true,
-      arrangement: "side-by-side",
-      consoleSize: 40,
-    });
+    // The stored toggle and split came back, and the tile is really on screen.
+    expect(activeTab(await app.state()).layout.tiles).toMatchObject({ webviewVisible: true, consoleSize: 40 });
     await tileShown(app, true);
     await app.screenshot("web-view-tile-shown");
 
@@ -120,7 +116,7 @@ describe("the Web View tile (spec §7.1)", () => {
     // The per-tab split survives another round trip to disk.
     await app.quit();
     const session = await readJson(join(app.userData, "session.json"));
-    expect(session.tabs[withTile].layout.tiles).toMatchObject({ webviewVisible: true, arrangement: "side-by-side" });
+    expect(session.tabs[withTile].layout.tiles).toMatchObject({ webviewVisible: true, consoleSize: 40 });
     expect(session.tabs[withoutTile].layout.tiles.webviewVisible).toBe(false);
   });
 });

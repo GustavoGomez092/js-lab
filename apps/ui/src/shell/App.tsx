@@ -183,7 +183,9 @@ export function App({
           tabId,
           code,
           language: freshTab.language,
-          logpoints: [],
+          // Spec §6.3 / §5.5: the tab's own logpoint lines, read at send time like `code` above, so a toggle
+          // that landed while a format was in flight is still included.
+          logpoints: fresh.runtimes[tabId]?.logpoints ?? [],
           reason,
           runtime: freshTab.runtime,
         });
@@ -255,7 +257,7 @@ export function App({
     );
     created.register(
       ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle, keysFor }),
-      ...createEditorCommands(getEditorHandle),
+      ...createEditorCommands(getEditorHandle, store),
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
       ...createFileCommands(flows, api),
@@ -282,6 +284,18 @@ export function App({
                 ? "output"
                 : "editor";
           state.openModal({ kind: "palette", context });
+        },
+      },
+      // spec §7.4: Show Transpiled Output "opens a read-only side tab", so unlike the activity bar's `togglePanel`
+      // this only ever *opens* the panel -- invoking it while that panel is already showing must not close it.
+      // Opening goes through `view.toggleSideBar` rather than writing `view.sideBar` here, so the persisted setting
+      // keeps a single owner and a second invocation writes nothing.
+      {
+        id: "view.showTranspiled",
+        run: () => {
+          const state = store.getState();
+          state.setSideBarPanel("transpiled");
+          if (!state.settings?.view.sideBar) created.execute("view.toggleSideBar");
         },
       },
       {
@@ -404,6 +418,10 @@ export function App({
         outputPlain: document.querySelector(".output-plain") !== null,
         lineAnchors: document.querySelector(".entry-line") !== null,
         staleLabel: document.querySelector(".output-stale-label") !== null,
+        // M5a (spec §7.4): the read-only transpiled-output panel, so a scenario can tell it is on screen, and
+        // (R-M5a-7) whether it is currently admitting that what it shows is output for code that has since changed.
+        transpiledPanel: document.querySelector(".transpiled-panel") !== null,
+        transpiledStale: document.querySelector(".transpiled-stale-label") !== null,
         // M4 Task 16: the Web View tile's docking placeholder, which `OutputTiles` renders only for a runtime that
         // can host a webview and only while that tab's own Web View toggle is on -- so this is what an E2E
         // scenario reads to tell "the tile is on screen" from "a bun tab never gets one" (spec §7.1, parity WV-01).
@@ -571,7 +589,7 @@ export function App({
             onNpm={() => registry.execute("tools.npmPackages")}
           />
         )}
-        {settings.view.sideBar && <SideBar panel={sideBarPanel} />}
+        {settings.view.sideBar && <SideBar panel={sideBarPanel} store={store} api={api} />}
         <SplitPane
           orientation={orientation}
           size={editorSize}

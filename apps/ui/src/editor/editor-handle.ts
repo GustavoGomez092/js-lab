@@ -26,6 +26,8 @@ export interface EditorHandle {
   getCursorOffset(): number;
   /** The 1-based lines covered by the primary selection (a selection ending at column 1 excludes that line). */
   getSelectedLineRange(): { startLine: number; endLine: number } | null;
+  /** The 1-based line the caret is on, or null when nothing is mounted (spec §6.3: `F9` toggles the current line). */
+  getCursorLine(): number | null;
   getLines(startLine: number, endLine: number): string[];
   /** Replaces whole lines as one undoable edit, keeping the model's line ending. */
   replaceLines(startLine: number, endLine: number, lines: string[]): void;

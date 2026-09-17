@@ -23,6 +23,7 @@ import { SnippetStore } from "./services/snippet-store";
 import { TypesService } from "./services/types-service";
 import { strings } from "./strings";
 import { CachingTransformHost, type TransformHost, WorkerTransformHost } from "./transform/transform-host";
+import { WELCOME_CODE, WELCOME_TITLE } from "./welcome";
 
 export interface MainServicesOptions {
   paths: AppPaths;
@@ -109,7 +110,13 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   const settings = await SettingsStore.open(paths.dataDir, {
     onWriteError: (error) => log(strings.log.settingsWriteFailed, String(error)),
   });
+  // R-M5a-REGRESSION-1: the welcome tab rewrites the single tab a fresh profile starts with -- its title, language
+  // and content -- and that first tab is the starting state most E2E scenarios assume. Every harness launch gets a
+  // brand new data folder, so every one of them is a first launch. Suppress the sample under the harness; a scenario
+  // that is *about* the welcome tab opts back in with JSLAB_E2E_WELCOME=1.
+  const welcomeSuppressed = options.env.JSLAB_E2E === "1" && options.env.JSLAB_E2E_WELCOME !== "1";
   const session = await SessionStore.open(paths.dataDir, {
+    ...(welcomeSuppressed ? {} : { firstRun: { title: WELCOME_TITLE, content: WELCOME_CODE, language: "tsx" } }),
     tabDefaults: () => ({
       language: settings.current.run.defaultLanguage,
       runtime: effectiveRuntime(settings.current.run.defaultRuntime),

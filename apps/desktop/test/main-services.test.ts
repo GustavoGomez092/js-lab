@@ -9,6 +9,7 @@ import { createMainServices, type MainServices } from "../src/main/main-services
 import { createRpcHandlers, InvalidPayloadError } from "../src/main/rpc-handlers";
 import type { BunRunnerProcess, RunnerSpawnConfig } from "../src/main/runs/bun-runner-process";
 import type { NpmSpawnOptions } from "../src/main/services/npm-spawn";
+import { WELCOME_CODE, WELCOME_TITLE } from "../src/main/welcome";
 
 let dir = "";
 let services: MainServices | null = null;
@@ -23,6 +24,55 @@ afterEach(async () => {
 });
 
 describe("main services (composition root)", () => {
+  /** Boots the services a first launch would get, with `env` standing in for the process environment. */
+  const bootstrapWith = async (env: Record<string, string | undefined>) => {
+    const paths = resolveAppPaths({
+      resourcesFolder: join(dir, "Resources"),
+      userData: dir,
+      execPath: process.execPath,
+      env: {},
+    });
+    services = await createMainServices({
+      paths,
+      env,
+      shiftHeld: Promise.resolve(false),
+      realHome: join(dir, "home"),
+      onEvents: () => {},
+      onState: () => {},
+      onDiagnostics: () => {},
+      onNpmOperation: () => {},
+      onNpmLog: () => {},
+      onNpmChanged: () => {},
+      startRunner: () => Promise.reject(new Error("no runners in this test")),
+      transformHost: { transform: () => Promise.reject(new Error("no transforms in this test")), dispose: () => {} },
+    });
+    const [onlyId] = services.session.session.tabOrder;
+    if (!onlyId) throw new Error("expected one tab");
+    return { tab: services.session.session.tabs[onlyId], buffer: await services.session.readBuffer(onlyId) };
+  };
+
+  /**
+   * R-M5a-REGRESSION-1. `dir` is a fresh mkdtemp, so each of these is a genuinely first launch -- and so is every
+   * E2E launch, because the harness hands each one a brand new data folder. Three scenarios broke when the welcome
+   * tab began rewriting that first tab's title, language and content, so the harness gets the plain empty tab it
+   * has always assumed unless a scenario asks for the sample by name.
+   */
+  test("the welcome tab is suppressed under the E2E harness, and opted back into with JSLAB_E2E_WELCOME", async () => {
+    const suppressed = await bootstrapWith({ JSLAB_E2E: "1" });
+    expect(suppressed.buffer).toBe("");
+    expect(suppressed.tab).toMatchObject({ titleIsCustom: false, pristine: false });
+
+    // A second genuinely first launch: the opt-in is what brings the sample back, nothing else about the folder.
+    services?.dispose();
+    services = null;
+    await rm(join(dir, "session.json"), { force: true });
+    await rm(join(dir, "session.json.bak"), { force: true });
+
+    const optedIn = await bootstrapWith({ JSLAB_E2E: "1", JSLAB_E2E_WELCOME: "1" });
+    expect(optedIn.buffer).toBe(WELCOME_CODE);
+    expect(optedIn.tab).toMatchObject({ title: WELCOME_TITLE, titleIsCustom: true, language: "tsx", pristine: true });
+  });
+
   test("builds stores and the run coordinator without Electrobun, and the RPC handlers validate against them", async () => {
     const paths = resolveAppPaths({
       resourcesFolder: join(dir, "Resources"),
@@ -60,7 +110,15 @@ describe("main services (composition root)", () => {
     });
     const payload = await handlers.requests["app.bootstrap"]();
     expect(payload.session.tabOrder).toHaveLength(1);
-    expect(payload.buffers).toEqual({ [payload.session.activeTabId]: "" });
+    // Task 10 (spec §7.5): this test's `dir` is a fresh mkdtemp, so it is a genuinely first launch. This is the
+    // only place that proves the composition root actually hands SessionStore the welcome tab -- session-store's
+    // own tests pass `firstRun` themselves and so cannot catch main-services.ts forgetting to.
+    expect(payload.buffers).toEqual({ [payload.session.activeTabId]: WELCOME_CODE });
+    expect(payload.session.tabs[payload.session.activeTabId]).toMatchObject({
+      title: WELCOME_TITLE,
+      titleIsCustom: true,
+      language: "tsx",
+    });
     expect(() => handlers.requests["run.start"]({ tabId: payload.session.activeTabId, code: 1 })).toThrow(
       InvalidPayloadError,
     );

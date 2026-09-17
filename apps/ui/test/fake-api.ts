@@ -28,6 +28,14 @@ export function createFakeApi() {
     }),
     startRun: mock(async (_params: unknown) => ({ runId: "r1" })),
     expand: mock(async (_params: unknown) => null),
+    // The return type is written out so a test can re-implement this as the never-transpiled case (`null`), which
+    // an inferred `{ code, source }` would reject.
+    transpiled: mock(
+      async (_tabId: string, _hideInstrumentation: boolean): Promise<{ code: string; source: string } | null> => ({
+        code: "",
+        source: "",
+      }),
+    ),
     stop: mock((_tabId: string) => {}),
     kill: mock((_tabId: string) => {}),
     wait: mock((_tabId: string) => {}),

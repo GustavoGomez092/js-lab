@@ -218,14 +218,25 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
         }
         return reply.path ?? null;
       },
-      waitForRunState: (states, timeoutMs = 15_000) =>
-        waitFor(
-          async () => {
-            const runState = activeTab(await app.state()).runState;
-            return runState !== null && states.includes(runState) ? runState : null;
-          },
-          { timeoutMs, message: `Run state never became ${states.join(" or ")}` },
-        ),
+      waitForRunState: async (states, timeoutMs = 15_000) => {
+        // Report the state this wait last saw before giving up. Without it the two ways it fails are the same
+        // message, and a CI runner keeps no app log to tell them apart afterwards: a transient state the poll
+        // stepped over (the run reached it and moved on, so the state now reads "settled") looks exactly like a
+        // run that never started at all ("null" or "transpiling").
+        let lastObserved: string | null = null;
+        try {
+          return await waitFor(
+            async () => {
+              const runState = activeTab(await app.state()).runState;
+              lastObserved = runState;
+              return runState !== null && states.includes(runState) ? runState : null;
+            },
+            { timeoutMs, message: `Run state never became ${states.join(" or ")}` },
+          );
+        } catch (error) {
+          throw new Error(`${String(error)}; last observed run state: ${String(lastObserved)}`);
+        }
+      },
       waitForOutput: (predicate, timeoutMs = 15_000) =>
         waitFor(
           async () => {

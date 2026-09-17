@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { contentHash, createTab, defaultSession, defaultSettings, mergeSettings } from "@jslab/shared";
+import { contentHash, createTab, defaultSession, defaultSettings, mergeSettings, type TabState } from "@jslab/shared";
 import { act, fireEvent, render } from "@testing-library/react";
 import { createElement } from "react";
 import { type EditorHandle, setEditorHandle } from "../src/editor/editor-handle";
@@ -11,18 +11,24 @@ import { strings } from "../src/strings";
 import { createTabActions } from "../src/tabs/tab-actions";
 import { createFakeApi } from "./fake-api";
 
-function setup(settings = defaultSettings()) {
+/**
+ * `lone` builds the single-tab workspace TF-21 is about: no second tab, and the scratch tab's fields and content
+ * under the test's control -- R-M5a-REGRESSION-2 needs a tab that is untouched but NOT empty.
+ */
+function setup(settings = defaultSettings(), lone?: { tab: TabState; content: string }) {
   const store = createAppStore();
+  const scratch = lone?.tab ?? createTab({ id: "scratch" });
   store.getState().hydrate({
     settings,
-    session: defaultSession(() => createTab({ id: "scratch" })),
-    buffers: { scratch: "1 + 1" },
+    session: defaultSession(() => scratch),
+    buffers: { [scratch.id]: lone?.content ?? "1 + 1" },
     safeMode: { active: false, reason: null },
     versions: { app: "0", bun: "1.4.0" },
   });
-  store
-    .getState()
-    .openTab(createTab({ id: "saved", filePath: "/w/a.ts", lastSavedHash: contentHash("v1") }), "v1", false);
+  if (!lone)
+    store
+      .getState()
+      .openTab(createTab({ id: "saved", filePath: "/w/a.ts", lastSavedHash: contentHash("v1") }), "v1", false);
   const { api } = createFakeApi();
   const dialogs = createDialogs(store);
   const tabs = createTabActions(store, api);
@@ -189,6 +195,30 @@ describe("file flows", () => {
     const confirmClose = tabs.close("scratch");
     expect((await answer("cancel")).title).toBe('Close "x"?');
     expect(await confirmClose).toBe(false);
+  });
+
+  /**
+   * R-M5a-REGRESSION-2. Before the welcome tab (spec §7.5) a first launch's only tab was empty, so TF-21's
+   * "empty" test and "untouched" were the same thing. They no longer are: the welcome tab is untouched but full
+   * of sample code, and testing emptiness there closes the TAB and leaves a first-run user looking at an empty
+   * window. The guard has to test pristineness instead.
+   */
+  test("⌘W closes the window for a lone untouched tab, empty or not, and stops once it is edited (TF-21)", async () => {
+    const welcome = "// Welcome to JSLab\nconst answer = 42\n";
+    const { flows, api, store } = setup(defaultSettings(), {
+      tab: createTab({ id: "scratch", pristine: true }),
+      content: welcome,
+    });
+
+    expect(await flows.beforeClose("scratch")).toBe(false);
+    expect(api.appCommand).toHaveBeenCalledWith("closeWindow");
+
+    // The moment the user types, the tab is theirs, and ⌘W goes back to being an ordinary tab close.
+    api.appCommand.mockClear();
+    store.getState().editCode(`${welcome}const mine = 1\n`, "scratch");
+    expect(store.getState().tabs.scratch?.pristine).toBe(false);
+    expect(await flows.beforeClose("scratch")).toBe(true);
+    expect(api.appCommand).not.toHaveBeenCalledWith("closeWindow");
   });
 
   test("opened files become tabs; errors show; large files need confirmation", async () => {

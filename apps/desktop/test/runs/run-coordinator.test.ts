@@ -726,4 +726,57 @@ describe("RunCoordinator", () => {
     expect(seen[0]?.build?.pipelineOperator).toBe(true);
     expect(harness.events.find((event) => event.kind === "result")).toMatchObject({ value: { t: "number", v: "2" } });
   });
+
+  // Spec §7.4 / R-M5a-3: Show Transpiled Output serves the tab's last *successful* Babel output, and derives the
+  // uninstrumented view by transforming the same source again with Auto Log, logpoints and loop protection off --
+  // not by stripping `__jl` calls out of generated code, which cannot be done correctly.
+  test("transpiled() returns the last Babel output, and re-transforms without instrumentation on request", async () => {
+    const h = await createHarness();
+    const { runId } = h.coordinator.start({
+      tabId: "t1",
+      code: "const a = 5;\na;",
+      language: "typescript",
+      logpoints: [1],
+    });
+    await h.waitForState("evaluating", runId);
+
+    const instrumented = await h.coordinator.transpiled("t1", false);
+    expect(instrumented?.code).toContain("__jl.");
+    // R-M5a-7: the source this output was produced from travels with it, so the panel compares against what Main
+    // actually transpiled rather than guessing from what it last sent.
+    expect(instrumented?.source).toBe("const a = 5;\na;");
+
+    const plain = await h.coordinator.transpiled("t1", true);
+    expect(plain?.code).not.toContain("__jl.");
+    expect(plain?.code).toContain("const a = 5");
+    // The uninstrumented view is the same program, so it is stale under the same condition: same `source`.
+    expect(plain?.source).toBe("const a = 5;\na;");
+
+    expect(await h.coordinator.transpiled("never-ran", false)).toBeNull();
+
+    // The remembered transform is dropped with the tab, so a closed tab stops serving its last program.
+    h.coordinator.disposeTab("t1");
+    expect(await h.coordinator.transpiled("t1", false)).toBeNull();
+  });
+
+  // The two ways this cache could lie, neither of them pinned before: a later run that cannot compile must not
+  // replace the last good entry (if it did, `source` would stop describing where `code` came from, and R-M5a-7's
+  // stale indicator would report "fresh" over older output), and asking for the uninstrumented view must not
+  // consume or overwrite the instrumented one.
+  test("a failed compile leaves the last good transform in place, and hiding instrumentation does not erase it", async () => {
+    const h = await createHarness();
+    const good = h.coordinator.start({ tabId: "t1", code: "const a = 5;\na;", language: "typescript", logpoints: [] });
+    await h.waitForState("evaluating", good.runId);
+    const before = await h.coordinator.transpiled("t1", false);
+    expect(before?.source).toBe("const a = 5;\na;");
+    expect(before?.code).toContain("__jl.");
+
+    const broken = h.coordinator.start({ tabId: "t1", code: "const a = ;", language: "typescript", logpoints: [] });
+    await h.waitForState("failed", broken.runId);
+    expect(await h.coordinator.transpiled("t1", false)).toEqual(before);
+
+    const plain = await h.coordinator.transpiled("t1", true);
+    expect(plain?.code).not.toContain("__jl.");
+    expect(await h.coordinator.transpiled("t1", false)).toEqual(before);
+  }, 15_000);
 });

@@ -33,7 +33,9 @@ Write JavaScript or TypeScript and watch it run as you type. Each result, log an
 - A Monaco editor with TypeScript, JavaScript, TSX and JSX modes, bracket matching, folding, multi-cursor editing and optional Vim keys.
 - **Auto Log** shows the value of each top-level expression without a `console.log`.
 - **Magic comments** log exactly what you ask for: `value //?`, inline `/*?*/`, or `//? $.length` to log an expression of the value. <kbd>⌘⌥⇧/</kbd> toggles one on the current line.
+- **Logpoints** log a line without editing it: click the gutter beside it or press <kbd>F9</kbd>, and <kbd>⇧⌘F9</kbd> clears them all. They follow their lines as you type, belong to one tab, and aren't saved with it.
 - **Loop protection** stops runaway `for`, `while`, `do…while`, `for…in` and `for…of` loops before they hang a run.
+- **Show Transpiled Output** (Actions menu) puts the Babel output for the current tab in the side bar, with or without the instrumentation, and says so when you've edited past the run that produced it.
 - **Stop** (<kbd>⌘⇧R</kbd>) and **Kill** (<kbd>⌘⌥R</kbd>), plus a Tab Unresponsive prompt when user code stops answering.
 - Zoom (<kbd>⌘=</kbd> / <kbd>⌘−</kbd> / <kbd>⌘0</kbd>) scales the editor, output and window chrome together.
 
@@ -163,7 +165,7 @@ Scripted launches must use a working directory on an internal disk. From an exte
 | M2 | Workspace: tabs, files, settings, themes, formatting, command palette | ✅ Done |
 | M3 | Language & packages: npm, types and autocomplete, working directory, env vars | ✅ Done (manual QA items pending user) |
 | M4 | Browser runtimes: DOM, canvas, React and a live web view | ✅ Done (manual QA items pending user) |
-| M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | Planned |
+| M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | 🚧 In progress — logpoints, Show Transpiled Output and the first-run welcome tab are done |
 | M6 | Ship: signing, notarization, auto-update, 1.0 | Planned |
 
 Details are in the [roadmap](docs/superpowers/plans/2026-09-12-jslab-roadmap.md).

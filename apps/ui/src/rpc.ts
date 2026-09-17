@@ -34,6 +34,7 @@ export function createRpcApi(): MainApi {
     bootstrap: () => rpc.request["app.bootstrap"]({}),
     startRun: (params) => rpc.request["run.start"](params),
     expand: (params) => rpc.request["run.expand"](params),
+    transpiled: (tabId, hideInstrumentation) => rpc.request["run.transpiled"]({ tabId, hideInstrumentation }),
     stop: (tabId) => rpc.send["run.stop"]({ tabId }),
     kill: (tabId) => rpc.send["run.kill"]({ tabId }),
     wait: (tabId) => rpc.send["run.wait"]({ tabId }),

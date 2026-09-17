@@ -11,6 +11,7 @@ import {
   MAX_TEXT_CHARS,
   runExpandParamsSchema,
   runStartParamsSchema,
+  runTranspiledParamsSchema,
   settingsAppCommandSchema,
   settingsUpdateParamsSchema,
   tabCreateParamsSchema,
@@ -83,6 +84,15 @@ describe("inbound validators", () => {
     expect(runExpandParamsSchema.safeParse({ tabId: "t1", runId, handleId: "h12" }).success).toBe(true);
     expect(runExpandParamsSchema.safeParse({ tabId: "t1", runId: "nope", handleId: "h12" }).success).toBe(false);
     expect(runExpandParamsSchema.safeParse({ tabId: "t1", runId, handleId: "../etc" }).success).toBe(false);
+  });
+
+  test("run.transpiled requires a safe tab id and an explicit hideInstrumentation flag", () => {
+    expect(runTranspiledParamsSchema.safeParse({ tabId: "t1", hideInstrumentation: false }).success).toBe(true);
+    // Not optional and not coerced: a missing or truthy-string flag would silently pick an output the caller
+    // never asked for (instrumented vs not), so both are rejected at the boundary.
+    expect(runTranspiledParamsSchema.safeParse({ tabId: "t1" }).success).toBe(false);
+    expect(runTranspiledParamsSchema.safeParse({ tabId: "t1", hideInstrumentation: "yes" }).success).toBe(false);
+    expect(runTranspiledParamsSchema.safeParse({ tabId: "../escape", hideInstrumentation: true }).success).toBe(false);
   });
 
   test("buffer.changed caps content size", () => {

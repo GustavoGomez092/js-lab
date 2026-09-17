@@ -161,6 +161,8 @@ export function buildMenu(model: MenuModel): MenuItem[] {
         item("edit.toggleLineComment"),
         item("edit.toggleBlockComment"),
         item("edit.toggleMagicComment"),
+        item("edit.toggleLogpoint"),
+        item("edit.clearLogpoints"),
         separator,
         item("output.clear"),
         item("editor.clear"),
@@ -195,6 +197,8 @@ export function buildMenu(model: MenuModel): MenuItem[] {
             language("language.jsx", "jsx", "JSX"),
           ],
         },
+        separator,
+        item("view.showTranspiled"),
       ],
     },
     {

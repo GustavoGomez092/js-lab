@@ -12,6 +12,7 @@ function setup(safeMode: RpcHandlerDeps["safeMode"] = { active: false, reason: n
       wait: mock(() => {}),
       expand: mock(async () => ({ t: "number", v: "1" }) as const),
       mute: mock(() => {}),
+      transpiled: mock(async () => ({ code: "const a = 5;", source: "const a = 5" })),
     },
     settings: { current: defaultSettings() },
     session: {
@@ -122,6 +123,20 @@ describe("requests", () => {
     });
     expect(deps.coordinator.expand).toHaveBeenCalledWith("t1", runId, "h3");
     expect(() => handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "nope" })).toThrow(
+      InvalidPayloadError,
+    );
+  });
+
+  test("run.transpiled validates its payload and forwards it to the coordinator", async () => {
+    const { handlers, deps } = setup();
+    // R-M5a-7: `source` reaches the UI too -- the handler hands back the coordinator's whole answer, not just `code`.
+    expect(await handlers.requests["run.transpiled"]({ tabId: "t1", hideInstrumentation: true })).toEqual({
+      code: "const a = 5;",
+      source: "const a = 5",
+    });
+    expect(deps.coordinator.transpiled).toHaveBeenCalledWith("t1", true);
+    expect(() => handlers.requests["run.transpiled"]({ tabId: "t1" })).toThrow(InvalidPayloadError);
+    expect(() => handlers.requests["run.transpiled"]({ tabId: "../escape", hideInstrumentation: false })).toThrow(
       InvalidPayloadError,
     );
   });

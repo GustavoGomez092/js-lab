@@ -91,6 +91,7 @@ JSLab is free and MIT licensed. Every feature RunJS keeps behind a paid license 
 | D10 | License | MIT | Adoption-friendly, and matches the ecosystem. |
 | D11 | Secrets | macOS Keychain via a `security` CLI adapter | Better than RunJS's plaintext storage. |
 | D12 | Extras in v1 | Custom themes + keybindings, CLI, Gist | Most-requested features RunJS lacks. |
+| D13 | Default runtime for a new tab (M4, risk R8) | `bun`, not `browser-node` | Decided in M4. RunJS defaults to its Browser & Node.js environment, and §5.2 originally followed it. When the browser runtimes were really registered, a default tab routed to a webview that loads, receives the code and begins evaluating, but never reports a result — so the run never finishes. Defaulting to a runtime that cannot complete what it starts is worse than the silent Bun fallback it replaced. Revisit once web runs settle reliably; `run.defaultRuntime` already lets a user choose otherwise. |
 
 ---
 
@@ -286,11 +287,13 @@ interface RunHandle {
 
 | Runtime id | UI label | Globals | Node APIs | Web view tile | Types fed to Monaco |
 |---|---|---|---|---|---|
-| `browser-node` (**default**) | Browser & Node APIs | DOM + web APIs | Pure modules polyfilled; `fs`, `child_process`, `os` through an async bridge (§5.13) | Available | `dom` lib + `@types/node` |
-| `bun` | Bun (Node-compatible) | Bun/Node globals, no DOM | Full (Bun) | Hidden | `bun-types` + `@types/node`, no `dom` |
+| `browser-node` | Browser & Node APIs | DOM + web APIs | Pure modules polyfilled; `fs`, `child_process`, `os` through an async bridge (§5.13) | Available | `dom` lib + `@types/node` |
+| `bun` (**default**) | Bun (Node-compatible) | Bun/Node globals, no DOM | Full (Bun) | Hidden | `bun-types` + `@types/node`, no `dom` |
 | `browser` | Browser | DOM + web APIs | None | Available | `dom` lib only |
 
 The default is set by `run.defaultRuntime`. Tabs change runtime from the status bar or the Actions → Runtime menu, and a change triggers a run when Auto Run is on.
+
+**The default is `bun` (decision D13, M4).** This spec originally made `browser-node` the default, following RunJS. M4 changed it: with the browser runtimes really registered, a default tab routed to a webview that began evaluating and never reported a result, so the run never finished. Revisit when web runs settle reliably.
 
 ### 5.3 Bun runner: module semantics
 
@@ -666,7 +669,7 @@ Special cases:
   - Horizontal (side by side, default) or vertical (stacked).
   - The divider is draggable; the default is 55/45, stored per tab. Double-clicking the divider resets the split to 50/50.
   - Status bar "Split" toggles the orientation, and View → Output toggles the output area.
-- **Output area tiles:** Console and Web View. Tiles are arranged by dragging their headers (stacked or side by side, stored per tab). The Web View tile is unavailable in the `bun` runtime.
+- **Output area tiles:** Console and Web View. Tiles are arranged by dragging their headers (stacked or side by side, stored per tab). The Web View tile is unavailable in the `bun` runtime. **Not built as of M4 (parity WV-06):** the header-drag affordance does not exist, so the stored arrangement is honoured and persists across a relaunch but can only be changed by editing `session.json`. The tile toggle itself is a real command (`view.toggleWebView`, ⌥⌘W, View → Web View).
 - **Status bar** (toggle `view.statusBar`, 28 px):
   - Left: run state (dot and label), Safe Mode badge, status message.
   - Right: runtime selector, language selector, Web View toggle (M4), Split orientation toggle, WD chip (M3; click → change/clear; tooltip shows the full path), Vim mode, cursor position.
@@ -752,7 +755,7 @@ The Settings window has these tabs: **General · Editor · Formatting · Appeara
 |---|---|---|---|---|
 | General | `run.autoRun` | bool | `true` | Run code automatically as you type |
 | General | `run.autoLog` | bool | `true` | Show the value of each top-level expression |
-| General | `run.defaultRuntime` | enum | `browser-node` | Runtime for new tabs |
+| General | `run.defaultRuntime` | enum | `bun` | Runtime for new tabs (changed from `browser-node` by decision D13, M4) |
 | General | `run.defaultLanguage` | enum | `typescript` | Language for new tabs |
 | General | `run.formatOnRun` | bool | `false` | Auto-format code on each run |
 | General | `tabs.confirmClose` | bool | `false` | Ask before closing a tab |
@@ -1307,7 +1310,7 @@ Each milestone gets its own implementation plan in `docs/superpowers/plans/`, an
 | R5 | Unauthenticated RPC WebSocket (#518) | Medium / Medium | Track upstream; contribute a fix; carry a patch before 1.0 |
 | R6 | WKWebView freezes after sleep (#550) | Medium / Medium | UI watchdog + rehydration (§4.6) |
 | R7 | Bun ≠ Node in edge cases (V8-only APIs, some native addons, `node:vm`/`inspector`) | High / Medium | Runtime adapter interface; `docs/user/bun-vs-node.md`; "Report a Bun incompatibility" template; clear error hints |
-| R8 | `browser-node` lacks sync Node APIs, so libraries using `fs.*Sync` fail in the default runtime | High / Medium | Explicit errors with a one-click "Switch tab to Bun"; **after M4 dogfooding, decide whether `bun` becomes the default runtime** |
+| R8 | `browser-node` lacks sync Node APIs, so libraries using `fs.*Sync` fail in that runtime | High / Medium | Explicit errors with a one-click "Switch tab to Bun"; **decided in M4 (D13): `bun` is the default runtime**, so a new tab is no longer exposed to this by default |
 | R9 | The bundled Bun version (pinned by Electrobun, 1.4.0) is tied to Electrobun releases | Medium / Medium | **Decided (M0-S3): no separately pinned runner Bun for now**; runners use `process.execPath` (§5.3). A pinned Bun runs and keeps its upstream signature, but it adds ~63 MB and a separate update story. Revisit when a needed Bun feature is missing from the bundled version. Any mixed-version runner must use `serialization: "json"` IPC (§4.3), which JSLab already sets |
 | R10 | Active-handle tracking misses handles created by native code, so "Settled/Idle" state is wrong | Medium / Low | Wrap every handle-creating API JSLab knows about; the state label is advisory; Stop/Kill always work. (`getActiveResourcesInfo()` returned `[]` with a pending timer when observed on Bun 1.3.13; not re-checked on the bundled Bun 1.4.0, and JSLab does not use it.) |
 | R11 | `@babel/standalone` is too heavy or slow for large files | Low / Medium | Worker + cache; `packages/transform` interface permits swapping to oxc/SWC plus a custom instrument pass later |

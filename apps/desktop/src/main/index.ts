@@ -419,7 +419,14 @@ async function start(): Promise<void> {
   };
   const mainWindow = createMainWindowController({
     create: createWindow,
-    onClosed: () => e2eBridge.rejectAll("The JSLab window closed"),
+    onClosed: () => {
+      e2eBridge.rejectAll("The JSLab window closed");
+      // M4 final review (C): this window's UI owned every `<electrobun-webview>` Main was driving. Reopening from
+      // the Dock builds a fresh view with an empty registry, so Main's own entries must go with the old one --
+      // otherwise the next run on every browser tab hits a stale entry, skips `webRunner.ensure`, and fails after
+      // 2 s with "never reported ready".
+      services.webviews?.invalidateAll();
+    },
   });
   mainWindow.open();
   Electrobun.events.on("reopen", () => {
@@ -565,6 +572,11 @@ async function start(): Promise<void> {
     // A reload is a fresh boot (R-M2-T18-3): the reloaded view gets the 30 s boot grace until its own first
     // heartbeat, instead of the 6 s steady-state deadline left over from the view it replaces.
     ({ sawFirstHeartbeat, bootWindowStartedAt, lastUiHeartbeat } = onReload(now));
+    // M4 final review (C): the reloaded view starts with an empty webview registry, so Main's entries for the view
+    // being replaced are stale the instant this navigates. Dropping them here is what makes the next run create a
+    // new element instead of driving one nobody owns any more. This reload is the likeliest trigger of all: it
+    // exists because WKWebView freezes after sleep, i.e. exactly when the user wakes the laptop and hits Run.
+    services.webviews?.invalidateAll();
     current.webview.loadURL(url);
   }, 2000);
 

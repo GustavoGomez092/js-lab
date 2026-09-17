@@ -54,6 +54,56 @@ test("clicking toggles mute without also activating whatever is behind it (event
   expect(screen.getByTestId("row-clicks").textContent).toBe("0");
 });
 
+/**
+ * CodeRabbit finding 6. `TabBar.tsx` makes each tab row activatable from the keyboard with its own
+ * `onKeyDown` handler (`if (event.key === "Enter" || event.key === " ") tabs.activate(id)`). This control sits
+ * *inside* that row, so a keyboard user pressing Enter or Space on the speaker icon had the event bubble up and
+ * activate the tab as well -- unmuting a background tab silently switched to it. `onClick` propagation was
+ * already stopped; keydown was not.
+ *
+ * `fireEvent.keyDown` does not synthesize the click a real browser generates for Enter/Space on a `<button>`, so
+ * what is asserted here is exactly the bug: whether the row underneath saw the keystroke.
+ */
+test("Enter and Space don't leak into the tab row underneath (CodeRabbit 6)", () => {
+  function Harness() {
+    const [muted, setMuted] = useState(false);
+    const [rowActivations, setRowActivations] = useState(0);
+    return (
+      // Mirrors TabBar's own tab row, including the Enter/Space handling that is the whole point of this test.
+      // biome-ignore lint/a11y/noStaticElementInteractions: this stands in for TabBar's row, which is a real tab stop
+      <div
+        onClick={() => setRowActivations((c) => c + 1)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") setRowActivations((c) => c + 1);
+        }}
+      >
+        <span data-testid="row-activations">{rowActivations}</span>
+        <AudioIndicator active={true} muted={muted} title="script.ts" onToggle={() => setMuted((m) => !m)} />
+      </div>
+    );
+  }
+  render(<Harness />);
+  const button = screen.getByRole("button", { pressed: false });
+
+  fireEvent.keyDown(button, { key: "Enter" });
+  fireEvent.keyDown(button, { key: " " });
+
+  expect(screen.getByTestId("row-activations").textContent).toBe("0");
+});
+
+/**
+ * CodeRabbit finding 7. `if (!active) return null` unmounted the control whenever audio was not active -- but
+ * `TabBar` passes the runner's `audioActive` as `active`, and the media path in `packages/runner-web/src/
+ * handles.ts` *pauses* playback when the tab is muted (`if (audio.muted) this.pause()`), which drops the element
+ * out of `AudioController.active`. So muting a tab could make it report inactive, unmount the only unmute
+ * control, and leave the user no way back. A muted tab must keep its control whatever the activity says.
+ */
+test("a muted tab keeps its unmute control even once audio goes inactive (CodeRabbit 7)", () => {
+  render(<AudioIndicator active={false} muted={true} title="noisy.ts" onToggle={() => {}} />);
+  const button = screen.getByRole("button", { pressed: true, name: /unmute noisy\.ts/i });
+  expect(button).toBeDefined();
+});
+
 test("is a real button: focusable by keyboard, not merely drawn to look like a control", () => {
   render(<AudioIndicator active={true} muted={false} title="script.ts" onToggle={() => {}} />);
   const button = screen.getByRole("button", { pressed: false });

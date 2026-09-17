@@ -33,7 +33,7 @@ These apply to every milestone plan:
 | M1 Core scratchpad | `2026-09-12-jslab-m1-core-scratchpad.md` (rulings: `2026-09-12-jslab-m1-rulings.md`) | Done: 268 tests, lint/typecheck clean, dev and packaged canary boot verified by script; manual QA Q1–Q16 pending (`docs/qa/m1-checklist.md`) |
 | M2 Workspace | `2026-09-13-jslab-m2-workspace.md` | Complete (manual QA items pending user) |
 | M3 Language & packages | `2026-09-14-jslab-m3-language-packages.md` | Complete (manual QA items pending user) |
-| M4 Browser runtimes | to be written at M3 completion | Not started |
+| M4 Browser runtimes | `2026-09-16-jslab-m4-browser-runtimes.md` | Complete (manual QA items pending user; WV-06 tile-header drag not built) |
 | M5 Productivity & extras | to be written at M4 completion | Not started |
 | M6 Ship | to be written at M5 completion | Not started |
 
@@ -124,6 +124,8 @@ M5 depends on M3 because snippets autocomplete, AI context and the CLI all use t
   9. Paging for expanded large collections in the output: entries past the first 10,000 aren't reachable yet.
 - **Parity rows:** EX-22, EX-25, EX-34, EX-35, LB-06, WV-01..WV-06.
 - **Exit:** all four guide scenarios pass manual QA.
+- **Outcome:** items 1–7 shipped. Item 8 was decided: **the default is `bun`, not `browser-node`** — recorded as spec decision **D13**, because a default tab on a web runtime began evaluating and never reported a result. **Item 9 did not land:** expanded collections still stop at 10,000 entries (parity OU-02), and it carries to M5. **WV-06 was not built:** tiles have no header-drag affordance, so the per-tab arrangement is honoured but only editable in `session.json`. **p5 is not covered** by any guide scenario; WV-04's other guides (canvas + rAF, React, Three.js/WebGL, Web Audio) are verified end to end, including all four in one tab. Eight accepted limitations are recorded in `docs/qa/m4-checklist.md` — among them that the runner channel is **not** authenticated (page code can forge an inbound command), that `import * as ns` over a bundled package diverges from Bun, and that shared built-in identity is broken across `stream`/`events`/`buffer`.
+- **Delivered beyond the original list:** a real Web View toggle command (⌥⌘W, View menu, command palette) rather than a status-bar-only switch; logged DOM elements rendering as their own opening tag with attributes and child count; the `browser`/`browser-node` E2E scenario suite and the opt-in package-guide suite against the loopback registry.
 
 ## M5: Productivity & extras
 

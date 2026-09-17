@@ -72,3 +72,103 @@ test("an ordinary run that completes reports idle", async () => {
   const sent = await runToCompletion("globalThis.__jslabRunCompletionProbe = 1;\n");
   expect(sent.filter((m) => m.type === "state").at(-1)).toMatchObject({ state: "idle" });
 });
+
+/**
+ * Final review, finding B. `startRun` wraps its own `pushError` call in a try/catch with a last-resort event, but
+ * the global `error` / `unhandledrejection` listeners called it bare. `pushError` reads `error.stack` and encodes
+ * the value, and both can throw on a hostile one -- so the listener itself threw, and the error was never pushed,
+ * never flushed and never reported. This is the same family as the shipped `jsonBytes`/`Buffer` defect the tests
+ * above pin: an error path that throws while reporting an error.
+ *
+ * `fakeGlobal`'s `addEventListener` is a no-op, so the listener path is unreachable through it -- this fixture
+ * records the listeners and dispatches to them the way a page's event loop would.
+ */
+function listenerGlobal(sent: WebToHostMessage[]): {
+  g: RunnerWebGlobal;
+  dispatch(type: string, event: unknown): void;
+} {
+  const listeners = new Map<string, ((event: unknown) => void)[]>();
+  const g = {
+    ...(fakeGlobal(sent) as unknown as Record<string, unknown>),
+    addEventListener: (type: string, listener: (event: unknown) => void) => {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+    },
+    removeEventListener: () => {},
+  } as unknown as RunnerWebGlobal;
+  return {
+    g,
+    dispatch(type, event) {
+      for (const listener of [...(listeners.get(type) ?? [])]) listener(event);
+    },
+  };
+}
+
+/** A value whose `stack` getter throws: what makes the error reporter itself throw. */
+function hostileError(): Error {
+  const error = new Error("hostile");
+  Object.defineProperty(error, "stack", {
+    get() {
+      throw new Error("stack is hostile");
+    },
+  });
+  return error;
+}
+
+/** Starts a run and waits for it to reach a terminal state, so `run` exists when the listener fires. */
+async function startIdleRun(g: RunnerWebGlobal, sent: WebToHostMessage[]): Promise<void> {
+  (g.__jslabHostMessage as (m: unknown) => void)({
+    seq: 1,
+    message: {
+      type: "run",
+      runId: "run-1",
+      code: "globalThis.__jslabListenerProbe = 1;\n",
+      settings: { maxEntries: 100 },
+    },
+  });
+  const deadline = Date.now() + 2000;
+  while (!sent.some((m) => m.type === "state" && m.state !== "evaluating")) {
+    if (Date.now() > deadline) throw new Error(`no terminal state; received ${JSON.stringify(sent)}`);
+    await Bun.sleep(2);
+  }
+}
+
+test("a hostile value reaching the error listener is reported instead of throwing out of the listener", async () => {
+  const sent: WebToHostMessage[] = [];
+  const { g, dispatch } = listenerGlobal(sent);
+  const handle = startRunnerWeb({ global: g, heartbeatMs: 10_000 });
+  try {
+    await startIdleRun(g, sent);
+    sent.length = 0;
+
+    // Before the fix this throws `stack is hostile` straight out of the listener.
+    expect(() => dispatch("error", { error: hostileError() })).not.toThrow();
+
+    const deadline = Date.now() + 2000;
+    while (!sent.some((m) => m.type === "events" && m.events.some((e) => e.kind === "error"))) {
+      if (Date.now() > deadline) throw new Error(`no error event reported; received ${JSON.stringify(sent)}`);
+      await Bun.sleep(2);
+    }
+  } finally {
+    handle.dispose();
+  }
+});
+
+test("a hostile rejection reaching the unhandledrejection listener is reported instead of throwing", async () => {
+  const sent: WebToHostMessage[] = [];
+  const { g, dispatch } = listenerGlobal(sent);
+  const handle = startRunnerWeb({ global: g, heartbeatMs: 10_000 });
+  try {
+    await startIdleRun(g, sent);
+    sent.length = 0;
+
+    expect(() => dispatch("unhandledrejection", { reason: hostileError() })).not.toThrow();
+
+    const deadline = Date.now() + 2000;
+    while (!sent.some((m) => m.type === "events" && m.events.some((e) => e.kind === "error"))) {
+      if (Date.now() > deadline) throw new Error(`no error event reported; received ${JSON.stringify(sent)}`);
+      await Bun.sleep(2);
+    }
+  } finally {
+    handle.dispose();
+  }
+});

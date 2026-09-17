@@ -688,6 +688,73 @@ describe("browser-node module table -- the async Node bridge (Task 11, spec §5.
   });
 
   /**
+   * CodeRabbit finding 1. `unsupportedModuleSource` emitted EVERY name in `UNSUPPORTED_MODULE_EXPORTS` as
+   * `function () { return __jslabRefuse(); }`. That is right for a callable (`createServer`, `Worker`) and wrong
+   * for a **data-valued** one: `http.STATUS_CODES` is an object and `http.METHODS` an array in Node, so binding
+   * them to a function made `STATUS_CODES[200]` read back as `undefined` and `METHODS.length` as `0` -- the
+   * §5.13 refusal contract silently defeated, with no `JSLabUnsupportedError` anywhere.
+   *
+   * The audit of the whole table (not just the two names CodeRabbit happened to cite) finds six data-valued
+   * exports: `http.STATUS_CODES`, `http.METHODS`, and `worker_threads`' `isMainThread`, `parentPort`,
+   * `workerData` and `threadId`. Every one is covered here.
+   */
+  test("a data-valued export refuses on property access, not only when called (CodeRabbit 1)", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import { STATUS_CODES, METHODS } from 'http';",
+        "import { isMainThread, parentPort, workerData, threadId } from 'worker_threads';",
+        "const out = [];",
+        "const probe = (label, fn) => {",
+        "  try { fn(); out.push(label + ':did-not-throw'); } catch (e) { out.push(label + ':' + e.name); }",
+        "};",
+        "probe('STATUS_CODES[200]', () => STATUS_CODES[200]);",
+        "probe('METHODS.length', () => METHODS.length);",
+        "probe('parentPort.postMessage', () => parentPort.postMessage(1));",
+        "probe('workerData.job', () => workerData.job);",
+        "probe('threadId.toFixed', () => threadId.toFixed(0));",
+        "probe('isMainThread.valueOf', () => isMainThread.valueOf());",
+        "globalThis.__jlProbe = out;",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toEqual([
+      "STATUS_CODES[200]:JSLabUnsupportedError",
+      "METHODS.length:JSLabUnsupportedError",
+      "parentPort.postMessage:JSLabUnsupportedError",
+      "workerData.job:JSLabUnsupportedError",
+      "threadId.toFixed:JSLabUnsupportedError",
+      "isMainThread.valueOf:JSLabUnsupportedError",
+    ]);
+  });
+
+  /**
+   * The truthiness half of CodeRabbit finding 1, and the honest limit of what JavaScript allows.
+   *
+   * `if (parentPort)` CANNOT be made to throw: `ToBoolean` has no trap -- not on a Proxy, not through
+   * `Symbol.toPrimitive` -- and every object is truthy, so a guard on a data-valued binding necessarily takes the
+   * "present" branch. What the fix guarantees instead is that the guard cannot silently hand back a *usable*
+   * value: the very next thing such code does is read a property off it, and that refuses. This test pins that
+   * whole guard-then-use path, which is the shape real `worker_threads` code actually takes.
+   */
+  test("a truthy data-valued guard still refuses the moment the value is used (CodeRabbit 1)", async () => {
+    const result = await runBrowserNodeEntry(
+      [
+        "import { parentPort } from 'worker_threads';",
+        "let reached = 'guard-was-falsy';",
+        "if (parentPort) {",
+        "  try { parentPort.postMessage('hi'); reached = 'did-not-throw'; }",
+        "  catch (e) { reached = e.name + ': ' + e.message; }",
+        "}",
+        "globalThis.__jlProbe = reached;",
+        "",
+      ].join("\n"),
+    );
+    expect(result).toBe(
+      'JSLabUnsupportedError: worker_threads isn\'t available in "Browser & Node APIs". Switch this tab to the Bun runtime.',
+    );
+  });
+
+  /**
    * The round trip a real tab makes: the bundled `fs/promises` module reads the client the bootstrap installed on
    * the page global. Here the bootstrap's role is played by a fake installed on `globalThis` before the joined
    * module runs, which is the same realm the bundle evaluates in.

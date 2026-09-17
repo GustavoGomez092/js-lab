@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import type { BunPlugin } from "bun";
+import { MAX_PACKAGE_JSON_BYTES, readBoundedTextSyncOrNull } from "../fs/bounded-read";
 import type { BundleError } from "./bundler";
 import { buildCodeFrame, locateImport } from "./locate-import";
 import { isNodeBuiltin } from "./node-builtins";
@@ -294,14 +295,19 @@ export function browserEntryFor(
   if (index < 0) return undefined;
   const packageRoot = resolved.slice(0, index + marker.length - 1);
 
+  // F4: this read is synchronous and runs on Main's loop during bundling, so an unbounded read blocked it
+  // outright and a FIFO never returned at all. The bounded reader refuses both and yields null, which falls
+  // through to the same "keep Bun's answer" path an unreadable manifest already took.
+  const manifestText = readBoundedTextSyncOrNull(join(packageRoot, "package.json"), MAX_PACKAGE_JSON_BYTES);
+  if (manifestText === null) return undefined;
   let manifest: { exports?: unknown; browser?: unknown };
   try {
-    manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
+    manifest = JSON.parse(manifestText) as {
       exports?: unknown;
       browser?: unknown;
     };
   } catch {
-    return undefined; // unreadable or unparseable manifest: keep Bun's answer rather than guess
+    return undefined; // unparseable manifest: keep Bun's answer rather than guess
   }
 
   // An export or `browser` target must stay inside its own package and must actually exist. Either failing means

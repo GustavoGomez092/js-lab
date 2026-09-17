@@ -27,7 +27,7 @@ import type {
 import { MAX_NPMRC_BYTES } from "@jslab/rpc-schema";
 import { defaultPackagesManifest, type PackagesManifest } from "@jslab/shared";
 import type { AppPaths } from "../app-paths";
-import { FileTooLargeError, readBoundedText } from "../fs/bounded-read";
+import { FileTooLargeError, MAX_PACKAGE_JSON_BYTES, readBoundedText, readBoundedTextOrNull } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 import { strings } from "../strings";
 import type { NpmSpawn, NpmSpawnResult } from "./npm-spawn";
@@ -437,8 +437,16 @@ export class NpmService {
   }
 
   protected async installedVersion(name: string): Promise<string | null> {
+    // F4: a third party's package.json -- whatever the registry served, plus whatever a postinstall rewrote.
+    // Read unbounded this OOM'd Main on a crafted multi-GB manifest and hung npm.list forever on a FIFO, while
+    // types-service.ts already read this identical path bounded.
+    const text = await readBoundedTextOrNull(
+      join(this.deps.paths.packagesNodeModules, name, "package.json"),
+      MAX_PACKAGE_JSON_BYTES,
+    );
+    if (text === null) return null;
     try {
-      const pkg = JSON.parse(await readFile(join(this.deps.paths.packagesNodeModules, name, "package.json"), "utf8"));
+      const pkg = JSON.parse(text);
       return typeof pkg.version === "string" ? pkg.version : null;
     } catch {
       return null;
@@ -595,8 +603,13 @@ export class NpmService {
    */
   async #hasOwnTypes(name: string): Promise<boolean> {
     let pkg: { types?: unknown; typings?: unknown; exports?: unknown };
+    // F4: the same third-party manifest under the same bound as installedVersion above.
+    const text = await readBoundedTextOrNull(
+      join(this.deps.paths.packagesNodeModules, name, "package.json"),
+      MAX_PACKAGE_JSON_BYTES,
+    );
+    if (text === null) return false;
     try {
-      const text = await readFile(join(this.deps.paths.packagesNodeModules, name, "package.json"), "utf8");
       pkg = JSON.parse(text) as { types?: unknown; typings?: unknown; exports?: unknown };
     } catch {
       return false;

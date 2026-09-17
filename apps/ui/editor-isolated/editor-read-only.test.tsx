@@ -54,7 +54,19 @@ function fakeEditorInstance() {
   let model: unknown = null;
   return {
     updateOptions: (options: Record<string, unknown>) => void updates.push(options),
-    createDecorationsCollection: () => ({ set: () => {} }),
+    // Monaco's IEditorDecorationsCollection, in full rather than the one method this test first needed: the
+    // hover decorations (Editor.tsx) and M5a's logpoint gutter both drive one, and they clear/append as well as
+    // set. Implementing the whole published surface ends the one-TypeError-per-run discovery loop.
+    createDecorationsCollection: () => ({
+      length: 0,
+      set: () => {},
+      clear: () => {},
+      append: () => {},
+      getRanges: () => [],
+      getRange: () => null,
+      has: () => false,
+      onDidChange: () => disposable(),
+    }),
     onDidChangeCursorPosition: () => disposable(),
     onDidScrollChange: () => disposable(),
     onDidFocusEditorText: () => disposable(),
@@ -68,6 +80,18 @@ function fakeEditorInstance() {
     getSelections: () => null,
     getRawOptions: () => ({}),
     getAction: () => null,
+    // M5b registers the Create Snippet… context-menu action on the real editor (snippets/create-snippet-action.ts),
+    // so the fake has to offer the same surface or mounting the real Editor throws before any assertion runs.
+    addAction: () => disposable(),
+    // M5a's logpoint gutter attaches to the real editor at mount (editor/logpoint-gutter.ts): both of these
+    // must hand back a disposable or the gutter's own cleanup throws.
+    onMouseDown: () => disposable(),
+    onDidChangeModelContent: () => disposable(),
+    // Editor.tsx:332 casts this to `{ insert?(...) } | null` and Editor.tsx:347/352 guard on a falsy selection,
+    // so null is the correct "nothing here" answer for both rather than a stub object.
+    getContribution: () => null,
+    getSelection: () => null,
+    getValue: () => "",
     focus: () => {},
     trigger: () => {},
     pushUndoStop: () => {},
@@ -106,6 +130,14 @@ mock.module("../src/editor/monaco-setup", () => ({
       setModelMarkers: () => {},
       getModelMarkers: () => [],
       registerCommand: () => disposable(),
+      // Read EAGERLY while logpoint-gutter builds its decoration options (logpoint-gutter.ts:44), so this one
+      // is load-bearing at mount rather than only inside a callback.
+      TrackedRangeStickiness: { NeverGrowsWhenTypingAtEdges: 1 },
+      // Only compared inside the onMouseDown callback, which this fake never fires; present so the gutter's
+      // handler is still well-formed if it ever is.
+      MouseTargetType: { GUTTER_GLYPH_MARGIN: 2 },
+      // M5b's snippet preview colorizes through the bridge Editor.tsx:150 publishes.
+      colorize: async () => "",
     },
     languages: {
       registerCodeActionProvider: () => disposable(),

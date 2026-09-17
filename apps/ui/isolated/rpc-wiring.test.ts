@@ -73,6 +73,14 @@ async function callEveryRequest() {
   await api.localTypes("t1", ["./a.ts"]);
   await api.getEnv();
   await api.saveEnv({});
+  // Added by the integration merge: M5a's transpiled panel, M5b's snippet library and M5d's theme importer
+  // each added a main-window request, and this list is the completeness half of B2 -- a request added to
+  // MAIN_REQUEST_NAMES without a call here is precisely what the second test below refuses.
+  await api.transpiled("t1", true);
+  await api.snippetsList();
+  await api.snippetsSave([]);
+  await api.importTheme();
+  await api.importThemePick(crypto.randomUUID(), "themes/one.json");
 }
 
 describe("rpc.ts request wiring (B2)", () => {

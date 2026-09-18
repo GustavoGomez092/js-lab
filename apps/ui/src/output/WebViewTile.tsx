@@ -264,6 +264,32 @@ export function WebViewTile({
     const measure = () => {
       counters.measures += 1;
       const box = dockNode.getBoundingClientRect();
+      /**
+       * A DEGENERATE box -- zero (or negative) on either axis -- is never committed as a docked rect.
+       *
+       * `COLLAPSED_STYLE` above records why an exact 0x0 must never reach the native layer: the devkit's
+       * `OverlaySyncController.sync()` early-returns on `newRect.width === 0 && newRect.height === 0`, so a 0x0
+       * frame is silently never synced and the surface stays painted at its last docked rect. That guard is an
+       * **AND**, which leaves the other half of the same problem wide open: a box like 1352x0 is not suppressed,
+       * so it *is* shipped, and JSLab hands the compositor a zero-height frame. Measured on a live run at two
+       * window sizes -- `tile` and `surface` agreeing exactly at `w=1352 h=0`, width tracking the window while
+       * height stayed 0 -- which is what proves this component measures faithfully and the bad rect is one it
+       * chose to commit, not one the native layer invented.
+       *
+       * Both halves have the same right answer, and it is the one the not-docked path already implements: a dock
+       * with no area is a dock there is nothing to show in, so render `COLLAPSED_STYLE` (1x1, deliberately not
+       * 0x0, so it clears the devkit guard) and let the surface shrink to something valid. Clearing `lastRect`
+       * rather than storing the degenerate box keeps the equality guard below honest -- the next real box is a
+       * genuine change and commits normally. The `lastRect.current === null` bail is what stops a dock that is
+       * *persistently* degenerate from committing `null` over and over on every trigger.
+       */
+      if (box.width <= 0 || box.height <= 0) {
+        if (lastRect.current === null) return;
+        lastRect.current = null;
+        counters.rectCommits += 1;
+        setRect(null);
+        return;
+      }
       const previous = lastRect.current;
       if (
         previous !== null &&

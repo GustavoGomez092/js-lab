@@ -12,7 +12,7 @@ import type {
   ViewMessages,
 } from "@jslab/rpc-schema";
 import { MAX_OPEN_FILE_BYTES } from "@jslab/rpc-schema";
-import { DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
+import { DEFAULT_KEYBINDINGS, resolveKeybindings, resolveLocale } from "@jslab/shared";
 import { listThemes, registerUserThemes } from "@jslab/themes";
 import Electrobun, {
   ApplicationMenu,
@@ -35,10 +35,11 @@ import { createUiDispatch } from "./cli/ui-dispatch";
 import { createErrorPolicy } from "./error-policy";
 import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-service";
 import { readBoundedBytes, readBoundedText } from "./fs/bounded-read";
+import { createTranslator } from "./i18n";
 import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
 import { createMainServices } from "./main-services";
-import { resolveMainViewUrl } from "./main-view-url";
+import { resolveMainViewUrl, withLocale } from "./main-view-url";
 import { buildMenu, createMenuController, dispatchMenuAction } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
 import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
@@ -526,6 +527,15 @@ async function start(): Promise<void> {
     env: process.env,
     probe: (target, signal) => fetch(target, { method: "HEAD", signal }),
   });
+  // Spec §17: fixed for the life of this launch, which is what "changing the language needs a restart" means.
+  const locale = resolveLocale(
+    settings.current.app.uiLanguage,
+    Intl.DateTimeFormat().resolvedOptions().locale || process.env.LANG,
+  );
+  const localizedUrl = withLocale(url, locale);
+  // Spec §17: Main's own `t()`, reading the very locale files the UI ships (AppPaths.localesDir). Fixed for the
+  // life of this launch, like `locale` itself.
+  const t = createTranslator({ dir: paths.localesDir, locale });
   const displays = (): DisplayInfo[] => Screen.getAllDisplays();
   // A blocked web or mail link opens in the default browser; E2E runs record it instead (never the user's browser).
   const openExternal = (link: string) =>
@@ -535,7 +545,7 @@ async function start(): Promise<void> {
     const restored = restoreFrame(session.session.window, displays());
     const created = new BrowserWindow({
       title: "JSLab",
-      url,
+      url: localizedUrl,
       frame: restored.frame,
       titleBarStyle: "hiddenInset",
       rpc,
@@ -642,7 +652,10 @@ async function start(): Promise<void> {
       createE2EResponseHandler(settingsE2E, log),
     ),
   });
-  const settingsUrl = url.startsWith("views://") ? "views://mainview/settings.html" : `${url}/settings.html`;
+  const settingsUrl = withLocale(
+    url.startsWith("views://") ? "views://mainview/settings.html" : `${url}/settings.html`,
+    locale,
+  );
   const settingsWindow = createMainWindowController({
     create: () => {
       // The same display-aware restore as the main window (Task 18, spec §10.1).
@@ -651,7 +664,7 @@ async function start(): Promise<void> {
         displays(),
       );
       const created = new BrowserWindow({
-        title: strings.window.settingsTitle,
+        title: t("app.settingsWindowTitle"),
         url: settingsUrl,
         frame: restored.frame,
         // The nav column has a 40px top pad and is the drag region, which is built for the inset title bar (review M13).

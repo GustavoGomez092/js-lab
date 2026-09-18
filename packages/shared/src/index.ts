@@ -2,6 +2,7 @@ export * from "./commands";
 export * from "./dotenv";
 export * from "./env-vars";
 export * from "./keybindings";
+export * from "./locale";
 export * from "./migrations";
 export * from "./packages";
 export * from "./session";

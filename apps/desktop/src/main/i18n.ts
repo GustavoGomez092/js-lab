@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Locale, SOURCE_LOCALE } from "@jslab/shared";
+import { readBoundedTextSync } from "./fs/bounded-read";
 
 export type Translate = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -8,9 +8,22 @@ export interface TranslatorOptions {
   /** `AppPaths.localesDir`: Resources/app/locales in a packaged build. */
   dir: string;
   locale: Locale;
-  /** Injectable for tests; defaults to a UTF-8 readFileSync. */
+  /** Injectable for tests; defaults to the shared bounded reader, capped at `MAX_LOCALE_FILE_BYTES`. */
   read?: (path: string) => string;
 }
+
+/**
+ * A locale file is JSLab's own shipped JSON (`Resources/app/locales`, or `JSLAB_LOCALES_DIR` in dev and tests). The
+ * five seeded files are under 100 bytes each, and the Phase B extraction sweep grows them by keys rather than by
+ * orders of magnitude, so this is a real refusal and not a waiver wearing a number -- the same bound
+ * `MAX_SETTINGS_BYTES` and `MAX_DOTENV_BYTES` put on JSLab's other small owned files.
+ *
+ * Reading these through `readBoundedTextSync` rather than a bare `readFileSync` is required by
+ * `test/fs/no-unbounded-reads.test.ts`: the bundle directory is user-writable, so the size bound is only half the
+ * point -- the reader's `O_NONBLOCK` open and `isFile` check are what keep a FIFO at `<lng>.json` from parking Main
+ * forever while the window and the native menu are being built.
+ */
+const MAX_LOCALE_FILE_BYTES = 1024 * 1024;
 
 const PLACEHOLDER = /\{\{(\w+)\}\}/g;
 
@@ -56,7 +69,7 @@ function load(dir: string, locale: Locale, read: (path: string) => string): Reco
  * Both files are read once, here, rather than per call: `t()` is called once per menu item on every menu rebuild.
  */
 export function createTranslator(options: TranslatorOptions): Translate {
-  const read = options.read ?? ((path: string) => readFileSync(path, "utf8"));
+  const read = options.read ?? ((path: string) => readBoundedTextSync(path, MAX_LOCALE_FILE_BYTES));
   const primary = load(options.dir, options.locale, read);
   const fallback = options.locale === SOURCE_LOCALE ? primary : load(options.dir, SOURCE_LOCALE, read);
 

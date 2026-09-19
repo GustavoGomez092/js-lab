@@ -26,6 +26,12 @@ export interface AppPaths {
   envFile: string;
   /** Spec §4.5: the snippet library (§13.4). */
   snippetsFile: string;
+  /**
+   * Spec §14.3: "the current conversation is kept in `ai/conversation.json` and restored at launch". Its own
+   * `ai/` folder, exactly as the spec writes the path -- `writeFileAtomic` creates the parent directory, so
+   * nothing has to mkdir it ahead of the first save.
+   */
+  conversationFile: string;
   socketPath: string;
   screenshotsDir: string;
   /** Spec §4.5: user-imported themes (`*.jslab-theme.json`), written by the VS Code importer (§9.3). */
@@ -71,6 +77,7 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     vendorCacheDir: join(dataDir, "cache", "vendor"),
     envFile: join(dataDir, "env.json"),
     snippetsFile: join(dataDir, "snippets.json"),
+    conversationFile: join(dataDir, "ai", "conversation.json"),
     socketPath: join(dataDir, "jslab.sock"),
     screenshotsDir: join(dataDir, "e2e-screenshots"),
     themesDir: join(dataDir, "themes"),

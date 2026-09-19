@@ -23,6 +23,8 @@ describe("resolveAppPaths", () => {
       vendorCacheDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/cache/vendor",
       envFile: "/Users/me/Library/Application Support/dev.jslab.app/stable/env.json",
       snippetsFile: "/Users/me/Library/Application Support/dev.jslab.app/stable/snippets.json",
+      // Spec §14.3: the AI chat conversation, in its own `ai/` folder as the spec writes the path.
+      conversationFile: "/Users/me/Library/Application Support/dev.jslab.app/stable/ai/conversation.json",
       socketPath: "/Users/me/Library/Application Support/dev.jslab.app/stable/jslab.sock",
       screenshotsDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/e2e-screenshots",
       themesDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/themes",

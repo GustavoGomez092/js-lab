@@ -3,9 +3,16 @@ import {
   type AiSendParams,
   aiSendParamsSchema,
   aiStopParamsSchema,
+  conversationSaveParamsSchema,
   type MainMessages,
 } from "@jslab/rpc-schema";
-import { AI_PROVIDER_NONE, type AiProvider, isAiProviderAvailable, type Settings } from "@jslab/shared";
+import {
+  AI_PROVIDER_NONE,
+  type AiProvider,
+  type ConversationTurn,
+  isAiProviderAvailable,
+  type Settings,
+} from "@jslab/shared";
 import { buildMessages } from "../ai/context";
 import { resolveBaseUrl, resolveModel } from "../ai/models";
 import { createOllamaAdapter } from "../ai/ollama";
@@ -34,6 +41,11 @@ export interface AiHandlerDeps {
   /** The Keychain (`secrets/keychain.ts`). Optional: absent in headless tests, where no provider needs a key. */
   secrets?: { get(account: string): Promise<string | null> };
   registry: AdapterRegistry;
+  /**
+   * Spec §14.3: `ai/conversation.json`. Optional, like `secrets` above: the streaming tests build these handlers
+   * without a data folder, and a conversation they never save is not part of what they exercise.
+   */
+  conversation?: { save(messages: readonly ConversationTurn[]): void };
   send: {
     chunk(payload: { requestId: string; text: string }): void;
     done(payload: { requestId: string; stopped: boolean }): void;
@@ -167,6 +179,12 @@ export function createAiHandlers(deps: AiHandlerDeps) {
         // The real abort. Without this the model goes on generating (and, for a metered provider, being billed)
         // while JSLab merely stops listening.
         entry.controller.abort();
+      }),
+      // Spec §14.3: the conversation is kept in `ai/conversation.json`. The UI sends the whole transcript after
+      // a turn settles and after New Chat clears it; the store trims and debounces, so a long reply does not
+      // rewrite the file once per chunk.
+      "ai.conversationSave": message(conversationSaveParamsSchema, "ai.conversationSave", ({ messages }) => {
+        deps.conversation?.save(messages);
       }),
     },
   };

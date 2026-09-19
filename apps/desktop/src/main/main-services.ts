@@ -13,6 +13,7 @@ import { createBunAdapter } from "./runtimes/bun-adapter";
 import { createRuntimeRegistry, type RuntimeRegistry } from "./runtimes/registry";
 import { createWebAdapter, type WebAdapterDeps } from "./runtimes/web-adapter";
 import { createUiWebviewSource, type UiWebviewSource, type WebviewBridge } from "./runtimes/webview-source";
+import { ConversationStore } from "./services/conversation-store";
 import { EnvStore } from "./services/env-store";
 import { NpmService } from "./services/npm-service";
 import { createBunSpawn, type NpmSpawn } from "./services/npm-spawn";
@@ -93,6 +94,8 @@ export interface MainServices {
   env: EnvStore;
   /** Spec §13.4: the snippet library. */
   snippets: SnippetStore;
+  /** Spec §14.3: the AI chat conversation, restored at launch. */
+  conversation: ConversationStore;
   npm: NpmService;
   types: TypesService;
   runLock: RunLock;
@@ -171,6 +174,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
   await ensurePackagesProject(paths, log);
   const env = await EnvStore.open(paths.envFile);
   const snippets = await SnippetStore.open(paths.snippetsFile);
+  const conversation = await ConversationStore.open(paths.conversationFile);
   const safeMode = await detectSafeMode({
     uncleanPreviousExit: runLock.uncleanPreviousExit,
     manualRequested: consumeSafeModeFlag(paths.dataDir),
@@ -299,6 +303,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
     session,
     env,
     snippets,
+    conversation,
     npm,
     types,
     runLock,

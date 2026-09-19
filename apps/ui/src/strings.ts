@@ -291,6 +291,8 @@ export const strings = {
     /** OU-10: the two items on a single output row's entry menu, and the label of the control that opens it. */
     copyEntry: t("output.copyEntry"),
     copyEntryJson: t("output.copyEntryJson"),
+    /** TL-20: the entry menu's third item (spec §14.2). Opens the AI panel and asks about this row. */
+    explainResult: t("output.explainResult"),
     entryMenu: t("output.entryMenu"),
     clear: t("output.clear"),
     jumpToLine: (line: number) => t("output.jumpToLine", { line }),
@@ -411,6 +413,17 @@ export const strings = {
     insertAtCursor: t("ai.insertAtCursor"),
     replaceEditor: t("ai.replaceEditor"),
     retry: t("ai.retry"),
+    /**
+     * TL-20 (spec §14.2): the prompt Explain Result sends, worded as the spec words it.
+     *
+     * Translated, unlike the bundled system prompt Main builds: this one is rendered in the panel as the user's
+     * OWN turn, so leaving it English would put a foreign sentence in the transcript under the user's name.
+     */
+    explainLine: (line: number) => t("ai.explainLine", { line }),
+    /** The same, for a stdout/stderr row, which has no source line of its own to name. */
+    explainOutput: t("ai.explainOutput"),
+    /** Appended when a very large value was cut to fit one request (`ai/explain.ts`). */
+    explainTruncated: t("ai.explainTruncated"),
     // Spec §14.3: errors are shown inline with a retry button. One headline per classified kind.
     errors: {
       auth: t("ai.errors.auth"),

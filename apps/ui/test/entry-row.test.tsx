@@ -353,6 +353,72 @@ describe("EntryRow", () => {
       fireEvent.keyDown(screen.getByTestId("entry"), { key: "F10" });
       expect(screen.queryAllByRole("menuitem")).toEqual([]);
     });
+
+    describe("Explain Result (TL-20)", () => {
+      const withExplain = (event: RunEvent, onExplain: (event: DisplayEvent) => void) =>
+        render(
+          <EntryRow
+            entry={{ key: "k", event: event as DisplayEvent }}
+            stale={false}
+            expand={noExpand}
+            onReveal={() => {}}
+            onHover={() => {}}
+            onExplain={onExplain}
+          />,
+        );
+
+      // Literal labels, as the two tests above use them: reading the catalogue here would let a wrong
+      // translation pass, because the implementation reads that same entry.
+      test("is the third item on the row's menu", () => {
+        withExplain(resultRow as RunEvent, () => {});
+        fireEvent.contextMenu(screen.getByTestId("entry"), { clientX: 5, clientY: 6 });
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+          "Copy",
+          "Copy as JSON",
+          "Explain Result",
+        ]);
+      });
+
+      test("hands the row's own event to the caller, so the prompt is about THIS row", () => {
+        const explained: DisplayEvent[] = [];
+        withExplain(resultRow as RunEvent, (event) => explained.push(event));
+        fireEvent.contextMenu(screen.getByTestId("entry"), { clientX: 5, clientY: 6 });
+        fireEvent.click(screen.getByRole("menuitem", { name: "Explain Result" }));
+        expect(explained).toHaveLength(1);
+        expect(explained[0]).toMatchObject({ kind: "result", line: 1 });
+      });
+
+      /**
+       * The accessibility requirement OU-10 already meets, now covering the third item: a mouse-only Explain
+       * Result would be a regression against the standard the rest of the row holds to.
+       */
+      test("opens from the keyboard like the rest of the menu, and returns focus on close", () => {
+        const explained: DisplayEvent[] = [];
+        withExplain({ kind: "stdout", text: "raw output\n", seq: 1, t: 0 } as RunEvent, (event) =>
+          explained.push(event),
+        );
+        const opener = screen.getByRole("button", { name: "Entry actions" });
+        opener.focus();
+
+        fireEvent.keyDown(screen.getByTestId("entry"), { key: "F10", shiftKey: true });
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+          "Copy",
+          "Copy as JSON",
+          "Explain Result",
+        ]);
+
+        fireEvent.click(screen.getByRole("menuitem", { name: "Explain Result" }));
+        expect(explained).toHaveLength(1);
+        expect(document.activeElement).toBe(opener);
+      });
+
+      // The other half of the spread: a caller with no route to the panel offers two items, not a dead third.
+      test("is absent when the caller cannot reach the AI panel", () => {
+        renderEntry(resultRow as RunEvent);
+        fireEvent.contextMenu(screen.getByTestId("entry"), { clientX: 5, clientY: 6 });
+        expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy", "Copy as JSON"]);
+      });
+    });
   });
 
   // R24-4: a relative module-not-found row offers to set a working directory when the tab has none.

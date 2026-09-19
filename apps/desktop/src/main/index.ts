@@ -244,7 +244,8 @@ async function start(): Promise<void> {
     onNpmLog: (opId, text) => rpc.send["npm.log"]({ opId, text }),
     onNpmChanged: (list) => rpc.send["npm.changed"](list),
   });
-  const { settings, session, env, npm, types, runLock, safeMode, transform, spares, coordinator } = services;
+  const { settings, session, env, npm, types, runLock, safeMode, transform, spares, coordinator, conversation } =
+    services;
   // Spec §17: fixed for the life of this launch, which is what "changing the language needs a restart" means.
   // Settings are open now, so the user's own choice replaces the system-locale guess installed above.
   const locale = resolveLocale(settings.current.app.uiLanguage, systemLocale);
@@ -425,6 +426,8 @@ async function start(): Promise<void> {
         // The stores report what their own load found, including the corrupt copy saved this launch (FA-m4).
         notices: startupNotices({ settings, session }),
         themes,
+        // Spec §14.3: the conversation `app.bootstrap` restores into the AI panel.
+        conversation,
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
       createCommandPublishHandlers({
@@ -467,6 +470,8 @@ async function start(): Promise<void> {
       createOllamaAiHandlers({
         settings,
         secrets: new SecretStore(),
+        // Spec §14.3: where `ai.conversationSave` lands. Main owns the file; the UI owns the conversation.
+        conversation,
         send: {
           chunk: (payload) => rpc.send["ai.chunk"](payload),
           done: (payload) => rpc.send["ai.done"](payload),
@@ -865,8 +870,14 @@ async function start(): Promise<void> {
     // Final review T14: a hung flush must not keep JSLab from quitting. FA-I1: settings writes are awaited too.
     // A quit started by a startup failure keeps its exit code 1 (FA-I3).
     void flushBeforeQuit(
-      // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
-      () => afterUiFlush({ uiFlush, then: () => Promise.all([session.flush(), settings.flush()]) })(),
+      () =>
+        afterUiFlush({
+          uiFlush,
+          // Spec §14.3: the conversation is debounced like session.json, so a reply that settled inside the
+          // debounce window would be lost on quit without this flush.
+          // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
+          then: () => Promise.all([session.flush(), settings.flush(), conversation.flush()]),
+        })(),
       log,
     ).finally(() => Utils.quit(errorPolicy.exitCode));
   });

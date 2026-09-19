@@ -11,7 +11,7 @@ import {
   tabParamsSchema,
   tabPatchSchema,
 } from "@jslab/rpc-schema";
-import { effectiveRuntime, type KeybindingRule, scriptFileName } from "@jslab/shared";
+import { type ConversationTurn, effectiveRuntime, type KeybindingRule, scriptFileName } from "@jslab/shared";
 import type { ThemeDefinition } from "@jslab/themes";
 import { createValidators, InvalidPayloadError } from "./rpc/validate";
 import type { RunCoordinator } from "./runs/run-coordinator";
@@ -42,6 +42,8 @@ export interface RpcHandlerDeps {
   notices?: StartupNotice[];
   /** Spec §9.3: the imported themes, so the UI has them before its first paint (Finding T1). */
   themes?: { themes: readonly ThemeDefinition[] };
+  /** Spec §14.3: the conversation restored into the AI panel at launch. */
+  conversation?: { messages: readonly ConversationTurn[] };
 }
 
 /** A valid request that Main declines to act on (for example an automatic run while Safe Mode is active). */
@@ -110,6 +112,12 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
           // M5d Finding T1: without this the first paint offers only the built-ins, and an imported theme appears
           // only once some later import happens to push `theme.changed`.
           ...(deps.themes && deps.themes.themes.length > 0 ? { userThemes: [...deps.themes.themes] } : {}),
+          // Spec §14.3: restored at launch. A COPY, for the same reason `keybindings` is one -- this crosses the
+          // RPC boundary as a mutable array, and handing out the store's own would let a caller edit what Main
+          // believes is on disk.
+          ...(deps.conversation && deps.conversation.messages.length > 0
+            ? { conversation: [...deps.conversation.messages] }
+            : {}),
         };
       },
       "run.start": (input: unknown): { runId: string } => {

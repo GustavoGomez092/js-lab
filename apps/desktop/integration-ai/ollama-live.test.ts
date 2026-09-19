@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { buildMessages } from "../src/main/ai/context";
 import { createOllamaAdapter } from "../src/main/ai/ollama";
 import { AiRequestError } from "../src/main/ai/provider";
 
@@ -154,5 +155,42 @@ describe("Ollama, live (spec §14.3)", () => {
       .catch((thrown: unknown) => thrown)) as AiRequestError;
 
     expect(error.kind).toBe("network");
+  });
+
+  /**
+   * TL-20 end to end against a real model (spec §14.2).
+   *
+   * An Explain Result request is an ordinary `ai.send` with spec §14.2's sentence and the rendered value as its
+   * prompt, so what this proves that no fixture can is that the WHOLE assembled context -- the bundled system
+   * prompt, the tab's code, the run's output and that prompt, in `buildMessages`' order -- is something a real
+   * server accepts and answers, rather than a shape only JSLab's own stub has ever agreed to.
+   */
+  live("an Explain Result request is accepted by a real server and answered", async () => {
+    const messages = buildMessages(
+      {
+        requestId: crypto.randomUUID(),
+        tabId: "t1",
+        prompt: "Explain why line 2 produces this result:\n\n6",
+        code: "const total = [1, 2, 3].reduce((a, b) => a + b, 0);\ntotal;\n",
+        language: "typescript",
+        runtime: "bun",
+        output: "6",
+        history: [],
+      },
+      { includeOutput: true },
+    );
+    // Deterministic half, asserted before the network is involved: the code and the output really do ride the
+    // request alongside the prompt, which is what "reuses the existing assembler" has to mean.
+    const joined = messages.map((message) => message.content).join("\n");
+    expect(joined).toContain("reduce");
+    expect(joined).toContain("Explain why line 2 produces this result:");
+
+    const chunks: string[] = [];
+    await createOllamaAdapter().chat(
+      { model, baseUrl: BASE_URL, apiKey: null, messages, signal: AbortSignal.timeout(120_000) },
+      (text) => chunks.push(text),
+    );
+    // Content is the model's business; that it answered at all is this suite's.
+    expect(chunks.join("").trim().length).toBeGreaterThan(0);
   });
 });

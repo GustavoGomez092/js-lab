@@ -22,6 +22,9 @@
     "insertAtCursor": "Insert at Cursor",
     "replaceEditor": "Replace Editor",
     "retry": "Retry",
+    "explainLine": "Explain why line {{line}} produces this result:",
+    "explainOutput": "Explain why the code produces this output:",
+    "explainTruncated": "…(the value was cut to fit this request)",
     "errors": {
       "auth": "The provider rejected the credentials for this request.",
       "rateLimit": "The provider is rate limiting this request. Try again shortly.",
@@ -498,6 +501,7 @@
     "copyEntryJson": "Copy as JSON",
     "copyFailed": "Couldn't copy",
     "entryMenu": "Entry actions",
+    "explainResult": "Explain Result",
     "filterLabel": "Output filter",
     "filters": {
       "all": "All",

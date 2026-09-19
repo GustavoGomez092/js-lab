@@ -12,6 +12,7 @@ import type {
   VsixChoice,
 } from "@jslab/rpc-schema";
 import {
+  type ConversationTurn,
   type KeybindingRule,
   type Language,
   type Runtime,
@@ -200,6 +201,36 @@ export interface AiChatState {
 export const initialAiChat = (): AiChatState => ({ messages: [], requestId: null, lastPrompt: null });
 
 /**
+ * TL-20 (spec §14.2): a prompt the output panel has asked the AI panel to send.
+ *
+ * A request channel rather than a direct call, for the reason the panel cannot simply be called: Explain Result
+ * usually OPENS the panel, so at the moment the user picks it the component that owns `send` is not mounted --
+ * and on a cold open it will not be until Main has echoed the `view.sideBar` settings change back. The request
+ * waits in the store until the panel exists and is idle. `nonce` is carried for the same reason
+ * `SnippetsRequest` carries one: explaining the same row twice must reach the panel twice.
+ */
+export interface AiExplainRequest {
+  prompt: string;
+  nonce: number;
+}
+
+/** Spec §14.3: a conversation restored from `ai/conversation.json` becomes a settled, error-free transcript. */
+const restoredChat = (turns: readonly ConversationTurn[]): AiChatState => ({
+  messages: turns.map((turn) => ({
+    id: turn.id,
+    role: turn.role,
+    content: turn.content,
+    // Neither survives a relaunch, and neither is stored: a stream cannot resume, and a Retry button for a
+    // request whose provider call is long gone would resend a prompt the user has not asked for again.
+    streaming: false,
+    stopped: turn.stopped,
+    error: null,
+  })),
+  requestId: null,
+  lastPrompt: null,
+});
+
+/**
  * The one channel the snippet commands use to reach the panel (Task 9). `nonce` is bumped on every request for the
  * same reason `revealRequest` carries one: pressing ⌘B twice, or Create Snippet… twice over the same selection, must
  * reach the panel twice even though the payload is identical.
@@ -267,6 +298,10 @@ export interface AppState {
   snippetsNonce: number;
   /** Spec §14.1: the AI chat conversation. App state, not tab state -- one conversation, whatever tab is active. */
   aiChat: AiChatState;
+  /** TL-20: a prompt the output panel queued for the AI panel to send, or null. */
+  aiExplainRequest: AiExplainRequest | null;
+  /** Counts explain requests. Separate from the request so clearing it never rewinds the count. */
+  aiExplainNonce: number;
 
   // Mirrors of the active tab, so M1 components keep reading a single tab.
   tab: TabState | null;
@@ -379,6 +414,9 @@ export interface AppState {
   aiFailRequest(requestId: string, error: { kind: AiErrorKind; detail: string }): void;
   /** Spec §14.1's New Chat: clears the conversation. */
   aiNewChat(): void;
+  /** TL-20 (spec §14.2): queues a prompt for the AI panel to send once it is mounted and idle. */
+  requestAiExplain(prompt: string): void;
+  clearAiExplainRequest(): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -523,6 +561,8 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       snippetsRequest: null,
       snippetsNonce: 0,
       aiChat: initialAiChat(),
+      aiExplainRequest: null,
+      aiExplainNonce: 0,
       tab: null,
       code: "",
       autoRunArmed: false,
@@ -559,6 +599,9 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           buffers: Object.fromEntries(session.tabOrder.map((id) => [id, payload.buffers[id] ?? ""])),
           runtimes: Object.fromEntries(session.tabOrder.map((id) => [id, newRuntime()])),
           closedCount: session.closedStack.length,
+          // Spec §14.3: "restored at launch". Main omits the field for a fresh profile rather than sending an
+          // empty array, so the store's own empty conversation stands untouched in that case.
+          ...(payload.conversation ? { aiChat: restoredChat(payload.conversation) } : {}),
         });
       },
 
@@ -1071,6 +1114,15 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
             ),
           },
         });
+      },
+
+      requestAiExplain(prompt) {
+        const nonce = get().aiExplainNonce + 1;
+        set({ aiExplainNonce: nonce, aiExplainRequest: { prompt, nonce } });
+      },
+
+      clearAiExplainRequest() {
+        set({ aiExplainRequest: null });
       },
 
       aiNewChat() {

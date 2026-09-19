@@ -1,4 +1,5 @@
 export * from "./commands";
+export * from "./conversation";
 export * from "./dotenv";
 export * from "./env-vars";
 export * from "./keybindings";

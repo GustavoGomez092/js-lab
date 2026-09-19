@@ -32,6 +32,11 @@ interface EntryRowProps {
    * no route to Main, which renders the row's URLs as ordinary text rather than as controls that do nothing.
    */
   onOpenLink?(url: string): void;
+  /**
+   * TL-20 (spec §14.2): opens the AI panel and asks it to explain this row. Left off by callers with no route
+   * to the panel, which drops the menu item entirely rather than offering one that does nothing.
+   */
+  onExplain?(event: OutputEntry["event"]): void;
 }
 
 type ErrorEvent = Extract<RunEvent, { kind: "error" }>;
@@ -53,6 +58,7 @@ export function EntryRow({
   hasWorkingDirectory,
   onCopyStatus,
   onOpenLink,
+  onExplain,
 }: EntryRowProps) {
   const { event } = entry;
   const line = event.kind === "result" || event.kind === "console" || event.kind === "error" ? event.line : undefined;
@@ -82,6 +88,11 @@ export function EntryRow({
       label: strings.output.copyEntryJson,
       run: () => void copyEntry(event, "json").then((status) => onCopyStatus?.(status)),
     },
+    // TL-20: the third item, and it reaches the keyboard exactly as the other two do -- `ContextMenu` renders
+    // every entry as a real `role="menuitem"` button, so Shift+F10 / the Menu key and the row's menu button
+    // open a menu this item is simply part of. Spread rather than made `disabled`, because a caller with no
+    // route to the panel has nothing to offer: a permanently greyed row would only advertise a missing wire.
+    ...(onExplain ? [{ id: "explain", label: strings.output.explainResult, run: () => onExplain(event) }] : []),
   ];
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: hover only mirrors the source-line highlight in the editor

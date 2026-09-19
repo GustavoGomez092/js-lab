@@ -1,10 +1,13 @@
 import type { CommandCategory, CommandId, KeybindingRule, TabState } from "@jslab/shared";
 import {
+  type ConversationTurn,
+  conversationTurnSchema,
   DEFAULT_RUNTIME,
   type EnvVars,
   envVarsSchema,
   keybindingRuleSchema,
   LANGUAGES,
+  MAX_CONVERSATION_TURNS,
   MAX_SNIPPETS,
   RUNTIMES,
   SETTINGS_SECTIONS,
@@ -718,6 +721,18 @@ export type AiSendParams = z.infer<typeof aiSendParamsSchema>;
 export const aiStopParamsSchema = z.object({ requestId: z.uuid() });
 
 /**
+ * `ai.conversationSave` (UI → Main): the transcript to write to `ai/conversation.json` (spec §14.3).
+ *
+ * The WHOLE conversation, never a delta -- the same rule `snippets.save` follows (R-M5b-6). The UI is the only
+ * holder of the conversation, so a delta protocol would oblige Main to keep a second copy to apply deltas to,
+ * and the two could then disagree about what the user is actually looking at.
+ */
+export const conversationSaveParamsSchema = z.object({
+  messages: z.array(conversationTurnSchema).max(MAX_CONVERSATION_TURNS),
+});
+export type ConversationSaveParams = z.infer<typeof conversationSaveParamsSchema>;
+
+/**
  * How an AI request failed, classified so the panel can say something useful and offer Retry (spec §14.3 names
  * 401, 429, network and context-too-long). Same shape as `NpmErrorKind`: Main classifies, the UI translates -- so
  * no provider message has to be a translated string coming out of Main.
@@ -811,6 +826,13 @@ export interface BootstrapPayload {
   notices?: StartupNotice[];
   /** Spec §9.3: the themes imported into `<appdata>/themes/`, so the first paint already offers them (Finding T1). */
   userThemes?: ThemeDefinition[];
+  /**
+   * Spec §14.3: "the current conversation is kept in `ai/conversation.json` and restored at launch".
+   *
+   * Omitted rather than sent empty, exactly as `keybindings` and `userThemes` above are, so a fresh profile's
+   * payload carries no empty array and the UI's own initial state stands.
+   */
+  conversation?: ConversationTurn[];
 }
 
 /** Requests handled by Main, called by the UI. */
@@ -946,6 +968,11 @@ export type MainMessages = {
   "ai.send": AiSendParams;
   /** Spec §14.1's Stop button. Aborts the real HTTP request, so the model stops being billed/computed. */
   "ai.stop": { requestId: string };
+  /**
+   * Spec §14.3: write the conversation to `ai/conversation.json`. A message, not a request: nothing waits on
+   * the write and nothing is returned, exactly like `buffer.changed`, and Main debounces it the same way.
+   */
+  "ai.conversationSave": ConversationSaveParams;
 };
 
 /** Messages received by the UI, sent by Main. */

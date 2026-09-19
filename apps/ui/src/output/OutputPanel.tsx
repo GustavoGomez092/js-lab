@@ -2,7 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
-import { visibleEntries } from "../state/output";
+import { type DisplayEvent, visibleEntries } from "../state/output";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { type AnnouncerState, EMPTY_ANNOUNCEMENT, nextAnnouncement } from "./announce";
@@ -32,6 +32,8 @@ interface OutputPanelProps {
   webViewSlot?: ReactNode;
   /** spec §7.1: whether this tab's runtime can host a Web View at all. A `bun` tab gets no Web View control. */
   webviewSupported?: boolean;
+  /** TL-20 (spec §14.2): opens the AI panel and asks about one row. Threaded down to every `EntryRow`. */
+  onExplain?(event: DisplayEvent): void;
 }
 
 export function OutputPanel({
@@ -41,6 +43,7 @@ export function OutputPanel({
   onInstall,
   webViewSlot = null,
   webviewSupported = false,
+  onExplain,
 }: OutputPanelProps) {
   const output = useStore(store, (s) => s.output);
   const showUndefined = useStore(store, (s) => s.settings?.run.showUndefined ?? false);
@@ -167,6 +170,7 @@ export function OutputPanel({
                 onCopyStatus={showCopyStatus}
                 // OU-13: Main owns the one external-link path; the UI only says which URL the user activated.
                 onOpenLink={(url) => api.openExternal(url)}
+                {...(onExplain ? { onExplain } : {})}
               />
             </div>
           );

@@ -1,5 +1,6 @@
 import { appNoticeSchema, MAX_TEXT_CHARS } from "@jslab/rpc-schema";
 import {
+  AI_PROVIDER_NONE,
   commandMeta,
   commandTitleKey,
   DEFAULT_KEYBINDINGS,
@@ -11,6 +12,8 @@ import {
 import { registerUserThemes } from "@jslab/themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
+import { explainPrompt } from "../ai/explain";
+import { persistConversation } from "../ai/persist";
 import type { MainApi } from "../api";
 import { createAppCommands } from "../commands/app-commands";
 import { createEditorCommands, EDITOR_ACTIONS } from "../commands/editor-commands";
@@ -40,6 +43,7 @@ import { createSnippetActions, createSnippetCommands } from "../snippets/snippet
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
 import { createEventCoalescer, createFrameScheduler } from "../state/event-coalescer";
+import type { DisplayEvent } from "../state/output";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { RenameDialog } from "../tabs/RenameDialog";
@@ -633,6 +637,33 @@ export function App({
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [store, resolver, registry]);
 
+  // Spec §14.3: the conversation is written to `ai/conversation.json` whenever it settles, and New Chat clears
+  // it. Subscribed HERE rather than in `AiChatPanel`, because that panel unmounts whenever the side bar closes
+  // -- including mid-reply, which the store deliberately supports -- so a panel-owned save would miss exactly
+  // the replies that finished while the user was looking at something else.
+  useEffect(() => persistConversation(store, api), [store, api]);
+
+  /**
+   * TL-20 (spec §14.2): "from an output entry, it opens the panel and sends …".
+   *
+   * Opening is unconditional -- the user asked for the panel and gets it. Queuing the prompt is not: with no
+   * provider configured the panel shows spec §14.1's "Choose a provider" card, and a prompt sent behind that
+   * card would only come back as a `notConfigured` error the user cannot act on. The card already says the one
+   * useful thing and opens Settings → AI, so it is left to say it.
+   */
+  const explainEntry = useCallback(
+    (event: DisplayEvent) => {
+      const state = store.getState();
+      state.setSideBarPanel("ai");
+      // `view.sideBar` keeps its single writer, the command (R-M5b-D3/D4-FIX-a) -- never a direct settings
+      // write. Only when closed, so Explain Result can never toggle the panel shut on the user.
+      if (!state.settings?.view.sideBar) registry.execute("view.toggleSideBar");
+      if ((state.settings?.ai.provider ?? AI_PROVIDER_NONE) === AI_PROVIDER_NONE) return;
+      state.requestAiExplain(explainPrompt(event));
+    },
+    [store, registry],
+  );
+
   const togglePanel = useCallback(
     (panel: "snippets" | "ai") => {
       const state = store.getState();
@@ -756,6 +787,7 @@ export function App({
               runKeys={keycaps.run}
               onInstall={install}
               onWebviewDock={setWebviewDock}
+              onExplain={explainEntry}
             />
           }
         />

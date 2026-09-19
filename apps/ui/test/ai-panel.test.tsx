@@ -176,6 +176,69 @@ describe("the AI Chat panel (spec §14.1)", () => {
     expect(screen.getByText(strings.ai.empty)).toBeTruthy();
   });
 
+  describe("Explain Result reaches the panel (TL-20, spec §14.2)", () => {
+    test("a queued prompt is sent, with the tab's code alongside it", async () => {
+      const { api, store } = setup({ code: "const total = 6;" });
+      await act(async () => {
+        store.getState().requestAiExplain("Explain why line 1 produces this result:\n\n6");
+      });
+
+      const sent = api.aiSend.mock.calls.at(-1)?.[0] as { prompt: string; code: string } | undefined;
+      expect(sent?.prompt).toBe("Explain why line 1 produces this result:\n\n6");
+      // The existing assembler, not a second one: the code rides the same request as any typed question.
+      expect(sent?.code).toBe("const total = 6;");
+      // Cleared, or the effect would send it again on the next unrelated render.
+      expect(store.getState().aiExplainRequest).toBeNull();
+    });
+
+    test("the prompt appears in the transcript as the user's own turn", async () => {
+      const { store } = setup();
+      await act(async () => {
+        store.getState().requestAiExplain("Explain why line 1 produces this result:\n\n6");
+      });
+      expect(store.getState().aiChat.messages[0]).toMatchObject({
+        role: "user",
+        content: "Explain why line 1 produces this result:\n\n6",
+      });
+    });
+
+    /**
+     * Sending it immediately would overwrite `aiChat.requestId`, orphaning the reply already on screen so that
+     * its remaining chunks are dropped by the store's own correlation guard -- the user would watch a half
+     * answer stop dead.
+     */
+    test("a request that arrives mid-reply waits for that reply to settle, then sends", async () => {
+      const { api, emit, store } = setup();
+      const first = send(api, "first question");
+      expect(api.aiSend).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        store.getState().requestAiExplain("Explain why line 1 produces this result:\n\n6");
+      });
+      expect(api.aiSend).toHaveBeenCalledTimes(1);
+      expect(store.getState().aiExplainRequest).not.toBeNull();
+
+      await emit("ai.done", { requestId: first, stopped: false });
+      expect(api.aiSend).toHaveBeenCalledTimes(2);
+      const queued = api.aiSend.mock.calls[1]?.[0] as { prompt: string } | undefined;
+      expect(queued?.prompt).toContain("Explain why line 1 produces this result:");
+    });
+
+    test("explaining the same row twice really sends twice", async () => {
+      const { api, emit, store } = setup();
+      await act(async () => {
+        store.getState().requestAiExplain("Explain why line 1 produces this result:\n\n6");
+      });
+      const sent = api.aiSend.mock.calls[0]?.[0] as { requestId: string } | undefined;
+      await emit("ai.done", { requestId: sent?.requestId ?? "", stopped: false });
+
+      await act(async () => {
+        store.getState().requestAiExplain("Explain why line 1 produces this result:\n\n6");
+      });
+      expect(api.aiSend).toHaveBeenCalledTimes(2);
+    });
+  });
+
   test("the conversation so far is sent as history, without the new prompt", async () => {
     const { api, emit } = setup();
     const first = send(api, "first");

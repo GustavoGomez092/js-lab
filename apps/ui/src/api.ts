@@ -22,7 +22,7 @@ import type {
   ThemeImportResult,
   ViewMessages,
 } from "@jslab/rpc-schema";
-import type { Settings, TabState } from "@jslab/shared";
+import type { ConversationTurn, Settings, TabState } from "@jslab/shared";
 
 /**
  * Everything the UI needs from Main. Components depend on this interface only; `rpc.ts` implements it with
@@ -103,6 +103,11 @@ export interface MainApi {
   aiSend(params: AiSendParams): void;
   /** Spec §14.1's Stop button. Main aborts the real HTTP request, not just its own reading of it. */
   aiStop(requestId: string): void;
+  /**
+   * Spec §14.3: persist the conversation to `ai/conversation.json`. The whole transcript, never a delta -- the
+   * UI is its only holder (see `ai/persist.ts`).
+   */
+  aiSaveConversation(messages: ConversationTurn[]): void;
 
   appCommand(action: AppAction): void;
   /**

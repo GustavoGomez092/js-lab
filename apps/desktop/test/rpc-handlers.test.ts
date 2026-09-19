@@ -47,6 +47,35 @@ describe("requests", () => {
   });
 
   /**
+   * Spec §14.3: "the current conversation is kept in `ai/conversation.json` and restored at launch". The exact
+   * equality above is the other half of this pair -- it holds only while a profile with nothing stored omits
+   * the field altogether, so the two tests cannot both pass if the payload starts carrying an empty array.
+   */
+  test("app.bootstrap restores the stored conversation, handing out a copy of it", async () => {
+    const { deps } = setup();
+    const messages = [
+      { id: "a", role: "user" as const, content: "why?", stopped: false },
+      { id: "b", role: "assistant" as const, content: "because", stopped: true },
+    ];
+    const conversation = { messages };
+    const handlers = createRpcHandlers({ ...deps, conversation });
+
+    const payload = await handlers.requests["app.bootstrap"]();
+    expect(payload.conversation).toEqual(messages);
+
+    // A COPY, for the reason `keybindings` is one: this crosses the RPC boundary as a mutable array, and
+    // handing out the store's own would let a caller edit what Main believes is on disk.
+    payload.conversation?.push({ id: "c", role: "user", content: "injected", stopped: false });
+    expect(conversation.messages).toHaveLength(2);
+  });
+
+  test("a profile with nothing stored omits the conversation rather than sending an empty array", async () => {
+    const { deps } = setup();
+    const handlers = createRpcHandlers({ ...deps, conversation: { messages: [] } });
+    expect(await handlers.requests["app.bootstrap"]()).not.toHaveProperty("conversation");
+  });
+
+  /**
    * `app.bootstrap` is the first request a view makes, and its message hub already exists by then -- so this is the
    * earliest moment an `e2e.request` is queued rather than dropped into a still-loading bundle. The E2E bridge
    * holds every send until it hears this (apps/desktop/src/main/cli/e2e-bridge.ts); before that gate existed, the

@@ -269,6 +269,8 @@ export function AiChatPanel({
 }) {
   const chat = useStore(store, (s) => s.aiChat);
   const settings = useStore(store, (s) => s.settings);
+  const explainRequest = useStore(store, (s) => s.aiExplainRequest);
+  const streaming = chat.requestId !== null;
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const scroller = useRef<HTMLElement>(null);
@@ -340,8 +342,21 @@ export function AiChatPanel({
     [api, store],
   );
 
+  // TL-20 (spec §14.2): a prompt queued by an output row's Explain Result. Held in the store rather than passed
+  // in, because the click that produces it is usually what opens this panel -- see `AiExplainRequest`. Declared
+  // after `send` deliberately: it calls it, and a `const` is not initialized until its declaration is reached.
+  //
+  // `streaming` is in the guard, not just the body: a request that arrives mid-reply is LEFT queued rather than
+  // dropped or sent alongside, and this effect runs again the moment the reply settles. Sending it immediately
+  // would overwrite `aiChat.requestId`, orphaning the reply already on screen so its remaining chunks were
+  // dropped by the store's own correlation guard.
+  useEffect(() => {
+    if (!explainRequest || streaming) return;
+    store.getState().clearAiExplainRequest();
+    send(explainRequest.prompt);
+  }, [explainRequest, streaming, send, store]);
+
   const provider = settings?.ai.provider ?? AI_PROVIDER_NONE;
-  const streaming = chat.requestId !== null;
 
   if (provider === AI_PROVIDER_NONE) {
     // Spec §14.1: "No provider configured: the panel shows a card with 'Choose a provider', which opens

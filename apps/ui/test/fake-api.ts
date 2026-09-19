@@ -17,7 +17,7 @@ import type {
   ThemeImportResult,
   ViewMessages,
 } from "@jslab/rpc-schema";
-import { createTab, defaultSettings } from "@jslab/shared";
+import { type ConversationTurn, createTab, defaultSettings } from "@jslab/shared";
 import { act } from "@testing-library/react";
 import type { MainApi } from "../src/api";
 
@@ -99,6 +99,7 @@ export function createFakeApi() {
     openExternal: mock((_url: string) => {}),
     aiSend: mock((_params: AiSendParams) => {}),
     aiStop: mock((_requestId: string) => {}),
+    aiSaveConversation: mock((_messages: ConversationTurn[]) => {}),
     appCommand: mock((_action: AppAction) => {}),
     publishCommands: mock((_ids: string[]) => {}),
     e2eRespond: mock((_response: E2EResponse) => {}),

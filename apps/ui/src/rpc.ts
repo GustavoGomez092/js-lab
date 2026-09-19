@@ -86,6 +86,7 @@ export function createRpcApi(): MainApi {
     openExternal: (url) => rpc.send["link.open"]({ url }),
     aiSend: (params) => rpc.send["ai.send"](params),
     aiStop: (requestId) => rpc.send["ai.stop"]({ requestId }),
+    aiSaveConversation: (messages) => rpc.send["ai.conversationSave"]({ messages }),
     appCommand: (action) => rpc.send["app.command"]({ action }),
     publishCommands: (ids) => rpc.send["commands.published"]({ ids }),
     e2eRespond: (response) => rpc.send["e2e.response"](response),

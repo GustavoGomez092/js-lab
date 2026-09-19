@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { AiError, AiSendParams } from "@jslab/rpc-schema";
-import { defaultSettings, mergeSettings, type Settings } from "@jslab/shared";
+import { type ConversationTurn, defaultSettings, mergeSettings, type Settings } from "@jslab/shared";
 import { type AiProviderAdapter, AiRequestError, createAdapterRegistry } from "../../src/main/ai/provider";
 import { createAiHandlers } from "../../src/main/rpc/ai-handlers";
 
@@ -51,10 +51,13 @@ function setup(options: { settings?: Settings; adapter?: AiProviderAdapter; key?
   const errors: AiError[] = [];
   const built = options.adapter ? { adapter: options.adapter, seen: [] } : fakeAdapter();
   const get = mock(async (_account: string) => options.key ?? null);
+  const saved: ConversationTurn[][] = [];
   const handlers = createAiHandlers({
     settings: { current: options.settings ?? settingsWith({ provider: "ollama" }) },
     secrets: { get },
     registry: createAdapterRegistry([built.adapter]),
+    // A copy per call, so a later mutation of the array the handler was given cannot rewrite history here.
+    conversation: { save: (messages) => saved.push([...messages]) },
     send: {
       chunk: (payload) => chunks.push(payload),
       done: (payload) => dones.push(payload),
@@ -62,8 +65,60 @@ function setup(options: { settings?: Settings; adapter?: AiProviderAdapter; key?
     },
     log: () => {},
   });
-  return { handlers, chunks, dones, errors, get, seen: built.seen };
+  return { handlers, chunks, dones, errors, get, saved, seen: built.seen };
 }
+
+const savedTurn = (id: string, content: string): ConversationTurn => ({
+  id,
+  role: "user",
+  content,
+  stopped: false,
+});
+
+describe("ai.conversationSave (spec §14.3)", () => {
+  test("hands the whole transcript to the store", async () => {
+    const { handlers, saved } = setup();
+    handlers.messages["ai.conversationSave"]({ messages: [savedTurn("a", "why?"), savedTurn("b", "because")] });
+    await flush();
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.map((turn) => turn.content)).toEqual(["why?", "because"]);
+  });
+
+  test("New Chat's empty transcript is passed through, not mistaken for nothing to do", async () => {
+    const { handlers, saved } = setup();
+    handlers.messages["ai.conversationSave"]({ messages: [] });
+    await flush();
+
+    expect(saved).toEqual([[]]);
+  });
+
+  /**
+   * Spec §18: every inbound payload is validated before use. A malformed save must never reach the store,
+   * because the store writes what it is given and the next launch has to be able to read it back.
+   */
+  test("a payload that is not a conversation is rejected, and nothing is written", async () => {
+    const { handlers, saved } = setup();
+    handlers.messages["ai.conversationSave"]({ messages: [{ id: "a", content: "no role" }] });
+    handlers.messages["ai.conversationSave"]({ messages: "not an array" });
+    handlers.messages["ai.conversationSave"]({});
+    await flush();
+
+    expect(saved).toEqual([]);
+  });
+
+  test("a build with no conversation store wired simply does nothing, rather than throwing", async () => {
+    const { adapter } = fakeAdapter();
+    const handlers = createAiHandlers({
+      settings: { current: settingsWith({ provider: "ollama" }) },
+      registry: createAdapterRegistry([adapter]),
+      send: { chunk: () => {}, done: () => {}, error: () => {} },
+      log: () => {},
+    });
+    expect(() => handlers.messages["ai.conversationSave"]({ messages: [savedTurn("a", "x")] })).not.toThrow();
+    await flush();
+  });
+});
 
 describe("ai.send / ai.stop (spec §14.3)", () => {
   test("a configured provider streams chunks and then a done", async () => {

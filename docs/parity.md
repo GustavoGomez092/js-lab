@@ -212,10 +212,10 @@ JSLab behavior and defaults are defined in the spec ([`2026-09-12-jslab-design.m
 
 | ID | RunJS capability | Source | JSLab | Spec | MS | Verify | Status |
 |---|---|---|---|---|---|---|---|
-| PL-01 | macOS signed + notarized build | CL 1.7.0 | Same (arm64) | §19 | M6 | M | ⬜ (📝 no Intel, R12) |
+| PL-01 | macOS signed + notarized build | CL 1.7.0 | Same (arm64) | §19 | M6 | M | 📝 **out of scope by owner decision (2026-09-19): JSLab is open source and will not pay for a Developer ID "at least not for now."** This is not pending work. Unsigned local and CI builds are unaffected — `bun run build:cli` and `hutch run build:dev` are what the suites drive. Reopen only if the owner decides to ship a signed distributable. 📝 arm64 only, no Intel (R12) |
 | PL-02 | Windows / Linux builds | Docs | Post-v1 | §27 | — | — | 📝 deferred (D9) |
-| PL-03 | Auto-update (differential) | CL 2.8.0, Docs | Electrobun bsdiff updater | §19 | M6 | M | ⬜ |
-| PL-04 | Homebrew cask | #270 | `jslab` cask | §19 | M6 | M | ⬜ |
+| PL-03 | Auto-update (differential) | CL 2.8.0, Docs | Electrobun bsdiff updater | §19 | M6 | M | 📝 **deferred with PL-01 (owner decision, 2026-09-19).** A differential updater needs a signed distributable and a release feed to update *from*; with no signing there is nothing to serve. Not pending work, and not a limitation of the updater itself |
+| PL-04 | Homebrew cask | #270 | `jslab` cask | §19 | M6 | M | 📝 **deferred with PL-01 (owner decision, 2026-09-19).** A cask distributes a released artifact; Homebrew would warn on an unsigned one. Reopen with PL-01 |
 | PL-05 | License activation / paid gating | Docs | None: every feature is free | §1 | — | — | 📝 intentionally absent |
 | PL-06 | `runjs://` deep-link protocol | CL 2.7.3, #500 | No URL scheme in v1 (security) | §18 | — | — | 📝 intentionally absent |
 

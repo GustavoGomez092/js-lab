@@ -398,8 +398,28 @@ export function Editor({ store, api, onLargePaste, onInstall, onCreateSnippet, v
           autoClosingBrackets: options.autoClosingBrackets,
           minimap: options.minimap?.enabled,
           hoverDelay: options.hover?.delay,
+          // ED-10 / ED-11: `editor.hoverInfo` and `editor.signatures` were wired to Monaco in `editor-options.ts`
+          // but were invisible to E2E, so the two parity rows had no end-to-end evidence. Read back from
+          // `getRawOptions()` like every field above, which is what makes this Monaco's answer rather than an
+          // echo of the settings that were written. `hoverEnabled` is Monaco 0.56's "on"/"off" (see
+          // `toMonacoOptions`), NOT the boolean the setting carries -- that difference is itself the proof the
+          // value came back out of the editor.
+          hoverEnabled: options.hover?.enabled,
+          parameterHints: options.parameterHints?.enabled,
         };
       },
+      /**
+       * XT-11 (E2E verification): the two view properties a format must not disturb.
+       *
+       * Folds are not re-derived here. They live in Monaco's folding contribution memento -- the same state
+       * `saveViewState`/`restoreViewState` already persist per tab (`tab-view.ts`) -- so it is serialized and
+       * compared as one opaque token. Deliberately narrow: fold and scroll state only, not a general read of the
+       * editor, and nothing in the app reads this outside a JSLAB_E2E=1 launch.
+       */
+      getViewGeometry: () => ({
+        scrollTop: editor.getScrollTop(),
+        folding: JSON.stringify(editor.saveViewState()?.contributionsState["editor.contrib.folding"] ?? null),
+      }),
       flushViewState: () => {
         view.saveActive();
         view.flush();

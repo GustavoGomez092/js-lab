@@ -46,6 +46,11 @@ export interface EditorHandle {
   missingActions(ids: readonly string[]): string[];
   /** Settings-driven editor options currently in effect (E2E verification). */
   getOptions(): Record<string, unknown>;
+  /**
+   * XT-11 (E2E verification): the fold and scroll state a format must preserve. `folding` is Monaco's folding
+   * memento serialized as an opaque token, compared for equality rather than interpreted.
+   */
+  getViewGeometry(): { scrollTop: number; folding: string };
   /** Sends every pending view-state save now (X1, before quit). */
   flushViewState(): void;
   /** Monaco's current TypeScript markers for the shown model (E2E verification). */

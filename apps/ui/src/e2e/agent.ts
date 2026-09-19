@@ -79,12 +79,21 @@ export interface E2EAgentDeps {
   completions?(offset: number): Promise<string[]>;
   /** The editor's install-assist actions for its current markers (Task 23). */
   installActions?(): Promise<InstallAction[]>;
+  /** XT-11: the editor's fold and scroll state, so a scenario can check a format left both alone. */
+  viewGeometry?(): { scrollTop: number; folding: string } | null;
+  /**
+   * XT-11: folds every foldable region (Monaco's `editor.foldAll`). A named fold trigger rather than a general
+   * "run any Monaco action" hook, which would be an escape hatch around the command registry. It exists because
+   * a synthetic keystroke cannot reach Monaco's own keybinding dispatch (see `packages/e2e/src/app.ts`'s `key`).
+   */
+  foldAll?(): boolean;
 }
 
 /** E2E-only command: clicks a temporary link inside the page, as a user clicking a web link would (R-M1-17(e)). */
 export const E2E_OPEN_LINK = "e2e.openLink";
 export const E2E_COMPLETIONS = "e2e.completions";
 export const E2E_INSTALL_ACTIONS = "e2e.installActions";
+export const E2E_FOLD_ALL = "e2e.foldAll";
 
 function openLink(args: unknown): { executed: string } {
   const href = (args as { href?: unknown } | undefined)?.href;
@@ -132,6 +141,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
         }
         if (id === E2E_INSTALL_ACTIONS)
           return { executed: E2E_INSTALL_ACTIONS, actions: (await deps.installActions?.()) ?? [] };
+        if (id === E2E_FOLD_ALL) return { executed: E2E_FOLD_ALL, folded: deps.foldAll?.() ?? false };
         const result = deps.executeCommand(id, args);
         if (result === "unknown") throw new Error(`Unknown command: ${id}`);
         if (result === "disabled") throw new Error(`Command is disabled: ${id}`);
@@ -147,6 +157,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
           layoutMetrics: deps.layoutMetrics?.() ?? null,
           registeredCommands: deps.registeredCommands?.() ?? [],
           tsDiagnostics: (await deps.tsDiagnostics?.()) ?? [],
+          viewGeometry: deps.viewGeometry?.() ?? null,
         };
       case "output":
         return { entries: snapshotOutput(deps.store.getState(), (params as { tabId?: string }).tabId) };

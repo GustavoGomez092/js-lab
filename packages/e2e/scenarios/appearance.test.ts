@@ -46,6 +46,18 @@ describe("appearance", () => {
     expect(String((state.ui.editorOptions as Options).fontFamily)).toContain("JetBrains Mono Variable");
   });
 
+  test("Hover Info and Signatures reach Monaco, both on and off (ED-10, ED-11)", async () => {
+    app = await launchApp({ settings: { version: 2, editor: { hoverInfo: false, signatures: false } } });
+    // Monaco's own answer, not the settings that were written. `getOptions()` reads `editor.getRawOptions()`, and
+    // `hoverEnabled` comes back as Monaco 0.56's "on"/"off" (see `toMonacoOptions`) -- a shape the boolean setting
+    // never had, so a value echoed from settings could not produce it.
+    expect(await options(app)).toMatchObject({ hoverEnabled: "off", parameterHints: false });
+    await app.dispose();
+    // Both polarities in one test, so no hardcoded constant can satisfy the pair.
+    app = await launchApp({ settings: { version: 2, editor: { hoverInfo: true, signatures: true } } });
+    expect(await options(app)).toMatchObject({ hoverEnabled: "on", parameterHints: true });
+  });
+
   test("Vim Keys starts in normal mode and ⌘R still runs (ED-02)", async () => {
     app = await launchApp({ settings: { version: 2, run: { autoRun: false }, editor: { vimKeys: true } } });
     // The editor mounts after hydrate, so wait for Vim to report its mode (review M10).

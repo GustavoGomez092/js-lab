@@ -32,6 +32,7 @@ export function Toolbar(props: {
   children?: ReactNode;
 }) {
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: the row is the title bar, not a control; double-click-to-zoom is a pointer affordance of the OS window frame, and the same action is keyboard-reachable as the `view.zoomWindow` command
     <header
       className="toolbar electrobun-webkit-app-region-drag"
       onDoubleClick={(event) => {

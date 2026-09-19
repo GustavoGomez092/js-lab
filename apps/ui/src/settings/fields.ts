@@ -1,4 +1,12 @@
-import { DECORATOR_MODES, LANGUAGES, RUNTIMES, type SettingKey, UI_LANGUAGES } from "@jslab/shared";
+import {
+  AI_PROVIDER_NONE,
+  AVAILABLE_AI_PROVIDERS,
+  DECORATOR_MODES,
+  LANGUAGES,
+  RUNTIMES,
+  type SettingKey,
+  UI_LANGUAGES,
+} from "@jslab/shared";
 import { strings } from "../strings";
 
 export type SettingsTab =
@@ -7,12 +15,14 @@ export type SettingsTab =
   | "formatting"
   | "appearance"
   | "keybindings"
+  | "ai"
   | "npm"
   | "build"
   | "advanced";
 
+// Spec §8's own order: "General · Editor · Formatting · Appearance · Keybindings · AI · NPM · Build · Advanced".
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = (
-  ["general", "editor", "formatting", "appearance", "keybindings", "npm", "build", "advanced"] as const
+  ["general", "editor", "formatting", "appearance", "keybindings", "ai", "npm", "build", "advanced"] as const
 ).map((id) => ({ id, label: strings.settings.tabs[id] }));
 
 export type FieldKind =
@@ -21,7 +31,15 @@ export type FieldKind =
   | { type: "number"; min: number; max: number; step: number }
   | { type: "enum"; options: { value: string; label: string }[] }
   | { type: "theme" }
-  | { type: "font" };
+  | { type: "font" }
+  /**
+   * Free text whose EMPTY value is meaningful -- `ai.baseUrl.<provider>` blank means "the provider's standard
+   * endpoint" and `ai.model.<provider>` blank means "the manifest's default" (spec §8, §14.3).
+   *
+   * Deliberately not reusing `theme`/`font`, whose coercion rejects blank: with those, clearing the field would
+   * silently keep the old value and the user could never get back to the default they started from.
+   */
+  | { type: "text" };
 
 export interface FieldDef {
   key: SettingKey;
@@ -89,6 +107,20 @@ export const SETTINGS_FIELDS: FieldDef[] = [
   { key: "output.highlighting", tab: "appearance", kind: bool },
   { key: "output.showLineNumbers", tab: "appearance", kind: bool },
 
+  /**
+   * Spec §8 (AI). The picker offers only what this build implements, plus "none" -- `AVAILABLE_AI_PROVIDERS` is
+   * the same mechanism `AVAILABLE_RUNTIMES` uses, so a provider becomes selectable by shipping its adapter
+   * rather than by editing this list. `ai.provider` itself still accepts all six ids on disk.
+   */
+  {
+    key: "ai.provider",
+    tab: "ai",
+    kind: choices(o.aiProvider, [AI_PROVIDER_NONE, ...AVAILABLE_AI_PROVIDERS]),
+  },
+  { key: "ai.model.ollama", tab: "ai", kind: { type: "text" } },
+  { key: "ai.baseUrl.ollama", tab: "ai", kind: { type: "text" } },
+  { key: "ai.includeOutput", tab: "ai", kind: bool },
+
   { key: "npm.allowInstallScripts", tab: "npm", kind: bool },
   { key: "npm.autoInstallTypes", tab: "npm", kind: bool },
 
@@ -139,5 +171,8 @@ export function coerceFieldValue(field: FieldDef, raw: string | boolean): boolea
     case "theme":
     case "font":
       return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+    // Blank is a VALUE here, not a rejection: it is how the user asks for the default back (see `FieldKind`).
+    case "text":
+      return typeof raw === "string" ? raw.trim() : null;
   }
 }

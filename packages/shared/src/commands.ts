@@ -156,6 +156,8 @@ export const COMMANDS = [
   { id: "tools.environmentVariables", category: "tools" },
   { id: "npm.install", category: "tools", palette: false },
   { id: "tools.snippets", category: "tools" },
+  // Spec §14.1: the AI Chat panel, on Ctrl+Cmd+I and the activity bar. Same three-way toggle as tools.snippets.
+  { id: "tools.aiChat", category: "tools" },
   { id: "snippets.import", category: "tools" },
   { id: "snippets.export", category: "tools" },
   // Category "edit" (they belong in the Edit menu and the palette's Edit section); the `snippets.` prefix keeps them

@@ -281,6 +281,9 @@ describe("application menu", () => {
       "NPM Packages…",
       "Environment Variables…",
       "Snippets…",
+      // TL-18: AI Chat sits with the other Tools panels, above the separator that starts the snippet
+      // import/export block -- so the three library items stay a group of their own.
+      "AI Chat…",
       undefined,
       "Import Snippets…",
       "Export Snippets…",

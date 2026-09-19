@@ -1,4 +1,5 @@
 import type {
+  AiSendParams,
   AppAction,
   BootstrapPayload,
   E2EResponse,
@@ -94,6 +95,14 @@ export interface MainApi {
    * is validated again by Main (`linkOpenParamsSchema`), because output text is written by the user's program.
    */
   openExternal(url: string): void;
+
+  /**
+   * Spec §14.3: ask the configured provider for a reply. The answer arrives as `ai.chunk` / `ai.done` /
+   * `ai.error` messages, never inline -- it is a stream, and Main is the only process that talks to a provider.
+   */
+  aiSend(params: AiSendParams): void;
+  /** Spec §14.1's Stop button. Main aborts the real HTTP request, not just its own reading of it. */
+  aiStop(requestId: string): void;
 
   appCommand(action: AppAction): void;
   /**

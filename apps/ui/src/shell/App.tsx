@@ -271,6 +271,21 @@ export function App({
   // before the registry exists. Side-bar control lives in the command deps below (ruling R-M5b-D3/D4-FIX-b).
   const snippetActions = useMemo(() => createSnippetActions({ store, editor: getEditorHandle, tabs }), [store, tabs]);
 
+  /**
+   * Spec §14.1: what an AI code block's two editor buttons do.
+   *
+   * `typeText(code, false)` inserts at the caret and replaces the selection, which is what every other
+   * insert-at-cursor path in the app uses; `replaceAll` replaces the buffer as ONE undoable edit, so a user who
+   * did not want the whole file rewritten gets it back with a single undo.
+   */
+  const aiActions = useMemo(
+    () => ({
+      insertAtCursor: (code: string) => getEditorHandle()?.typeText(code, false),
+      replaceEditor: (code: string) => getEditorHandle()?.replaceAll(code),
+    }),
+    [],
+  );
+
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>
       store.getState().setStatusMessage(strings.commands.failed(commandMeta(id) ? t(commandTitleKey(id)) : id, error)),
@@ -299,6 +314,21 @@ export function App({
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
       ...createSnippetCommands(snippetDeps),
+      // Spec §14.1: Ctrl+Cmd+I. The same three-way toggle the activity-bar button has (R-M5b-3), and it routes
+      // through `view.toggleSideBar` so `view.sideBar` keeps its single writer (R-M5b-D3/D4-FIX-a).
+      {
+        id: "tools.aiChat",
+        run: () => {
+          const state = store.getState();
+          const showing = Boolean(state.settings?.view.sideBar) && state.sideBarPanel === "ai";
+          if (showing) {
+            created.execute("view.toggleSideBar");
+            return;
+          }
+          state.setSideBarPanel("ai");
+          if (!state.settings?.view.sideBar) created.execute("view.toggleSideBar");
+        },
+      },
       ...createFileCommands(flows, api),
       ...createOutputCommands(store),
       {
@@ -344,6 +374,7 @@ export function App({
       settings: keysFor("app.settings"),
       npm: keysFor("tools.npmPackages"),
       snippets: keysFor("tools.snippets"),
+      aiChat: keysFor("tools.aiChat"),
     }),
     [keysFor],
   );
@@ -691,6 +722,7 @@ export function App({
         )}
         {settings.view.sideBar && (
           <SideBar
+            aiActions={aiActions}
             panel={sideBarPanel}
             store={store}
             api={api}

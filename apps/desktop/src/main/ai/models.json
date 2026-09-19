@@ -1,0 +1,11 @@
+{
+  "openai": { "defaultModel": "gpt-4o-mini", "defaultBaseUrl": "https://api.openai.com/v1" },
+  "anthropic": { "defaultModel": "claude-sonnet-4-5", "defaultBaseUrl": "https://api.anthropic.com" },
+  "gemini": {
+    "defaultModel": "gemini-2.0-flash",
+    "defaultBaseUrl": "https://generativelanguage.googleapis.com/v1beta"
+  },
+  "mistral": { "defaultModel": "mistral-small-latest", "defaultBaseUrl": "https://api.mistral.ai/v1" },
+  "ollama": { "defaultModel": "qwen2.5:7b-instruct", "defaultBaseUrl": "http://localhost:11434" },
+  "custom": { "defaultModel": "", "defaultBaseUrl": "" }
+}

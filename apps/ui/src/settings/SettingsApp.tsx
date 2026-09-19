@@ -336,6 +336,27 @@ function FieldControl(props: {
           onChange={(event) => onChange(event.target.checked)}
         />
       );
+    case "text": {
+      // Committed on blur/Enter like a number, not on every keystroke: each commit is an RPC round trip to Main,
+      // and a base URL typed character by character would send one per character.
+      const commitText = () => {
+        const next = coerceFieldValue(field, draft);
+        if (next !== null && next !== value) onChange(next);
+      };
+      return (
+        <input
+          id={id}
+          type="text"
+          aria-describedby={helpId}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commitText}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commitText();
+          }}
+        />
+      );
+    }
     case "int":
     case "number": {
       const commit = () => {

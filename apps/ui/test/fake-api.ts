@@ -1,5 +1,6 @@
 import { mock } from "bun:test";
 import type {
+  AiSendParams,
   AppAction,
   E2EResponse,
   EnvVars,
@@ -96,6 +97,8 @@ export function createFakeApi() {
     pickWorkingDirectory: mock((_tabId: string) => {}),
     clearWorkingDirectory: mock((_tabId: string) => {}),
     openExternal: mock((_url: string) => {}),
+    aiSend: mock((_params: AiSendParams) => {}),
+    aiStop: mock((_requestId: string) => {}),
     appCommand: mock((_action: AppAction) => {}),
     publishCommands: mock((_ids: string[]) => {}),
     e2eRespond: mock((_response: E2EResponse) => {}),

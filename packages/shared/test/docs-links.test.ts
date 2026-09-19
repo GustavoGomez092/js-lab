@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, extname, relative, resolve, sep } from "node:path";
 
 /**
  * A link-integrity check for docs/user (the M6 "user documentation site" milestone): every relative Markdown
@@ -92,5 +92,64 @@ describe("docs/user link integrity", () => {
     }
     const unreachable = files.filter((file) => !visited.has(file)).map((file) => relative(REPO_ROOT, file));
     expect(unreachable).toEqual([]);
+  });
+});
+
+/**
+ * Matches HTML image sources: `<img … src="…">`. `LINK_PATTERN` above is blind to these, and the repo README
+ * embeds every one of its screenshots that way, so without this a moved or deleted image under `docs/images`
+ * rots silently -- on the page that is the project's front door.
+ */
+const HTML_IMAGE_PATTERN = /<img[^>]+src="([^"]+)"/g;
+
+function extractHtmlImageSources(markdown: string): string[] {
+  const sources: string[] = [];
+  for (const match of markdown.matchAll(HTML_IMAGE_PATTERN)) {
+    const src = match[1];
+    if (src) sources.push(src);
+  }
+  return sources;
+}
+
+const README_FILE = resolve(REPO_ROOT, "README.md");
+
+/** The path part of a link, without its `#fragment`; empty for a bare same-page anchor. */
+function filePart(href: string): string {
+  return href.split("#")[0] ?? "";
+}
+
+/**
+ * The same integrity guarantee for the repo README, which the suite above does not reach. It is the entry
+ * point to the manual, the spec, the parity table and the QA checklists, so a dead link here is the most
+ * visible kind there is.
+ *
+ * Only the README is checked, not every Markdown file in the repo: `docs/superpowers/` holds historical plans
+ * and specs that deliberately reference paths as they stood when written, and failing the suite over those
+ * would be noise rather than rot. Images are checked HERE and not over `docs/user`, which embeds none at all
+ * (0 HTML and 0 Markdown images, measured) -- asserting over an empty set would pass whatever the code did.
+ */
+describe("README link integrity", () => {
+  const markdown = readFileSync(README_FILE, "utf8");
+  const relativeLinks = extractLinkTargets(markdown).filter((href) => !isExternal(href) && !href.startsWith("#"));
+  const imageSources = extractHtmlImageSources(markdown).filter((src) => !isExternal(src));
+
+  test("the README really does carry relative links and embedded images", () => {
+    // Without this, the two tests below would pass just as contentedly against a README that linked to nothing
+    // and showed nothing -- which is the shape of a test that can never fail.
+    expect(relativeLinks.length).toBeGreaterThan(3);
+    expect(imageSources.length).toBeGreaterThan(0);
+  });
+
+  test("every relative link in the README resolves to a real file", () => {
+    const broken = relativeLinks.filter((href) => {
+      const path = filePart(href);
+      return path !== "" && !existsSync(resolve(REPO_ROOT, path));
+    });
+    expect(broken).toEqual([]);
+  });
+
+  test("every image the README embeds resolves to a real file", () => {
+    const broken = imageSources.filter((src) => !existsSync(resolve(REPO_ROOT, filePart(src))));
+    expect(broken).toEqual([]);
   });
 });

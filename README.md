@@ -16,7 +16,7 @@
 
 Write JavaScript or TypeScript and watch it run as you type. Each result, log and error appears beside the line that produced it. There's no project to set up and no build step: open a tab and start typing.
 
-> JSLab is under active development. Milestones M0–M4 (the core scratchpad, the workspace, language & packages, and browser runtimes) are complete; productivity features and signed releases are next. See the [roadmap](#roadmap).
+> JSLab is under active development. Milestones M0–M5 are complete — the core scratchpad, the workspace, language & packages, browser runtimes, and the productivity features: snippets, logpoints, the `jslab` CLI, VS Code theme import, the keybindings editor and AI chat — apart from Gist sharing, which needs a GitHub OAuth App. M6 is under way: this user manual, an About window and the performance budgets. Builds are **not** signed or notarized, and will not be; see [Download](#download). See the [roadmap](#roadmap).
 
 ## Why JSLab
 

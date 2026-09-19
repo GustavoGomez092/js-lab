@@ -27,7 +27,13 @@ export interface RpcHandlerDeps {
   settings: Pick<SettingsStore, "current">;
   session: Pick<SessionStore, "session" | "readBuffers" | "readBuffer" | "setBuffer" | "patchTab">;
   safeMode: SafeModeState;
-  versions: { app: string; bun: string };
+  /**
+   * M6: `electrobun` is REQUIRED here even though it is optional on `BootstrapPayload`. The payload field is
+   * optional only so the ~70 existing UI test fixtures that build `{ app, bun }` keep compiling; making it
+   * required at the composition root is what actually forces `index.ts` to send it, so the About dialog can
+   * never silently lose the framework version to a forgotten field.
+   */
+  versions: { app: string; bun: string; electrobun: string };
   log(message: string, detail?: unknown): void;
   onUiHeartbeat(): void;
   /** True for JSLAB_E2E=1 launches. */

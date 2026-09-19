@@ -54,6 +54,7 @@ import { startThemeSync } from "../themes/apply";
 import { startAppearanceSync } from "../themes/fonts";
 import { ThemePickDialog } from "../themes/ThemePickDialog";
 import { createThemeCommands } from "../themes/theme-commands";
+import { AboutDialog } from "./AboutDialog";
 import { ActivityBar } from "./ActivityBar";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { createDialogs } from "./dialogs";
@@ -807,6 +808,7 @@ export function App({
         />
       )}
       <RenameDialog store={store} />
+      <AboutDialog store={store} api={api} />
       <ThemePickDialog store={store} api={api} />
       <ConfirmDialog store={store} dialogs={dialogs} />
       <EnvVarsSheet store={store} api={api} />

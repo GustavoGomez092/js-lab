@@ -335,7 +335,7 @@ async function start(): Promise<void> {
   const appHandlerDeps: AppHandlerDeps = {
     logTail: (lines) => logger.tail(lines),
     settings,
-    paths: { dataDir: paths.dataDir, logsDir },
+    paths: { dataDir: paths.dataDir, logsDir, noticesFile: paths.noticesFile },
     keybindings,
     versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
     os: osInfo,
@@ -408,7 +408,9 @@ async function start(): Promise<void> {
         session,
         safeMode,
         keybindings,
-        versions: { app: APP_VERSION, bun: Bun.version },
+        // M6: all three, so the About dialog can name the framework version too. The debug report already
+        // carried `electrobun`; the bootstrap payload did not, which is why the UI could never show it.
+        versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
         log,
         e2e: e2eEnabled,
         onE2EResponse: (response) => e2eBridge.receive(response),

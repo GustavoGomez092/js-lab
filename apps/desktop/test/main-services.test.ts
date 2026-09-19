@@ -106,7 +106,9 @@ describe("main services (composition root)", () => {
       settings: services.settings,
       session: services.session,
       safeMode: services.safeMode,
-      versions: { app: "test", bun: Bun.version },
+      // M6: `electrobun` is required at the composition root so `index.ts` cannot forget to send it, which is
+      // what lets the About dialog name the framework version.
+      versions: { app: "test", bun: Bun.version, electrobun: "2.0.1" },
       log: (message) => logged.push(message),
       onUiHeartbeat: () => {},
     });

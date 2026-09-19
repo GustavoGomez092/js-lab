@@ -35,6 +35,10 @@ describe("resolveAppPaths", () => {
       // Spec §17: staged into the bundle by hutch.config.ts and copied to Resources/app/locales, so Main
       // reads the very files apps/ui/src/i18n/locales/ ships.
       localesDir: "/Applications/JSLab.app/Contents/Resources/app/locales",
+      // M6: Help → About → Open-Source Notices…. Staged into the bundle by hutch.config.ts and copied to
+      // Resources/app by electrobun.config.ts's `"dist/THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md"`,
+      // so this is the file a BUILT app really opens -- not a path guessed beside the sources.
+      noticesFile: "/Applications/JSLab.app/Contents/Resources/app/THIRD-PARTY-NOTICES.md",
       bunBinary: "/Applications/JSLab.app/Contents/MacOS/bun",
       // Spec §16.1: the symlink target Help -> Install `jslab` Command… creates.
       cliBinary: "/Applications/JSLab.app/Contents/Resources/app/bin/jslab",
@@ -54,6 +58,9 @@ describe("resolveAppPaths", () => {
     expect(paths.transformWorker).toBe("/src/worker.ts");
     expect(paths.bunBinary).toBe("/bin/bun");
     expect(resolveAppPaths({ ...input, env: { JSLAB_CLI_BINARY: "/src/jslab" } }).cliBinary).toBe("/src/jslab");
+    expect(resolveAppPaths({ ...input, env: { JSLAB_NOTICES_FILE: "/src/NOTICES.md" } }).noticesFile).toBe(
+      "/src/NOTICES.md",
+    );
   });
 
   test("JSLAB_USER_DATA relocates every data path", () => {

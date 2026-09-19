@@ -154,6 +154,9 @@ export const APP_ACTIONS = [
   "openDocumentation",
   "reportIssue",
   "openWhatsNew",
+  // M6: Help → About → Open-Source Notices…. Main stages THIRD-PARTY-NOTICES.md into the bundle and owns its
+  // path (`app-paths.ts`'s `noticesFile`), so the UI names the action and never a filesystem path (spec §18).
+  "openThirdPartyNotices",
 ] as const;
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });
@@ -819,7 +822,16 @@ export interface BootstrapPayload {
    */
   unreadableBuffers?: string[];
   safeMode: { active: boolean; reason: "crashLoop" | "manual" | "shift" | null };
-  versions: { app: string; bun: string };
+  /**
+   * M6: `electrobun` joins `app` and `bun` so the About dialog can name the framework version the app is
+   * actually running on -- until now only the debug report knew it (`logging/debug-report.ts`), because the
+   * bootstrap payload carried just the two.
+   *
+   * Optional purely so the ~70 existing test fixtures that build `{ app, bun }` keep compiling; Main always
+   * sends all three, which `apps/desktop/test/rpc-handlers.test.ts` pins against a literal rather than
+   * against the constant Main itself reads.
+   */
+  versions: { app: string; bun: string; electrobun?: string };
   /** True only when the app was launched with JSLAB_E2E=1; the UI then installs the automation agent. */
   e2e?: boolean;
   keybindings?: KeybindingRule[];

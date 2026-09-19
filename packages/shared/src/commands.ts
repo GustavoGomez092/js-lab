@@ -179,6 +179,10 @@ export const COMMANDS = [
   { id: "theme.import", category: "theme" },
   { id: "theme.toggleFollowSystem", category: "theme" },
 
+  // M6: About, credits and open-source notices. Opens a dialog in the main window rather than the native
+  // `{ role: "about" }` panel, which can name neither the Bun/Electrobun versions nor the notices file.
+  { id: "help.about", category: "help" },
+
   // ST-11 (spec §7.4): the three Help items that open a page in the user's browser. Main owns the URLs
   // (apps/desktop/src/main/rpc/app-handlers.ts) so the link a menu item follows is decided in one place.
   { id: "help.documentation", category: "help" },

@@ -811,6 +811,24 @@ button:disabled {
   color: var(--fg-error);
 }
 
+/* ---------- About (M6): app name, versions, licence and the open-source notices ---------- */
+.about-facts {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  color: var(--fg-default);
+}
+
+.about-facts li {
+  padding: 1px 0;
+}
+
+/* Quieter than the version list: the licence is attribution, not the headline. `.dialog p` already supplies
+   the muted colour and the 16px bottom margin. */
+.about-license {
+  font-size: 11px;
+}
+
 /* ---------- sheets (Environment Variables, and NPM Packages in Task 26; spec §7.5) ---------- */
 .sheet {
   display: flex;

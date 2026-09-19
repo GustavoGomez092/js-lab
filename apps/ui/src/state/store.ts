@@ -93,7 +93,9 @@ export type Modal =
   | { kind: "npm" }
   | { kind: "env" }
   /** Spec §9.3: a `.vsix` declared more than one theme, so the user chooses which one to import. */
-  | { kind: "themePick"; token: string; choices: VsixChoice[] };
+  | { kind: "themePick"; token: string; choices: VsixChoice[] }
+  /** M6: About, credits and open-source notices. Carries no data -- it reads versions from the store. */
+  | { kind: "about" };
 
 export interface NpmUiState {
   /** False until the first list arrives, so the initial load highlights nothing. */

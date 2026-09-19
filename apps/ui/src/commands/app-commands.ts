@@ -132,6 +132,8 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
       }),
     ),
 
+    // M6: About opens a dialog in this window, so unlike the Help links it needs nothing from Main.
+    { id: "help.about", run: () => s().openModal({ kind: "about" }) },
     // ST-11 (spec §7.4): Main owns the URLs; the UI only names the action.
     { id: "help.documentation", run: () => deps.api.appCommand("openDocumentation") },
     { id: "help.reportIssue", run: () => deps.api.appCommand("reportIssue") },

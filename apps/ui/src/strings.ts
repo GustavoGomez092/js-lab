@@ -288,6 +288,10 @@ export const strings = {
     /** R-WEBVIEW-TAB-1: the control beside the filter chips that fills the output panel with the Web View. */
     webViewTab: t("output.webViewTab"),
     copyAll: t("output.copyAll"),
+    /** OU-10: the two items on a single output row's entry menu, and the label of the control that opens it. */
+    copyEntry: t("output.copyEntry"),
+    copyEntryJson: t("output.copyEntryJson"),
+    entryMenu: t("output.entryMenu"),
     clear: t("output.clear"),
     jumpToLine: (line: number) => t("output.jumpToLine", { line }),
     truncated: (dropped: number) => t("output.truncated", { dropped }),

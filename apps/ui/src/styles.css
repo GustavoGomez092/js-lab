@@ -428,7 +428,9 @@ button:disabled {
 
 .entry {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+  /* OU-10 adds a fourth track for the entry menu's button. A row without a line badge simply leaves the third
+     track empty -- both trailing tracks are `auto`, so neither reserves width it is not using. */
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: start;
   padding: 5px 12px 5px 0;
@@ -451,6 +453,21 @@ button:disabled {
   padding: 0 2px;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* OU-10. Quiet until the row is hovered, but `opacity` only -- never `display: none` or `visibility: hidden`,
+   which would take the button out of the tab order and make the entry menu unreachable by keyboard. It also
+   stays visible while focused and while its own menu is open. */
+.entry-menu-button {
+  padding: 0 4px;
+  color: var(--fg-muted);
+  opacity: 0;
+}
+
+.entry:hover .entry-menu-button,
+.entry-menu-button:focus-visible,
+.entry-menu-button[aria-expanded="true"] {
+  opacity: 1;
 }
 
 .entry-console-warn {

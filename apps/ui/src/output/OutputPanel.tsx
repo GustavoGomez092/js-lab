@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { visibleEntries } from "../state/output";
@@ -111,15 +111,19 @@ export function OutputPanel({
       ? api.expand({ tabId, runId: output.runId, handleId: handle, ...(offset === undefined ? {} : { offset }) })
       : Promise.resolve(null);
 
+  // OU-10: hoisted out of `copyAll` so a row's entry menu reports into the same chip on the same schedule --
+  // one owner of "say whether the clipboard took it", rather than one per copy gesture.
+  const showCopyStatus = useCallback((status: "copied" | "failed") => {
+    if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
+    setCopyStatus(status);
+    copyStatusTimer.current = setTimeout(() => setCopyStatus(null), COPY_STATUS_DURATION_MS);
+  }, []);
+
   const copyAll = () => {
     // R-M2-T19A-1: the entries visible under the current filter chip -- the same owner the `output.copyAll`
     // command uses, so the button and the palette can never copy different sets again.
     const text = copyAllText(store.getState());
-    void copyEntriesToClipboard(text).then((status) => {
-      if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
-      setCopyStatus(status);
-      copyStatusTimer.current = setTimeout(() => setCopyStatus(null), COPY_STATUS_DURATION_MS);
-    });
+    void copyEntriesToClipboard(text).then(showCopyStatus);
   };
 
   const logList = (
@@ -160,6 +164,7 @@ export function OutputPanel({
                 onInstall={onInstall}
                 onChangeWorkingDirectory={() => (tabId ? api.pickWorkingDirectory(tabId) : undefined)}
                 hasWorkingDirectory={hasWorkingDirectory}
+                onCopyStatus={showCopyStatus}
               />
             </div>
           );

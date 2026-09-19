@@ -8,7 +8,8 @@
 
 ## Status — 2026-09-19
 
-Every refinement below has shipped except the second half of **6**. Audited against the merged tree on
+**All eleven have now shipped.** Ten were already done when this section was first written; item **6**'s
+remaining half landed on 2026-09-19. Audited against the merged tree on
 `integration/all-fixes` by locating the test that asserts each behaviour — grep counts were not accepted as
 evidence, because "I recognise those test names" is exactly the reasoning that left eight parity rows stale
 earlier in this project.
@@ -20,7 +21,7 @@ earlier in this project.
 | 3 | Output announced to assistive tech | ✅ | "a polite live region exists before it has anything to say, and is mutated rather than replaced"; "the region announces a per-run summary, not a row, and blanks between runs" |
 | 4 | Name both separators | ✅ | "the separator carries its label as its accessible name, and the two production names are distinct" |
 | 5 | Disabled palette commands explain themselves | ✅ | "a search whose only match is disabled lists it, greyed and labelled, instead of 'No matching commands'"; "arrow keys skip disabled rows, so the selection and Enter always land on a runnable command"; "clicking or hovering a disabled row neither runs it nor closes the palette". `palette/CommandPalette.tsx:176` sets `aria-disabled` |
-| 6 | The object overflow must not read as a broken button | 🚧 **half done** | Shipped, and it is the substantive half: `ValueView.tsx:321` renders a real `<button class="v-more">` for pageable collections and `:327` a plain `<div class="v-hole">` for objects, pinned by "an object's overflow states its count but is not a button (OU-02 boundary)" — whose comment names the mutant it kills. **Outstanding:** both branches still render the *same* string, `output.moreEntries` → "… N more entries". This section asked for distinct wording, and spec §5.9 agrees with it: objects have properties, collections have entries |
+| 6 | The object overflow must not read as a broken button | ✅ | Both halves shipped. The semantics: `ValueView.tsx:321` renders a real `<button class="v-more">` for pageable collections and `:327` a plain `<div class="v-hole">` for objects, pinned by "an object's overflow states its count but is not a button (OU-02 boundary)" — whose comment names the mutant it kills. And the wording, added 2026-09-19: the object branch now renders its own string, `output.moreProperties` → "… N more properties", instead of sharing `output.moreEntries` with the collection button. Spec §5.9 lists object properties and collection entries as separate rows, so "entries" was the wrong noun — and since the element type is the only other difference between the two renderings, the noun is what tells a screen-reader user which kind of remainder they are hearing. Mutation-proved in **both** directions, because one alone would show only that the object case is pinned rather than that the two strings are distinguished: reverting the object branch reds the OU-02 boundary test by name, and pointing the button branch at the new string reds five collection tests |
 | 7 | The notice banner needs a voice per severity | ✅ | "each severity renders its own class and its own icon" |
 | 8 | Focusing a row highlights the editor line | ✅ | "focusing the line badge reports its line, and blurring clears it (item 8)" |
 | 9 | All four filter chips count | ✅ | "all four chips show their count (R-UI9-COUNTS-1)" |

@@ -118,7 +118,7 @@ jobs:
             echo
             echo "**macOS on Apple Silicon.** Download the \`.dmg\`, open it and drag JSLab to Applications."
             echo
-            echo "This build is not signed with an Apple Developer ID or notarized yet, so macOS blocks the first launch."
+            echo "This build is not signed with an Apple Developer ID or notarized -- JSLab is open source and does not pay for one -- so macOS blocks the first launch."
             echo "To open it anyway: Control-click the app, choose **Open**, then confirm; or run"
             echo "\`xattr -dr com.apple.quarantine \"/Applications/JSLab-canary.app\"\` once."
             echo

@@ -113,7 +113,7 @@ The Help menu can copy a redacted debug log, open the logs folder, or restart JS
 Download the latest `.dmg` from [GitHub Releases](https://github.com/GustavoGomez092/js-lab/releases), open it and drag JSLab to Applications. Canary builds are published automatically as prereleases on every push to `main`.
 
 > [!IMPORTANT]
-> Builds are **not signed or notarized yet**, so macOS blocks the first launch. To open JSLab anyway, Control-click the app in Applications, choose **Open**, and confirm. Or run this once:
+> Builds are **not signed or notarized** — JSLab is open source and does not pay for an Apple Developer ID, so this is how the app ships rather than a step still to come. macOS therefore blocks the first launch. To open JSLab anyway, Control-click the app in Applications, choose **Open**, and confirm. Or run this once:
 >
 > ```bash
 > xattr -dr com.apple.quarantine "/Applications/JSLab-canary.app"
@@ -195,8 +195,8 @@ Code runs only when `--run` is passed. `jslab` starts JSLab if it isn't already 
 | M2 | Workspace: tabs, files, settings, themes, formatting, command palette | ✅ Done |
 | M3 | Language & packages: npm, types and autocomplete, working directory, env vars | ✅ Done (manual QA items pending user) |
 | M4 | Browser runtimes: DOM, canvas, React and a live web view | ✅ Done (manual QA items pending user) |
-| M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | 🚧 In progress — logpoints, Show Transpiled Output, the first-run welcome tab, snippets, the `jslab` CLI, the VS Code theme importer and the Keybindings editor are done |
-| M6 | Ship: signing, notarization, auto-update, 1.0 | Planned |
+| M5 | Productivity: logpoints UI, snippets, AI chat, Gist, `jslab` CLI | 🚧 In progress — logpoints, Show Transpiled Output, the first-run welcome tab, snippets, the `jslab` CLI, the VS Code theme importer, the Keybindings editor and **AI chat** (Ollama, with Explain Result and a conversation that survives relaunch) are done; Gist needs a GitHub OAuth App and the other AI providers need the owner's API keys |
+| M6 | Ship: About and open-source notices, user docs, performance budgets, 1.0 | 🚧 In progress — signing, notarization, auto-update and the Homebrew cask are **out of scope**: JSLab is open source and does not pay for an Apple Developer ID, and each of those depends on a signed artifact |
 
 Details are in the [roadmap](docs/superpowers/plans/2026-09-12-jslab-roadmap.md).
 

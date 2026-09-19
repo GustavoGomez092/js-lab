@@ -624,6 +624,91 @@ describe("browser-node module table -- node: prefix (fix round 1, I2)", () => {
 });
 
 /**
+ * EX-19 (spec §5.3) for the web runtimes: CommonJS `require()` in a tab's own code.
+ *
+ * Every `browser-node` test above uses ESM `import`. `require()` is a different resolution path through
+ * `Bun.build` -- `resolve-plugin.ts` deliberately selects a different `exports` condition set for it
+ * (`["browser", "require", "default"]` versus the `import` branch) -- so nothing above exercised it.
+ *
+ * **`runJoinedModule` evaluates the bundle in Bun, where a `require` global exists.** That makes "it returned the
+ * right value" worthless on its own here: a chunk that still contained a bare `require("path")` call would be
+ * silently served by Bun's own require and pass, while failing in a real webview, which has no such binding. So
+ * the load-bearing assertion is the static one -- the emitted chunk must contain **no free `require(` call at
+ * all**, proving the call was resolved at bundle time rather than deferred to a host that only the test has.
+ * `path.join('a','b') === 'a/b'` is likewise true of Bun's own `node:path`, so it is only ever a companion check.
+ */
+describe("browser-node -- CommonJS require() in the tab's own code (EX-19, spec §5.3)", () => {
+  /** Builds one `browser-node` entry and hands back the emitted app chunk, for static inspection. */
+  async function buildBrowserNodeChunk(source: string): Promise<string> {
+    const entry = join(workingDirectory, "require-entry.js");
+    await writeFile(entry, source);
+    const app = await bundleAppForWeb({
+      entry,
+      runtime: "browser-node",
+      workingDirectory,
+      packagesNodeModules,
+      dataDir,
+    });
+    if ("error" in app) throw new Error(`app build failed: ${app.error.message}`);
+    return app.code;
+  }
+
+  /**
+   * A free `require(` -- one not preceded by a `.`, and not part of a longer identifier such as esbuild's own
+   * self-contained `__require` shim, which is defined inside the chunk and therefore harmless.
+   */
+  const freeRequireCalls = (code: string) => [...code.matchAll(/(^|[^.\w$])require\s*\(/g)].length;
+
+  test("require() of a builtin is resolved at bundle time, leaving no free require in the chunk", async () => {
+    const source = "const path = require('path');\nglobalThis.__jlProbe = path.join('a','b');\n";
+    expect(freeRequireCalls(await buildBrowserNodeChunk(source))).toBe(0);
+    expect(await runBrowserNodeEntry(source)).toBe("a/b");
+  });
+
+  test("require() with the node: prefix resolves through the same table", async () => {
+    const source = "const path = require('node:path');\nglobalThis.__jlProbe = path.join('a','b');\n";
+    expect(freeRequireCalls(await buildBrowserNodeChunk(source))).toBe(0);
+    expect(await runBrowserNodeEntry(source)).toBe("a/b");
+  });
+
+  test("ESM import and require() in the same module both resolve", async () => {
+    const source = [
+      "import { join } from 'node:path';",
+      "const os = require('os');",
+      "globalThis.__jlProbe = [join('a','b'), typeof os.platform];",
+      "",
+    ].join("\n");
+    expect(freeRequireCalls(await buildBrowserNodeChunk(source))).toBe(0);
+    expect(await runBrowserNodeEntry(source)).toEqual(["a/b", "function"]);
+  });
+});
+
+/**
+ * The `browser` runtime's refusal, in the `node:`-prefixed spelling. The refusal hook gates on `isNodeBuiltin`,
+ * which normalizes through `stripNodePrefix` -- but every existing test of it drives the bare `fs` spelling, so a
+ * regression that stopped normalizing would have left `node:`-prefixed builtins silently stubbed by
+ * `Bun.build({target:'browser'})` instead of refused, which is the exact failure mode Task 11 documents for
+ * `browser-node`.
+ */
+describe("browser runtime refuses node:-prefixed builtins too (EX-19, spec §5.3)", () => {
+  test("node:fs is refused with the Browser-runtime message, naming the prefixed specifier", async () => {
+    const entry = join(workingDirectory, "browser-node-prefix.js");
+    await writeFile(entry, "import fs from 'node:fs';\nglobalThis.__jlProbe = typeof fs;\n");
+    const app = await bundleAppForWeb({
+      entry,
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+      dataDir,
+    });
+    if (!("error" in app)) throw new Error("expected the browser build to refuse node:fs");
+    expect(app.error.message).toBe(
+      "Cannot find module 'node:fs'. Node built-ins aren't available in the Browser runtime.",
+    );
+  });
+});
+
+/**
  * Task 11 (spec §5.13): the async bridge's own table entries, through the same real `Bun.build` pipeline.
  *
  * These are the end-to-end tests for the gap this task closed. Before it, `fs`, `child_process` and the six

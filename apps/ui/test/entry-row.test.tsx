@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { RunEvent } from "@jslab/rpc-schema";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { EntryRow } from "../src/output/EntryRow";
 import type { DisplayEvent } from "../src/state/output";
 import { strings } from "../src/strings";
@@ -492,6 +492,40 @@ describe("EntryRow", () => {
       } as RunEvent);
       fireEvent.click(screen.getByTestId("output-link"), { metaKey: true });
       expect(onOpenLink.mock.calls).toEqual([["https://example.com/help"]]);
+    });
+
+    test("a truncated string is not linkified until the whole value has arrived", async () => {
+      const full = "https://example.com/truncated-tail";
+      const onOpenLink = mock((_url: string) => {});
+      render(
+        <EntryRow
+          entry={{
+            key: "t",
+            event: {
+              kind: "result",
+              line: 1,
+              source: "autolog",
+              value: { t: "string", v: "https://example.com/trunc", truncated: { handle: "h1", total: full.length } },
+              seq: 1,
+              t: 0,
+            } as DisplayEvent,
+          }}
+          stale={false}
+          expand={async () => ({ t: "string" as const, v: full })}
+          onReveal={() => {}}
+          onHover={() => {}}
+          onOpenLink={onOpenLink}
+        />,
+      );
+      // A cut-off URL carries no visible mark of being cut off, so linking it would offer a complete-looking
+      // address that opens a prefix of itself -- a destination the user was never shown.
+      expect(screen.queryAllByTestId("output-link")).toEqual([]);
+      await act(async () => {
+        fireEvent.click(document.querySelector(".v-more") as HTMLButtonElement);
+        await Bun.sleep(5);
+      });
+      // Once the rest has arrived the whole URL is there, so it becomes openable.
+      expect(screen.getByTestId("output-link").textContent).toBe(full);
     });
 
     test("with no route to Main the URL renders as plain text rather than a dead control", () => {

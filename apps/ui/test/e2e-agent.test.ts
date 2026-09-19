@@ -175,6 +175,23 @@ describe("E2E agent", () => {
     }
     // With no link on screen it fails loudly, so a scenario can never "pass" by activating nothing at all.
     await expect(agent("command", { id: "e2e.openOutputLink" })).rejects.toThrow("found no link in the output");
+
+    // The accessibility guard, and the reason the keyboard path checks focus at all: a "link" that cannot take
+    // focus must fail loudly rather than let a scenario pass by dispatching Enter at something no keyboard user
+    // could ever reach. A <span> stands in for exactly that regression.
+    const inert = document.createElement("span");
+    inert.dataset.testid = "output-link";
+    // happy-dom lets any element take focus, so the real condition this guard exists for -- focus failing to
+    // land, as a non-focusable element behaves in an actual webview -- is simulated by a no-op focus().
+    inert.focus = () => {};
+    document.body.append(inert);
+    try {
+      await expect(agent("command", { id: "e2e.openOutputLink", args: { via: "keyboard" } })).rejects.toThrow(
+        "could not focus the link",
+      );
+    } finally {
+      inert.remove();
+    }
   });
 
   test("state carries TypeScript diagnostics, and e2e.completions asks the editor for completions", async () => {

@@ -57,6 +57,24 @@ describe("isSafeExternalUrl (OU-13)", () => {
     }
   });
 
+  test("refuses an ALLOWED scheme whose text hides characters the parser would strip", () => {
+    // These are the inputs that make the hidden-character rule load-bearing rather than incidental. Every one of
+    // them PARSES to a perfectly good https URL -- the parser deletes the tab, or trims the surrounding spaces --
+    // so every other rule in the function accepts them. Refusing the hidden characters outright is the only thing
+    // that stops the text on screen and the URL that opens from being two different strings.
+    for (const url of [
+      "ht\ttps://evil.example",
+      "  https://example.com",
+      // DEL is not stripped by the parser, but it is invisible on screen, so a URL carrying one still shows the
+      // reader something other than what it opens.
+      `https://example.com/${String.fromCharCode(127)}`,
+      "https://exa\tmple.com",
+      "https://example.com\n",
+    ]) {
+      expect({ url, safe: isSafeExternalUrl(url) }).toEqual({ url, safe: false });
+    }
+  });
+
   test("refuses a URL carrying credentials, which hides the real host behind a username", () => {
     // `https://www.paypal.com@evil.example/` reads to a human as PayPal and resolves to evil.example.
     expect(isSafeExternalUrl("https://user:pass@evil.example/")).toBe(false);

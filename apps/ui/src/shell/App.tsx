@@ -456,6 +456,10 @@ export function App({
       executeCommand: (id, args) => registry.execute(id, args),
       missingEditorActions: () => getEditorHandle()?.missingActions(Object.values(EDITOR_ACTIONS)) ?? [],
       editorOptions: () => getEditorHandle()?.getOptions() ?? null,
+      // XT-11: fold and scroll state, plus the named fold trigger a scenario needs because a synthetic Tab or
+      // chord never reaches Monaco's own keybinding dispatch (`packages/e2e/src/app.ts`).
+      viewGeometry: () => getEditorHandle()?.getViewGeometry() ?? null,
+      foldAll: () => getEditorHandle()?.runAction("editor.foldAll") ?? false,
       registeredCommands: () => registry.list().map((spec) => spec.id),
       tsDiagnostics: () => getEditorHandle()?.typeDiagnostics() ?? Promise.resolve([]),
       completions: (offset) => getEditorHandle()?.completionsAt(offset) ?? Promise.resolve([]),

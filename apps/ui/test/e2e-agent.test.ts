@@ -188,6 +188,38 @@ describe("E2E agent", () => {
     });
   });
 
+  /**
+   * XT-11 wiring. The geometry values are injected, so these assertions pin the SEAM (the handle's answer
+   * reaches `e2e.state`, and `e2e.foldAll` reaches the editor) rather than Monaco's real fold behaviour --
+   * that half is pinned by `packages/e2e/scenarios/format.test.ts` against a built app. Disclosed as such.
+   */
+  test("state carries the editor's fold and scroll geometry, and e2e.foldAll folds through the editor (XT-11)", async () => {
+    const { store } = setup();
+    const calls: string[] = [];
+    const agent = createE2EAgent({
+      store,
+      executeCommand: () => "unknown",
+      editor: () => null,
+      target: () => new EventTarget(),
+      viewGeometry: () => ({ scrollTop: 120, folding: '{"collapsedRegions":[1]}' }),
+      foldAll: () => {
+        calls.push("foldAll");
+        return true;
+      },
+    });
+    expect(await agent("state", {})).toMatchObject({
+      viewGeometry: { scrollTop: 120, folding: '{"collapsedRegions":[1]}' },
+    });
+    expect(await agent("command", { id: "e2e.foldAll" })).toEqual({ executed: "e2e.foldAll", folded: true });
+    expect(calls).toEqual(["foldAll"]);
+  });
+
+  test("an agent with no editor reports null geometry and a refused fold, rather than throwing (XT-11)", async () => {
+    const { agent } = setup();
+    expect(await agent("state", {})).toMatchObject({ viewGeometry: null });
+    expect(await agent("command", { id: "e2e.foldAll" })).toEqual({ executed: "e2e.foldAll", folded: false });
+  });
+
   test("tab snapshots carry the working directory and the suffixed label", async () => {
     const { store, agent } = setup();
     store.getState().applyTabUpdate({

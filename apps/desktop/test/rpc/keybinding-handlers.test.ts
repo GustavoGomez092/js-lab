@@ -1,5 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
-import { COMMANDS, DEFAULT_KEYBINDINGS, type KeybindingRule } from "@jslab/shared";
+import { join } from "node:path";
+import { COMMANDS, commandTitleKey, DEFAULT_KEYBINDINGS, type KeybindingRule } from "@jslab/shared";
+import { createTranslator } from "../../src/main/i18n";
 import {
   createCommandPublishHandlers,
   createKeybindingHandlers,
@@ -7,6 +9,12 @@ import {
 } from "../../src/main/rpc/keybinding-handlers";
 import { InvalidPayloadError } from "../../src/main/rpc/validate";
 import { strings } from "../../src/main/strings";
+
+/** The real translator over the real catalogue, so the row text is proved end to end rather than stubbed. */
+const t = createTranslator({
+  dir: join(import.meta.dir, "..", "..", "..", "ui", "src", "i18n", "locales"),
+  locale: "en",
+});
 
 function setup(published: string[] = [], options: { invalid?: boolean } = {}) {
   const saved: KeybindingRule[][] = [];
@@ -20,6 +28,7 @@ function setup(published: string[] = [], options: { invalid?: boolean } = {}) {
       }),
     },
     registeredCommands: () => published,
+    t,
     log: mock(() => {}),
   } satisfies KeybindingHandlerDeps;
   return { deps, saved, handlers: createKeybindingHandlers(deps) };
@@ -48,9 +57,17 @@ describe("commands.catalog", () => {
     const { commands } = await handlers.requests["commands.catalog"]({});
     const byId = new Map(commands.map((entry) => [entry.id, entry]));
     for (const command of COMMANDS) {
-      expect(byId.get(command.id)?.title).toBe(command.title);
+      expect(byId.get(command.id)?.title).toBe(t(commandTitleKey(command.id)));
       expect(byId.get(command.id)?.category).toBe(command.category);
     }
+    // The line above is satisfied by a catalogue of raw keys too, because Main's t() returns the key when the
+    // entry is missing -- which is exactly how a mis-shaped en.json would fail. So: no row may BE its own key,
+    // and a known row must read as its English.
+    for (const entry of commands) {
+      expect(entry.title).not.toBe(commandTitleKey(entry.id));
+    }
+    expect(byId.get("run.start")?.title).toBe("Run");
+    expect(byId.get("tab.reopenClosed")?.title).toBe("Reopen Closed Tab");
     // A catalogue that collapsed every row onto one category would still satisfy a per-row equality check if
     // COMMANDS itself were single-category; it is not, so this states the property the grouping depends on.
     expect(new Set(commands.map((entry) => entry.category)).size).toBeGreaterThan(1);
@@ -72,6 +89,7 @@ describe("commands.catalog", () => {
     const handlers = createKeybindingHandlers({
       store: { path: "/data/keybindings.json", rules: [], invalid: false, save: async () => {} },
       registeredCommands: () => published,
+      t,
       log: () => {},
     });
     expect(

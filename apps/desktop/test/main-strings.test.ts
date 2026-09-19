@@ -17,7 +17,8 @@ describe("Main's strings, resolved through t() (spec §17)", () => {
   });
 
   test("interpolated strings keep theirs, with no unreplaced placeholder", () => {
-    expect(strings.dialogs.startupFailed("disk full")).toBe("JSLab couldn't start: disk full");
+    // No `strings.dialogs`: the startup dialog fires before a translator exists and shows an English literal
+    // from index.ts by design, so the catalogue entry it used to carry had no surface and was removed.
     expect(strings.files.tooLarge("big.ts")).toBe("big.ts is larger than 50 MB and can't be opened.");
     expect(strings.runs.workingDirectoryNotFound("/tmp/x")).toBe("Working directory not found: /tmp/x");
     expect(strings.notices.settingsNewer(9)).toContain("version 9");

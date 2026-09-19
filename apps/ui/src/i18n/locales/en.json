@@ -4,13 +4,161 @@
     "settingsWindowTitle": "JSLab Settings"
   },
   "commands": {
+    "app": {
+      "closeWindow": "Close Window",
+      "openDataFolder": "Open Data Folder",
+      "settings": "Settings…"
+    },
     "copyFailed": "Couldn't copy the output to the clipboard.",
     "current": "current",
+    "edit": {
+      "addCursorAbove": "Add Cursor Above",
+      "addCursorBelow": "Add Cursor Below",
+      "clearLogpoints": "Clear All Logpoints",
+      "deleteLine": "Delete Line",
+      "deleteToLineStart": "Delete to Line Start",
+      "duplicateLine": "Duplicate Line",
+      "expandSelection": "Expand Selection",
+      "find": "Find",
+      "findNext": "Find Next",
+      "findPrevious": "Find Previous",
+      "gotoBracket": "Go to Bracket",
+      "gotoLine": "Go to Line…",
+      "insertLineAfter": "Insert Line After",
+      "insertLineBefore": "Insert Line Before",
+      "joinLines": "Join Lines",
+      "moveLineDown": "Move Line Down",
+      "moveLineUp": "Move Line Up",
+      "replace": "Replace",
+      "reverseLinesCaseInsensitive": "Reverse Sort Lines (Case-Insensitive)",
+      "selectLine": "Select Line",
+      "selectNextOccurrence": "Select Next Occurrence",
+      "selectToBracket": "Select to Bracket",
+      "showDiagnostic": "Show Diagnostic",
+      "showHover": "Show Hover",
+      "sortLines": "Sort Lines",
+      "sortLinesCaseInsensitive": "Sort Lines (Case-Insensitive)",
+      "splitSelectionIntoLines": "Split Selection into Lines",
+      "toggleBlockComment": "Toggle Block Comment",
+      "toggleLineComment": "Toggle Line Comment",
+      "toggleLogpoint": "Toggle Logpoint",
+      "toggleMagicComment": "Toggle Magic Comment",
+      "triggerSuggest": "Trigger Suggestions"
+    },
+    "editor": {
+      "clear": "Clear Editor"
+    },
     "failed": "{{title}} failed: {{error}}",
+    "file": {
+      "open": "Open…",
+      "save": "Save",
+      "saveAs": "Save As…"
+    },
     "folder": "folder: {{name}}",
+    "format": {
+      "document": "Format Code"
+    },
+    "help": {
+      "copyDebugLog": "Copy Debug Log",
+      "installCli": "Install jslab Command…",
+      "openLogsFolder": "Open Logs Folder",
+      "restartSafeMode": "Restart in Safe Mode",
+      "uninstallCli": "Uninstall jslab Command…"
+    },
+    "language": {
+      "javascript": "Language: JavaScript",
+      "jsx": "Language: JSX",
+      "tsx": "Language: TSX",
+      "typescript": "Language: TypeScript"
+    },
     "loopLimit": "limit {{limit}}",
+    "npm": {
+      "install": "Install Package"
+    },
     "off": "currently off",
-    "on": "currently on"
+    "on": "currently on",
+    "output": {
+      "clear": "Clear Output",
+      "copyAll": "Copy All Output",
+      "showAll": "Output: Show All",
+      "showErrors": "Output: Show Errors",
+      "showLogs": "Output: Show Logs",
+      "showResults": "Output: Show Results"
+    },
+    "run": {
+      "kill": "Kill",
+      "start": "Run",
+      "stop": "Stop",
+      "toggleAutoLog": "Toggle Auto Log",
+      "toggleAutoRun": "Toggle Auto Run",
+      "toggleLoopProtection": "Toggle Loop Protection"
+    },
+    "runtime": {
+      "browser": "Runtime: Browser",
+      "browserNode": "Runtime: Browser & Node APIs",
+      "bun": "Runtime: Bun"
+    },
+    "snippets": {
+      "create": "Create Snippet…",
+      "expand": "Expand Snippet",
+      "export": "Export Snippets…",
+      "import": "Import Snippets…"
+    },
+    "tab": {
+      "close": "Close Tab",
+      "closeOthers": "Close Other Tabs",
+      "closeToRight": "Close Tabs to the Right",
+      "copyPath": "Copy Path",
+      "goto1": "Go to Tab 1",
+      "goto2": "Go to Tab 2",
+      "goto3": "Go to Tab 3",
+      "goto4": "Go to Tab 4",
+      "goto5": "Go to Tab 5",
+      "goto6": "Go to Tab 6",
+      "goto7": "Go to Tab 7",
+      "goto8": "Go to Tab 8",
+      "goto9": "Go to Tab 9",
+      "new": "New Tab",
+      "next": "Next Tab",
+      "previous": "Previous Tab",
+      "rename": "Rename Tab…",
+      "reopenClosed": "Reopen Closed Tab",
+      "revealInFinder": "Reveal in Finder"
+    },
+    "theme": {
+      "import": "Import VS Code Theme…",
+      "select": "Select Theme",
+      "toggleFollowSystem": "Follow System Appearance"
+    },
+    "tools": {
+      "environmentVariables": "Environment Variables…",
+      "npmPackages": "NPM Packages…",
+      "snippets": "Snippets…"
+    },
+    "view": {
+      "commandPalette": "Show Command Palette",
+      "focusEditor": "Focus Editor",
+      "focusOutput": "Focus Output",
+      "layoutHorizontal": "Horizontal Layout",
+      "layoutVertical": "Vertical Layout",
+      "showTranspiled": "Show Transpiled Output",
+      "toggleActivityBar": "Toggle Activity Bar",
+      "toggleFullScreen": "Toggle Full Screen",
+      "toggleLayout": "Toggle Vertical Split",
+      "toggleOutput": "Toggle Output Panel",
+      "toggleSideBar": "Toggle Side Bar",
+      "toggleStatusBar": "Toggle Status Bar",
+      "toggleTabBar": "Toggle Tab Bar",
+      "toggleWebView": "Toggle Web View",
+      "zoomIn": "Zoom In",
+      "zoomOut": "Zoom Out",
+      "zoomReset": "Actual Size",
+      "zoomWindow": "Zoom"
+    },
+    "wd": {
+      "clear": "Clear Working Directory",
+      "set": "Set Working Directory…"
+    }
   },
   "completions": {
     "packageDetail": "v{{version}}",
@@ -103,9 +251,6 @@
     "cli": {
       "installFailed": "Couldn't install the jslab command: {{message}}"
     },
-    "dialogs": {
-      "startupFailed": "JSLab couldn't start: {{message}}"
-    },
     "files": {
       "bufferUnreadable": "JSLab couldn't read this tab's contents, so it won't save over the file on disk.",
       "confirmExpired": "That save request expired. Save again.",
@@ -184,6 +329,31 @@
     "window": {
       "settingsTitle": "JSLab Settings"
     }
+  },
+  "menu": {
+    "actions": "Actions",
+    "edit": "Edit",
+    "file": "File",
+    "help": "Help",
+    "language": "Language",
+    "layout": "Layout",
+    "runtime": "Runtime",
+    "themes": "Themes",
+    "tools": "Tools",
+    "view": {
+      "_": "View",
+      "activityBar": "Activity Bar",
+      "commandPalette": "Command Palette…",
+      "fullScreen": "Enter Full Screen",
+      "horizontal": "Horizontal",
+      "output": "Output",
+      "sideBar": "Side Bar",
+      "statusBar": "Status Bar",
+      "tabBar": "Tab Bar",
+      "vertical": "Vertical",
+      "webView": "Web View"
+    },
+    "window": "Window"
   },
   "notices": {
     "copyDebugLog": "Copy Debug Log",

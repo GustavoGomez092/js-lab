@@ -637,6 +637,7 @@ async function start(): Promise<void> {
         themes: listThemes(),
         canReopen: session.session.closedStack.length > 0,
         cliInstalled,
+        t,
       }),
     apply: (items) => ApplicationMenu.setApplicationMenu(items),
   });
@@ -664,7 +665,7 @@ async function start(): Promise<void> {
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createFontHandlers({ fonts: systemFonts, log }),
       createNpmrcHandlers({ path: paths.packagesNpmrc, onSaved: () => npm.resetOutdated(), log }),
-      createKeybindingHandlers({ store: keybindings, registeredCommands: () => publishedCommands, log }),
+      createKeybindingHandlers({ store: keybindings, registeredCommands: () => publishedCommands, t, log }),
       createSettingsAppHandlers(appHandlerDeps),
       createE2EResponseHandler(settingsE2E, log),
     ),

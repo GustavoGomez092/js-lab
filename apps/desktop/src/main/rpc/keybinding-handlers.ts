@@ -5,7 +5,8 @@ import {
   keybindingsSaveParamsSchema,
   type SaveResult,
 } from "@jslab/rpc-schema";
-import { COMMANDS, DEFAULT_KEYBINDINGS, type KeybindingRule } from "@jslab/shared";
+import { COMMANDS, commandTitleKey, DEFAULT_KEYBINDINGS, type KeybindingRule } from "@jslab/shared";
+import type { Translate } from "../i18n";
 import type { KeybindingsStore } from "../services/keybindings-store";
 import { strings } from "../strings";
 import { createValidators, type Log } from "./validate";
@@ -14,6 +15,8 @@ export interface KeybindingHandlerDeps {
   store: Pick<KeybindingsStore, "path" | "rules" | "save" | "invalid">;
   /** Ids the running main window has registered, published by App.tsx. Empty when no main window is open. */
   registeredCommands(): readonly string[];
+  /** Spec §17: command titles live in the catalogue, so the row text is resolved here rather than shipped. */
+  t: Translate;
   log: Log;
 }
 
@@ -37,7 +40,7 @@ export function createKeybindingHandlers(deps: KeybindingHandlerDeps) {
         return {
           commands: COMMANDS.map((command) => ({
             id: command.id,
-            title: command.title,
+            title: deps.t(commandTitleKey(command.id)),
             category: command.category,
             registered: registered.has(command.id),
           })),

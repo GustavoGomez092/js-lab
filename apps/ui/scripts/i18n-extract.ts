@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { LOCALES, SOURCE_LOCALE } from "@jslab/shared";
 import { flattenKeys } from "../src/i18n/check";
 
@@ -80,35 +80,11 @@ const writeJson = (path: string, value: unknown) => writeFileSync(path, `${JSON.
  * rewrites it would let any unreviewed key change sail through the very check the manifest exists for.
  */
 if (import.meta.main) {
+  // The `--from <module>` migration mode is gone: it existed to merge a module that still held English literals
+  // into en.json, and after Task 11 no such module remains. What is left is the permanent path -- regenerating
+  // the manifest and the coverage record from the locale files -- which is what the key check's failure message
+  // tells you to run.
   const enPath = join(LOCALES_DIR, `${SOURCE_LOCALE}.json`);
-  const fromIndex = process.argv.indexOf("--from");
-
-  if (fromIndex !== -1) {
-    // Migration mode (Tasks 8, 10, 11): merge a module that still holds literals into en.json.
-    const modulePath = process.argv[fromIndex + 1];
-    if (!modulePath || modulePath.startsWith("--")) throw new Error("--from needs a module path");
-    // Do NOT write `process.argv[process.argv.indexOf("--namespace") + 1]`. With the flag absent indexOf
-    // returns -1, so that reads argv[0] — the absolute path of the bun binary — and the truthiness guard
-    // lets it through, prefixing every harvested key with a machine-specific path and committing it into
-    // en.json. Step 5 below invokes this with no --namespace, so that fires on first use. Test the flag.
-    const namespaceIndex = process.argv.indexOf("--namespace");
-    const namespaceValue = namespaceIndex === -1 ? undefined : process.argv[namespaceIndex + 1];
-    if (namespaceIndex !== -1 && (!namespaceValue || namespaceValue.startsWith("--"))) {
-      throw new Error("--namespace needs a value");
-    }
-    const namespace = namespaceValue ?? "";
-    // Resolve against the working directory. A bare `await import(modulePath)` resolves relative to THIS
-    // file, so the documented `--from ./src/strings.ts` (run from apps/ui) would look for
-    // apps/ui/scripts/src/strings.ts and die with "Cannot find module './src/strings.ts'".
-    const imported = (await import(resolve(process.cwd(), modulePath))) as Record<string, unknown>;
-    const source = imported.strings ?? imported.default;
-    const leaves = remapSettingsFields(plainLeaves(source, namespace));
-    const merged = { ...plainLeaves(readJson(enPath)), ...leaves };
-    writeJson(enPath, nest(merged));
-    console.log(`i18n: merged ${Object.keys(leaves).length} keys from ${modulePath} into en.json`);
-  }
-
-  // Always regenerate the manifest and the coverage record from what is now on disk.
   const en = readJson(enPath);
   const enKeys = flattenKeys(en);
   writeJson(join(I18N_DIR, "keys.json"), enKeys);

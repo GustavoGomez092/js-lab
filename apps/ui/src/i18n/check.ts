@@ -20,6 +20,13 @@ export interface CheckInput {
   sources: readonly SourceFile[];
   manifest: readonly string[];
   coverage: Record<string, number>;
+  /**
+   * Keys that no literal call site can ever show, because the key is computed: the 114 command titles are read as
+   * `t(commandTitleKey(id))`, whose argument is computed. `COMMANDS` is the authority on which keys those are, so
+   * the caller derives them from it and passes them here. Without this every command title reads as unused the
+   * moment Task 11 drops `--bootstrap`, and the check would demand the deletion of the entire `commands.*` group.
+   */
+  derivedKeys?: readonly string[];
 }
 
 export interface CheckReport {
@@ -32,10 +39,14 @@ export interface CheckReport {
 }
 
 /**
- * The measured size of the two string modules this milestone sweeps: 420 leaves in `apps/ui/src/strings.ts`
- * plus 44 in `apps/desktop/src/main/strings.ts`, counted by importing both and walking their exports. The real
- * catalogue only grows from here, so a total below this means the check read the wrong path or an empty file --
- * the one failure that would otherwise look exactly like success.
+ * A floor, not a census. Its job is to fail the check when it reads an empty or wrong-path catalogue -- the one
+ * failure that would otherwise look exactly like success.
+ *
+ * 464 is what the two string modules measured when Phase B began (420 leaves in `apps/ui/src/strings.ts` plus 44
+ * in `apps/desktop/src/main/strings.ts`). Both have grown well past that since: Task 11 alone adds the command
+ * titles and the menu labels, and the shipped catalogue is now over 700 keys. The floor is deliberately left at
+ * the Phase B number rather than ratcheted to the current total -- it exists to catch a collapse, not to restate
+ * a count that every task changes. `keys.json` is what pins the exact set.
  */
 export const MIN_KEYS = 464;
 
@@ -98,7 +109,10 @@ export function checkLocales(input: CheckInput): CheckReport {
   const enKeys = flattenKeys(source);
   const enValues = new Map<string, string>();
   for (const key of enKeys) enValues.set(key, valueAt(source, key) ?? "");
-  const used = collectUsedKeys(input.sources);
+  // A derived key is asked for exactly as a literal one is; it simply cannot be seen by scanning source text.
+  // Both lists feed both directions: a derived key with no entry is still unknown, and an entry a derived key
+  // asks for is still used.
+  const asked = [...new Set([...collectUsedKeys(input.sources), ...(input.derivedKeys ?? [])])].sort();
 
   const manifestDrift = {
     added: without(enKeys, input.manifest),
@@ -109,8 +123,8 @@ export function checkLocales(input: CheckInput): CheckReport {
   // the second keeps `env.saved_one` / `env.saved_other` from reading as unused once Task 11 drops
   // `--bootstrap` and the unused-key sweep starts biting.
   const enKeysAndBases = new Set([...enKeys, ...enKeys.map(pluralBase)]);
-  const usedSet = new Set(used);
-  const unknownKeys = used.filter((key) => !enKeysAndBases.has(key));
+  const usedSet = new Set(asked);
+  const unknownKeys = asked.filter((key) => !enKeysAndBases.has(key));
   const unusedKeys = enKeys.filter((key) => !usedSet.has(key) && !usedSet.has(pluralBase(key)));
 
   const locales: LocaleReport[] = LOCALES.filter((locale) => locale !== SOURCE_LOCALE).map((locale) => {

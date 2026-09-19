@@ -53,9 +53,10 @@ export function createStrings(t: Translate) {
       /** Spec §9.3: the raw cause can quote an absolute path, so it goes here and never to the user (spec §18). */
       themeUnreadable: t("main.log.themeUnreadable"),
     },
-    dialogs: {
-      startupFailed: (message: string) => t("main.dialogs.startupFailed", { message }),
-    },
+    // No `dialogs` group: the one startup dialog (`index.ts`'s `showFatal`) fires before `resolveAppPaths` has
+    // run, so there is no translator to reach and it shows an English literal by design. A catalogue entry that
+    // no surface can render is exactly the dead copy the unused-key sweep exists to prevent, and the sweep could
+    // not have seen it -- the `t()` call in this file would have counted as its use.
     files: {
       tooLarge: (name: string) => t("main.files.tooLarge", { name }),
       notText: (name: string) => t("main.files.notText", { name }),

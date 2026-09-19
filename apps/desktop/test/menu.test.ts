@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import {
   createTab,
   DEFAULT_KEYBINDINGS,
@@ -8,6 +9,7 @@ import {
   resolveKeybindings,
 } from "@jslab/shared";
 import { listThemes } from "@jslab/themes";
+import { createTranslator } from "../src/main/i18n";
 import {
   buildMenu,
   commandForMenuAction,
@@ -19,6 +21,14 @@ import {
 
 const flatten = (items: MenuItem[]): MenuItem[] => items.flatMap((item) => [item, ...flatten(item.submenu ?? [])]);
 const bindings = resolveKeybindings(DEFAULT_KEYBINDINGS, []);
+/**
+ * The real translator over the real shipped catalogue, not a stub. Every English assertion below therefore now
+ * proves the whole id -> commandTitleKey -> en.json -> native menu chain, rather than just the menu's shape.
+ */
+const t = createTranslator({
+  dir: join(import.meta.dir, "..", "..", "ui", "src", "i18n", "locales"),
+  locale: "en",
+});
 const model = (overrides: Partial<Parameters<typeof buildMenu>[0]> = {}) => ({
   settings: defaultSettings(),
   activeTab: createTab({ id: "t1" }),
@@ -26,6 +36,7 @@ const model = (overrides: Partial<Parameters<typeof buildMenu>[0]> = {}) => ({
   themes: listThemes(),
   canReopen: false,
   cliInstalled: false,
+  t,
   ...overrides,
 });
 const byLabel = (items: MenuItem[], prefix: string) => flatten(items).find((item) => item.label?.startsWith(prefix));

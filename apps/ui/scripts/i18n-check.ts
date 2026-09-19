@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { LOCALES } from "@jslab/shared";
+import { COMMANDS, commandTitleKey, LOCALES } from "@jslab/shared";
 import { checkLocales, MIN_KEYS, type SourceFile } from "../src/i18n/check";
 
 const UI_ROOT = join(import.meta.dir, "..");
@@ -9,10 +9,11 @@ const I18N_DIR = join(UI_ROOT, "src", "i18n");
 const LOCALES_DIR = join(I18N_DIR, "locales");
 
 /**
- * Until the extraction sweep (Tasks 8-11) produces the real catalogue, `en.json` is a seed of a few keys, so
- * the size floor, the committed manifest and the unused-key sweep cannot be true yet. `--bootstrap` skips
- * exactly those three and nothing else: the unknown-key check, the per-locale `extra` check and the coverage
- * ratchet all run from day one. Task 11 drops the flag here and in CI.
+ * While the extraction sweep (Tasks 8-11) was still producing the real catalogue, `en.json` was a seed of a few
+ * keys, so the size floor, the committed manifest and the unused-key sweep could not be true yet. `--bootstrap`
+ * skips exactly those three and nothing else: the unknown-key check, the per-locale `extra` check and the
+ * coverage ratchet ran from day one. Task 11 completed the catalogue and dropped the flag from `package.json`
+ * and from CI, so the default run is now full strength; the flag remains only for a partial local tree.
  */
 const bootstrap = process.argv.includes("--bootstrap");
 const strict = process.argv.includes("--strict");
@@ -42,6 +43,9 @@ const report = checkLocales({
   locales,
   manifest,
   coverage,
+  // Command titles are looked up as `t(commandTitleKey(id))`, which no source scan can see. The id list is the
+  // authority on which keys those are, so they are derived from it rather than enumerated by hand.
+  derivedKeys: COMMANDS.map((command) => commandTitleKey(command.id)),
   // Both trees, because Main reads the very same files the UI ships (spec §17).
   sources: [...sourceFiles(join(UI_ROOT, "src")), ...sourceFiles(join(REPO_ROOT, "apps", "desktop", "src"))],
 });

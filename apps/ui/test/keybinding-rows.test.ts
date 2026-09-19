@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { COMMANDS, DEFAULT_KEYBINDINGS, type KeybindingRule } from "@jslab/shared";
+import { COMMANDS, commandTitleKey, DEFAULT_KEYBINDINGS, type KeybindingRule } from "@jslab/shared";
+import { t } from "../src/i18n";
 import { keybindingRows } from "../src/settings/keybinding-rows";
 
+// Main builds the real catalogue rows this way (rpc/keybinding-handlers.ts); the fake mirrors it.
 const catalogue = COMMANDS.map((command) => ({
   id: command.id,
-  title: command.title,
+  title: t(commandTitleKey(command.id)),
   category: command.category,
   registered: true,
 }));

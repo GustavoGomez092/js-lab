@@ -1,7 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { SettingsViewMessages } from "@jslab/rpc-schema";
-import { COMMANDS, DEFAULT_KEYBINDINGS, type KeybindingRule } from "@jslab/shared";
+import { COMMANDS, commandTitleKey, DEFAULT_KEYBINDINGS, type KeybindingRule } from "@jslab/shared";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { t } from "../src/i18n";
 import { KeybindingsPane, type KeybindingsPaneHandle } from "../src/settings/KeybindingsPane";
 import type { SettingsApi } from "../src/settings/settings-rpc";
 import { strings } from "../src/strings";
@@ -50,7 +51,7 @@ function fakeApi(
     commandCatalog: mock(async () => ({
       commands: COMMANDS.map((command) => ({
         id: command.id,
-        title: command.title,
+        title: t(commandTitleKey(command.id)),
         category: command.category,
         registered: command.id !== options.unregistered,
       })),

@@ -44,6 +44,18 @@ Languages that do not distinguish plurals need only `_other`; Japanese and Chine
 Languages with more categories may add `_zero`, `_two`, `_few` or `_many` — i18next selects the right one from
 the language's CLDR rules.
 
+### Command titles
+
+Every entry under `commands.` is the title of one JSLab command, and its key is the command's own id — so
+`commands.run.start` is the title of `run.start`, the one shown in the command palette, in the application menu
+and in Settings → Keybindings. There is no separate list to keep in step: the key is derived from the id.
+
+### The `_` key
+
+A few names are both a label and a group of keys, which JSON cannot express at once. Where that happens the
+group's own label is the key `_`: `menu.view._` is the View menu's title, and `menu.view.output` is the Output
+item inside it. Translate `_` as you would any other label.
+
 ## Adding a new language
 
 1. Add its code to `LOCALES` in `packages/shared/src/locale.ts` and to `UI_LANGUAGES` in

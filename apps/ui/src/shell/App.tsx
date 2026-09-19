@@ -1,6 +1,7 @@
 import { appNoticeSchema, MAX_TEXT_CHARS } from "@jslab/rpc-schema";
 import {
   commandMeta,
+  commandTitleKey,
   DEFAULT_KEYBINDINGS,
   formatChord,
   resolveKeybindings,
@@ -24,6 +25,7 @@ import { createFileCommands } from "../files/file-commands";
 import { createFileFlows } from "../files/file-flows";
 import { createFormatActions } from "../format/format-actions";
 import { type Formatter, shouldFormatBeforeRun } from "../format/formatter";
+import { t } from "../i18n";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { NpmSheet } from "../npm/NpmSheet";
 import { operationStatusMessage } from "../npm/npm-panel";
@@ -270,7 +272,7 @@ export function App({
 
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>
-      store.getState().setStatusMessage(strings.commands.failed(commandMeta(id)?.title ?? id, error)),
+      store.getState().setStatusMessage(strings.commands.failed(commandMeta(id) ? t(commandTitleKey(id)) : id, error)),
     );
     // `view.sideBar` keeps ONE writer -- the `view.toggleSideBar` command -- exactly as `view.showTranspiled` below
     // does. A second mechanism writing the setting directly is what ruling R-M5b-D3/D4-FIX-a forbids.

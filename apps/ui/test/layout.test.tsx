@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   commandMeta,
+  commandTitleKey,
   createTab,
   defaultSession,
   defaultSettings,
@@ -10,6 +11,7 @@ import {
 } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createViewCommands } from "../src/commands/view-commands";
+import { t } from "../src/i18n";
 import { runStateKind } from "../src/shell/labels";
 import { SplitPane } from "../src/shell/SplitPane";
 import { StatusBar } from "../src/shell/StatusBar";
@@ -247,9 +249,11 @@ describe("layout", () => {
     const emptyChip = screen.getByRole("button", { name: strings.shell.workingDirectory.set });
     expect(emptyChip.getAttribute("title")).toBe(strings.shell.workingDirectory.setHelp);
 
-    // M-3 (fix round 1): the chip labels stay in step with the wd.set/wd.clear command titles (R24-1).
-    expect(commandMeta("wd.set")?.title).toBe(strings.shell.workingDirectory.set);
-    expect(commandMeta("wd.clear")?.title).toBe(strings.shell.workingDirectory.clear);
+    // M-3 (fix round 1): the chip labels stay in step with the wd.set/wd.clear command titles (R24-1). The
+    // titles now come from the catalogue rather than from a `title` field, so the check goes through the key.
+    expect(commandMeta("wd.set")).toBeDefined();
+    expect(t(commandTitleKey("wd.set"))).toBe(strings.shell.workingDirectory.set);
+    expect(t(commandTitleKey("wd.clear"))).toBe(strings.shell.workingDirectory.clear);
   });
 
   // R24-2: the chip keeps showing "Working directory not found" after the output scrolls away.

@@ -231,6 +231,42 @@ describe("checkLocales (spec §17)", () => {
     expect(report.locales.map((entry) => entry.locale)).toEqual(LOCALES.filter((locale) => locale !== SOURCE_LOCALE));
   });
 
+  test("a derived key counts as a use, so a catalogue entry no literal names is not reported unused", () => {
+    // The 114 command titles are read as `t(commandTitleKey(id))`, whose argument is computed -- no source scan
+    // can see them. Without this the whole `commands.*` group reads as unused the moment `--bootstrap` goes,
+    // and the check would demand its deletion.
+    const report = checkLocales(
+      big({
+        locales: { en: { ...bigEn, commands: { run: { start: "Run" } } }, ...empty },
+        manifest: [...bigManifest, "commands.run.start"],
+        derivedKeys: ["commands.run.start"],
+      }),
+    );
+    expect(report.unusedKeys).toEqual([]);
+    expect(report.unknownKeys).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  test("without the derived key that same entry IS unused — control", () => {
+    // Otherwise the test above would pass against a `derivedKeys` that was ignored entirely.
+    const report = checkLocales(
+      big({
+        locales: { en: { ...bigEn, commands: { run: { start: "Run" } } }, ...empty },
+        manifest: [...bigManifest, "commands.run.start"],
+      }),
+    );
+    expect(report.unusedKeys).toEqual(["commands.run.start"]);
+    expect(report.ok).toBe(false);
+  });
+
+  test("a derived key with no entry in en is unknown, exactly as a literal one is", () => {
+    // A command whose title was never harvested must fail the check, not pass unnoticed: in the native menu it
+    // would render as the raw key `commands.run.start`.
+    const report = checkLocales(big({ derivedKeys: ["commands.run.start"] }));
+    expect(report.unknownKeys).toEqual(["commands.run.start"]);
+    expect(report.ok).toBe(false);
+  });
+
   test("a locale absent from coverage.json is recorded as zero rather than crashing", () => {
     const report = checkLocales(big({ coverage: {} }));
     expect(report.locales.every((entry) => entry.recorded === 0)).toBe(true);
@@ -261,15 +297,26 @@ describe("the shipped catalogue (spec §17)", () => {
 });
 
 describe("the i18n:check CLI", () => {
-  test("runs green against the real tree, in bootstrap mode", () => {
+  test("runs green against the real tree at full strength, which is what CI runs", () => {
     // A subprocess, because the CLI is what CI runs: this proves the script resolves its imports, finds the
     // locale files and the two source trees, and exits 0 -- none of which importing the engine would show.
-    const run = Bun.spawnSync([process.execPath, CLI, "--bootstrap"], { cwd: UI_ROOT });
+    // No `--bootstrap`: Task 11 completed the catalogue, so the size floor, the committed manifest and the
+    // unused-key sweep all bite here.
+    const run = Bun.spawnSync([process.execPath, CLI], { cwd: UI_ROOT });
     const stdout = run.stdout.toString();
     expect(run.stderr.toString()).toBe("");
     expect(run.exitCode).toBe(0);
     expect(stdout).toContain("i18n: ok");
-    expect(stdout).toMatch(/i18n: \d+ keys in en\.json \(bootstrap\)/);
+    expect(stdout).not.toContain("(bootstrap)");
+    expect(stdout).toMatch(/i18n: \d+ keys in en\.json/);
+  });
+
+  test("bootstrap mode still exists, and is visibly weaker", () => {
+    // The flag is no longer used by CI or by `bun run i18n:check`, but it remains for a partial local tree --
+    // and its output must say so, or a weakened run could be mistaken for a full one.
+    const run = Bun.spawnSync([process.execPath, CLI, "--bootstrap"], { cwd: UI_ROOT });
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.toString()).toMatch(/i18n: \d+ keys in en\.json \(bootstrap\)/);
   });
 });
 

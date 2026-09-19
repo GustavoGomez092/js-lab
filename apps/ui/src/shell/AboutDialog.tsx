@@ -72,7 +72,13 @@ function AboutPanel({ store, api }: { store: AppStore; api: AboutApi }) {
           {strings.about.copyright}
         </p>
         <div className="dialog-actions">
-          <button type="button" onClick={() => api.appCommand("openThirdPartyNotices")}>
+          <button
+            type="button"
+            // A stable hook for the E2E agent's `e2e.aboutNotices` trigger (ST-13), which clicks this real
+            // button rather than dispatching the action behind it.
+            data-testid="about-notices"
+            onClick={() => api.appCommand("openThirdPartyNotices")}
+          >
             {strings.about.thirdParty}
           </button>
           <button type="button" className="primary" ref={closeButton} onClick={close}>

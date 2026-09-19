@@ -52,6 +52,38 @@ export interface OverlayDiagnostics {
   };
 }
 
+/**
+ * EX-35: one tab-audio indicator as it actually exists in the tab bar, read off the rendered element.
+ *
+ * **Every field here is read from the DOM, never from `store.tabs[].layout.muted` or `runtimes[].audioActive`.**
+ * That is the whole point of this reporter, and the same rule `editorOptions` follows by returning what Monaco
+ * reports rather than what the settings say (`apps/ui/src/editor/Editor.tsx`). A reporter that echoed the store
+ * would stay green no matter what `AudioIndicator` rendered -- including if it rendered nothing at all -- so it
+ * could not tell "the control is on screen saying it is muted" from "the store holds `muted: true`". The unit
+ * tests already pin the component against props; only the built app can say the attributes reached the screen.
+ */
+export interface AudioIndicatorReport {
+  /**
+   * The enclosing tab row's own `.tab-title` text, so a reading names WHICH tab is making noise. Note this is
+   * the tab *label* (`tabLabel()`, which may carry a working directory), while the accessible name below is
+   * built from the bare title -- they coincide for a tab with no working directory.
+   */
+  tabTitle: string;
+  /** The row's `aria-selected`, read off the row element: whether the noisy tab is the one in front. */
+  tabSelected: string | null;
+  /** `BUTTON` for a real control; anything else means the "not a div with a click handler" claim regressed. */
+  tagName: string;
+  /** Raw attributes, uninterpreted: a missing attribute reads `null` rather than a plausible-looking `false`. */
+  ariaPressed: string | null;
+  ariaLabel: string | null;
+  className: string;
+  /** The glyph actually rendered (🔊 / 🔇). */
+  glyph: string;
+  /** Real measured geometry: a control that is present but has collapsed to nothing is not "on screen". */
+  width: number;
+  height: number;
+}
+
 export interface E2EAgentDeps {
   store: AppStore;
   /** Runs a command id through the registry. */
@@ -87,6 +119,8 @@ export interface E2EAgentDeps {
    * a synthetic keystroke cannot reach Monaco's own keybinding dispatch (see `packages/e2e/src/app.ts`'s `key`).
    */
   foldAll?(): boolean;
+  /** EX-35: the tab bar's audio indicators as rendered, attribute by attribute. See `AudioIndicatorReport`. */
+  audioIndicators?(): AudioIndicatorReport[];
 }
 
 /** E2E-only command: clicks a temporary link inside the page, as a user clicking a web link would (R-M1-17(e)). */
@@ -96,6 +130,10 @@ export const E2E_OPEN_OUTPUT_LINK = "e2e.openOutputLink";
 export const E2E_COMPLETIONS = "e2e.completions";
 export const E2E_INSTALL_ACTIONS = "e2e.installActions";
 export const E2E_FOLD_ALL = "e2e.foldAll";
+/** E2E-only command: clicks a tab's own audio indicator, as a user muting a noisy tab would (EX-35). */
+export const E2E_TOGGLE_TAB_AUDIO = "e2e.toggleTabAudio";
+/** E2E-only command: clicks the About dialog's Open-Source Notices button (ST-13). */
+export const E2E_ABOUT_NOTICES = "e2e.aboutNotices";
 
 function openLink(args: unknown): { executed: string } {
   const href = (args as { href?: unknown } | undefined)?.href;
@@ -137,6 +175,85 @@ function openOutputLink(args: unknown): { executed: string; href: string } {
   return { executed: E2E_OPEN_OUTPUT_LINK, href: link.textContent ?? "" };
 }
 
+/** The tab bar's audio indicators with the tab row each sits in. One selector, shared by the reporter and trigger. */
+function audioIndicatorElements(): { button: HTMLElement; row: Element | null }[] {
+  return [...document.querySelectorAll<HTMLElement>('[data-testid="tab-audio"]')].map((button) => ({
+    button,
+    row: button.closest('[role="tab"]'),
+  }));
+}
+
+function rowTitle(row: Element | null): string {
+  return (row?.querySelector(".tab-title")?.textContent ?? "").trim();
+}
+
+/**
+ * EX-35. Reads every tab audio indicator's own rendered attributes. See `AudioIndicatorReport` for why this
+ * must never consult the store.
+ */
+export function reportAudioIndicators(): AudioIndicatorReport[] {
+  return audioIndicatorElements().map(({ button, row }) => {
+    const { width, height } = button.getBoundingClientRect();
+    return {
+      tabTitle: rowTitle(row),
+      tabSelected: row?.getAttribute("aria-selected") ?? null,
+      tagName: button.tagName,
+      ariaPressed: button.getAttribute("aria-pressed"),
+      ariaLabel: button.getAttribute("aria-label"),
+      className: button.className,
+      glyph: (button.textContent ?? "").trim(),
+      width,
+      height,
+    };
+  });
+}
+
+/**
+ * EX-35. Clicks one tab's audio indicator, as a user silencing a noisy tab would.
+ *
+ * A named trigger for the same reason `e2e.openOutputLink` and `e2e.foldAll` are named (see `openOutputLink`
+ * above): there is no command id behind this control -- `TabBar` wires it straight to `toggleMuted` -- so the
+ * only honest way to exercise it is a real event on the real rendered button.
+ *
+ * The click deliberately `bubbles`, because the thing most worth proving here is what the component *stops*:
+ * the indicator sits inside its tab's own clickable row, and `AudioIndicator`'s `stopPropagation` is all that
+ * keeps muting a background tab from also switching to it. A non-bubbling click could not tell the difference.
+ * Focus is asserted first, so a control that a mouse alone could reach fails loudly instead of passing quietly.
+ */
+function toggleTabAudio(args: unknown): { executed: string; tabTitle: string; pressedBefore: string | null } {
+  const wanted = (args as { title?: unknown } | undefined)?.title;
+  const all = audioIndicatorElements();
+  const found = typeof wanted === "string" ? all.filter((entry) => rowTitle(entry.row) === wanted) : all;
+  const [target] = found;
+  const onScreen = `${all.length} on screen: [${all.map((entry) => rowTitle(entry.row)).join(", ")}]`;
+  if (!target) {
+    const which = typeof wanted === "string" ? ` for tab "${wanted}"` : "";
+    throw new Error(`e2e.toggleTabAudio found no audio indicator${which}; ${onScreen}`);
+  }
+  if (found.length > 1) throw new Error(`e2e.toggleTabAudio matched ${found.length} indicators; ${onScreen}`);
+  target.button.focus();
+  if (document.activeElement !== target.button)
+    throw new Error("e2e.toggleTabAudio could not focus the indicator: it is not keyboard-reachable");
+  const pressedBefore = target.button.getAttribute("aria-pressed");
+  target.button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  return { executed: E2E_TOGGLE_TAB_AUDIO, tabTitle: rowTitle(target.row), pressedBefore };
+}
+
+/**
+ * ST-13. Clicks the About dialog's Open-Source Notices button, which -- like the audio indicator -- has no
+ * command id behind it: it calls `api.appCommand("openThirdPartyNotices")` directly. Dispatching that action
+ * from the harness instead would skip the dialog entirely and prove nothing about the button on screen.
+ */
+function aboutNotices(): { executed: string; label: string } {
+  const button = document.querySelector<HTMLElement>('[data-testid="about-notices"]');
+  if (!button) throw new Error("e2e.aboutNotices found no Open-Source Notices button (is the About dialog open?)");
+  button.focus();
+  if (document.activeElement !== button)
+    throw new Error("e2e.aboutNotices could not focus the notices button: it is not keyboard-reachable");
+  button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  return { executed: E2E_ABOUT_NOTICES, label: (button.textContent ?? "").trim() };
+}
+
 /**
  * Answers Main's `e2e.request` messages (spec §22.3). Main has already validated params with zod,
  * so the agent only narrows their types. Only installed for JSLAB_E2E=1 launches.
@@ -170,6 +287,8 @@ export function createE2EAgent(deps: E2EAgentDeps) {
         if (id === E2E_INSTALL_ACTIONS)
           return { executed: E2E_INSTALL_ACTIONS, actions: (await deps.installActions?.()) ?? [] };
         if (id === E2E_FOLD_ALL) return { executed: E2E_FOLD_ALL, folded: deps.foldAll?.() ?? false };
+        if (id === E2E_TOGGLE_TAB_AUDIO) return toggleTabAudio(args);
+        if (id === E2E_ABOUT_NOTICES) return aboutNotices();
         const result = deps.executeCommand(id, args);
         if (result === "unknown") throw new Error(`Unknown command: ${id}`);
         if (result === "disabled") throw new Error(`Command is disabled: ${id}`);
@@ -186,6 +305,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
           registeredCommands: deps.registeredCommands?.() ?? [],
           tsDiagnostics: (await deps.tsDiagnostics?.()) ?? [],
           viewGeometry: deps.viewGeometry?.() ?? null,
+          audioIndicators: deps.audioIndicators?.() ?? [],
         };
       case "output":
         return { entries: snapshotOutput(deps.store.getState(), (params as { tabId?: string }).tabId) };

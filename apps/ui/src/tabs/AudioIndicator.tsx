@@ -40,6 +40,9 @@ export function AudioIndicator({
   return (
     <button
       type="button"
+      // A stable hook for the E2E agent's `audioIndicators` reporter and its `e2e.toggleTabAudio` trigger, so
+      // neither selects on `tab-audio`/`muted` -- the very class names they report and assert on.
+      data-testid="tab-audio"
       className={`tab-audio${muted ? " muted" : ""}`}
       aria-pressed={muted}
       aria-label={muted ? strings.tabs.audio.unmute(title) : strings.tabs.audio.mute(title)}

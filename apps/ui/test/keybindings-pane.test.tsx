@@ -390,6 +390,12 @@ describe("KeybindingsPane", () => {
     );
     const handle = renderWithHandle(api);
     await settled();
+    // `settled()` waits for ROWS. Rows and the handle both depend on `catalogue`, but rows render in the commit
+    // that sets it while `onReady` fires from a SEPARATE effect afterwards -- so a row-based wait can return one
+    // tick early and `handle()` throws "the pane never reported a handle". That is intermittent by nature: it
+    // needs a slow or contended machine to lose, which is why it passed here and failed on CI. Wait for the
+    // handle itself; `waitFor` retries the throw until the effect has published it.
+    await waitFor(() => handle());
 
     act(() => {
       expect(handle().resetRow("run.start")).toBe(true);
@@ -525,6 +531,9 @@ describe("KeybindingsPane", () => {
     const { api, save } = fakeApi([], { invalid: true });
     const handle = renderWithHandle(api);
     await settled();
+    // Same one-tick gap as the save-round-trip test above: wait for the handle, not for the rows that stand in
+    // for it.
+    await waitFor(() => handle());
 
     act(() => {
       expect(handle().resetRow("run.start")).toBe(false);

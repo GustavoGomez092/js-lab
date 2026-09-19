@@ -20,7 +20,7 @@ import { createEditorCommands, EDITOR_ACTIONS } from "../commands/editor-command
 import { createOutputCommands } from "../commands/output-commands";
 import { CommandRegistry } from "../commands/registry";
 import { createViewCommands } from "../commands/view-commands";
-import { createE2EAgent } from "../e2e/agent";
+import { createE2EAgent, reportAudioIndicators } from "../e2e/agent";
 import { measureLayout } from "../e2e/layout-metrics";
 import { Editor } from "../editor/Editor";
 import { getEditorHandle } from "../editor/editor-handle";
@@ -496,6 +496,9 @@ export function App({
       // chord never reaches Monaco's own keybinding dispatch (`packages/e2e/src/app.ts`).
       viewGeometry: () => getEditorHandle()?.getViewGeometry() ?? null,
       foldAll: () => getEditorHandle()?.runAction("editor.foldAll") ?? false,
+      // EX-35: the tab audio indicators as the tab bar actually rendered them. Deliberately NOT derived from
+      // `runtimes[].audioActive` or `tabs[].layout.muted` -- see `AudioIndicatorReport`.
+      audioIndicators: reportAudioIndicators,
       registeredCommands: () => registry.list().map((spec) => spec.id),
       tsDiagnostics: () => getEditorHandle()?.typeDiagnostics() ?? Promise.resolve([]),
       completions: (offset) => getEditorHandle()?.completionsAt(offset) ?? Promise.resolve([]),
@@ -575,6 +578,11 @@ export function App({
             snippetsPanel: ".snippets-panel",
             palette: ".palette",
             paletteList: ".palette-list",
+            // ST-13 (M6): the About dialog and its version list. `measureFirst` returns `null` when the selector
+            // matches nothing, so one reporter answers both "is it on screen, at a real size" and "what does it
+            // say" -- and the text is what makes the second question answerable at all.
+            aboutDialog: ".about-dialog",
+            aboutFacts: '[data-testid="about-facts"]',
           },
           {
             statusItems: ".status-item",

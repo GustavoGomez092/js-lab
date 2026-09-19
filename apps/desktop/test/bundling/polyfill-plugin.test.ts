@@ -630,12 +630,20 @@ describe("browser-node module table -- node: prefix (fix round 1, I2)", () => {
  * `Bun.build` -- `resolve-plugin.ts` deliberately selects a different `exports` condition set for it
  * (`["browser", "require", "default"]` versus the `import` branch) -- so nothing above exercised it.
  *
- * **`runJoinedModule` evaluates the bundle in Bun, where a `require` global exists.** That makes "it returned the
- * right value" worthless on its own here: a chunk that still contained a bare `require("path")` call would be
- * silently served by Bun's own require and pass, while failing in a real webview, which has no such binding. So
- * the load-bearing assertion is the static one -- the emitted chunk must contain **no free `require(` call at
- * all**, proving the call was resolved at bundle time rather than deferred to a host that only the test has.
- * `path.join('a','b') === 'a/b'` is likewise true of Bun's own `node:path`, so it is only ever a companion check.
+ * Two different things have to be pinned here, because two different fallbacks can fake a pass.
+ *
+ * 1. **`runJoinedModule` evaluates the bundle in Bun, where a `require` global exists.** A chunk that still
+ *    contained a free `require("path")` call would be served by Bun's own require and pass, while failing in a
+ *    real webview, which has no such binding. Hence the static `freeRequireCalls` check.
+ * 2. **A bypassed table is silently replaced by `Bun.build`'s own internal browser shim**, which is also
+ *    self-contained (so `freeRequireCalls` stays 0) and also behaves plausibly. This is the exact I2 failure
+ *    mode documented above. So every behavioural assertion below is against a **snapshot-backed** value that
+ *    only the real §5.13 table can produce. Measured, with the table's `require` resolution disabled:
+ *    `process.cwd()` reads `"/"` instead of the tab's working directory, `path.win32` is `undefined` instead of
+ *    an object, and `os.platform()` reads `"browser"` instead of the host platform.
+ *
+ * A value-shaped assertion such as `path.join('a','b') === 'a/b'` is true of the table AND of the shim, and so
+ * proves nothing on its own -- an earlier draft of these tests used exactly that and survived the bypass intact.
  */
 describe("browser-node -- CommonJS require() in the tab's own code (EX-19, spec §5.3)", () => {
   /** Builds one `browser-node` entry and hands back the emitted app chunk, for static inspection. */
@@ -659,27 +667,32 @@ describe("browser-node -- CommonJS require() in the tab's own code (EX-19, spec 
    */
   const freeRequireCalls = (code: string) => [...code.matchAll(/(^|[^.\w$])require\s*\(/g)].length;
 
-  test("require() of a builtin is resolved at bundle time, leaving no free require in the chunk", async () => {
-    const source = "const path = require('path');\nglobalThis.__jlProbe = path.join('a','b');\n";
+  test("require() of a builtin is served by the table, not a shim, and leaves no free require", async () => {
+    // `process.cwd()` is snapshot-backed: only the table knows this tab's working directory. The bypass fallback
+    // reads "/" instead, so this distinguishes the two; a `path.join` result would not.
+    const source = "const p = require('process');\nglobalThis.__jlProbe = p.cwd();\n";
     expect(freeRequireCalls(await buildBrowserNodeChunk(source))).toBe(0);
-    expect(await runBrowserNodeEntry(source)).toBe("a/b");
+    expect(await runBrowserNodeEntry(source)).toBe(workingDirectory);
   });
 
   test("require() with the node: prefix resolves through the same table", async () => {
-    const source = "const path = require('node:path');\nglobalThis.__jlProbe = path.join('a','b');\n";
+    // `win32` is present on the vendored `path-browserify` and absent from Bun's internal browser shim, so it
+    // separates the table from the fallback in a way `sep` (identical in both) cannot.
+    const source = "const p = require('node:path');\nglobalThis.__jlProbe = { sep: p.sep, win32: typeof p.win32 };\n";
     expect(freeRequireCalls(await buildBrowserNodeChunk(source))).toBe(0);
-    expect(await runBrowserNodeEntry(source)).toBe("a/b");
+    expect(await runBrowserNodeEntry(source)).toEqual({ sep: "/", win32: "object" });
   });
 
-  test("ESM import and require() in the same module both resolve", async () => {
+  test("ESM import and require() in the same module both resolve through the table", async () => {
+    // `os.platform()` comes from Main's own `node:os` snapshot; the bypass fallback answers "browser".
     const source = [
       "import { join } from 'node:path';",
       "const os = require('os');",
-      "globalThis.__jlProbe = [join('a','b'), typeof os.platform];",
+      "globalThis.__jlProbe = [join('a','b'), os.platform()];",
       "",
     ].join("\n");
     expect(freeRequireCalls(await buildBrowserNodeChunk(source))).toBe(0);
-    expect(await runBrowserNodeEntry(source)).toEqual(["a/b", "function"]);
+    expect(await runBrowserNodeEntry(source)).toEqual(["a/b", process.platform]);
   });
 });
 

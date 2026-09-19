@@ -6,6 +6,37 @@
 
 ---
 
+## Status — 2026-09-19
+
+Every refinement below has shipped except the second half of **6**. Audited against the merged tree on
+`integration/all-fixes` by locating the test that asserts each behaviour — grep counts were not accepted as
+evidence, because "I recognise those test names" is exactly the reasoning that left eight parity rows stale
+earlier in this project.
+
+| # | Refinement | Status | The test that asserts it |
+|---|---|---|---|
+| 1 | Copy All: one set for both entry points | ✅ | `copyAllEntries`/`copyAllText` in `output/copy.ts` are called by both paths. Button: "Copy All copies exactly the entries the chip leaves visible (R-M2-T19A-1)". Command: "a chip that matches nothing disables the command instead of copying an empty string" |
+| 2 | Keyboard focus to the output | ✅ | "view.focusOutput moves focus to the output scroller"; "view.focusEditor moves focus back to the editor"; and the availability rules, including while the Web View is docked in the log list's place |
+| 3 | Output announced to assistive tech | ✅ | "a polite live region exists before it has anything to say, and is mutated rather than replaced"; "the region announces a per-run summary, not a row, and blanks between runs" |
+| 4 | Name both separators | ✅ | "the separator carries its label as its accessible name, and the two production names are distinct" |
+| 5 | Disabled palette commands explain themselves | ✅ | "a search whose only match is disabled lists it, greyed and labelled, instead of 'No matching commands'"; "arrow keys skip disabled rows, so the selection and Enter always land on a runnable command"; "clicking or hovering a disabled row neither runs it nor closes the palette". `palette/CommandPalette.tsx:176` sets `aria-disabled` |
+| 6 | The object overflow must not read as a broken button | 🚧 **half done** | Shipped, and it is the substantive half: `ValueView.tsx:321` renders a real `<button class="v-more">` for pageable collections and `:327` a plain `<div class="v-hole">` for objects, pinned by "an object's overflow states its count but is not a button (OU-02 boundary)" — whose comment names the mutant it kills. **Outstanding:** both branches still render the *same* string, `output.moreEntries` → "… N more entries". This section asked for distinct wording, and spec §5.9 agrees with it: objects have properties, collections have entries |
+| 7 | The notice banner needs a voice per severity | ✅ | "each severity renders its own class and its own icon" |
+| 8 | Focusing a row highlights the editor line | ✅ | "focusing the line badge reports its line, and blurring clears it (item 8)" |
+| 9 | All four filter chips count | ✅ | "all four chips show their count (R-UI9-COUNTS-1)" |
+| 10 | Make the window-level drop handlers testable | ✅ | Three §10.2 tests in `apps/ui/isolated/app.test.tsx`: the non-file drag left to the browser, the file dropped anywhere opening as a tab, and the folder refused with the working-directory hint |
+| 11 | Value tree keyboard navigation and Expand All | ✅ | `describe("ValueView: arrow-key navigation (§11)")` and `describe("ValueView: Expand All (§11)")` |
+
+**§0's second correction is superseded.** It records that the drag/drop JSX handlers — the `types.includes("Files")`
+guard and the `webkitGetAsEntry().isDirectory` detection — are "genuinely uncovered". True at the base ref;
+item 10 has since covered all three paths.
+
+**Where the tests live, because it cost an audit.** `apps/ui` has *three* test roots — `test`, `isolated` and
+`editor-isolated` — and the package's `test` script runs all three in sequence. Item 10 first read as
+unimplemented purely because the search was scoped to `apps/ui/test`, where its tests do not live.
+
+---
+
 ## 0. What the UI actually does today (read, not assumed)
 
 | Area | Current behaviour | Evidence |

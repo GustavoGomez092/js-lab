@@ -526,6 +526,7 @@
     "jumpToLine": "Go to line {{line}}",
     "lastSuccessfulRun": "Last successful run",
     "moreEntries": "… {{remaining}} more entries",
+    "moreProperties": "… {{remaining}} more properties",
     "noMatches": "No entries match this filter",
     "noOutput": "No output yet — press {{keys}}",
     "noOutputNoKeys": "No output yet",

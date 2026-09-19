@@ -227,7 +227,10 @@ describe("ValueView", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /Object/ }));
     expect(moreButton()).toBeNull();
-    expect(container.querySelector(".v-hole")?.textContent).toContain("7 more entries");
+    // "properties", not "entries" -- §5.9 treats them as different rows, and with the element type being the
+    // only other difference, the noun is what distinguishes them when read aloud. Kills "reuse
+    // `output.moreEntries` for the object branch too".
+    expect(container.querySelector(".v-hole")?.textContent).toContain("7 more properties");
   });
 
   test("collection rows are labelled with their real index once a later page is loaded (OU-02)", () => {

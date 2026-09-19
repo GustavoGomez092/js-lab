@@ -417,6 +417,7 @@
   "output.jumpToLine",
   "output.lastSuccessfulRun",
   "output.moreEntries",
+  "output.moreProperties",
   "output.noMatches",
   "output.noOutput",
   "output.noOutputNoKeys",

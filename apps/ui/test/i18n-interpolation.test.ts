@@ -64,6 +64,7 @@ describe("interpolated strings keep their English output (spec §17)", () => {
     expect(strings.snippets.conflicts(2, 5)).toBe("5 snippets to import, 2 with a name you already use.");
     expect(strings.npm.weekly(1234)).toBe("1,234 weekly downloads");
     expect(strings.output.moreEntries(1234)).toBe("… 1,234 more entries");
+    expect(strings.output.moreProperties(1234)).toBe("… 1,234 more properties");
   });
 
   /**

@@ -323,8 +323,11 @@ export function ValueView({ value, expand, nested = false, label, cascade = null
             </button>
           ) : remaining > 0 ? (
             // An object's properties are not paged, so the count is still stated -- it just is not a button that
-            // could promise a page `run.expand` can never return.
-            <div className="v-hole">{strings.output.moreEntries(remaining)}</div>
+            // could promise a page `run.expand` can never return. It also says "properties" rather than
+            // "entries": spec §5.9 lists object properties and collection entries as separate rows, and once
+            // the element type is the only other difference, the noun is what tells a screen-reader user which
+            // kind of remainder they are hearing.
+            <div className="v-hole">{strings.output.moreProperties(remaining)}</div>
           ) : null}
           {pageError && <div className="v-error">{pageError}</div>}
         </div>

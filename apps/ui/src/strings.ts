@@ -314,6 +314,15 @@ export const strings = {
      */
     // Formatted before interpolation: i18next renders a bare number as "1234", losing the separator.
     moreEntries: (remaining: number) => t("output.moreEntries", { remaining: remaining.toLocaleString("en-US") }),
+    /**
+     * The same count for an OBJECT's hidden properties, which are never paged — spec §5.9 lists object
+     * properties and collection entries as separate rows, so calling an object's remainder "entries" is simply
+     * the wrong noun. It is a separate key rather than a reworded shared one because the two renderings differ
+     * in kind as well as wording: the collection remainder is a button that fetches the next page, this one is
+     * plain text that cannot promise a page `run.expand` would never return.
+     */
+    // Formatted before interpolation for the same reason as `moreEntries` above.
+    moreProperties: (remaining: number) => t("output.moreProperties", { remaining: remaining.toLocaleString("en-US") }),
     region: t("output.region"),
     /**
      * The output panel's polite live region (`OutputPanel`'s `<output className="visually-hidden">`).

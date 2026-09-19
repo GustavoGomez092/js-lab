@@ -48,8 +48,16 @@ describe("Main's strings, resolved through t() (spec §17)", () => {
   });
 
   test("both session plurals select by count", () => {
-    expect(strings.notices.tabsDropped(1)).toContain("1 tab in session.json");
-    expect(strings.notices.tabsDropped(3)).toContain("3 tabs in session.json");
+    // Defect B (queued follow-up batch): the _one form kept the plural verb and possessive from an
+    // earlier plural split ("...couldn't be read and were skipped. Their buffer files were kept."),
+    // which is ungrammatical for a single tab. Exact-matched so both bugs -- and any regression of
+    // the still-correct plural -- are caught, not just the substring that was never wrong.
+    expect(strings.notices.tabsDropped(1)).toBe(
+      "1 tab in session.json couldn't be read and was skipped. Its buffer file was kept.",
+    );
+    expect(strings.notices.tabsDropped(3)).toBe(
+      "3 tabs in session.json couldn't be read and were skipped. Their buffer files were kept.",
+    );
     // The second plural the extraction found: one unreadable buffer reads "tab's", several read "tabs'".
     expect(strings.notices.buffersUnreadable(1)).toBe(
       "1 tab's contents couldn't be read, so it opened empty and read-only. JSLab won't save it over its file.",

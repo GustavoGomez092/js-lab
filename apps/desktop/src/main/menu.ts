@@ -283,6 +283,11 @@ export function buildMenu(model: MenuModel): MenuItem[] {
     {
       label: t("menu.help"),
       submenu: [
+        // ST-11 (spec §7.4): the three link items lead, as they do in the app this menu is measured against.
+        item("help.documentation"),
+        item("help.reportIssue"),
+        item("help.whatsNew"),
+        separator,
         item("help.copyDebugLog"),
         item("help.openLogsFolder"),
         separator,

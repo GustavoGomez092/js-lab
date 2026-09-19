@@ -19,6 +19,11 @@ export interface AppHandlerDeps {
   os: { macOS: string; arch: string };
   clipboard(text: string): void;
   openPath(path: string): void;
+  /**
+   * ST-11 (spec §7.4): hands a URL to the user's default browser. This is the same single external-link path a
+   * blocked in-app navigation takes (`index.ts`), so JSLab has exactly one way to open a link, not two.
+   */
+  openExternal(url: string): void;
   restartInSafeMode(): void;
   toggleFullScreen(): void;
   /** Standard macOS zoom: fill the display's work area, or go back to the pre-zoom frame. Never full screen. */
@@ -33,6 +38,20 @@ export interface AppHandlerDeps {
   home?: string;
   log: Log;
 }
+
+/**
+ * ST-11 (spec §7.4): the three Help links, in one place so a menu item cannot point somewhere no test checks.
+ *
+ * Each is a live page on the project's own repository — the README is JSLab's actual documentation entry point
+ * (`docs/user/` holds only two topic pages and no index), and canary builds are published as prereleases on
+ * every push to `main`, so the releases page is what "What's New" means here. A Help item that opens a 404 is
+ * worse than one that does not exist, so these are asserted as exact values rather than assembled at runtime.
+ */
+export const HELP_URLS = {
+  documentation: "https://github.com/GustavoGomez092/js-lab#readme",
+  reportIssue: "https://github.com/GustavoGomez092/js-lab/issues/new",
+  whatsNew: "https://github.com/GustavoGomez092/js-lab/releases",
+} as const;
 
 /** Help menu and window-level actions that need Main (spec §7.4, §8 Advanced, §20). */
 export function createAppHandlers(deps: AppHandlerDeps) {
@@ -75,6 +94,15 @@ async function runAppAction(deps: AppHandlerDeps, action: AppAction): Promise<vo
       return;
     case "openLogsFolder":
       deps.openPath(deps.paths.logsDir);
+      return;
+    case "openDocumentation":
+      deps.openExternal(HELP_URLS.documentation);
+      return;
+    case "reportIssue":
+      deps.openExternal(HELP_URLS.reportIssue);
+      return;
+    case "openWhatsNew":
+      deps.openExternal(HELP_URLS.whatsNew);
       return;
     case "openDataFolder":
       deps.openPath(deps.paths.dataDir);

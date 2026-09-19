@@ -2,7 +2,12 @@ import { describe, expect, mock, test } from "bun:test";
 import { defaultSettings, type KeybindingRule } from "@jslab/shared";
 import { createRedactor } from "../../src/main/logging/redact";
 import { appBundlePath, relaunchCommand } from "../../src/main/platform/relaunch";
-import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } from "../../src/main/rpc/app-handlers";
+import {
+  type AppHandlerDeps,
+  createAppHandlers,
+  createSettingsAppHandlers,
+  HELP_URLS,
+} from "../../src/main/rpc/app-handlers";
 
 /**
  * The keybindings store as `openKeybindingsFile` sees it. Built by a helper rather than mutated in place: under
@@ -27,6 +32,7 @@ function setup(keybindings = keybindingsFake()) {
     os: { macOS: "26.5.2", arch: "arm64" },
     clipboard: mock((_text: string) => {}),
     openPath: mock((_path: string) => {}),
+    openExternal: mock((_url: string) => {}),
     restartInSafeMode: mock(() => {}),
     toggleFullScreen: mock(() => {}),
     zoomWindow: mock(() => {}),
@@ -71,6 +77,35 @@ describe("app.command", () => {
     expect(deps.zoomWindow).toHaveBeenCalledTimes(1);
     expect(deps.closeWindow).toHaveBeenCalledTimes(1);
     expect(deps.openSettings).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * ST-11 (spec §7.4). The URLs are asserted as literals rather than as `HELP_URLS.x` lookups: comparing the
+   * handler's output against the very constant the handler read would survive any edit to that constant,
+   * including one that pointed a Help item at the wrong page. These three strings were confirmed to return
+   * HTTP 200 on the project's repository — a Help item that opens a 404 is worse than one that is absent.
+   */
+  test("the three Help links each open their page through the one external-link path (ST-11)", () => {
+    const { deps, handlers } = setup();
+    for (const action of ["openDocumentation", "reportIssue", "openWhatsNew"]) {
+      handlers.messages["app.command"]({ action });
+    }
+    expect(deps.openExternal.mock.calls).toEqual([
+      ["https://github.com/GustavoGomez092/js-lab#readme"],
+      ["https://github.com/GustavoGomez092/js-lab/issues/new"],
+      ["https://github.com/GustavoGomez092/js-lab/releases"],
+    ]);
+    // A link must never be handed to `openPath`, which would try to open a URL as a filesystem path.
+    expect(deps.openPath).not.toHaveBeenCalled();
+  });
+
+  test("every Help link is an https URL on the project's own repository (ST-11)", () => {
+    // The check above pins three exact strings; this one states the property they have to keep, so a future
+    // URL change cannot quietly introduce an http or off-repository link.
+    for (const url of Object.values(HELP_URLS)) {
+      expect(url.startsWith("https://github.com/GustavoGomez092/js-lab")).toBe(true);
+    }
+    expect(Object.keys(HELP_URLS).sort()).toEqual(["documentation", "reportIssue", "whatsNew"]);
   });
 
   test("the Settings window RPC rejects main-window actions such as closeWindow and runs its own (FA-m11)", async () => {

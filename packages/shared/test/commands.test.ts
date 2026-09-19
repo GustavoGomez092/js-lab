@@ -132,10 +132,11 @@ describe("command titles come from the catalogue (spec §17)", () => {
     expect(COMMANDS.every((command) => !("title" in command))).toBe(true);
   });
 
-  test("all 114 commands have an entry in en.json", () => {
+  test("all 117 commands have an entry in en.json", () => {
     const missing = COMMANDS.filter((command) => typeof lookup(commandTitleKey(command.id)) !== "string");
     expect(missing.map((command) => command.id)).toEqual([]);
-    expect(COMMANDS.length).toBe(114);
+    // 114 through M5; ST-11 added Help → Documentation / Report Issue / What's New.
+    expect(COMMANDS.length).toBe(117);
   });
 
   test("the entries are nested, never flat dotted keys, because Main walks one segment at a time", () => {

@@ -60,10 +60,13 @@
     },
     "help": {
       "copyDebugLog": "Copy Debug Log",
+      "documentation": "Documentation",
       "installCli": "Install jslab Command…",
       "openLogsFolder": "Open Logs Folder",
+      "reportIssue": "Report Issue",
       "restartSafeMode": "Restart in Safe Mode",
-      "uninstallCli": "Uninstall jslab Command…"
+      "uninstallCli": "Uninstall jslab Command…",
+      "whatsNew": "What's New"
     },
     "language": {
       "javascript": "Language: JavaScript",

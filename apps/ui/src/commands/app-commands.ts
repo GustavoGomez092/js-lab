@@ -132,6 +132,10 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
       }),
     ),
 
+    // ST-11 (spec §7.4): Main owns the URLs; the UI only names the action.
+    { id: "help.documentation", run: () => deps.api.appCommand("openDocumentation") },
+    { id: "help.reportIssue", run: () => deps.api.appCommand("reportIssue") },
+    { id: "help.whatsNew", run: () => deps.api.appCommand("openWhatsNew") },
     { id: "help.copyDebugLog", run: () => deps.api.appCommand("copyDebugLog") },
     { id: "help.openLogsFolder", run: () => deps.api.appCommand("openLogsFolder") },
     { id: "help.installCli", run: () => deps.api.appCommand("installCli") },

@@ -18,6 +18,45 @@ describe("pipeline", () => {
     expect(r.ok && r.code).toContain("react/jsx-runtime");
   });
 
+  /**
+   * LB-03's second half. Babel's TypeScript preset only ERASES types -- it never type-checks -- so a source
+   * carrying a genuine type error (the editor reports it as TS2322) still compiles and still runs. The
+   * diagnostic reaches the editor from the TypeScript worker, on a path that never gates a run.
+   *
+   * Anchored to behaviour rather than to the transform's own report: the code is executed and the value it
+   * actually produces at runtime is asserted -- the string "x", despite the `number` annotation.
+   */
+  test("a type error compiles and still runs, so types never block execution", async () => {
+    const source = 'const wrong: number = "x";\nwrong //?';
+    const r = transform(source, plain);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+    const { calls } = await runInstrumented(source, { autoLog: false, loopProtection: false });
+    expect(calls).toEqual([{ kind: "mc", line: 2, value: "x" }]);
+  });
+
+  /**
+   * LB-04. The automatic runtime is what lets user code omit the React import: Babel injects the
+   * `react/jsx-runtime` import itself. Checked for both JSX-bearing languages, and anchored to the emitted
+   * call as well as the specifier -- a classic-runtime build still emits `React.createElement`, which a
+   * specifier-only assertion would not distinguish.
+   */
+  test("JSX and TSX compile with the automatic runtime, so no React import is needed", () => {
+    const source = "const el = <div>{1}</div>;";
+    expect(source).not.toContain("React");
+    for (const language of ["jsx", "tsx"] as const) {
+      const r = transform(source, { ...plain, language });
+      expect(r.ok).toBe(true);
+      if (!r.ok) continue;
+      expect(r.code).toContain("react/jsx-runtime");
+      // Babel emits the imported binding as `_jsx(` / `_jsxs(`, so this deliberately does not anchor on a word
+      // boundary before the name -- `_` is a word character and `\bjsx` would never match the real output.
+      expect(r.code).toMatch(/jsxs?\(/);
+      expect(r.code).not.toContain("React.createElement");
+    }
+  });
+
   test("reports syntax errors with position and code frame", () => {
     const r = transform("const x = ;", plain);
     expect(r.ok).toBe(false);

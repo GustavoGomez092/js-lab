@@ -341,6 +341,10 @@ async function start(): Promise<void> {
     clipboard: writeClipboard,
     openPath: (target) =>
       e2eEnabled ? appendFileSync(join(paths.dataDir, "e2e-opened.txt"), `${target}\n`) : Utils.openPath(target),
+    // ST-11 (spec §7.4): Help → Documentation / Report Issue / What's New reuse the ONE external-link path
+    // below rather than adding a second one. `openExternal` is declared later and read only when an action
+    // runs, exactly as `mainWindow` and `settingsWindow` are.
+    openExternal: (link) => openExternal(link),
     restartInSafeMode: () => {
       logger.info(strings.log.restartRequested);
       requestSafeModeOnNextLaunch(paths.dataDir);

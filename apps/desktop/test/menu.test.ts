@@ -299,4 +299,24 @@ describe("application menu", () => {
     expect(byLabel(installed, "Uninstall jslab Command")).toMatchObject({ action: menuAction("help.uninstallCli") });
     expect(byLabel(installed, "Install jslab Command")).toBeUndefined();
   });
+
+  /**
+   * ST-11 (spec §7.4). The English asserted here is a literal, not a lookup of the same catalogue entry the
+   * menu read, so it pins the whole id -> commandTitleKey -> en.json -> native menu chain rather than merely
+   * agreeing with itself: a renamed or deleted `commands.help.*` entry makes `t()` return the raw key and
+   * these fail.
+   */
+  test("the Help menu carries Documentation, Report Issue and What's New, each on its command (ST-11)", () => {
+    const menu = buildMenu(model());
+    expect(byLabel(menu, "Documentation")).toMatchObject({ action: menuAction("help.documentation") });
+    expect(byLabel(menu, "Report Issue")).toMatchObject({ action: menuAction("help.reportIssue") });
+    expect(byLabel(menu, "What's New")).toMatchObject({ action: menuAction("help.whatsNew") });
+
+    // Order matters to the reader: the three link items lead the menu, ahead of the diagnostic items. Asserted
+    // on the Help submenu itself so a block pasted into another menu cannot satisfy the lookups above.
+    const help = (menu.find((item) => item.label === "Help")?.submenu ?? []).map(
+      (item) => item.label?.split("    ")[0],
+    );
+    expect(help.slice(0, 5)).toEqual(["Documentation", "Report Issue", "What's New", undefined, "Copy Debug Log"]);
+  });
 });

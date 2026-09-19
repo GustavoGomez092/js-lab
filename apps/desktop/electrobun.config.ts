@@ -40,4 +40,20 @@ export default {
   runtime: {
     exitOnLastWindowClosed: false,
   },
+  // TF-20 (spec §4.6): declare the JS/TS family as document types so macOS offers JSLab for them.
+  //
+  // Electrobun 2.0.1 does expose a native `app.fileAssociations` field that documents itself as generating
+  // `CFBundleDocumentTypes`, but it exposes no `LSHandlerRank` control, and ruling R7 requires "Alternate" for
+  // every one of these extensions so JSLab never outranks the user's own editor for a .js or .ts file. Its
+  // emitter is also not among the devkit's readable files, so what rank it would produce cannot be confirmed
+  // here. M0-S5 proved this hook patch end to end instead (LaunchServices registration for all 8 extensions and
+  // `open-url` delivery), so that is what ships; re-evaluate the native field in M6 if it gains rank control.
+  //
+  // Wired to BOTH hooks deliberately. On macOS the real .app is compressed into its install/update payload
+  // BEFORE `postWrap` fires, so `postWrap` alone patches only the self-extracting installer stub and leaves the
+  // app macOS actually registers untouched. `postBuild` is the one that matters; see scripts/patch-plist.ts.
+  scripts: {
+    postBuild: "./scripts/patch-plist.ts",
+    postWrap: "./scripts/patch-plist.ts",
+  },
 } satisfies ElectrobunConfig;

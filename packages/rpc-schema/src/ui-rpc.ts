@@ -146,6 +146,11 @@ export const APP_ACTIONS = [
   "installCli",
   "uninstallCli",
   "openKeybindingsFile",
+  // ST-11 (spec §7.4): Help → Documentation / Report Issue / What's New. Each opens a page in the user's
+  // default browser through Main's one external-link path; the UI never learns the URLs.
+  "openDocumentation",
+  "reportIssue",
+  "openWhatsNew",
 ] as const;
 export type AppAction = (typeof APP_ACTIONS)[number];
 export const appCommandSchema = z.object({ action: z.enum(APP_ACTIONS) });

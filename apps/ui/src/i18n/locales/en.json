@@ -2,5 +2,687 @@
   "app": {
     "name": "JSLab",
     "settingsWindowTitle": "JSLab Settings"
+  },
+  "commands": {
+    "copyFailed": "Couldn't copy the output to the clipboard.",
+    "current": "current"
+  },
+  "env": {
+    "add": "Add",
+    "cancel": "Cancel",
+    "empty": "No variables yet. Type a key below, or paste a .env file.",
+    "errors": {
+      "duplicateKey": "Another row already uses this key.",
+      "invalidKey": "Use letters, digits and _, and don't start with a digit."
+    },
+    "help": "Every tab uses these variables. Paste a .env file into Key to add several at once. Changes apply from the next run.",
+    "hideButton": "Hide",
+    "hideNew": "Hide new value",
+    "key": "Key",
+    "loadFailed": "Couldn't read your saved variables, so Save is off to protect them. Close this sheet and open it again.",
+    "newKey": "New key",
+    "newValue": "New value",
+    "revealNew": "Show new value",
+    "save": "Save",
+    "showButton": "Show",
+    "title": "Environment Variables",
+    "value": "Value"
+  },
+  "files": {
+    "cancel": "Cancel",
+    "close": "Close",
+    "closeDetail": "Its contents are kept in Reopen Closed Tab.",
+    "dontSave": "Don't Save",
+    "folderDrop": "A dropped folder can't become the working directory here. Use Actions → Set Working Directory… or the status bar.",
+    "largeTitle": "Open a large file?",
+    "locationTitle": "Save to this location?",
+    "open": "Open",
+    "pasteButton": "Paste",
+    "pasteTitle": "Paste a large amount of text?",
+    "save": "Save",
+    "saveChangesDetail": "Your changes will be lost if you don't save them.",
+    "unreadableBuffer": "JSLab couldn't read this tab's contents, so it won't save over the file on disk."
+  },
+  "fonts": {
+    "bundledUnavailable": "The bundled code font couldn't load; using the system monospace font."
+  },
+  "format": {
+    "busy": "Formatting…",
+    "crashed": "the formatter stopped unexpectedly",
+    "disposed": "the formatter was closed",
+    "restarted": "the formatter was restarted",
+    "timedOut": "formatting took too long, so the formatter was restarted"
+  },
+  "limits": {
+    "tooLarge": "This tab is larger than 64 MB. JSLab stops saving and running it until it's smaller."
+  },
+  "logpoints": {
+    "noValue": "Logpoint has no value to log on this line",
+    "tooltip": "Logpoint — this line's value is shown in the output"
+  },
+  "notices": {
+    "copyDebugLog": "Copy Debug Log",
+    "dismissAll": "Dismiss all"
+  },
+  "npm": {
+    "addButton": "Add",
+    "adding": "Adding…",
+    "allowAndRetry": "Allow Scripts and Retry",
+    "allowScripts": "Allow install scripts",
+    "close": "Close",
+    "copyLog": "Copy Log",
+    "dismiss": "Dismiss",
+    "hints": {
+      "disk": "JSLab couldn't write the packages folder. Check disk space and permissions.",
+      "nativeBuild": "A native module failed to build. See the log for the compiler error.",
+      "network": "Check your connection and the registry in Settings → NPM.",
+      "noMatchingVersion": "No published version matches. Try name@latest.",
+      "notFound": "The registry has no package with this name. Check the spelling.",
+      "peerConflict": "It needs a different version of a package you already have. The log names it.",
+      "scriptBlocked": "Install scripts were blocked. Turn on Allow install scripts.",
+      "timeout": "Stopped after 5 minutes. Check your connection, then retry.",
+      "unknown": "Open the log below to see what Bun reported."
+    },
+    "latest": "Latest",
+    "latestUnknown": "—",
+    "log": "Log",
+    "major": "Major",
+    "name": "Name",
+    "none": "No packages yet. Search above, or type name@version and press Return.",
+    "removeButton": "Remove",
+    "retry": "Retry",
+    "scriptBlocked": "Installed without running install scripts. To run them, turn on Allow install scripts and install again.",
+    "searchLabel": "Search npm packages",
+    "searchPlaceholder": "Search npm, or type name@version",
+    "showTypes": "Show @types",
+    "title": "NPM Packages",
+    "upToDate": "Up to date",
+    "updateAll": "Update All",
+    "updateButton": "Update",
+    "version": "Installed"
+  },
+  "output": {
+    "anonymous": "<anonymous>",
+    "changeWorkingDirectory": "Change…",
+    "clear": "Clear",
+    "copied": "Copied",
+    "copyAll": "Copy All",
+    "copyFailed": "Couldn't copy",
+    "filterLabel": "Output filter",
+    "filters": {
+      "all": "All",
+      "errors": "Errors",
+      "logs": "Logs",
+      "results": "Results"
+    },
+    "lastSuccessfulRun": "Last successful run",
+    "noMatches": "No entries match this filter",
+    "region": "Output",
+    "setWorkingDirectory": "Set Working Directory…",
+    "showAll": "Show all",
+    "tableIndex": "(index)",
+    "uncaughtInPromise": "Uncaught (in promise) ",
+    "webViewTab": "Web View"
+  },
+  "palette": {
+    "categories": {
+      "app": "JSLab",
+      "edit": "Edit",
+      "file": "File",
+      "format": "Format",
+      "help": "Help",
+      "language": "Language",
+      "run": "Run",
+      "runtime": "Runtime",
+      "tab": "Tabs",
+      "theme": "Theme",
+      "tools": "Tools",
+      "view": "View"
+    },
+    "context": {
+      "editor": "Editor",
+      "output": "Output"
+    },
+    "empty": "No matching commands",
+    "footer": {
+      "close": "close",
+      "keys": {
+        "close": "esc",
+        "move": "↑↓",
+        "run": "↵"
+      },
+      "move": "move",
+      "run": "run"
+    },
+    "label": "Command palette",
+    "placeholder": "Type a command",
+    "unavailable": "Unavailable now"
+  },
+  "settings": {
+    "app": {
+      "uiLanguage": {
+        "help": "Language of menus and panels. More languages arrive in a later version.",
+        "label": "Language"
+      }
+    },
+    "appearance": {
+      "darkTheme": {
+        "help": "Theme used in dark mode when following the system.",
+        "label": "Dark Theme"
+      },
+      "followSystem": {
+        "help": "Switch between the light and dark themes below with macOS.",
+        "label": "Follow System Appearance"
+      },
+      "font": {
+        "help": "Font for the editor and output. Bundled fonts are listed first, then installed fonts.",
+        "label": "Font"
+      },
+      "fontLigatures": {
+        "help": "Combine character pairs like => into ligatures when the font supports them.",
+        "label": "Font Ligatures"
+      },
+      "fontSize": {
+        "help": "Font size for the editor and output (8–72).",
+        "label": "Font Size"
+      },
+      "lightTheme": {
+        "help": "Theme used in light mode when following the system.",
+        "label": "Light Theme"
+      },
+      "theme": {
+        "help": "Color theme for the editor and the window.",
+        "label": "Theme"
+      },
+      "uiScale": {
+        "help": "Scales the editor, output and side bar. Also changed by ⌘= and ⌘−.",
+        "label": "Zoom"
+      }
+    },
+    "build": {
+      "decorators": {
+        "help": "Decorator syntax: 2023-11 (the standard), Legacy (TypeScript experimentalDecorators) or None.",
+        "label": "Decorators"
+      },
+      "doExpressions": {
+        "help": "do { … } blocks that produce a value.",
+        "label": "Do Expressions"
+      },
+      "functionSent": {
+        "help": "The value last passed to a generator's next().",
+        "label": "function.sent"
+      },
+      "optionalChainingAssign": {
+        "help": "a?.b = c assigns only when a is not null or undefined.",
+        "label": "Optional Chaining Assignment"
+      },
+      "pipelineOperator": {
+        "help": "Hack-style |> with % as the topic token.",
+        "label": "Pipeline Operator"
+      },
+      "regexpModifiers": {
+        "help": "Inline flags such as (?i:a) in regular expressions.",
+        "label": "RegExp Modifiers"
+      },
+      "throwExpressions": {
+        "help": "throw as an expression, for example value ?? throw new Error().",
+        "label": "Throw Expressions"
+      }
+    },
+    "confirmReset": "Confirm Reset",
+    "editor": {
+      "activeLine": {
+        "help": "Highlight the line with the cursor.",
+        "label": "Active Line"
+      },
+      "autocomplete": {
+        "help": "Suggest completions while you type.",
+        "label": "Autocomplete"
+      },
+      "closeBrackets": {
+        "help": "Insert the closing bracket or quote when you type the opening one.",
+        "label": "Close Brackets"
+      },
+      "formatOnSave": {
+        "help": "Format code with Prettier before saving a file.",
+        "label": "Format on Save"
+      },
+      "hoverDelayMs": {
+        "help": "Milliseconds before hover information appears (100–2000).",
+        "label": "Hover Delay"
+      },
+      "hoverInfo": {
+        "help": "Show type information when hovering over code.",
+        "label": "Hover Info"
+      },
+      "invisibles": {
+        "help": "Render spaces and tabs.",
+        "label": "Invisibles"
+      },
+      "lineNumbers": {
+        "help": "Show line numbers in the gutter.",
+        "label": "Line Numbers"
+      },
+      "lineWrap": {
+        "help": "Wrap long lines to the editor width.",
+        "label": "Line Wrap"
+      },
+      "linting": {
+        "help": "Show TypeScript diagnostics inline. Never blocks running code.",
+        "label": "Linting"
+      },
+      "minimap": {
+        "help": "Show a code overview next to the scroll bar.",
+        "label": "Minimap"
+      },
+      "signatures": {
+        "help": "Show parameter hints while typing a call.",
+        "label": "Signatures"
+      },
+      "vimKeys": {
+        "help": "Edit with Vim key bindings. ⌘R still runs in every mode.",
+        "label": "Vim Keys"
+      }
+    },
+    "fontsUnavailable": "Couldn't load installed fonts",
+    "groups": {
+      "bundled": "Bundled",
+      "dark": "Dark",
+      "installed": "Installed",
+      "light": "Light",
+      "monospace": "Installed monospace"
+    },
+    "keybindings": {
+      "captureHint": "Press the keys you want, or Escape to cancel.",
+      "change": "Change",
+      "columns": {
+        "command": "Command",
+        "keybinding": "Keybinding",
+        "source": "Source",
+        "when": "When"
+      },
+      "empty": "No commands match this search",
+      "fileInvalid": "keybindings.json isn't valid JSON, so it can't be edited here. Open it, fix it, then relaunch.",
+      "help": "Every JSLab command and the keys that run it.",
+      "loadFailed": "Couldn't read the keybindings.",
+      "openFile": "Open keybindings.json",
+      "rejected": {
+        "bareKey": "Add a modifier (⌘, ⌃ or ⌥) to that key, or use a function key.",
+        "reserved": "That key is reserved and can't be used as a shortcut."
+      },
+      "reset": "Reset",
+      "resetAll": "Reset All Keybindings",
+      "saveFailed": "Couldn't save your keybindings.",
+      "search": "Search keybindings",
+      "source": {
+        "default": "Default",
+        "none": "Not bound",
+        "user": "User"
+      },
+      "title": "Keybindings",
+      "unregistered": "Not available in this window"
+    },
+    "loadingFonts": "Loading installed fonts…",
+    "npm": {
+      "allowInstallScripts": {
+        "help": "Run packages' install scripts. Each package is added to trustedDependencies; scripts run with your permissions. Applies to future installs. Packages you already trusted keep running their install scripts.",
+        "label": "Allow Install Scripts"
+      },
+      "autoInstallTypes": {
+        "help": "Install @types/<package> automatically when an installed package has no types of its own.",
+        "label": "Install Types Automatically"
+      }
+    },
+    "npmrc": {
+      "editorLabel": ".npmrc contents",
+      "exampleText": "@acme:registry=https://npm.acme.dev/\n//npm.acme.dev/:_authToken=<token>",
+      "examples": "Examples",
+      "help": "Registry and authentication for package installs. Your ~/.npmrc is never used.",
+      "privacyNote": "This file is readable only by you, and tokens never appear in JSLab's logs.",
+      "reset": "Reset",
+      "resetDone": "Restored the default registry",
+      "resetFailed": "Couldn't reset .npmrc.",
+      "save": "Save",
+      "saved": "Saved .npmrc",
+      "title": ".npmrc"
+    },
+    "openDataFolder": "Open Data Folder",
+    "options": {
+      "arrowParens": {
+        "always": "Always",
+        "avoid": "Avoid"
+      },
+      "channel": {
+        "canary": "Canary",
+        "stable": "Stable"
+      },
+      "decorators": {
+        "2023-11": "2023-11 (standard)",
+        "legacy": "Legacy (experimentalDecorators)",
+        "none": "None"
+      },
+      "language": {
+        "javascript": "JavaScript",
+        "jsx": "JSX",
+        "tsx": "TSX",
+        "typescript": "TypeScript"
+      },
+      "layout": {
+        "horizontal": "Horizontal",
+        "vertical": "Vertical"
+      },
+      "quoteProps": {
+        "as-needed": "As needed",
+        "consistent": "Consistent",
+        "preserve": "Preserve"
+      },
+      "runtime": {
+        "browser": "Browser",
+        "browser-node": "Browser & Node APIs",
+        "bun": "Bun"
+      },
+      "trailingComma": {
+        "all": "All",
+        "es5": "ES5",
+        "none": "None"
+      },
+      "uiLanguage": {
+        "en": "English",
+        "es": "Español",
+        "ja": "日本語",
+        "pt": "Português",
+        "system": "System",
+        "zh": "中文"
+      }
+    },
+    "output": {
+      "highlighting": {
+        "help": "Color values in the output by type.",
+        "label": "Output Highlighting"
+      },
+      "maxEntries": {
+        "help": "Most entries kept per run before output is truncated (100–100,000).",
+        "label": "Output Limit"
+      },
+      "showLineNumbers": {
+        "help": "Show the source line next to each output entry.",
+        "label": "Output Line Numbers"
+      }
+    },
+    "prettier": {
+      "arrowParens": {
+        "help": "Include parentheses around a sole arrow function parameter.",
+        "label": "Arrow Parens"
+      },
+      "bracketSameLine": {
+        "help": "Put the > of a multi-line JSX element at the end of the last line.",
+        "label": "Bracket Same Line"
+      },
+      "bracketSpacing": {
+        "help": "Put spaces between brackets in object literals.",
+        "label": "Bracket Spacing"
+      },
+      "jsxSingleQuote": {
+        "help": "Use single quotes in JSX attributes.",
+        "label": "JSX Single Quotes"
+      },
+      "printWidth": {
+        "help": "Line length Prettier wraps at.",
+        "label": "Print Width"
+      },
+      "quoteProps": {
+        "help": "When to quote object property names.",
+        "label": "Quote Props"
+      },
+      "semi": {
+        "help": "Add a semicolon at the end of every statement.",
+        "label": "Semicolons"
+      },
+      "singleQuote": {
+        "help": "Use single quotes instead of double quotes.",
+        "label": "Single Quotes"
+      },
+      "tabWidth": {
+        "help": "Spaces per indentation level.",
+        "label": "Tab Width"
+      },
+      "trailingComma": {
+        "help": "Where to add trailing commas.",
+        "label": "Trailing Commas"
+      },
+      "useTabs": {
+        "help": "Indent with tabs instead of spaces.",
+        "label": "Use Tabs"
+      }
+    },
+    "resetAll": "Reset All Settings…",
+    "restartRequired": "Restart required",
+    "restartSafeMode": "Restart in Safe Mode",
+    "results": "Search results",
+    "run": {
+      "autoLog": {
+        "help": "Show the value of each top-level expression.",
+        "label": "Auto Log"
+      },
+      "autoRun": {
+        "help": "Run code automatically as you type.",
+        "label": "Auto Run"
+      },
+      "autoRunDelayMs": {
+        "help": "Milliseconds after you stop typing before code runs (0–5000).",
+        "label": "Auto Run Delay"
+      },
+      "defaultLanguage": {
+        "help": "Language for new tabs.",
+        "label": "Default Language"
+      },
+      "defaultRuntime": {
+        "help": "Runtime for new tabs.",
+        "label": "Default Runtime"
+      },
+      "formatOnRun": {
+        "help": "Format code with Prettier before each run, unless you are typing.",
+        "label": "Format on Run"
+      },
+      "loopProtection": {
+        "help": "Stop loops that run more iterations than the limit below.",
+        "label": "Loop Protection"
+      },
+      "loopProtectionMaxIterations": {
+        "help": "Iterations before loop protection stops a loop (100–10,000,000).",
+        "label": "Loop Limit"
+      },
+      "showUndefined": {
+        "help": "Show expressions whose value is undefined.",
+        "label": "Show Undefined"
+      },
+      "unresponsiveTimeoutMs": {
+        "help": "Milliseconds without a heartbeat before JSLab offers to kill a run (1000–60000).",
+        "label": "Unresponsive Timeout"
+      }
+    },
+    "search": "Search settings",
+    "tabs": {
+      "advanced": "Advanced",
+      "appearance": "Appearance",
+      "build": "Build",
+      "confirmClose": {
+        "help": "Ask before closing any tab.",
+        "label": "Confirm Close"
+      },
+      "editor": "Editor",
+      "formatting": "Formatting",
+      "general": "General",
+      "keybindings": "Keybindings",
+      "npm": "NPM"
+    },
+    "updates": {
+      "auto": {
+        "help": "Download and install updates automatically.",
+        "label": "Automatic Updates"
+      },
+      "channel": {
+        "help": "Stable releases, or canary builds with the newest changes.",
+        "label": "Update Channel"
+      }
+    },
+    "view": {
+      "activityBar": {
+        "help": "Show the activity bar on the left.",
+        "label": "Activity Bar"
+      },
+      "layout": {
+        "help": "Split direction for new tabs.",
+        "label": "Layout"
+      },
+      "sideBar": {
+        "help": "Show the side bar.",
+        "label": "Side Bar"
+      },
+      "statusBar": {
+        "help": "Show the status bar at the bottom.",
+        "label": "Status Bar"
+      },
+      "tabBarForSingleTab": {
+        "help": "Show the tab bar even when only one tab is open.",
+        "label": "Tab Bar"
+      }
+    },
+    "windowTitle": "Settings"
+  },
+  "shell": {
+    "activity": "Activity",
+    "aiChat": "AI Chat",
+    "autoRun": "Auto Run",
+    "language": "Language",
+    "laterMilestone": "Arrives in a later version",
+    "npm": "NPM Packages",
+    "off": "off",
+    "on": "on",
+    "run": "Run",
+    "runState": {
+      "failed": "Failed",
+      "killed": "Run killed",
+      "running": "Running…",
+      "stopped": "Stopped",
+      "stopping": "Stopping…",
+      "unresponsive": "Not responding"
+    },
+    "running": "Running",
+    "runtime": "Runtime",
+    "safeMode": "Safe Mode",
+    "safeModeBanner": {
+      "crashLoop": "JSLab didn't shut down cleanly while running code. Auto Run is paused for this session.",
+      "manual": "Safe Mode: restarted from Help → Restart in Safe Mode. Auto Run is paused for this session.",
+      "shift": "Safe Mode: Shift was held at launch. Auto Run is paused for this session."
+    },
+    "settings": "Settings",
+    "sideBarPlaceholder": "This panel arrives in a later version.",
+    "snippets": "Snippets",
+    "split": {
+      "horizontal": "Side by side",
+      "vertical": "Stacked"
+    },
+    "splitter": {
+      "editorOutput": "Editor and Output",
+      "outputWebView": "Output and Web View"
+    },
+    "stop": "Stop",
+    "unreadableBuffer": "JSLab couldn't read this tab's contents. It's shown empty and read-only, so the file on disk isn't overwritten.",
+    "unresponsive": {
+      "body": "Your code has been busy for a few seconds without responding. You can kill it, or keep waiting.",
+      "kill": "Kill",
+      "title": "This tab isn't responding",
+      "wait": "Wait"
+    },
+    "webView": {
+      "hide": "Hide Web View",
+      "show": "Show Web View",
+      "unavailable": "Web View isn't available for the Bun runtime"
+    },
+    "workingDirectory": {
+      "clear": "Clear Working Directory",
+      "set": "Set Working Directory…",
+      "setHelp": "Run this tab in a folder: relative imports, .env and node_modules resolve there."
+    }
+  },
+  "snippets": {
+    "bodyHelp": "$0 is where the cursor lands; ${1:name} and $1 are tab stops.",
+    "bodyLabel": "Body",
+    "cancel": "Cancel",
+    "copied": "Copied",
+    "copy": "Copy",
+    "copyFailed": "Couldn't copy",
+    "createAction": "Create Snippet…",
+    "delete": "Delete",
+    "deleteButton": "Delete",
+    "deleteMessage": "You can undo this until you make another change.",
+    "descriptionLabel": "Description",
+    "edit": "Edit",
+    "editTitle": "Edit Snippet",
+    "empty": "No snippets yet. Create one, or import a library.",
+    "export": "Export…",
+    "exportCancelled": "Export cancelled.",
+    "import": "Import…",
+    "importFailed": "This file isn't a valid JSLab snippets file",
+    "insert": "Insert",
+    "insertInNewTab": "Insert in New Tab",
+    "keepBoth": "Keep Both",
+    "languageLabel": "Language hint",
+    "languageNone": "Any",
+    "list": "Snippet library",
+    "loadFailed": "Couldn't read your snippets. Close and reopen the panel to try again.",
+    "nameHelp": "The word you type to insert this snippet. Letters, digits, _, $ and - only.",
+    "nameInvalid": "Use letters, digits, _, $ and - only.",
+    "nameLabel": "Name",
+    "nameRequired": "A snippet needs a name.",
+    "nameTaken": "Another snippet already uses this name.",
+    "newSnippet": "New Snippet",
+    "newTitle": "New Snippet",
+    "overwrite": "Overwrite",
+    "preview": "Snippet preview",
+    "save": "Save",
+    "searchLabel": "Search snippets",
+    "searchPlaceholder": "Search by name or description",
+    "skip": "Skip",
+    "title": "Snippets",
+    "undo": "Undo"
+  },
+  "startup": {
+    "copyDebugLog": "Copy Debug Log",
+    "openDataFolder": "Open Data Folder",
+    "retry": "Try Again",
+    "stuck": "If Try Again keeps failing, one of your tab files may be unreadable."
+  },
+  "tabs": {
+    "cancel": "Cancel",
+    "closeOne": "Close",
+    "closeOthers": "Close Others",
+    "closeToRight": "Close to the Right",
+    "copyPath": "Copy Path",
+    "list": "Tabs",
+    "newTab": "New Tab",
+    "rename": "Rename…",
+    "renameHelp": "Leave empty to use the first line of code as the title.",
+    "renameLabel": "Tab name",
+    "renameTitle": "Rename Tab",
+    "reveal": "Reveal in Finder",
+    "save": "Rename",
+    "unsaved": "Unsaved changes"
+  },
+  "themes": {
+    "cancel": "Cancel",
+    "pickTitle": "Choose a theme"
+  },
+  "transpiled": {
+    "empty": "Run this tab to see its transpiled output.",
+    "failed": "Couldn't read the transpiled output.",
+    "hideInstrumentation": "Hide instrumentation",
+    "stale": "Stale — run to refresh",
+    "title": "Transpiled Output"
+  },
+  "webDialog": {
+    "dismiss": "Dismiss",
+    "region": "Page message"
   }
 }

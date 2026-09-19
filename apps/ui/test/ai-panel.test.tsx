@@ -86,14 +86,27 @@ describe("the AI Chat panel (spec §14.1)", () => {
     expect(screen.getByLabelText(strings.ai.assistant).textContent).toContain("Hello there");
   });
 
-  /** The stale-reply guard: a chunk for a request that is not the one in flight must not land on screen. */
-  test("a chunk for another request is ignored", async () => {
-    const { api, emit } = setup();
-    const requestId = send(api, "hello?");
-    await emit("ai.chunk", { requestId, text: "real" });
-    await emit("ai.chunk", { requestId: crypto.randomUUID(), text: "STALE" });
+  /**
+   * The stale-reply guard, against the case that actually happens: a straggling chunk for a PREVIOUS request
+   * whose turn is still on screen (the user pressed Stop, then a chunk already in flight arrived).
+   *
+   * Deliberately not a freshly minted id. Mutation testing killed that version of this test: a random id matches
+   * no message, so the per-message `id ===` check alone discards it and the store's stale-request guard could be
+   * deleted with every assertion still green. Only a chunk for a turn that EXISTS distinguishes the two.
+   */
+  test("a late chunk for a finished request does not extend that reply", async () => {
+    const { api, emit, store } = setup();
+    const first = send(api, "first");
+    await emit("ai.chunk", { requestId: first, text: "answer one" });
+    await emit("ai.done", { requestId: first, stopped: true });
 
-    expect(screen.getByLabelText(strings.ai.assistant).textContent).not.toContain("STALE");
+    // A second request is now the one in flight, while the first turn is still rendered above it.
+    const second = send(api, "second");
+    expect(second).not.toBe(first);
+    await emit("ai.chunk", { requestId: first, text: " LATE" });
+
+    expect(store.getState().aiChat.messages.find((message) => message.id === first)?.content).toBe("answer one");
+    expect(screen.getByLabelText(strings.ai.conversation).textContent).not.toContain("LATE");
   });
 
   test("Stop appears only while streaming and aborts the request that is in flight", async () => {

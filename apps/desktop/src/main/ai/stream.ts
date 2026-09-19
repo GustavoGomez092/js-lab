@@ -16,8 +16,8 @@ import { AiRequestError } from "./provider";
  *     caller decides, and `ollama.ts` turns it into a `network` error with whatever the connection said.
  *  3. A STREAM THAT NEVER TERMINATES. Two independent bounds, because they fail differently: `stallMs` bounds the
  *     time since the last BYTE (a hung model, a half-open socket -- nothing arrives, forever), and `maxBytes`
- *     bounds the total (a model looping produces bytes steadily and would sail past any stall timeout). Either
- *     one aborts the request rather than merely stopping reading.
+ *     bounds the total (a model looping produces bytes steadily and would sail past any stall timeout). Both
+ *     throw, and the one `finally` below turns any unfinished exit into a real abort.
  *  4. STOP. The caller's `AbortSignal` is passed to `fetch`, so aborting tears down the HTTP request itself
  *     instead of abandoning a stream that goes on being produced and billed. That is why every bound here aborts
  *     the controller rather than just breaking out of the loop: this is the same discipline
@@ -118,13 +118,10 @@ export async function readNdjsonStream(options: NdjsonStreamOptions): Promise<{ 
   try {
     while (!completed) {
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
-      // The race is what makes a hung stream finite. The timer aborts the controller, which rejects the pending
-      // read -- so the loop cannot simply resume, and the request is genuinely torn down.
+      // The race is what makes a hung stream finite: the timer wins, the throw below unwinds the loop, and the
+      // `finally` tears the request down. The timer does NOT abort here itself -- see the `finally`.
       const stalled = new Promise<"stalled">((resolve) => {
-        stallTimer = setTimeout(() => {
-          options.controller.abort();
-          resolve("stalled");
-        }, stallMs);
+        stallTimer = setTimeout(() => resolve("stalled"), stallMs);
       });
       // Derived from the reader rather than named: Main's tsconfig has no DOM lib, so the global
       // `ReadableStreamReadResult` does not exist here even though the stream type itself does.
@@ -142,7 +139,6 @@ export async function readNdjsonStream(options: NdjsonStreamOptions): Promise<{ 
       if (!chunk) continue;
       bytes += chunk.byteLength;
       if (bytes > maxBytes) {
-        options.controller.abort();
         throw new AiRequestError("tooLarge", `The response exceeded ${maxBytes} bytes without ending`);
       }
       for (const line of decoder.push(chunk)) {
@@ -168,8 +164,18 @@ export async function readNdjsonStream(options: NdjsonStreamOptions): Promise<{ 
     } catch {
       // Already released, or the stream errored -- either way there is nothing left to release.
     }
-    // Stop is not the only way out: a bound above ends the request too, and an unaborted controller would leave
-    // the socket open after we have stopped reading it.
+    /**
+     * THE SINGLE OWNER of "this request did not finish, so end it".
+     *
+     * Every exit that is not a completed turn passes through here: the stall timeout, the byte cap, a read that
+     * threw, and a body that simply stopped. Each of those used to abort at its own site as well, and mutation
+     * testing proved those copies unobservable -- deleting the stall timer's abort changed no test, because this
+     * line had already guaranteed the teardown. Two owners for one effect only make it ambiguous which is
+     * load-bearing; deleting THIS line fails `stream.test.ts`, which is what says that it is.
+     *
+     * Aborting (rather than just ceasing to read) is the point: an unaborted controller leaves the socket open
+     * and the model generating, which is the discipline `platform/subprocess-output.ts` records for children.
+     */
     if (!completed) options.controller.abort();
   }
   return { completed, bytes };

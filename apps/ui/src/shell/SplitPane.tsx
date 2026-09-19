@@ -8,6 +8,15 @@ export function SplitPane(props: {
   onReset(): void;
   first: ReactNode;
   second: ReactNode;
+  /**
+   * The separator's accessible name (`strings.shell.splitter.*`).
+   *
+   * REQUIRED, not optional, on purpose: two `SplitPane`s can be on screen at once, and an unnamed separator is
+   * announced only as "separator, <value>" -- indistinguishable from the other one. An optional prop would let a
+   * future call site silently reintroduce that exact defect. Required makes an unnamed splitter a typecheck
+   * failure instead, which is the only thing that catches the `App.tsx` call site: no test renders `<App>`.
+   */
+  label: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const horizontal = props.orientation === "horizontal";
@@ -70,6 +79,7 @@ export function SplitPane(props: {
       <div
         className="split-divider"
         role="separator"
+        aria-label={props.label}
         aria-orientation={horizontal ? "vertical" : "horizontal"}
         aria-valuenow={props.size}
         aria-valuemin={10}

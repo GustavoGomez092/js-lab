@@ -58,7 +58,13 @@ function isHostToWebMessage(value: unknown): value is HostToWebMessage {
     case "mute":
       return typeof value.muted === "boolean";
     case "expand":
-      return isInt(value.reqId) && isString(value.handleId);
+      return (
+        isInt(value.reqId) &&
+        isString(value.handleId) &&
+        // OU-02: absent is the pre-OU-02 shape and stays valid; present must be a non-negative safe integer.
+        // `value.offset >= 0` alone would accept the string "10" (it coerces), so `isInt` is load-bearing here.
+        (value.offset === undefined || (isInt(value.offset) && value.offset >= 0))
+      );
     case "fetchHead":
       return (
         isInt(value.id) &&

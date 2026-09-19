@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   authTokenFor,
@@ -24,8 +23,10 @@ import type {
   NpmOpKind,
   NpmSearchResponse,
 } from "@jslab/rpc-schema";
+import { MAX_NPMRC_BYTES } from "@jslab/rpc-schema";
 import { defaultPackagesManifest, type PackagesManifest } from "@jslab/shared";
 import type { AppPaths } from "../app-paths";
+import { FileTooLargeError, MAX_PACKAGE_JSON_BYTES, readBoundedText, readBoundedTextOrNull } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 import { strings } from "../strings";
 import type { NpmSpawn, NpmSpawnResult } from "./npm-spawn";
@@ -399,7 +400,10 @@ export class NpmService {
   protected async readManifest(): Promise<PackagesManifest> {
     let raw: string;
     try {
-      raw = await readFile(this.deps.paths.packagesJson, "utf8");
+      // JSLab writes this manifest, but into its own user-writable data dir, so "JSLab's own file" bounds neither
+      // its size nor what kind of file is at the path now. It is the same shape of manifest F4 already bounds at
+      // MAX_PACKAGE_JSON_BYTES one directory below, and a FIFO here would hang every npm.list on Main.
+      raw = await readBoundedText(this.deps.paths.packagesJson, MAX_PACKAGE_JSON_BYTES);
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return defaultPackagesManifest();
       throw new Error(strings.log.npmManifestUnreadable(this.deps.paths.packagesJson), { cause: error });
@@ -435,8 +439,16 @@ export class NpmService {
   }
 
   protected async installedVersion(name: string): Promise<string | null> {
+    // F4: a third party's package.json -- whatever the registry served, plus whatever a postinstall rewrote.
+    // Read unbounded this OOM'd Main on a crafted multi-GB manifest and hung npm.list forever on a FIFO, while
+    // types-service.ts already read this identical path bounded.
+    const text = await readBoundedTextOrNull(
+      join(this.deps.paths.packagesNodeModules, name, "package.json"),
+      MAX_PACKAGE_JSON_BYTES,
+    );
+    if (text === null) return null;
     try {
-      const pkg = JSON.parse(await readFile(join(this.deps.paths.packagesNodeModules, name, "package.json"), "utf8"));
+      const pkg = JSON.parse(text);
       return typeof pkg.version === "string" ? pkg.version : null;
     } catch {
       return null;
@@ -542,9 +554,15 @@ export class NpmService {
    */
   async #readNpmrc(): Promise<string> {
     try {
-      return await readFile(this.deps.paths.packagesNpmrc, "utf8");
+      // F2: `MAX_NPMRC_CHARS` was enforced on save and never here, though this runs on every search and every
+      // registry resolve, and `npm config set`, `npm login` and any package's postinstall all write this file.
+      return await readBoundedText(this.deps.paths.packagesNpmrc, MAX_NPMRC_BYTES);
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "";
+      // An oversized .npmrc reports its size rather than borrowing the generic "could not be read" wording.
+      if (error instanceof FileTooLargeError) {
+        throw new Error(strings.log.npmNpmrcTooLarge(error.path, error.size, error.maxBytes), { cause: error });
+      }
       throw new Error(strings.log.npmNpmrcUnreadable(this.deps.paths.packagesNpmrc), { cause: error });
     }
   }
@@ -587,8 +605,13 @@ export class NpmService {
    */
   async #hasOwnTypes(name: string): Promise<boolean> {
     let pkg: { types?: unknown; typings?: unknown; exports?: unknown };
+    // F4: the same third-party manifest under the same bound as installedVersion above.
+    const text = await readBoundedTextOrNull(
+      join(this.deps.paths.packagesNodeModules, name, "package.json"),
+      MAX_PACKAGE_JSON_BYTES,
+    );
+    if (text === null) return false;
     try {
-      const text = await readFile(join(this.deps.paths.packagesNodeModules, name, "package.json"), "utf8");
       pkg = JSON.parse(text) as { types?: unknown; typings?: unknown; exports?: unknown };
     } catch {
       return false;

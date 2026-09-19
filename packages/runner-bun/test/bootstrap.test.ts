@@ -174,6 +174,63 @@ test("answers expand requests for deep values", async () => {
   });
 });
 
+// OU-02: the runner's own hop. Nothing else in Task B's wiring exercises it -- the adapter tests stop at the
+// message, and the schema tests stop at the boundary -- so without this, dropping `message.offset` in the
+// bootstrap would leave every other test in the change green while paging silently returned page 1 forever.
+//
+// 12,000 entries is past EXPANDED_LIMITS.maxEntries (10,000), so one expansion cannot be the whole collection and
+// the second page is reachable only through an offset that survived the IPC hop.
+test("an expand request's offset reaches the encoder, and each page agrees with the remainder it advertises", async () => {
+  type ArrayPage = {
+    items: [number, { t: string; v: string }][];
+    length: number;
+    from?: number;
+    more?: number;
+    next?: number;
+  };
+  /** A 12,000-entry array cannot fit one page, so its first page always carries both `more` and `next`. */
+  type PagedArray = ArrayPage & { more: number; next: number };
+  const TOTAL = 12_000;
+  const runner = startRunner();
+  await runner.run(`__jl.log(1, Array.from({ length: ${TOTAL} }, (_, i) => i));`);
+  await runner.until((m) => m.type === "state" && m.state === "idle");
+
+  const eager = (
+    runner.events().find((e) => e.kind === "result") as unknown as { value: ArrayPage & { handle: string } }
+  ).value;
+  // Eagerly capped at DEFAULT_LIMITS.maxEntries (the runner builds its encoder with DEFAULT_LIMITS explicitly),
+  // so the value really does arrive as a truncated page with a handle to page on.
+  expect(typeof eager.handle).toBe("string");
+  expect(eager.length).toBe(TOTAL);
+
+  const expandAt = async (reqId: number, offset?: number): Promise<ArrayPage> => {
+    runner.proc.send({ type: "expand", reqId, handleId: eager.handle, ...(offset === undefined ? {} : { offset }) });
+    await runner.until((m) => m.type === "expanded" && m.reqId === reqId, 15_000);
+    const reply = runner.messages.find((m) => m.type === "expanded" && m.reqId === reqId);
+    return (reply as unknown as { value: ArrayPage }).value;
+  };
+
+  // Page sizes are read from the replies, never hard-coded: `#expandValue` halves maxEntries until the reply fits
+  // MAX_EXPAND_BYTES, so the real page size is whatever the encoder chose.
+  const first = (await expandAt(11)) as PagedArray;
+  expect(first.from).toBeUndefined(); // absent means 0
+  expect(first.items[0]?.[0]).toBe(0);
+  // The page and its advertised remainder must describe the same edge. Task A's own bug was exactly this pair
+  // disagreeing: one entry past the edge while `more`/`next` still described the intended one. The cast asserts
+  // nothing at runtime -- were `more`/`next` actually absent, these comparisons would be against NaN and fail.
+  expect(first.items.at(-1)?.[0]).toBe(first.next - 1);
+  expect(first.items.length).toBe(first.next);
+  expect(first.items.length + first.more).toBe(TOTAL);
+
+  const second = await expandAt(12, first.next);
+  expect(second.from).toBe(first.next);
+  expect(second.items[0]?.[0]).toBe(first.next);
+  expect(second.items.at(-1)).toEqual([TOTAL - 1, { t: "number", v: String(TOTAL - 1) }]);
+  expect(second.items.length + (second.more ?? 0)).toBe(TOTAL - (second.from ?? 0));
+  // Nothing left: `more` is omitted, never written as 0.
+  expect(second.more).toBeUndefined();
+});
+
 test("reports errors thrown while evaluating the module", async () => {
   const runner = startRunner();
   await runner.run('throw new TypeError("boom");\n');

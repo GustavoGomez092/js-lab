@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { SettingsViewMessages } from "@jslab/rpc-schema";
-import { defaultSettings, mergeSettings, type Settings } from "@jslab/shared";
+import type { CommandCatalogEntry, SettingsViewMessages } from "@jslab/rpc-schema";
+import { defaultSettings, type KeybindingRule, mergeSettings, type Settings } from "@jslab/shared";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SettingsApp } from "../src/settings/SettingsApp";
 import { createSettingsAgent } from "../src/settings/settings-agent";
@@ -10,7 +10,10 @@ import { strings } from "../src/strings";
 const NL = String.fromCharCode(10);
 const DEFAULT_REGISTRY_NPMRC = `registry=https://registry.npmjs.org/${NL}`;
 
-function fakeSettingsApi(fonts: Awaited<ReturnType<SettingsApi["listFonts"]>> = { fonts: null, refreshing: true }) {
+function fakeSettingsApi(
+  fonts: Awaited<ReturnType<SettingsApi["listFonts"]>> = { fonts: null, refreshing: true },
+  aiModels: Awaited<ReturnType<SettingsApi["listAiModels"]>> = { models: [], error: null, detail: "" },
+) {
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   let current: Settings = defaultSettings();
   const api = {
@@ -20,9 +23,18 @@ function fakeSettingsApi(fonts: Awaited<ReturnType<SettingsApi["listFonts"]>> = 
       return current;
     }),
     listFonts: mock(async () => fonts),
+    listAiModels: mock(async (_provider: string, _refresh: boolean) => aiModels),
     getNpmrc: mock(async () => DEFAULT_REGISTRY_NPMRC),
     saveNpmrc: mock(async (_content: string) => ({ ok: true as const })),
     resetNpmrc: mock(async () => DEFAULT_REGISTRY_NPMRC),
+    commandCatalog: mock(async () => ({ commands: [] as CommandCatalogEntry[] })),
+    getKeybindings: mock(async () => ({
+      rules: [] as KeybindingRule[],
+      defaults: [] as KeybindingRule[],
+      path: "/data/keybindings.json",
+      invalid: false,
+    })),
+    saveKeybindings: mock(async (_rules: KeybindingRule[]) => ({ ok: true as const })),
     appCommand: mock((_action: string) => {}),
     e2eRespond: mock(() => {}),
     on(name: string, listener: (payload: never) => void) {
@@ -177,6 +189,7 @@ describe("SettingsApp", () => {
         fontOptions: [],
         settings: null,
         npmrc: null,
+        keybindings: null,
       }),
       execute,
       target: () => input,
@@ -215,5 +228,130 @@ describe("SettingsApp", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Build" }));
     expect(screen.getByLabelText("Pipeline Operator")).toBeTruthy();
     expect(screen.queryByRole("button", { name: strings.settings.npmrc.reset })).toBeNull();
+  });
+
+  test("the Keybindings tab mounts the command table and its Open keybindings.json action (spec §6.5)", async () => {
+    const { api } = fakeSettingsApi();
+    render(<SettingsApp api={api} initial={defaultSettings()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Keybindings" }));
+    expect(await screen.findByRole("button", { name: strings.settings.keybindings.openFile })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: strings.settings.keybindings.columns.keybinding })).toBeTruthy();
+    expect(api.commandCatalog).toHaveBeenCalledTimes(1);
+    expect(api.getKeybindings).toHaveBeenCalledTimes(1);
+    // The pane is field-driven nowhere: switching away leaves no stray table behind.
+    fireEvent.click(screen.getByRole("tab", { name: "Build" }));
+    expect(screen.queryByRole("columnheader", { name: strings.settings.keybindings.columns.keybinding })).toBeNull();
+  });
+
+  /**
+   * TL-23. The English is written out rather than read from `strings`: asserting a label against the same
+   * lookup the component renders from passes whatever that lookup returns, including nothing at all.
+   */
+  test("the AI tab offers the models Main reports, over a field that stays free text (TL-23)", async () => {
+    const { api } = fakeSettingsApi(undefined, {
+      models: ["llama3.2:3b", "mistral:latest"],
+      error: null,
+      detail: "",
+    });
+    render(<SettingsApp api={api} initial={defaultSettings()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+
+    const picker = (await screen.findByLabelText("Installed models")) as HTMLSelectElement;
+    await waitFor(() =>
+      expect([...picker.options].map((option) => option.value)).toEqual(["", "llama3.2:3b", "mistral:latest"]),
+    );
+    expect(api.listAiModels).toHaveBeenCalledWith("ollama", false);
+
+    // The text input is still present, still enabled, and still the thing that commits: the dropdown layers
+    // over it rather than replacing it.
+    const input = screen.getByLabelText("Ollama Model") as HTMLInputElement;
+    expect(input.disabled).toBe(false);
+    fireEvent.change(input, { target: { value: "typed-by-hand" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(api.update).toHaveBeenCalledWith({ ai: { "model.ollama": "typed-by-hand" } }));
+  });
+
+  test("picking a model commits it, and the blank option puts the manifest default back (TL-23)", async () => {
+    const { api } = fakeSettingsApi(undefined, { models: ["llama3.2:3b"], error: null, detail: "" });
+    render(<SettingsApp api={api} initial={defaultSettings()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+    const picker = (await screen.findByLabelText("Installed models")) as HTMLSelectElement;
+    await waitFor(() => expect([...picker.options].map((option) => option.value)).toContain("llama3.2:3b"));
+
+    fireEvent.change(picker, { target: { value: "llama3.2:3b" } });
+    await waitFor(() => expect(api.update).toHaveBeenCalledWith({ ai: { "model.ollama": "llama3.2:3b" } }));
+
+    // The reason this field is not an enum: blank is a value, and it is the only way back to the default.
+    fireEvent.change(screen.getByLabelText("Installed models"), { target: { value: "" } });
+    await waitFor(() => expect(api.update).toHaveBeenCalledWith({ ai: { "model.ollama": "" } }));
+  });
+
+  test("Refresh asks Main again, with the refresh flag set (TL-23)", async () => {
+    const { api } = fakeSettingsApi(undefined, { models: ["llama3.2:3b"], error: null, detail: "" });
+    render(<SettingsApp api={api} initial={defaultSettings()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+    await screen.findByLabelText("Installed models");
+    expect(api.listAiModels.mock.calls).toEqual([["ollama", false]]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh models" }));
+
+    await waitFor(() =>
+      expect(api.listAiModels.mock.calls).toEqual([
+        ["ollama", false],
+        ["ollama", true],
+      ]),
+    );
+  });
+
+  test("a model list that can't be fetched says so and leaves the field usable (TL-23)", async () => {
+    const { api } = fakeSettingsApi(undefined, { models: null, error: "network", detail: "connect ECONNREFUSED" });
+    render(<SettingsApp api={api} initial={defaultSettings()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+
+    // Pinned by TITLE, not by text alone: the disabled <option> says the same words, so a text-only assertion
+    // would pass with the note deleted. This also proves the provider's own detail reaches the view.
+    const note = await screen.findByTitle("connect ECONNREFUSED");
+    expect(note.textContent).toBe("Couldn't load models");
+
+    // Never a silent empty dropdown, and never a field the user has lost control of.
+    const input = screen.getByLabelText("Ollama Model") as HTMLInputElement;
+    expect(input.disabled).toBe(false);
+    fireEvent.change(input, { target: { value: "still-typable" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(api.update).toHaveBeenCalledWith({ ai: { "model.ollama": "still-typable" } }));
+  });
+
+  test("an RPC that rejects is reported in the picker instead of throwing into the view (TL-23)", async () => {
+    const { api } = fakeSettingsApi();
+    api.listAiModels.mockImplementationOnce(async () => {
+      throw new Error("The Settings window closed");
+    });
+    render(<SettingsApp api={api} initial={defaultSettings()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+
+    // The rejection's own message becomes the detail, which is what distinguishes this from a list Main
+    // reported as failed: nothing else in the view could produce this title.
+    const note = await screen.findByTitle("The Settings window closed");
+    expect(note.textContent).toBe("Couldn't load models");
+    expect((screen.getByLabelText("Ollama Model") as HTMLInputElement).disabled).toBe(false);
+  });
+
+  test("no provider is contacted until a field that shows a model list is on screen, and then once (TL-23)", async () => {
+    const { api } = fakeSettingsApi(undefined, { models: ["llama3.2:3b"], error: null, detail: "" });
+    render(<SettingsApp api={api} initial={defaultSettings()} />);
+
+    // General is the opening tab and nothing on it shows a model list, so nothing reaches out to a provider.
+    expect(api.listAiModels).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "Editor" }));
+    expect(api.listAiModels).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+    await screen.findByLabelText("Installed models");
+    fireEvent.click(screen.getByRole("tab", { name: "Build" }));
+    fireEvent.click(screen.getByRole("tab", { name: "AI" }));
+    await screen.findByLabelText("Installed models");
+
+    // Leaving and returning is not a new question: the answer is already held.
+    expect(api.listAiModels).toHaveBeenCalledTimes(1);
   });
 });

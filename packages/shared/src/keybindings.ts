@@ -203,9 +203,23 @@ export const DEFAULT_KEYBINDINGS: readonly KeybindingRule[] = [
   { key: "alt+shift+f", command: "format.document" },
   { key: "cmd+k", command: "output.clear" },
   { key: "cmd+i", command: "tools.npmPackages" },
+  { key: "cmd+b", command: "tools.snippets" },
+  // Bare Tab is safe: `snippets.expand` reports isEnabled() === false unless a snippet name sits immediately before
+  // the caret, and App.tsx's key handler skips preventDefault for a disabled command, so Monaco still indents. The
+  // resolver additionally skips modifier-less chords while a text input has focus, so Tab in the panel's own search
+  // box is never intercepted either.
+  { key: "tab", command: "snippets.expand", when: editor },
   { key: "cmd+/", command: "edit.toggleLineComment", when: editor },
   { key: "cmd+alt+/", command: "edit.toggleBlockComment", when: editor },
   { key: "cmd+alt+shift+/", command: "edit.toggleMagicComment", when: editor },
+  // Spec §6.3: "`F9` toggles the current line, and `Cmd+Shift+F9` clears all." Clear All has no `when`, so the
+  // chord fires anywhere in the window; the toggle needs the caret, so it is editor-only. The *command* still
+  // declares context "editor", so the palette offers it only from editor focus -- match.ts drops editor commands
+  // when the palette is opened from output. That split is deliberate and matches `output.clear`, whose Cmd+K is
+  // likewise unconditional while the command stays output-scoped: the chord is the whole-window affordance, the
+  // palette listing is the focus-appropriate one.
+  { key: "f9", command: "edit.toggleLogpoint", when: editor },
+  { key: "cmd+shift+f9", command: "edit.clearLogpoints" },
   { key: "ctrl+space", command: "edit.triggerSuggest", when: editor },
   { key: "f1", command: "edit.showHover", when: editor },
   { key: "cmd+f1", command: "edit.showDiagnostic", when: editor },
@@ -238,7 +252,15 @@ export const DEFAULT_KEYBINDINGS: readonly KeybindingRule[] = [
   { key: "cmd+0", command: "view.zoomReset" },
   { key: "alt+cmd+\\", command: "view.toggleLayout" },
   { key: "alt+cmd+w", command: "view.toggleWebView" },
+  // UI item 2. ⌥⌘ is already this app's panel family (⌥⌘W Web View, ⌥⌘\ layout), and ⌥⌘O / ⌥⌘E were both unused
+  // in every context. Deliberately no `when`: ⌥⌘O has to fire from the editor and ⌥⌘E from the output, which are
+  // the only two journeys either chord has, so a focus clause would defeat both.
+  { key: "alt+cmd+o", command: "view.focusOutput" },
+  { key: "alt+cmd+e", command: "view.focusEditor" },
   { key: "ctrl+cmd+f", command: "view.toggleFullScreen" },
+  // Spec §14.1: "Panel (`Ctrl+Cmd+I`, activity bar)". Note ⌘I alone is already tools.npmPackages, which is why
+  // the spec puts AI Chat on the ⌃⌘ pair rather than the bare chord.
+  { key: "ctrl+cmd+i", command: "tools.aiChat" },
   { key: "cmd+shift+p", command: "view.commandPalette" },
 ];
 

@@ -1,0 +1,301 @@
+# M5e Manual QA Checklist
+
+Internationalisation: the `i18next` runtime, locale resolution, the extracted string catalogue and the language
+switcher.
+
+## Baseline at 4045dbd
+
+Measured on branch `feat/jslab-m5e` at commit `4045dbd` (the merge of `origin/main` into this branch), in a fresh
+worktree, **before** any M5e change. Every later "expected: PASS" in the M5e plan means *these* numbers plus the
+tests that task adds — not a figure remembered from another milestone.
+
+> [!NOTE]
+> The M5e plan's Task 1 names this baseline `## Baseline at 7f696bd`. That commit is a real ancestor but sits
+> **18 commits behind** the branch point measured here, so the heading records the commit actually measured.
+
+> [!IMPORTANT]
+> **The plan's devkit setup command does not work.** Task 1 says to run
+> `cp -a "$HOME/.hutch/releases/electrobun/2.0.1/devkit" apps/desktop/.hutch/devkit`, but that release tree
+> contains no `devkit` directory — only per-platform folders (`macos-arm64`). Copying is the wrong mechanism:
+> `apps/desktop`'s own `postinstall` already runs `hutch electrobun sync`, which *projects* the devkit into
+> `apps/desktop/.hutch/devkit` and then strips the legacy `baseUrl` via `scripts/devkit-tsconfig.ts`. The
+> postinstall only needs `hutch` to be reachable, so install with it on `PATH`:
+>
+> ```bash
+> export PATH="$HOME/.hutch/toolchains/bun/1.4.0/macos-arm64:$HOME/.hutch/bin:$PATH"
+> bun --version   # must print 1.4.0
+> bun install --frozen-lockfile
+> ```
+>
+> With `hutch` absent from `PATH` the postinstall exits 1, which aborts the install and leaves a half-linked
+> tree — `happy-dom` dangles and the UI suites then report a plausible-looking but fake test count.
+
+The suite gate is the **real** two-Bun form. Invoking the root task with a 1.4.0 binary *by absolute path* would
+use 1.4.0 only as the task runner, while each package's script is `bun test ./test`, so the inner binary would
+still come from `PATH`. Use a bare `bun run test` under the toolchain `PATH` above, never a bare root `bun test`
+(a single process cross-contaminates globals and invents ~250 failures).
+
+> [!NOTE]
+> An earlier draft of this paragraph named a `bun14` command. **There is no such command on this machine**
+> (`which bun14` finds nothing), and there never needs to be: putting the toolchain directory on `PATH`, as the
+> export above does, is what makes both the task runner and every inner `bun test` 1.4.0.
+
+- **`bun run lint --max-diagnostics=300`**: exit 0 — **14 warnings, 16 infos** (unchanged from the M4 baseline).
+- **`bun run typecheck`**: exit 0 across **13 packages**, each reporting individually.
+- **`bun run test`** (Bun 1.4.0): **1383 pass, 0 fail**. Banner set: `bun test v1.4.0 (34cbb9a40)` — a single
+  distinct banner, confirming every inner binary was 1.4.0.
+
+Per-package totals making up the 1383:
+
+| Package | Pass | Package | Pass |
+| --- | ---: | --- | ---: |
+| `@jslab/desktop` | 536 | `@jslab/transform` | 67 |
+| `@jslab/ui` (`./test`) | 356 | `@jslab/shared` | 62 |
+| `@jslab/runner-web` | 118 | `@jslab/npm` | 52 |
+| `@jslab/ui` (`./isolated`) | 43 | `@jslab/rpc-schema` | 45 |
+| `@jslab/serializer` | 42 | `@jslab/runner-bun` | 29 |
+| `@jslab/e2e` | 11 | `@jslab/runner-shared` | 9 |
+| `@jslab/themes` | 8 | `@jslab/test-registry` | 5 |
+
+## Phase A (mechanism, Tasks 1–7)
+
+Each row is the automated gate at that task's commit, measured on the real Bun 1.4.0 gate described above.
+`@jslab/ui` prints **two** totals lines (`./test` and `./isolated`); every figure here is their sum.
+
+| Task | Commit | What it added | `bun run test` |
+| --- | --- | --- | ---: |
+| 1 | `67c7ceb` | i18next pinned exactly, license gate | 1385 |
+| 1 fix | `2c6351a` | license gate also imports the package | 1386 |
+| 2 | `bfdc7d7` | `packages/shared/src/locale.ts` resolver | 1391 |
+| 3 | `56be885` | `withLocale`, both windows open on a locale-bearing URL | 1396 |
+| 4 | `8e62475` | locale files staged into the packaged build | 1399 |
+| 5 | `7307cd0` | Main's dependency-free `t()` | 1405 |
+| 6 | `c68e369` | UI i18next init from `?lng=` | 1415 |
+| 7 | this commit | lint rule, key check, CI step, `translating.md` | 1441 |
+
+### Phase A exit gate
+
+Run from the repo root with the toolchain `PATH` above. All four exit 0:
+
+```bash
+bun run lint --max-diagnostics=300
+bun run typecheck
+bun run i18n:check
+bun run test
+```
+
+- **`lint`**: exit 0 — **14 warnings, 16 infos**, 534 files, Biome **2.5.13**. Unchanged from the baseline:
+  enabling `noJsxLiterals` added **no** diagnostic, because the pre-existing offenders are exempted by name.
+- **`typecheck`**: exit 0 across **13 packages**.
+- **`i18n:check`**: exit 0, printing `i18n: 2 keys in en.json (bootstrap)` and `i18n: ok`.
+- **`bun run test`**: **1441 pass, 0 fail**.
+
+### Carried debt this phase records
+
+- [ ] **`noJsxLiterals` exemptions.** Eight components still hold hard-coded JSX text and are named one file at
+  a time in `biome.json` → `overrides`: `env/EnvVarsSheet.tsx`, `npm/NpmSheet.tsx`, `output/EntryRow.tsx`,
+  `output/ValueView.tsx`, `shell/StatusBar.tsx`, `shell/Toolbar.tsx`, `shell/parts.tsx`, `tabs/TabBar.tsx`.
+  Most are typographic marks (`×`, `▶`, `■`, `+`, `⌘↵`, `…`, `:`); two are real prose, both in `ValueView.tsx`
+  (`… {n} more characters` and `… {n} more`). Phase B rewrites these files and must empty that list. A unit
+  test pins the list, so adding a ninth file is a deliberate, reviewable diff.
+- [ ] **The check runs in `--bootstrap` mode.** The size floor (`MIN_KEYS` = 464), the committed `keys.json`
+  manifest and the unused-key sweep cannot be true until the extraction sweep produces the real catalogue.
+  The unknown-key check, the per-locale `extra` check and the coverage ratchet run now. Task 11 drops the flag
+  from `apps/ui/package.json` and from `.github/workflows/ci.yml` in the same commit as the full catalogue.
+
+## Translation provenance
+
+- [x] **`en` is complete and real.** Extracted from copy that shipped in M1–M4; no string was invented. 760 keys.
+- [ ] **Native-speaker review of `es`** — the seeded strings are drafts. Unchecked until a Spanish speaker has read them.
+- [ ] **Native-speaker review of `ja`** — as above.
+- [ ] **Native-speaker review of `zh`** — as above.
+- [ ] **Native-speaker review of `pt`** — as above.
+- [ ] **Full coverage for all four locales.** An M6 parity-gate obligation, verified with `bun run --cwd apps/ui i18n:check --strict`. Out of scope for M5e; see `docs/user/translating.md`.
+
+Do not tick a review box on the strength of the implementation plan, an automated translation, or a spot check
+by a non-speaker. The point of shipping a small seed with English fallback is that an unreviewed string is
+absent rather than wrong.
+
+**What the four files actually contain, stated plainly.** 25 seeded keys each, out of a 760-key catalogue —
+3.3% per language, 100 strings of the 3040 that full coverage would mean. The values are **drafts produced
+during implementation and read by no native speaker of any of the four languages.** They were kept to short,
+unambiguous chrome — the eleven menu section titles, seven settings tab names, five command verbs,
+`files.cancel` and `settings.restartRequired` — where the correct term is not in dispute. No term of art
+(`Auto Log`, `magic comment`, `logpoint`, `loop protection`, `spare`, `trailing comma`) is seeded, because
+machine or unreviewed output for those is wrong in ways the reader cannot detect.
+
+Coverage recorded in `apps/ui/src/i18n/coverage.json` is `es 23, ja 25, zh 25, pt 24` — not 25 each, because a
+value identical to English is not counted as a translation: `NPM` is a product name in all five, `General` and
+`Editor` are already Spanish, and `Editor` is already Portuguese. Those are correct answers that score zero,
+which is the gate behaving as designed (`apps/ui/src/i18n/check.ts`).
+
+Provenance cannot be recorded inside the locale files themselves: JSON carries no comments, and any extra key
+would be a key `en.json` lacks, which the check fails by design. This checklist and `docs/user/translating.md`
+are therefore the only provenance surfaces — keep them in step with the files.
+
+### Size floor
+
+`MIN_KEYS` was ratcheted 464 → 700 in this task (`apps/ui/src/i18n/check.ts`). 464 was the pre-sweep count and
+sat 296 keys below the shipped 760, so it would have stayed silent through a catalogue that lost a third of
+itself. `keys.json` does not already cover that case: the extractor rewrites the manifest *from* `en.json`, so
+after a regeneration against a truncated tree the two agree perfectly and every drift list is empty — the floor
+is then the only remaining check. 700 keeps ~60 keys of headroom so a legitimate deletion needs no edit here.
+
+## Layout under translation (Task 14)
+
+### What the width budget is, and what it is not
+
+`apps/ui/src/i18n/width.ts` caps the length of 27 short labels — the eleven menu titles, the eight settings tab
+names, the "Restart required" badge, two status-bar items, the three runtime options and the palette
+placeholder. It counts columns, not pixels: a CJK character counts two, a combining accent none.
+
+**It does not check layout, and nothing else does either.** The unit suite runs under happy-dom, which has no
+layout engine — `getBoundingClientRect()` returns zeros and text is never measured — so no test in this
+repository can assert that a translated label fits its control.
+
+> [!IMPORTANT]
+> The M5e plan says the real check is "the screenshot pass in Task 15". **It is not.** Task 15 contains two
+> `app.screenshot()` calls that assert nothing — one of them wrapped in `.catch(() => {})` — and no baseline
+> image is compared to anything. There is no automated layout coverage for any locale. The boxes below are the
+> only real check, and none of them has been performed.
+
+The one genuine browser measurement JSLab has is the output filter-chip row (commit `59a7b62`, ruling
+`R-UI9-COUNTS-1`): worst-case CJK with three-digit counts came out ~32% wider with **no** new wrapping and
+**no** truncation. The chips are therefore deliberately left out of the budget — a real measurement beats a
+column count — and that 32% is a pixel figure that neither derives nor validates the column numbers.
+
+### Manual checks (none performed)
+
+- [ ] **Menu bar in `ja` and `zh`.** Set Settings → General → Language to Japanese, restart, then Chinese.
+      Every menu-bar section title is fully visible; the bar does not crowd, clip or reflow.
+- [ ] **Settings nav column in `es` and `pt`.** All eight tab labels fit the 180px column without wrapping or
+      being cut off. `Compilación` (11 columns) and `Formatação` (10) are the long ones.
+- [ ] **Status bar at minimum window width, CJK locale.** Run-state text, the Safe Mode badge, the layout
+      toggle and both selects stay on one line without overlapping — the row is `white-space: nowrap`.
+- [ ] **"Restart required" badge in `es`.** `Requiere reiniciar` (18 columns, the widest shipped translation)
+      sits beside the Language field label without pushing the control off its row.
+- [ ] **The restart notice.** With the main window open, change the language. A dismissible info banner appears
+      in the main window naming the restart, and clears itself after 8s (`info`, `NOTICE_AUTO_DISMISS_MS`).
+- [ ] **`<html lang>`.** With VoiceOver on and a `ja` UI, the interface is announced in a Japanese voice rather
+      than an English one reading Japanese text.
+
+## End-to-end coverage (Task 15)
+
+`packages/e2e/scenarios/i18n.test.ts` drives the three things only a real launch can reach: the native menu under
+`app.uiLanguage: "ja"`, the Settings window under `es` (a separate React tree with its own RPC), and the restart
+semantics. It asserts the §17 fallback contract as a pair — an unseeded key renders as readable English
+("Reopen Closed Tab") **and** no menu label is a raw dotted key.
+
+Two things it deliberately does **not** do, so nobody reads more into a green run than is there:
+
+- **It does not assert the `languageChanged` notice.** The notice is `info` severity and removes itself after
+  `NOTICE_AUTO_DISMISS_MS` (8s), while the E2E bridge's first `e2e.state` round trip after a launch can go
+  unanswered until its own 15s timeout. 15s outlasts 8s, so no amount of polling or relaunching makes such an
+  assertion reliable — `help.test.ts` retries five whole launches for exactly this reason. The scenario asserts
+  the durable half instead (the setting reaches `settings.json`; the running window stays English; the next
+  launch is Japanese). The notice keeps its deterministic coverage in
+  `apps/desktop/test/startup-notices.test.ts` and `packages/rpc-schema`, plus Q4 below.
+- **It does not verify layout.** Its two `app.screenshot()` calls capture images and compare them to nothing.
+
+## Manual QA
+
+Build first — `bun run e2e` does not build:
+
+```bash
+export PATH="$HOME/.hutch/bin:$PATH"
+REPO="$(git rev-parse --show-toplevel)"
+cd "$REPO/apps/desktop" && hutch run build:dev && cd "$REPO"
+```
+
+Never run the Hutch installer, `hutch init` or `hutch upgrade`.
+
+> [!NOTE]
+> Q1–Q4 overlap the six boxes in "Layout under translation (Task 14)" above; they are the milestone-level pass
+> over the same surfaces, not six additional findings. Q1 covers the menu-bar box, Q2 and Q3 the Settings-nav and
+> status-bar boxes, Q4 the restart-notice box. Doing the Task 14 boxes and Q1–Q4 as separate sweeps repeats the
+> same work; tick both sets from one pass. Q5 and Q6 are genuinely new.
+
+- [ ] **Q1 Japanese chrome.** Launch with `app.uiLanguage: "ja"`. The menu bar reads ファイル / 編集 / 表示. No menu
+      item shows a dotted key such as `menu.file`. CJK renders in a real CJK face, not a fallback box.
+- [ ] **Q2 Japanese layout.** With a Japanese UI, check the status bar, the tab bar with four tabs open, and every
+      Settings tab. Nothing is clipped mid-character, no control overlaps its neighbour, and the window does not
+      scroll horizontally. **This is the check the width budget only approximates** — the unit suite has no layout
+      engine and cannot see any of it.
+- [ ] **Q3 Spanish and Portuguese length.** Repeat Q2 for `es` and `pt`, where labels are longer than English
+      rather than wider. Settings labels are the likeliest to wrap.
+- [ ] **Q4 Restart semantics.** Change the language in Settings. A notice appears in the main window, the menus stay
+      in the old language, and the new language is in force after a restart.
+- [ ] **Q5 Fallback is invisible, not broken.** In `ja`, open the NPM panel and the Environment Variables sheet —
+      both are mostly untranslated. They must read as clean English, never as dotted keys or blanks.
+- [ ] **Q6 Unknown system locale.** With `app.uiLanguage: "system"` on a Mac set to a language JSLab does not ship
+      (German, say), the app opens in English and does not warn.
+
+## Phase B exit gate
+
+Measured on `db3fef1` — this branch with `integration/all-fixes` (`29c86da`) merged in, so these are the numbers
+for the tree the milestone actually exits on. The machine held no other test or e2e runner during any leg
+(asserted with `pgrep -x bun` in the same invocation as each run; the three long-lived `bun dev` servers, an
+orphaned verdaccio, and the user's live app from `.worktrees/jslab-build` are not runners and were excluded).
+
+| Gate | Result |
+| --- | --- |
+| `bun run lint --max-diagnostics=300` | exit 0 — **16 warnings, 21 infos**, 672 files, Biome 2.5.13 |
+| `bun run typecheck` | exit 0, every package reporting individually |
+| `bun run i18n:check` | exit 0 — **761** keys, coverage `es 23  ja 25  zh 25  pt 24` |
+| `bun run test` (Bun 1.3.13) | **2388 ran, 2383 pass, 5 fail** |
+| `bun run test` (Bun 1.4.0) | **2388 ran, 2388 pass, 0 fail** |
+| `bun run e2e` (Bun 1.3.13) | exit 0 — **101 pass, 0 fail** across **37** scenario files, 267 `expect()` calls, 1922 s |
+
+**The lint figures deliberately differ from the Phase A baseline recorded above** (14 warnings, 16 infos). Biome
+reports **16 warnings and 21 infos** on this tree: a drift of +2 warnings and +5 infos accumulated across Phase
+B's extraction sweep (Tasks 8-14), not introduced by this task — `packages/e2e/scenarios/i18n.test.ts` checks
+clean on its own (`biome check`, exit 0, no diagnostics). Both numbers are real measurements of different trees;
+they are reconciled here so the two sections do not silently contradict each other.
+
+### Both toolchain legs ran, and the banners differ
+
+Leg A printed `bun test v1.3.13` and leg B `bun test v1.4.0`, each across all 15 package invocations with no
+mixed banner in either log. That check is the only guard against a gate that silently ran one toolchain twice,
+and it passes.
+
+> [!IMPORTANT]
+> **There is no toolchain limitation here, and an earlier ruling in this milestone wrongly recorded one.** The
+> claim was that no Bun 1.4.0 exists on this machine, reached from four true-but-incomplete lookups (`which bun`
+> → 1.3.13, the Homebrew Cellar → only 1.3.13, `~/.bun/bin/bun` → 1.3.12, `~/.hutch/bin` → no bun). All four miss
+> the hutch toolchain, which is deliberately *off* `PATH` and opted into per command — exactly as the
+> `export PATH="$HOME/.hutch/toolchains/bun/1.4.0/macos-arm64:…"` line in the baseline section at the top of this
+> file already prescribes. `~/.hutch/toolchains/bun/1.4.0/macos-arm64/bun --version` prints **1.4.0**. Four
+> wrong places agreeing is not corroboration.
+
+### The five failures, and what 1.4.0 does to them
+
+Identical under both legs in name and count, all in `@jslab/desktop`:
+
+- 4 × `subprocess output caps (R-M5b-S3)` — `saveDialog`, `runSystemProfiler`, `captureWindow` and
+  `readModifierFlags` each "refuses a flooding … WITHOUT buffering its output"
+- 1 × `the browser export condition` — "a `browser` map entry of `false` bundles an empty module instead of the
+  package"
+
+**They pass under 1.4.0.** `@jslab/desktop` reports 912 pass / 5 fail under 1.3.13 and 917 pass / 0 fail under
+1.4.0 — the same five tests, the whole difference between the two legs. This milestone measured that directly
+rather than inheriting it: the standing description of these as "1.3.13 artifacts that pass under 1.4.0" came
+from an earlier session's probe, and it is now confirmed on this tree.
+
+### The E2E suite, and what its log does and does not show
+
+Built in the prescribed order before the run — `bun run build:cli` at the repo root, then `hutch run build:dev`
+in `apps/desktop` — because `bun run e2e` builds nothing, and a stale bundle fails fast while looking healthy.
+
+`packages/e2e/scenarios/i18n.test.ts` is one of the 37 files (36 before this task), and was also measured on its
+own: **3 pass, 0 fail, 11 `expect()` calls, 93.77 s**.
+
+> [!NOTE]
+> Bun's default reporter prints **no line for a passing test** — only failures, plus any stdout a test writes
+> (which is why the webview rect dumps appear and nothing else does). The absence of a scenario's name from the
+> run log is therefore not evidence about that scenario in either direction, and a grep for one is not a check.
+> What the aggregate does establish: all 37 files were collected, nothing was skipped or marked todo, and
+> nothing failed.
+
+The `settingsRecovered` flake — "a corrupt settings.json is recovered with a notice naming the saved copy" — did
+**not** recur in this run; it is among the 101 passes. Nothing about its 8s/15s race has changed, so it can still
+bite a future run. That race is precisely why the i18n scenario asserts no transient notice of its own.

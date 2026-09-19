@@ -460,7 +460,12 @@ export function startRunnerWeb(options: RunnerWebOptions = {}): RunnerWebHandle 
         run?.buffer.close();
         return;
       case "expand":
-        bridge.send({ type: "expanded", reqId: message.reqId, value: run?.encoder.expand(message.handleId) ?? null });
+        // OU-02: as in the Bun runner, `expand`'s `offset = 0` default absorbs an absent offset.
+        bridge.send({
+          type: "expanded",
+          reqId: message.reqId,
+          value: run?.encoder.expand(message.handleId, message.offset) ?? null,
+        });
         return;
       case "dispose":
         tracker.disposeAll();

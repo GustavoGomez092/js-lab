@@ -454,6 +454,54 @@ describe("RunCoordinator", () => {
     });
   }, 15_000);
 
+  test("an expanded collection's later entries are reachable through a real runner (OU-02)", async () => {
+    const h = await createHarness();
+    // 12,000 entries: past EXPANDED_LIMITS.maxEntries (10,000), so one expansion cannot be the whole thing.
+    const { runId } = h.coordinator.start({
+      tabId: "t1",
+      code: "console.log(Array.from({ length: 12000 }, (_, i) => i));",
+      language: "typescript",
+      logpoints: [],
+    });
+    await h.waitForState("idle", runId);
+    await flush();
+
+    const logged = h.events.find((e) => e.kind === "console") as unknown as {
+      args: { more: number; next: number; handle: string }[];
+    };
+    const value = logged.args[0] as { more: number; next: number; handle: string };
+    // Eagerly capped at DEFAULT_LIMITS.maxEntries (1,000) — spec §5.9's "Collection entries" row. The runner
+    // builds its encoder with DEFAULT_LIMITS explicitly (`packages/runner-bun/src/bootstrap.ts:219`); the
+    // harness's own `maxEntries: 10_000` is the *console output* cap, a different limit entirely.
+    expect(value.more).toBe(11_000);
+    expect(value.next).toBe(1_000);
+
+    const first = (await h.coordinator.expand("t1", runId, value.handle)) as {
+      items: [number, { t: string; v: string }][];
+      more: number;
+      next: number;
+      handle: string;
+    };
+    // Read from the reply, never hard-coded: `#expandValue` halves maxEntries until the reply fits
+    // MAX_EXPAND_BYTES, so the real page size is whatever the encoder chose. A test that hard-coded 10,000
+    // would be asserting a number the code is allowed to lower.
+    expect(first.items[0]?.[0]).toBe(0);
+    expect(first.items.at(-1)?.[0]).toBe(first.next - 1);
+    expect(first.more).toBe(12_000 - first.next);
+
+    const second = (await h.coordinator.expand("t1", runId, first.handle, first.next)) as {
+      items: [number, { t: string; v: string }][];
+      from: number;
+      more?: number;
+    };
+    expect(second.from).toBe(first.next);
+    // The page really continues where the first stopped, and really reaches the end.
+    expect(second.items[0]?.[0]).toBe(first.next);
+    expect(second.items.at(-1)).toEqual([11_999, { t: "number", v: "11999" }]);
+    // Nothing left: `more` is omitted, not zero — the encoder writes it only when there is a remainder.
+    expect(second.more).toBeUndefined();
+  }, 15_000);
+
   // Task 15 (spec §5.12, EX-35): `RunCoordinator.mute()` is a harmless no-op for a runtime whose `RunHandle` has no
   // `mute` method at all (only `WebAdapter`'s sessions implement it) -- Bun has no audio concept, and the tab's
   // saved preference still persists in session.json (packages/shared) regardless of what's currently running.
@@ -558,6 +606,22 @@ describe("RunCoordinator", () => {
     ]);
     expect(outcome).toEqual({ value: null });
     expect(Date.now() - started).toBeLessThan(1000);
+  }, 15_000);
+
+  // OU-02: the coordinator's own forwarding hop. Nothing else in this change reaches it -- `rpc-handlers.test.ts`
+  // mocks the coordinator away, and the adapter tests call `RunHandle.expand` directly -- so without this, dropping
+  // `offset` in `RunCoordinator.expand` would leave every other test green while every page request silently asked
+  // for page 1 again. The stand-in runner echoes back the offset it received, so no 10,000-entry collection is
+  // needed to observe it.
+  test("expand forwards the caller's offset to the runner, and forwards its absence as absence (OU-02)", async () => {
+    const h = await createHarness({}, { bootstrapPath: join(import.meta.dir, "fixtures/expand-echo-runner.ts") });
+    const { runId } = h.coordinator.start({ tabId: "t1", code: "1", language: "typescript", logpoints: [] });
+    await h.waitForState("idle", runId);
+    expect(await h.coordinator.expand("t1", runId, "h1", 10_000)).toEqual({ t: "number", v: "10000" });
+    // A genuine 0 must arrive as 0 rather than being conflated with "no offset" -- the fixture reports -1 for an
+    // absent field, so these two assertions cannot both pass unless the value really crossed the wire.
+    expect(await h.coordinator.expand("t1", runId, "h1", 0)).toEqual({ t: "number", v: "0" });
+    expect(await h.coordinator.expand("t1", runId, "h1")).toEqual({ t: "number", v: "-1" });
   }, 15_000);
 
   test("labels logpoint results and captures stdout writes", async () => {
@@ -726,4 +790,57 @@ describe("RunCoordinator", () => {
     expect(seen[0]?.build?.pipelineOperator).toBe(true);
     expect(harness.events.find((event) => event.kind === "result")).toMatchObject({ value: { t: "number", v: "2" } });
   });
+
+  // Spec §7.4 / R-M5a-3: Show Transpiled Output serves the tab's last *successful* Babel output, and derives the
+  // uninstrumented view by transforming the same source again with Auto Log, logpoints and loop protection off --
+  // not by stripping `__jl` calls out of generated code, which cannot be done correctly.
+  test("transpiled() returns the last Babel output, and re-transforms without instrumentation on request", async () => {
+    const h = await createHarness();
+    const { runId } = h.coordinator.start({
+      tabId: "t1",
+      code: "const a = 5;\na;",
+      language: "typescript",
+      logpoints: [1],
+    });
+    await h.waitForState("evaluating", runId);
+
+    const instrumented = await h.coordinator.transpiled("t1", false);
+    expect(instrumented?.code).toContain("__jl.");
+    // R-M5a-7: the source this output was produced from travels with it, so the panel compares against what Main
+    // actually transpiled rather than guessing from what it last sent.
+    expect(instrumented?.source).toBe("const a = 5;\na;");
+
+    const plain = await h.coordinator.transpiled("t1", true);
+    expect(plain?.code).not.toContain("__jl.");
+    expect(plain?.code).toContain("const a = 5");
+    // The uninstrumented view is the same program, so it is stale under the same condition: same `source`.
+    expect(plain?.source).toBe("const a = 5;\na;");
+
+    expect(await h.coordinator.transpiled("never-ran", false)).toBeNull();
+
+    // The remembered transform is dropped with the tab, so a closed tab stops serving its last program.
+    h.coordinator.disposeTab("t1");
+    expect(await h.coordinator.transpiled("t1", false)).toBeNull();
+  });
+
+  // The two ways this cache could lie, neither of them pinned before: a later run that cannot compile must not
+  // replace the last good entry (if it did, `source` would stop describing where `code` came from, and R-M5a-7's
+  // stale indicator would report "fresh" over older output), and asking for the uninstrumented view must not
+  // consume or overwrite the instrumented one.
+  test("a failed compile leaves the last good transform in place, and hiding instrumentation does not erase it", async () => {
+    const h = await createHarness();
+    const good = h.coordinator.start({ tabId: "t1", code: "const a = 5;\na;", language: "typescript", logpoints: [] });
+    await h.waitForState("evaluating", good.runId);
+    const before = await h.coordinator.transpiled("t1", false);
+    expect(before?.source).toBe("const a = 5;\na;");
+    expect(before?.code).toContain("__jl.");
+
+    const broken = h.coordinator.start({ tabId: "t1", code: "const a = ;", language: "typescript", logpoints: [] });
+    await h.waitForState("failed", broken.runId);
+    expect(await h.coordinator.transpiled("t1", false)).toEqual(before);
+
+    const plain = await h.coordinator.transpiled("t1", true);
+    expect(plain?.code).not.toContain("__jl.");
+    expect(await h.coordinator.transpiled("t1", false)).toEqual(before);
+  }, 15_000);
 });

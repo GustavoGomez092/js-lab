@@ -188,7 +188,20 @@ button:disabled {
   flex-direction: column;
 }
 
+/* A pane is a flex ITEM of `.split` (hence `min-width`/`min-height: 0`, which stop a pane refusing to shrink below
+   its content) and also a flex CONTAINER for whatever it holds. Being a container is load-bearing, not symmetry:
+   `.split` declares `flex: 1`, which is an assertion about its PARENT, and a `SplitPane` nested inside a
+   `SplitPane` (`OutputTiles` renders exactly that for the Console/Web View preview) makes a `.split` the child of
+   a `.split-pane`. While a pane was a block container that `flex: 1` was inert, so the nested split took its
+   content height instead of the pane's, and everything measured against it collapsed: the console pane's
+   `flex-basis: 55%` resolved against an indefinite height (so it fell back to content -- the toolbar alone, 52px,
+   measured live), and the Web View pane's `flex: 1` had no free space to grow into, handing `WebViewTile` a
+   zero-height dock and the native surface a degenerate frame. Panes that set their own `height: 100%`
+   (`.editor`, `.output`, `.webview-tile-dock`) are unaffected -- a percentage height resolves against a flex
+   container's definite height exactly as it did against a block one. */
 .split-pane {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -255,6 +268,20 @@ button:disabled {
   z-index: 40;
 }
 
+/* ---------- logpoint gutter (spec §6.3) ---------- */
+/* Monaco sizes the glyph margin itself and applies this class to that line's margin cell; the dot is drawn with
+   a radial background so no pseudo-element is needed (Monaco owns the cell's own ::before/::after). */
+.logpoint-glyph {
+  background: radial-gradient(circle at center, var(--fg-accent) 0 4px, transparent 4px);
+  cursor: pointer;
+}
+
+/* Spec §5.5: a logpoint on a line with no loggable statement is hollow. Same specificity as `.logpoint-glyph`
+   (both classes are applied together), so this rule must stay after it to win on source order. */
+.logpoint-glyph-hollow {
+  background: radial-gradient(circle at center, transparent 0 2.5px, var(--fg-muted) 2.5px 4px, transparent 4px);
+}
+
 /* ---------- output ---------- */
 .output {
   display: flex;
@@ -263,9 +290,55 @@ button:disabled {
   background: var(--bg-canvas);
 }
 
+/* ---------- transpiled output panel (spec §7.4) ---------- */
+.transpiled-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.transpiled-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.transpiled-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+}
+
+/* Same treatment as the output panel's own stale chip, for the same reason (R-M5a-7). */
+.transpiled-stale-label {
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  font: 500 11px / 1 var(--ui);
+}
+
+.transpiled-code {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  white-space: pre;
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1.5 var(--code-font-family, var(--mono));
+  color: var(--fg-default);
+}
+
+.transpiled-empty {
+  color: var(--fg-muted);
+}
+
 /* ---------- web view tile (Task 8, fix round 1 F1-F3) ---------- */
-/* `.split-pane` children are flex items, not containers (see `.output`/`.editor` above), so `OutputTiles`'s
-   docking placeholder sets its own height explicitly, same as every other pane. It carries no visible content of
+/* `OutputTiles`'s docking placeholder sets its own height explicitly, same as every other pane (`.output`/
+   `.editor` above) -- a pane is a flex column, so `height: 100%` and `flex: 1` would both work here; the explicit
+   height is kept because it is also correct in the full-screen position below. It carries no visible content of
    its own -- `WebViewTile` only ever reads its box (`getBoundingClientRect`/`ResizeObserver`) to position the
    real tile over it; nothing is ever rendered inside it (fix round 1, F1: a portal target that lives inside a
    component allowed to unmount is exactly what let hiding Output or switching tabs destroy the webview). */
@@ -355,7 +428,9 @@ button:disabled {
 
 .entry {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+  /* OU-10 adds a fourth track for the entry menu's button. A row without a line badge simply leaves the third
+     track empty -- both trailing tracks are `auto`, so neither reserves width it is not using. */
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: start;
   padding: 5px 12px 5px 0;
@@ -380,6 +455,21 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* OU-10. Quiet until the row is hovered, but `opacity` only -- never `display: none` or `visibility: hidden`,
+   which would take the button out of the tab order and make the entry menu unreachable by keyboard. It also
+   stays visible while focused and while its own menu is open. */
+.entry-menu-button {
+  padding: 0 4px;
+  color: var(--fg-muted);
+  opacity: 0;
+}
+
+.entry:hover .entry-menu-button,
+.entry-menu-button:focus-visible,
+.entry-menu-button[aria-expanded="true"] {
+  opacity: 1;
+}
+
 .entry-console-warn {
   color: var(--fg-warn);
 }
@@ -397,6 +487,20 @@ button:disabled {
   display: block;
   color: var(--fg-muted);
   text-align: left;
+}
+
+/* OU-13. A URL in output is a real button, so it is an ordinary Tab stop and opens with Enter -- a link that
+   answered only Cmd-click would be unreachable by keyboard. It inherits the row's font and sits inline in the
+   text, so a row reads as one sentence rather than as text with a widget dropped into it. */
+.entry-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .entry-action {
@@ -596,15 +700,47 @@ button:disabled {
   border-bottom: 1px solid var(--border-default);
 }
 
+/* UI item 7: one tone for every notice is what these replace. A recovery and an unexpected error no longer
+   arrive in the same yellow. */
+.banner-info {
+  background: var(--bg-elevated);
+  color: var(--fg-info);
+}
+
 .banner-warning {
   background: var(--bg-elevated);
   color: var(--fg-warn);
 }
 
-/* Startup notices (Task 9, spec §20). */
+.banner-error {
+  background: var(--bg-elevated);
+  color: var(--fg-error);
+}
+
+/* Decorative, so severity survives for anyone who cannot tell the colours apart. */
+.banner-icon {
+  margin-right: 8px;
+  font-style: normal;
+}
+
+/* Startup notices (Task 9, spec §20).
+   UI item 7: still in normal flow on purpose -- floating these over the editor would put them in front of
+   Monaco's own widgets, the problem `widget-occlusion` exists to manage -- but now bounded, so a full queue of
+   five can only ever take a slice of the editor instead of pushing it off the bottom. */
 .notices {
   display: flex;
   flex-direction: column;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+/* Shown only once more than two are stacked (see DISMISS_ALL_THRESHOLD). */
+.notices-dismiss-all {
+  align-self: flex-end;
+  margin: 4px 12px;
+  padding: 2px 10px;
+  border-color: var(--border-default);
+  color: var(--fg-muted);
 }
 
 /* A notice's action button, such as Copy Debug Log (spec §20). */
@@ -615,11 +751,14 @@ button:disabled {
   color: var(--fg-default);
 }
 
+/* UI item 7: was 20x20, well under a comfortable target. The negative block margin buys the extra size from the
+   banner's own padding rather than making every banner taller. */
 .banner-dismiss {
   float: right;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   padding: 0;
+  margin: -4px 0;
   color: inherit;
 }
 
@@ -670,6 +809,24 @@ button:disabled {
 .dialog-actions .danger {
   background: var(--bg-errorRow);
   color: var(--fg-error);
+}
+
+/* ---------- About (M6): app name, versions, licence and the open-source notices ---------- */
+.about-facts {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  color: var(--fg-default);
+}
+
+.about-facts li {
+  padding: 1px 0;
+}
+
+/* Quieter than the version list: the licence is attribution, not the headline. `.dialog p` already supplies
+   the muted colour and the 16px bottom margin. */
+.about-license {
+  font-size: 11px;
 }
 
 /* ---------- sheets (Environment Variables, and NPM Packages in Task 26; spec §7.5) ---------- */
@@ -1006,6 +1163,159 @@ button:disabled {
   text-transform: uppercase;
 }
 
+/* ---------- snippets panel (spec §13.1) ---------- */
+.snippets-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.snippets-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.snippets-header h2 {
+  margin: 0;
+  margin-right: auto;
+}
+
+.snippets-search {
+  width: 100%;
+}
+
+.snippets-scroller {
+  flex: 1 1 auto;
+  min-height: 80px;
+  overflow: auto;
+}
+
+.snippets-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  cursor: default;
+  color: var(--fg-default);
+}
+
+.snippets-row[aria-selected="true"] {
+  background: var(--bg-activeRow);
+}
+
+/* Why the row matched, marked in the name or the description. Mirrors `.palette-item mark`. */
+.snippets-row mark {
+  background: none;
+  color: var(--fg-accent);
+  font-weight: 600;
+}
+
+.snippets-description,
+.snippets-empty,
+.snippets-status,
+.snippets-detail-text {
+  color: var(--fg-muted);
+}
+
+.snippets-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snippets-empty {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+
+.snippets-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border-default);
+  padding-top: 8px;
+}
+
+.snippets-preview {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre;
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1.5 var(--code-font-family, var(--mono));
+  color: var(--fg-default);
+}
+
+.snippets-actions,
+.snippets-conflicts .dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.snippets-undo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.snippets-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.snippets-form h2 {
+  margin: 0 0 4px;
+}
+
+/* A class, not `.snippets-form input`: an element-ending compound here descends in specificity from
+   `.env-table tr.invalid input` and trips lint/style/noDescendingSpecificity. `.dialog-input` is the same idiom. */
+.snippets-field {
+  width: 100%;
+  padding: 4px 6px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  color: inherit;
+}
+
+.snippets-body,
+.snippets-body-field {
+  min-height: 160px;
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  font: calc(var(--code-font-size, 13px) * var(--ui-scale)) / 1.5 var(--code-font-family, var(--mono));
+}
+
+.snippets-body-field {
+  background: var(--bg-canvas);
+  color: var(--fg-default);
+  padding: 6px;
+  resize: vertical;
+}
+
+.snippets-help {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+.snippets-error {
+  color: var(--fg-error);
+  font-size: 11px;
+}
+
 /* ---------- status bar parts ---------- */
 .status-left,
 .status-right {
@@ -1081,6 +1391,9 @@ button:disabled {
 
 .status-item {
   padding: 0 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-wd {
@@ -1145,6 +1458,7 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  word-break: keep-all;
 }
 
 .tab-dirty {
@@ -1413,6 +1727,18 @@ button:disabled {
   font-weight: 600;
 }
 
+/* R-M4-PALETTE-HIDE-1: a disabled command stays listed, greyed and unselectable, so "not right now" never reads
+   as "no such command". Arrow keys skip it, so it never carries aria-selected and needs no selected-row rule. */
+.palette-item[aria-disabled="true"] {
+  color: var(--fg-muted);
+}
+
+.palette-unavailable {
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
 .palette-desc {
   color: var(--fg-muted);
   font-size: 12px;
@@ -1516,6 +1842,11 @@ button:disabled {
   border-bottom: 1px solid var(--border-muted);
 }
 
+.field-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .field-text label {
   font-weight: 600;
 }
@@ -1540,6 +1871,32 @@ button:disabled {
   background: var(--bg-canvas);
   border: 1px solid var(--border-default);
   border-radius: var(--radius);
+}
+
+/* TL-23: the model picker and Refresh sit under the text input, which keeps its full width and stays editable. */
+.field-model {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.field-model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-model-row button {
+  padding: 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+}
+
+/* The failure line belongs to the control, not to a field label, so it loses the badge's leading gap. */
+.field-model .field-note {
+  margin-left: 0;
+  text-align: right;
 }
 
 .settings-actions {
@@ -1606,4 +1963,100 @@ button:disabled {
 
 .npmrc-status-error {
   color: var(--fg-error);
+}
+
+.keybindings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.keybindings h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.keybindings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+/* `thead th` / `tbody td` rather than bare `th` / `td`: the earlier `.npm-installed thead th` is (0, 1, 2), so a
+   later (0, 1, 1) selector here would be a descending-specificity hazard (biome lint/style/noDescendingSpecificity). */
+.keybindings-table thead th,
+.keybindings-table tbody td {
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.keybindings-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-chrome);
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+.keybindings-table tbody td:nth-child(3) {
+  color: var(--fg-muted);
+  font: 500 11px / 1.4 var(--mono);
+}
+
+.keybindings-note,
+.keybindings-conflict {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.keybindings-note {
+  color: var(--fg-muted);
+}
+
+.keybindings-conflict {
+  color: var(--fg-warn);
+}
+
+.keybindings-empty,
+.keybindings-status {
+  font-size: 12px;
+}
+
+.keybindings-empty {
+  color: var(--fg-muted);
+}
+
+.keybindings-status {
+  color: var(--fg-error);
+}
+
+/* Every chord bound to the command sits in this cell, so the row can wrap rather than widen the table
+   (R-M5d-ALIAS-1: a command with two chords shows both). */
+.keybindings-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.keybindings-capture {
+  width: 132px;
+  font: 500 11px / 1 var(--mono);
+}
+
+.keybindings-action {
+  padding: 2px 8px;
+  border-color: var(--border-default);
+  font-size: 11px;
+}
+
+.keybindings-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-size: 11px;
 }

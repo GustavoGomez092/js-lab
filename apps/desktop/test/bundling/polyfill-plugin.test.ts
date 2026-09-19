@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bundleAppForWeb, bundleVendorForWeb, joinVendorAndApp } from "../../src/main/bundling/bundler";
+import { nodePolyfills } from "../../src/main/bundling/polyfill-plugin";
 
 /**
  * Task 10 (spec §5.13): the `browser-node` module table `apps/desktop/src/main/bundling/polyfill-plugin.ts`
@@ -62,6 +63,49 @@ async function runJoinedModule(joined: string): Promise<unknown> {
   await import(file);
   return g.__jlProbe;
 }
+
+/**
+ * F1. The `browser` runtime's builtin-blocking hook re-reads `args.importer` to position its error. That read was a
+ * bare `readFileSync`, excused in the unbounded-reads allowlist as "best-effort inside try/catch" -- a
+ * recoverability argument that answers neither hazard, because `readFileSync` on a FIFO *blocks* and no try/catch
+ * can rescue a blocking syscall. Measured before the fix by driving this exact hook with a FIFO importer under a
+ * hard alarm: it never returned and had to be killed.
+ */
+describe("nodePolyfills: the importer re-read that positions a blocked-builtin error", () => {
+  /** Captures the onResolve callback the plugin registers, so the hook is driven without a full `Bun.build`. */
+  function driveResolve(onError: (error: { line?: number }) => void) {
+    let callback: ((args: Record<string, unknown>) => unknown) | null = null;
+    const builder = {
+      onResolve(_constraints: { filter: RegExp }, cb: typeof callback) {
+        callback = cb;
+      },
+      onLoad() {},
+    };
+    nodePolyfills("browser", onError as never).setup(builder as never);
+    return (importer: string) => {
+      if (!callback) throw new Error("onResolve was never registered");
+      return callback({ path: "fs", importer, namespace: "file", kind: "import-statement" });
+    };
+  }
+
+  test("positions the error from a regular importer, and refuses a FIFO one instead of hanging", async () => {
+    // Control first: without it, the FIFO assertion below would pass for a hook that never read the importer.
+    const real = join(root, "entry.js");
+    await writeFile(real, 'import fs from "fs";\n');
+    const positioned: Array<{ line?: number }> = [];
+    expect(() => driveResolve((error) => positioned.push(error))(real)).toThrow('blocked Node builtin "fs"');
+    expect(positioned[0]?.line).toBe(1);
+
+    // The same hook, with a FIFO importer. This read is synchronous: a regression does not time out, it parks the
+    // thread and hangs the whole run, which is exactly why the refusal belongs in the reader and not in a timeout.
+    const fifo = join(root, "fifo-entry.js");
+    expect(await Bun.spawn(["mkfifo", fifo]).exited).toBe(0);
+    const piped: Array<{ line?: number }> = [];
+    expect(() => driveResolve((error) => piped.push(error))(fifo)).toThrow('blocked Node builtin "fs"');
+    // The error still reports, just without a position -- the same fallback an unreadable importer already took.
+    expect(piped[0]?.line).toBeUndefined();
+  });
+});
 
 /**
  * Builds and runs one `browser-node` entry, returning whatever it left on `globalThis.__jlProbe`.
@@ -576,6 +620,104 @@ describe("browser-node module table -- node: prefix (fix round 1, I2)", () => {
       "import crypto from 'node:crypto';\nglobalThis.__jlProbe = crypto.createHash('md5').update('abc').digest('hex');\n",
     );
     expect(result).toBe("900150983cd24fb0d6963f7d28e17f72");
+  });
+});
+
+/**
+ * EX-19 (spec §5.3) for the web runtimes: CommonJS `require()` in a tab's own code.
+ *
+ * Every `browser-node` test above uses ESM `import`. `require()` is a different resolution path through
+ * `Bun.build` -- `resolve-plugin.ts` deliberately selects a different `exports` condition set for it
+ * (`["browser", "require", "default"]` versus the `import` branch) -- so nothing above exercised it.
+ *
+ * Two different things have to be pinned here, because two different fallbacks can fake a pass.
+ *
+ * 1. **`runJoinedModule` evaluates the bundle in Bun, where a `require` global exists.** A chunk that still
+ *    contained a free `require("path")` call would be served by Bun's own require and pass, while failing in a
+ *    real webview, which has no such binding. Hence the static `freeRequireCalls` check.
+ * 2. **A bypassed table is silently replaced by `Bun.build`'s own internal browser shim**, which is also
+ *    self-contained (so `freeRequireCalls` stays 0) and also behaves plausibly. This is the exact I2 failure
+ *    mode documented above. So every behavioural assertion below is against a **snapshot-backed** value that
+ *    only the real §5.13 table can produce. Measured, with the table's `require` resolution disabled:
+ *    `process.cwd()` reads `"/"` instead of the tab's working directory, `path.win32` is `undefined` instead of
+ *    an object, and `os.platform()` reads `"browser"` instead of the host platform.
+ *
+ * A value-shaped assertion such as `path.join('a','b') === 'a/b'` is true of the table AND of the shim, and so
+ * proves nothing on its own -- an earlier draft of these tests used exactly that and survived the bypass intact.
+ */
+describe("browser-node -- CommonJS require() in the tab's own code (EX-19, spec §5.3)", () => {
+  /** Builds one `browser-node` entry and hands back the emitted app chunk, for static inspection. */
+  async function buildBrowserNodeChunk(source: string): Promise<string> {
+    const entry = join(workingDirectory, "require-entry.js");
+    await writeFile(entry, source);
+    const app = await bundleAppForWeb({
+      entry,
+      runtime: "browser-node",
+      workingDirectory,
+      packagesNodeModules,
+      dataDir,
+    });
+    if ("error" in app) throw new Error(`app build failed: ${app.error.message}`);
+    return app.code;
+  }
+
+  /**
+   * A free `require(` -- one not preceded by a `.`, and not part of a longer identifier such as esbuild's own
+   * self-contained `__require` shim, which is defined inside the chunk and therefore harmless.
+   */
+  const freeRequireCalls = (code: string) => [...code.matchAll(/(^|[^.\w$])require\s*\(/g)].length;
+
+  test("require() of a builtin is served by the table, not a shim, and leaves no free require", async () => {
+    // `process.cwd()` is snapshot-backed: only the table knows this tab's working directory. The bypass fallback
+    // reads "/" instead, so this distinguishes the two; a `path.join` result would not.
+    const source = "const p = require('process');\nglobalThis.__jlProbe = p.cwd();\n";
+    expect(freeRequireCalls(await buildBrowserNodeChunk(source))).toBe(0);
+    expect(await runBrowserNodeEntry(source)).toBe(workingDirectory);
+  });
+
+  test("require() with the node: prefix resolves through the same table", async () => {
+    // `win32` is present on the vendored `path-browserify` and absent from Bun's internal browser shim, so it
+    // separates the table from the fallback in a way `sep` (identical in both) cannot.
+    const source = "const p = require('node:path');\nglobalThis.__jlProbe = { sep: p.sep, win32: typeof p.win32 };\n";
+    expect(freeRequireCalls(await buildBrowserNodeChunk(source))).toBe(0);
+    expect(await runBrowserNodeEntry(source)).toEqual({ sep: "/", win32: "object" });
+  });
+
+  test("ESM import and require() in the same module both resolve through the table", async () => {
+    // `os.platform()` comes from Main's own `node:os` snapshot; the bypass fallback answers "browser".
+    const source = [
+      "import { join } from 'node:path';",
+      "const os = require('os');",
+      "globalThis.__jlProbe = [join('a','b'), os.platform()];",
+      "",
+    ].join("\n");
+    expect(freeRequireCalls(await buildBrowserNodeChunk(source))).toBe(0);
+    expect(await runBrowserNodeEntry(source)).toEqual(["a/b", process.platform]);
+  });
+});
+
+/**
+ * The `browser` runtime's refusal, in the `node:`-prefixed spelling. The refusal hook gates on `isNodeBuiltin`,
+ * which normalizes through `stripNodePrefix` -- but every existing test of it drives the bare `fs` spelling, so a
+ * regression that stopped normalizing would have left `node:`-prefixed builtins silently stubbed by
+ * `Bun.build({target:'browser'})` instead of refused, which is the exact failure mode Task 11 documents for
+ * `browser-node`.
+ */
+describe("browser runtime refuses node:-prefixed builtins too (EX-19, spec §5.3)", () => {
+  test("node:fs is refused with the Browser-runtime message, naming the prefixed specifier", async () => {
+    const entry = join(workingDirectory, "browser-node-prefix.js");
+    await writeFile(entry, "import fs from 'node:fs';\nglobalThis.__jlProbe = typeof fs;\n");
+    const app = await bundleAppForWeb({
+      entry,
+      runtime: "browser",
+      workingDirectory,
+      packagesNodeModules,
+      dataDir,
+    });
+    if (!("error" in app)) throw new Error("expected the browser build to refuse node:fs");
+    expect(app.error.message).toBe(
+      "Cannot find module 'node:fs'. Node built-ins aren't available in the Browser runtime.",
+    );
   });
 });
 

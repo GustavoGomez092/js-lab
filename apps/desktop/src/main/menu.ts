@@ -1,6 +1,6 @@
 import {
   type CommandId,
-  commandMeta,
+  commandTitleKey,
   formatChord,
   isCommandId,
   isRuntimeAvailable,
@@ -12,6 +12,7 @@ import {
   type TabState,
 } from "@jslab/shared";
 import type { ApplicationMenuItemConfig } from "electrobun/main";
+import type { Translate } from "./i18n";
 
 export type MenuRole =
   | "about"
@@ -76,6 +77,10 @@ export interface MenuModel {
   bindings: readonly ResolvedBinding[];
   themes: readonly { id: string; name: string }[];
   canReopen: boolean;
+  /** Spec §16.1: the one slot reads "Uninstall…" once a symlink to this build is detected. */
+  cliInstalled: boolean;
+  /** Spec §17: Main's own translator, reading the very locale files the UI ships. */
+  t: Translate;
 }
 
 const PREFIX = "command:";
@@ -96,11 +101,13 @@ export function commandForMenuAction(action: string): { command: CommandId; args
 
 /** The complete M2 menu (spec §7.4). Shortcut text comes from the effective bindings, never from accelerators (R13). */
 export function buildMenu(model: MenuModel): MenuItem[] {
-  const { settings, activeTab, bindings } = model;
+  const { settings, activeTab, bindings, t } = model;
   const item = (command: CommandId, extra: { text?: string; enabled?: boolean; checked?: boolean } = {}): MenuItem => {
     const { text, ...rest } = extra;
     const chord = shortcutFor(bindings, command);
-    const title = text ?? commandMeta(command)?.title ?? command;
+    // No `?? command` fallback is needed: `t()` returns the key itself when the catalogue lacks it, which is the
+    // same visible-mistake-rather-than-blank-item rule, and `commandTitleKey` is total over ids.
+    const title = text ?? t(commandTitleKey(command));
     return { label: chord ? `${title}    ${formatChord(chord)}` : title, action: menuAction(command), ...rest };
   };
   const runtime = (command: CommandId, value: Runtime, text: string): MenuItem =>
@@ -116,9 +123,12 @@ export function buildMenu(model: MenuModel): MenuItem[] {
 
   return [
     {
-      label: "JSLab",
+      label: t("app.name"),
       submenu: [
-        { role: "about" },
+        // M6: JSLab's own About, not the native `{ role: "about" }` panel. The native one shows only what
+        // Info.plist carries -- it cannot name the Bun or Electrobun version, and cannot open the notices
+        // file -- so shipping both would mean two "About JSLab" that disagree with each other.
+        item("help.about"),
         separator,
         item("app.settings"),
         separator,
@@ -130,7 +140,7 @@ export function buildMenu(model: MenuModel): MenuItem[] {
       ],
     },
     {
-      label: "File",
+      label: t("menu.file"),
       submenu: [
         item("tab.new"),
         item("file.open"),
@@ -144,7 +154,7 @@ export function buildMenu(model: MenuModel): MenuItem[] {
       ],
     },
     {
-      label: "Edit",
+      label: t("menu.edit"),
       submenu: [
         { role: "undo" },
         { role: "redo" },
@@ -161,13 +171,17 @@ export function buildMenu(model: MenuModel): MenuItem[] {
         item("edit.toggleLineComment"),
         item("edit.toggleBlockComment"),
         item("edit.toggleMagicComment"),
+        item("edit.toggleLogpoint"),
+        item("edit.clearLogpoints"),
+        separator,
+        item("snippets.create"),
         separator,
         item("output.clear"),
         item("editor.clear"),
       ],
     },
     {
-      label: "Actions",
+      label: t("menu.actions"),
       submenu: [
         item("run.start"),
         item("run.stop"),
@@ -179,80 +193,116 @@ export function buildMenu(model: MenuModel): MenuItem[] {
         item("wd.clear", { enabled: Boolean(activeTab?.workingDirectory) }),
         separator,
         {
-          label: "Runtime",
+          // The runtime and language names reuse the option labels already in the catalogue rather than adding a
+          // second set of names for the same three runtimes and four languages.
+          label: t("menu.runtime"),
           submenu: [
-            runtime("runtime.browserNode", "browser-node", "Browser & Node APIs"),
-            runtime("runtime.bun", "bun", "Bun"),
-            runtime("runtime.browser", "browser", "Browser"),
+            runtime("runtime.browserNode", "browser-node", t("settings.options.runtime.browser-node")),
+            runtime("runtime.bun", "bun", t("settings.options.runtime.bun")),
+            runtime("runtime.browser", "browser", t("settings.options.runtime.browser")),
           ],
         },
         {
-          label: "Language",
+          label: t("menu.language"),
           submenu: [
-            language("language.typescript", "typescript", "TypeScript"),
-            language("language.javascript", "javascript", "JavaScript"),
-            language("language.tsx", "tsx", "TSX"),
-            language("language.jsx", "jsx", "JSX"),
+            language("language.typescript", "typescript", t("settings.options.language.typescript")),
+            language("language.javascript", "javascript", t("settings.options.language.javascript")),
+            language("language.tsx", "tsx", t("settings.options.language.tsx")),
+            language("language.jsx", "jsx", t("settings.options.language.jsx")),
           ],
         },
+        separator,
+        item("view.showTranspiled"),
       ],
     },
     {
-      label: "Tools",
-      submenu: [item("tools.npmPackages"), item("tools.environmentVariables")],
+      label: t("menu.tools"),
+      submenu: [
+        item("tools.npmPackages"),
+        item("tools.environmentVariables"),
+        item("tools.snippets"),
+        item("tools.aiChat"),
+        separator,
+        item("snippets.import"),
+        item("snippets.export"),
+      ],
     },
     {
-      label: "View",
+      // `menu.view` is both this section's label and the namespace its overrides live in, and a key can be only
+      // one of the two. `_` is the section's own title; docs/user/translating.md says so for translators.
+      label: t("menu.view._"),
       submenu: [
-        item("view.commandPalette", { text: "Command Palette…" }),
+        item("view.commandPalette", { text: t("menu.view.commandPalette") }),
         separator,
         item("view.zoomReset"),
         item("view.zoomIn"),
         item("view.zoomOut"),
         separator,
-        item("view.toggleOutput", { text: "Output", checked: activeTab?.layout.outputVisible ?? true }),
+        item("view.toggleOutput", { text: t("menu.view.output"), checked: activeTab?.layout.outputVisible ?? true }),
         item("view.toggleWebView", {
-          text: "Web View",
+          text: t("menu.view.webView"),
           checked: webView.supported && webView.on,
           enabled: webView.supported,
         }),
-        item("view.toggleSideBar", { text: "Side Bar", checked: view.sideBar }),
-        item("view.toggleActivityBar", { text: "Activity Bar", checked: view.activityBar }),
-        item("view.toggleStatusBar", { text: "Status Bar", checked: view.statusBar }),
-        item("view.toggleTabBar", { text: "Tab Bar", checked: view.tabBarForSingleTab }),
+        item("view.toggleSideBar", { text: t("menu.view.sideBar"), checked: view.sideBar }),
+        item("view.toggleActivityBar", { text: t("menu.view.activityBar"), checked: view.activityBar }),
+        item("view.toggleStatusBar", { text: t("menu.view.statusBar"), checked: view.statusBar }),
+        item("view.toggleTabBar", { text: t("menu.view.tabBar"), checked: view.tabBarForSingleTab }),
         {
-          label: "Layout",
+          label: t("menu.layout"),
           submenu: [
             item("view.layoutHorizontal", {
-              text: "Horizontal",
+              text: t("menu.view.horizontal"),
               checked: activeTab?.layout.orientation === "horizontal",
             }),
-            item("view.layoutVertical", { text: "Vertical", checked: activeTab?.layout.orientation === "vertical" }),
+            item("view.layoutVertical", {
+              text: t("menu.view.vertical"),
+              checked: activeTab?.layout.orientation === "vertical",
+            }),
           ],
         },
         separator,
-        item("view.toggleFullScreen", { text: "Enter Full Screen" }),
+        item("view.toggleFullScreen", { text: t("menu.view.fullScreen") }),
       ],
     },
     {
-      label: "Themes",
+      label: t("menu.themes"),
       submenu: [
+        // Theme names are proper nouns and are deliberately not translated (docs/user/translating.md).
         ...model.themes.map((theme) => ({
           label: theme.name,
           action: menuAction("theme.select", theme.id),
           checked: !appearance.followSystem && appearance.theme === theme.id,
         })),
         separator,
+        item("theme.import"),
+        separator,
         item("theme.toggleFollowSystem", { checked: appearance.followSystem }),
       ],
     },
     {
-      label: "Window",
+      label: t("menu.window"),
       submenu: [{ role: "minimize" }, { role: "zoom" }, separator, { role: "bringAllToFront" }],
     },
     {
-      label: "Help",
-      submenu: [item("help.copyDebugLog"), item("help.openLogsFolder"), separator, item("help.restartSafeMode")],
+      label: t("menu.help"),
+      submenu: [
+        // M6: the same `help.about` command the app menu carries, so the two entry points cannot drift.
+        item("help.about"),
+        separator,
+        // ST-11 (spec §7.4): the three link items lead the rest, as they do in the app this menu is measured
+        // against.
+        item("help.documentation"),
+        item("help.reportIssue"),
+        item("help.whatsNew"),
+        separator,
+        item("help.copyDebugLog"),
+        item("help.openLogsFolder"),
+        separator,
+        model.cliInstalled ? item("help.uninstallCli") : item("help.installCli"),
+        separator,
+        item("help.restartSafeMode"),
+      ],
     },
   ];
 }

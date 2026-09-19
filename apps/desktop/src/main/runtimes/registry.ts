@@ -17,13 +17,15 @@ export interface RuntimeRegistry {
  * The runtime -> adapter lookup (spec §5.1). This function itself needs no change to support more runtimes --
  * `adapters` already accepts any `Partial<Record<Runtime, RuntimeAdapter>>` -- so "registering" a `WebAdapter`
  * (`./web-adapter.ts`, `createWebAdapter`) is a matter of the *caller* passing `browser`/`browser-node` keys, once
- * a real `WebviewSource` exists to construct one from. No caller does yet: `createWebAdapter` exists and is
- * unit-tested against a fake `WebviewSource`, but production has no real one to build it with -- Task 7 deferred
- * building it pending a live `<electrobun-webview>` DOM node, Task 8 landed that node but didn't wire the Main<->UI
- * bridge a real `WebviewSource` needs, and M4 Task 9 made `browser`/`browser-node` selectable in the UI without
- * that wiring existing (a known, disclosed gap -- see Task 9's report). Until a caller registers real adapters for
- * those keys, any runtime with no adapter of its own falls back to Bun, same as `effectiveRuntime` does for tab
- * defaults -- except that fallback is no longer silent for an explicitly requested runtime (see `get()` below):
+ * a real `WebviewSource` exists to construct one from. **A caller now does:** `main-services.ts` registers both
+ * (`browser` and `browser-node`, via `createWebAdapter(webAdapterDeps(...))`) whenever a `webviewBridge` is
+ * provided, which M4 landed along with the Main<->UI bridge a real `WebviewSource` needs. The earlier text here
+ * said no caller did -- true when Task 7 deferred building one and Task 9 made the runtimes selectable without the
+ * wiring, but stale since M4 closed that gap. `run-coordinator.ts` had the same stale claim and corrected it; this
+ * copy was missed. The fallback below is therefore the *no-bridge* case (no `webviewBridge`, so no web adapter is
+ * registered), not the normal one: a runtime with no adapter of its own falls back to Bun, same as
+ * `effectiveRuntime` does for tab defaults -- except that fallback is no longer silent for an explicitly
+ * requested runtime (see `get()` below):
  * unlike `effectiveRuntime`'s tab-default case, a user can now deliberately choose the runtime being discarded.
  */
 export function createRuntimeRegistry(

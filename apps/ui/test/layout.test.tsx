@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   commandMeta,
+  commandTitleKey,
   createTab,
   defaultSession,
   defaultSettings,
@@ -10,6 +11,7 @@ import {
 } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createViewCommands } from "../src/commands/view-commands";
+import { t } from "../src/i18n";
 import { runStateKind } from "../src/shell/labels";
 import { SplitPane } from "../src/shell/SplitPane";
 import { StatusBar } from "../src/shell/StatusBar";
@@ -104,6 +106,9 @@ describe("layout", () => {
     const { rerender } = render(
       <SplitPane
         orientation="horizontal"
+        // Mirrors what `App.tsx` passes. Rendering `SplitPane` directly cannot prove `App.tsx` passes it --
+        // nothing renders `<App>`; the prop being REQUIRED is what makes dropping it there a typecheck failure.
+        label={strings.shell.splitter.editorOutput}
         size={70}
         secondVisible
         onResize={() => {}}
@@ -112,11 +117,13 @@ describe("layout", () => {
         second={<div>output</div>}
       />,
     );
-    fireEvent.doubleClick(screen.getByRole("separator"));
+    // Addressed by name rather than by bare role: the outer splitter is the one under test here.
+    fireEvent.doubleClick(screen.getByRole("separator", { name: strings.shell.splitter.editorOutput }));
     expect(onReset).toHaveBeenCalledTimes(1);
     rerender(
       <SplitPane
         orientation="horizontal"
+        label={strings.shell.splitter.editorOutput}
         size={70}
         secondVisible={false}
         onResize={() => {}}
@@ -150,6 +157,25 @@ describe("layout", () => {
     expect(store.getState().tab?.language).toBe("jsx");
     expect(screen.getByText("Ln 4, Col 7")).toBeTruthy();
     expect(screen.getByText("INSERT")).toBeTruthy();
+  });
+
+  /**
+   * Audit entry 3: `.status-message` was a bare `<span>`, so every transient message routed through
+   * `setStatusMessage` -- "Couldn't format: …", "Installing zod…", the 64 MB refusal -- was shown only to users who
+   * could see it. `<output>` carries an implicit `role="status"` (polite + atomic).
+   *
+   * This pins the element and its role. It does NOT prove a screen reader speaks it: happy-dom has no accessibility
+   * tree, so that is manual QA.
+   */
+  test("a status message is an <output>, so it is exposed as a status region rather than a mute span", () => {
+    const store = hydrated();
+    act(() => store.getState().setStatusMessage("Couldn't format: SyntaxError"));
+    render(<StatusBar store={store} onToggleLayout={() => {}} onToggleWebView={() => {}} runKeys="⌘R" />);
+
+    const message = document.querySelector(".status-message") as HTMLElement | null;
+    expect(message?.textContent).toBe("Couldn't format: SyntaxError");
+    expect(message?.tagName).toBe("OUTPUT");
+    expect(screen.getByRole("status")).toBe(message as HTMLElement);
   });
 
   test("view commands toggle app-wide settings through Main and per-tab layout locally", async () => {
@@ -223,9 +249,11 @@ describe("layout", () => {
     const emptyChip = screen.getByRole("button", { name: strings.shell.workingDirectory.set });
     expect(emptyChip.getAttribute("title")).toBe(strings.shell.workingDirectory.setHelp);
 
-    // M-3 (fix round 1): the chip labels stay in step with the wd.set/wd.clear command titles (R24-1).
-    expect(commandMeta("wd.set")?.title).toBe(strings.shell.workingDirectory.set);
-    expect(commandMeta("wd.clear")?.title).toBe(strings.shell.workingDirectory.clear);
+    // M-3 (fix round 1): the chip labels stay in step with the wd.set/wd.clear command titles (R24-1). The
+    // titles now come from the catalogue rather than from a `title` field, so the check goes through the key.
+    expect(commandMeta("wd.set")).toBeDefined();
+    expect(t(commandTitleKey("wd.set"))).toBe(strings.shell.workingDirectory.set);
+    expect(t(commandTitleKey("wd.clear"))).toBe(strings.shell.workingDirectory.clear);
   });
 
   // R24-2: the chip keeps showing "Working directory not found" after the output scrolls away.

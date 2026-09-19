@@ -1,4 +1,5 @@
 import type {
+  AiErrorKind,
   BootstrapPayload,
   DiagnosticPayload,
   InstalledPackage,
@@ -8,15 +9,19 @@ import type {
   RunEvent,
   RunState,
   StartupNotice,
+  VsixChoice,
 } from "@jslab/rpc-schema";
 import {
+  type ConversationTurn,
   type KeybindingRule,
   type Language,
   type Runtime,
   type Settings,
+  type Snippet,
   type TabState,
   tabAfterClose,
 } from "@jslab/shared";
+import { registerUserThemes } from "@jslab/themes";
 import { createStore } from "zustand/vanilla";
 import { MAX_NPM_LOG_CHARS, MAX_NPM_OPERATIONS, maskCredentials, splitLogChunk } from "../npm/npm-panel";
 import type { TimerApi } from "./auto-run";
@@ -39,6 +44,12 @@ export interface TabRuntime {
    * so the per-tab speaker icon (TabBar.tsx) tracks audio specifically, not every kind of handle.
    */
   audioActive: boolean;
+  /**
+   * Task 1 (spec §6.3, §10.1): the tab's logpoint lines, ascending and unique. Deliberately per-tab UI state and
+   * never part of `TabState`: spec §10.1 says logpoints are not persisted, so they live here with `output` and
+   * `diagnostics` rather than anywhere `session.json` can see them.
+   */
+  logpoints: number[];
 }
 
 const freshOutput = (): TabRuntime["output"] => ({ ...initialOutput, workingDirectoryMissing: false });
@@ -48,6 +59,7 @@ export const newRuntime = (): TabRuntime => ({
   diagnostics: [],
   autoRunArmed: false,
   audioActive: false,
+  logpoints: [],
 });
 
 /**
@@ -79,7 +91,11 @@ export type Modal =
   | { kind: "confirm"; id: string; title: string; message: string; buttons: ConfirmButton[] }
   | { kind: "rename"; tabId: string }
   | { kind: "npm" }
-  | { kind: "env" };
+  | { kind: "env" }
+  /** Spec §9.3: a `.vsix` declared more than one theme, so the user chooses which one to import. */
+  | { kind: "themePick"; token: string; choices: VsixChoice[] }
+  /** M6: About, credits and open-source notices. Carries no data -- it reads versions from the store. */
+  | { kind: "about" };
 
 export interface NpmUiState {
   /** False until the first list arrives, so the initial load highlights nothing. */
@@ -153,6 +169,80 @@ function evictOperations(operations: readonly NpmOperation[]): NpmOperation[] {
   return operations.filter((_, index) => !removeAt.has(index));
 }
 
+/** Which panel the side bar shows (Task 16, M4). M5a adds the read-only transpiled output (spec §7.4, R-M5a-6). */
+export type SideBarPanel = "snippets" | "ai" | "transpiled";
+
+/** One turn on screen (spec §14.1). `id` is React's key; it is never sent to a provider. */
+export interface AiChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  /** Assistant turns only: true while chunks are still arriving. */
+  streaming: boolean;
+  /** True when the turn ended because the user pressed Stop, so the panel can mark it interrupted. */
+  stopped: boolean;
+  /** Set when the turn failed; the panel shows a translated headline plus this detail, and offers Retry. */
+  error: { kind: AiErrorKind; detail: string } | null;
+}
+
+/**
+ * The conversation (spec §14.1).
+ *
+ * Held in the STORE rather than in the panel, so closing the side bar mid-reply does not lose the reply: the
+ * `ai.chunk` messages keep arriving and keep being applied, and reopening the panel shows the finished answer.
+ * A panel-local `useState` would have unmounted with the side bar and dropped every chunk after it.
+ */
+export interface AiChatState {
+  messages: AiChatMessage[];
+  /** The in-flight request, or null. What `ai.stop` names, and what makes a stale reply identifiable. */
+  requestId: string | null;
+  /** The last prompt sent, so Retry can resend it after a failure. */
+  lastPrompt: string | null;
+}
+
+export const initialAiChat = (): AiChatState => ({ messages: [], requestId: null, lastPrompt: null });
+
+/**
+ * TL-20 (spec §14.2): a prompt the output panel has asked the AI panel to send.
+ *
+ * A request channel rather than a direct call, for the reason the panel cannot simply be called: Explain Result
+ * usually OPENS the panel, so at the moment the user picks it the component that owns `send` is not mounted --
+ * and on a cold open it will not be until Main has echoed the `view.sideBar` settings change back. The request
+ * waits in the store until the panel exists and is idle. `nonce` is carried for the same reason
+ * `SnippetsRequest` carries one: explaining the same row twice must reach the panel twice.
+ */
+export interface AiExplainRequest {
+  prompt: string;
+  nonce: number;
+}
+
+/** Spec §14.3: a conversation restored from `ai/conversation.json` becomes a settled, error-free transcript. */
+const restoredChat = (turns: readonly ConversationTurn[]): AiChatState => ({
+  messages: turns.map((turn) => ({
+    id: turn.id,
+    role: turn.role,
+    content: turn.content,
+    // Neither survives a relaunch, and neither is stored: a stream cannot resume, and a Retry button for a
+    // request whose provider call is long gone would resend a prompt the user has not asked for again.
+    streaming: false,
+    stopped: turn.stopped,
+    error: null,
+  })),
+  requestId: null,
+  lastPrompt: null,
+});
+
+/**
+ * The one channel the snippet commands use to reach the panel (Task 9). `nonce` is bumped on every request for the
+ * same reason `revealRequest` carries one: pressing ⌘B twice, or Create Snippet… twice over the same selection, must
+ * reach the panel twice even though the payload is identical.
+ */
+export interface SnippetsRequest {
+  kind: "focusSearch" | "newSnippet";
+  body: string;
+  nonce: number;
+}
+
 export interface AppState {
   ready: boolean;
   settings: Settings | null;
@@ -167,6 +257,15 @@ export interface AppState {
   tabOrder: string[];
   activeTabId: string | null;
   buffers: Record<string, string>;
+  /**
+   * B1: tabs whose buffer file Main could not read, so JSLab does not know their text.
+   *
+   * `buffers` still holds `""` for these, because every consumer downstream expects a string -- but that `""` is
+   * a placeholder, not the file's content, and this is what says so. Without it the placeholder was
+   * indistinguishable from a genuinely empty file: `isDirty` compared it against the real file's
+   * `lastSavedHash`, said "modified", and ⌘S (or the Save button on ⌘W's prompt) wrote it over the user's file.
+   */
+  unreadableBuffers: string[];
   runtimes: Record<string, TabRuntime>;
   closedCount: number;
 
@@ -187,11 +286,24 @@ export interface AppState {
   /** True when `appearance.font` failed to load and JetBrains Mono is in use instead (spec §9.4). */
   fontFallback: boolean;
   /** Which panel the side bar shows when open (Task 16). Snippets and AI Chat arrive in M5. */
-  sideBarPanel: "snippets" | "ai";
+  sideBarPanel: SideBarPanel;
   /** Bumped on every `npm.changed` message, so the editor's type feeder invalidates its package cache (Task 23). */
   packagesRevision: number;
   /** The NPM Packages sheet (spec §11.2, Task 26). */
   npm: NpmUiState;
+  /** Spec §13: the whole snippet library, mirrored from Main (R-M5b-6). App state, not tab state. */
+  snippets: Snippet[];
+  /** False until the first `snippets.list` answers, so the panel shows nothing instead of "no snippets yet". */
+  snippetsLoaded: boolean;
+  snippetsRequest: SnippetsRequest | null;
+  /** Counts snippet requests. Separate from `snippetsRequest` so clearing the request never rewinds the count. */
+  snippetsNonce: number;
+  /** Spec §14.1: the AI chat conversation. App state, not tab state -- one conversation, whatever tab is active. */
+  aiChat: AiChatState;
+  /** TL-20: a prompt the output panel queued for the AI panel to send, or null. */
+  aiExplainRequest: AiExplainRequest | null;
+  /** Counts explain requests. Separate from the request so clearing it never rewinds the count. */
+  aiExplainNonce: number;
 
   // Mirrors of the active tab, so M1 components keep reading a single tab.
   tab: TabState | null;
@@ -199,6 +311,7 @@ export interface AppState {
   autoRunArmed: boolean;
   output: TabRuntime["output"];
   diagnostics: DiagnosticPayload[];
+  logpoints: number[];
 
   hoveredLine: number | null;
   revealRequest: { line: number; nonce: number } | null;
@@ -206,6 +319,11 @@ export interface AppState {
   notices: StartupNotice[];
 
   hydrate(payload: BootstrapPayload): void;
+  /**
+   * Replaces the user's keybinding overrides (Finding K1). App.tsx subscribes to `keybindings`, so writing here is
+   * what makes a saved keybindings.json take effect in the dispatcher, the palette and the chrome without a relaunch.
+   */
+  setKeybindings(keybindings: KeybindingRule[]): void;
   dismissNotice(id: StartupNotice["id"]): void;
   /** A notice Main sends after startup (`app.notice`, FA-I3): shown once per id, at most MAX_NOTICES at a time. */
   addNotice(notice: StartupNotice): void;
@@ -233,6 +351,15 @@ export interface AppState {
    * other `receive*` methods, there is no M1-era "no active tab yet" caller to default for). */
   receiveAudio(active: boolean, tabId: string): void;
   clearOutput(tabId?: string): void;
+  /** Spec §6.3: adds or removes a logpoint on `line` and arms Auto Run, so the change triggers a run. */
+  toggleLogpoint(line: number, tabId?: string): void;
+  /** Spec §6.3 (`Cmd+Shift+F9`): drops every logpoint on the tab and arms Auto Run. */
+  clearLogpoints(tabId?: string): void;
+  /**
+   * Reconciliation from the editor's sticky decorations after an edit moved them (spec §6.3). Not a user action:
+   * it never arms Auto Run, and an unchanged set keeps the previous array identity.
+   */
+  setLogpoints(lines: readonly number[], tabId?: string): void;
   /** Task 13: removes one shown alert() dialog from its tab's queue, once the user has answered it. Defaults to
    *  the active tab, like every other `tabId?`-optional action here. */
   dismissWebDialog(key: string, tabId?: string): void;
@@ -268,7 +395,7 @@ export interface AppState {
   setVimMode(mode: string | null): void;
   setThemeId(themeId: string): void;
   setFontFallback(value: boolean): void;
-  setSideBarPanel(panel: "snippets" | "ai"): void;
+  setSideBarPanel(panel: SideBarPanel): void;
   bumpPackagesRevision(): void;
   /** Spec §11.2. Bumps `packagesRevision` when the installed name@version set changes (not on `latest` alone). */
   receiveNpmList(list: NpmListResult, now?: number): void;
@@ -276,6 +403,22 @@ export interface AppState {
   receiveNpmOperation(operation: NpmOperation): void;
   /** Fix round 3: complete lines are masked and stored; the text after the last line break is carried. */
   appendNpmLog(opId: string, text: string): void;
+
+  receiveSnippets(snippets: Snippet[]): void;
+  requestSnippets(kind: SnippetsRequest["kind"], body?: string): void;
+  clearSnippetsRequest(): void;
+
+  /** Spec §14.1: records the user's turn and opens an empty assistant turn for the reply to stream into. */
+  aiStartRequest(requestId: string, prompt: string): void;
+  /** Appends one streamed chunk. Ignored unless `requestId` is the request currently in flight. */
+  aiAppendChunk(requestId: string, text: string): void;
+  aiFinishRequest(requestId: string, stopped: boolean): void;
+  aiFailRequest(requestId: string, error: { kind: AiErrorKind; detail: string }): void;
+  /** Spec §14.1's New Chat: clears the conversation. */
+  aiNewChat(): void;
+  /** TL-20 (spec §14.2): queues a prompt for the AI panel to send once it is mounted and idle. */
+  requestAiExplain(prompt: string): void;
+  clearAiExplainRequest(): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -283,6 +426,26 @@ export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "a
 }
 
 const NO_DIAGNOSTICS: DiagnosticPayload[] = [];
+
+/**
+ * B1: which tabs the bootstrap payload could not supply text for.
+ *
+ * Two sources, unioned on purpose. Main names them explicitly (`unreadableBuffers`), and a tab missing from
+ * `buffers` is unreadable by construction -- Main's per-tab read either returns the text or omits the tab, and
+ * ENOENT (never written yet) returns `""` rather than being omitted. Deriving the second half means a future
+ * Main that forgets to send the ids still cannot make the UI invent content silently.
+ */
+function unreadableFrom(payload: BootstrapPayload): string[] {
+  const named = payload.unreadableBuffers ?? [];
+  const missing = payload.session.tabOrder.filter((id) => !(id in payload.buffers));
+  return payload.session.tabOrder.filter((id) => named.includes(id) || missing.includes(id));
+}
+
+/** B1: true when this tab is showing a placeholder rather than its real contents. */
+export function isBufferUnreadable(state: Pick<AppState, "unreadableBuffers">, tabId: string | null): boolean {
+  return tabId !== null && state.unreadableBuffers.includes(tabId);
+}
+const NO_LOGPOINTS: number[] = [];
 
 /** Most notices shown at once; the oldest is dropped first (FA-I3). */
 export const MAX_NOTICES = 5;
@@ -304,7 +467,15 @@ function mirrorOf(state: Pick<AppState, "tabs" | "activeTabId" | "buffers" | "ru
     autoRunArmed: runtime?.autoRunArmed ?? false,
     output: runtime?.output ?? freshOutput(),
     diagnostics: runtime?.diagnostics ?? NO_DIAGNOSTICS,
+    logpoints: runtime?.logpoints ?? NO_LOGPOINTS,
   };
+}
+
+/** Ascending and unique; returns `previous` unchanged when the set is identical, so subscribers don't re-run. */
+function normalizeLogpoints(previous: number[], lines: readonly number[]): number[] {
+  const next = [...new Set(lines)].sort((a, b) => a - b);
+  if (next.length === previous.length && next.every((line, index) => line === previous[index])) return previous;
+  return next;
 }
 
 export function createAppStore(options: { timers?: TimerApi } = {}) {
@@ -371,6 +542,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       tabOrder: [],
       activeTabId: null,
       buffers: {},
+      unreadableBuffers: [],
       runtimes: {},
       closedCount: 0,
       focus: "editor",
@@ -386,17 +558,28 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       sideBarPanel: "snippets",
       packagesRevision: 0,
       npm: initialNpm(),
+      snippets: [],
+      snippetsLoaded: false,
+      snippetsRequest: null,
+      snippetsNonce: 0,
+      aiChat: initialAiChat(),
+      aiExplainRequest: null,
+      aiExplainNonce: 0,
       tab: null,
       code: "",
       autoRunArmed: false,
       output: freshOutput(),
       diagnostics: NO_DIAGNOSTICS,
+      logpoints: NO_LOGPOINTS,
       hoveredLine: null,
       revealRequest: null,
       notices: [],
 
       hydrate(payload) {
         const { session } = payload;
+        // Finding T1: the imported themes have to be in the registry before the first paint reads `listThemes()`,
+        // or the picker, the palette and Monaco all render a set that is missing them until the next import.
+        registerUserThemes(payload.userThemes ?? []);
         const activeTabId = session.tabs[session.activeTabId] ? session.activeTabId : (session.tabOrder[0] ?? null);
         commit({
           ready: true,
@@ -409,10 +592,23 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           tabs: session.tabs,
           tabOrder: session.tabOrder,
           activeTabId,
+          // B1: `?? ""` no longer erases what Main preserved. Main omits a tab it could not read (never
+          // inventing "") and names it in `unreadableBuffers`; the placeholder below is still written, so every
+          // consumer keeps getting a string, but `unreadableBuffers` records that it is a placeholder. The
+          // missing-from-`buffers` half is derived rather than trusted, so the two can never drift apart: a tab
+          // cannot be quietly filled in with "" without also being marked unreadable.
+          unreadableBuffers: unreadableFrom(payload),
           buffers: Object.fromEntries(session.tabOrder.map((id) => [id, payload.buffers[id] ?? ""])),
           runtimes: Object.fromEntries(session.tabOrder.map((id) => [id, newRuntime()])),
           closedCount: session.closedStack.length,
+          // Spec §14.3: "restored at launch". Main omits the field for a fresh profile rather than sending an
+          // empty array, so the store's own empty conversation stands untouched in that case.
+          ...(payload.conversation ? { aiChat: restoredChat(payload.conversation) } : {}),
         });
+      },
+
+      setKeybindings(keybindings) {
+        set({ keybindings });
       },
 
       dismissNotice(id) {
@@ -431,10 +627,18 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           set({ code, autoRunArmed: true });
           return;
         }
+        // B1: the editor is read-only for these tabs, so this should be unreachable from the keyboard -- but an
+        // edit arriving any other way (the E2E agent, a format action, a paste handler) must not turn the
+        // placeholder into "real" content that then looks saveable.
+        if (get().unreadableBuffers.includes(id)) return;
         get().clearTransientStatus();
+        const edited = get().tabs[id];
         commit({
           buffers: { ...get().buffers, [id]: code },
           runtimes: { ...get().runtimes, [id]: { ...(get().runtimes[id] ?? newRuntime()), autoRunArmed: true } },
+          // R-M5a-REGRESSION-2: Main retires this flag too (`SessionStore.setBuffer`), but nothing pushes a tab
+          // update back to the UI, so the side that decides what ⌘W does has to retire it itself.
+          ...(edited?.pristine ? { tabs: { ...get().tabs, [id]: { ...edited, pristine: false } } } : {}),
         });
       },
 
@@ -572,6 +776,38 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
         else updateRuntime(id, (runtime) => ({ ...runtime, output: clear(runtime.output) }));
       },
 
+      toggleLogpoint(line, tabId) {
+        const id = resolve(tabId);
+        if (!id || !Number.isInteger(line) || line < 1) return;
+        updateRuntime(id, (runtime) => {
+          const has = runtime.logpoints.includes(line);
+          const lines = has
+            ? runtime.logpoints.filter((candidate) => candidate !== line)
+            : [...runtime.logpoints, line];
+          return { ...runtime, logpoints: normalizeLogpoints(runtime.logpoints, lines), autoRunArmed: true };
+        });
+      },
+
+      clearLogpoints(tabId) {
+        const id = resolve(tabId);
+        if (!id) return;
+        updateRuntime(id, (runtime) =>
+          runtime.logpoints.length === 0 ? runtime : { ...runtime, logpoints: [], autoRunArmed: true },
+        );
+      },
+
+      setLogpoints(lines, tabId) {
+        const id = resolve(tabId);
+        if (!id) return;
+        updateRuntime(id, (runtime) => {
+          const logpoints = normalizeLogpoints(
+            runtime.logpoints,
+            lines.filter((line) => Number.isInteger(line) && line >= 1),
+          );
+          return logpoints === runtime.logpoints ? runtime : { ...runtime, logpoints };
+        });
+      },
+
       dismissWebDialog(key, tabId) {
         // Same guard as `clearOutput` above: dismissing a dead tab's dialog must not dismiss the live tab's.
         if (namesMissingTab(tabId)) return;
@@ -604,6 +840,9 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
           tabs: { ...get().tabs, [tab.id]: tab },
           tabOrder: insertAfterActive(get().tabOrder, get().activeTabId, tab.id),
           buffers: { ...get().buffers, [tab.id]: content },
+          // Reopening the same id (Reopen Closed Tab, or opening the file again) delivers real content, so the
+          // tab is no longer unknown and becomes editable and savable again.
+          unreadableBuffers: get().unreadableBuffers.filter((id) => id !== tab.id),
           runtimes: { ...get().runtimes, [tab.id]: newRuntime() },
           activeTabId: activate || !get().activeTabId ? tab.id : get().activeTabId,
         });
@@ -617,7 +856,14 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
         const current = get().activeTabId;
         const fallback = current ? tabAfterClose(get().tabOrder, tabId, current) : null;
         const activeTabId = nextActiveId && tabs[nextActiveId] ? nextActiveId : fallback;
-        const patch = { tabs, buffers, runtimes, tabOrder: get().tabOrder.filter((id) => id !== tabId), activeTabId };
+        const patch = {
+          tabs,
+          buffers,
+          runtimes,
+          unreadableBuffers: get().unreadableBuffers.filter((id) => id !== tabId),
+          tabOrder: get().tabOrder.filter((id) => id !== tabId),
+          activeTabId,
+        };
         if (activeTabId) commit(patch);
         else set({ ...patch, ...mirrorOf(patch), hoveredLine: null });
       },
@@ -812,6 +1058,92 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
             }
           : previous.logs;
         set({ npm: { ...previous, logs, carries: { ...previous.carries, [opId]: carry } } });
+      },
+
+      aiStartRequest(requestId, prompt) {
+        const chat = get().aiChat;
+        set({
+          aiChat: {
+            messages: [
+              ...chat.messages,
+              { id: `${requestId}-user`, role: "user", content: prompt, streaming: false, stopped: false, error: null },
+              { id: requestId, role: "assistant", content: "", streaming: true, stopped: false, error: null },
+            ],
+            requestId,
+            lastPrompt: prompt,
+          },
+        });
+      },
+
+      aiAppendChunk(requestId, text) {
+        const chat = get().aiChat;
+        // A chunk for anything but the in-flight request is dropped. Without this, a late chunk from a request
+        // the user stopped (or from one abandoned by New Chat) would be appended to whatever reply is on screen.
+        if (chat.requestId !== requestId) return;
+        set({
+          aiChat: {
+            ...chat,
+            messages: chat.messages.map((message) =>
+              message.id === requestId ? { ...message, content: message.content + text } : message,
+            ),
+          },
+        });
+      },
+
+      aiFinishRequest(requestId, stopped) {
+        const chat = get().aiChat;
+        if (chat.requestId !== requestId) return;
+        set({
+          aiChat: {
+            ...chat,
+            requestId: null,
+            messages: chat.messages.map((message) =>
+              message.id === requestId ? { ...message, streaming: false, stopped } : message,
+            ),
+          },
+        });
+      },
+
+      aiFailRequest(requestId, error) {
+        const chat = get().aiChat;
+        if (chat.requestId !== requestId) return;
+        set({
+          aiChat: {
+            ...chat,
+            requestId: null,
+            messages: chat.messages.map((message) =>
+              message.id === requestId ? { ...message, streaming: false, error } : message,
+            ),
+          },
+        });
+      },
+
+      requestAiExplain(prompt) {
+        const nonce = get().aiExplainNonce + 1;
+        set({ aiExplainNonce: nonce, aiExplainRequest: { prompt, nonce } });
+      },
+
+      clearAiExplainRequest() {
+        set({ aiExplainRequest: null });
+      },
+
+      aiNewChat() {
+        // `requestId` is cleared with the messages, so chunks from a reply that was still streaming when New Chat
+        // was pressed are dropped by the guards above rather than landing in the fresh conversation.
+        set({ aiChat: initialAiChat() });
+      },
+
+      receiveSnippets(snippets) {
+        set({ snippets, snippetsLoaded: true });
+      },
+
+      requestSnippets(kind, body = "") {
+        const nonce = get().snippetsNonce + 1;
+        set({ snippetsNonce: nonce, snippetsRequest: { kind, body, nonce } });
+      },
+
+      clearSnippetsRequest() {
+        set({ snippetsRequest: null });
       },
     };
   });

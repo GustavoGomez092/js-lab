@@ -1,5 +1,7 @@
 import { nextZoom, type Settings } from "@jslab/shared";
 import type { MainApi } from "../api";
+import { getEditorHandle } from "../editor/editor-handle";
+import { getOutputHandle } from "../output/output-handle";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import type { CommandSpec } from "./registry";
@@ -43,6 +45,24 @@ export function createViewCommands(store: AppStore, api: Pick<MainApi, "updateSe
     toggleView("view.toggleActivityBar", "activityBar"),
     toggleView("view.toggleStatusBar", "statusBar"),
     toggleView("view.toggleTabBar", "tabBarForSingleTab"),
+    // UI item 2: the keyboard's only route between the two panes -- from Monaco, Tab inserts a tab character.
+    // Each is enabled only while its target is actually mounted, so the palette greys it out instead of listing a
+    // command that would quietly do nothing (the Output panel can be hidden, and the Web View can be docked in
+    // the log list's place).
+    {
+      id: "view.focusOutput",
+      isEnabled: () => getOutputHandle() !== null,
+      run: () => {
+        getOutputHandle()?.focus();
+      },
+    },
+    {
+      id: "view.focusEditor",
+      isEnabled: () => getEditorHandle() !== null,
+      run: () => {
+        getEditorHandle()?.focus();
+      },
+    },
     { id: "view.layoutHorizontal", run: () => s().setOrientation("horizontal") },
     { id: "view.layoutVertical", run: () => s().setOrientation("vertical") },
     { id: "view.toggleLayout", run: () => s().toggleOrientation() },

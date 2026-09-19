@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import rootPackage from "../../../package.json";
 import viteConfig from "../../ui/vite.config";
 import electrobunConfig from "../electrobun.config";
 import hutchConfig from "../hutch.config";
+import { ASSOCIATED_EXTENSIONS, documentTypesFor, resolveAppPath } from "../scripts/patch-plist";
 import { resolveAppPaths } from "../src/main/app-paths";
 
 // The page a browser-mode tab's `<electrobun-webview>` loads (spec §5.12): a bare `<div id="root"></div>`, no
@@ -103,5 +105,147 @@ describe("build wiring: the runner-web bootstrap Main injects", () => {
       env: { JSLAB_WEB_RUNNER_BOOTSTRAP: "/elsewhere/web-bootstrap.js" },
     });
     expect(overridden.webRunnerBootstrap).toBe("/elsewhere/web-bootstrap.js");
+  });
+});
+
+describe("build wiring: the jslab CLI binary", () => {
+  test("electrobun.config.ts copies dist/bin into the bundle's app/bin folder", () => {
+    // Spec §16.1: the symlink points at JSLab.app/Contents/Resources/app/bin/jslab, and `copy`'s destinations are
+    // relative to Resources/app — the same reason "dist/runner": "runner" produces app/runner/bootstrap.js.
+    expect(electrobunConfig.build?.copy?.["dist/bin"]).toBe("bin");
+  });
+
+  test("the root build:cli script compiles the entry to that staged folder with real Bun", () => {
+    const scripts = (rootPackage.scripts ?? {}) as Record<string, string>;
+    expect(scripts["build:cli"]).toBe(
+      "bun build apps/desktop/src/cli/main.ts --compile --outfile apps/desktop/dist/bin/jslab",
+    );
+  });
+
+  test("build:bundles refuses to build a bundle whose CLI binary was never staged", () => {
+    // Cottontail rejects build flags it doesn't know (see hutch.config.ts's own notes on --format), so --compile
+    // never runs inside it. The guard turns a forgotten `bun run build:cli` into a loud failure instead of an app
+    // that ships without its CLI.
+    const bundles = (hutchConfig.scripts as Record<string, string>)["build:bundles"] ?? "";
+    expect(bundles).toContain("test -x dist/bin/jslab");
+    expect(bundles).toContain("bun run build:cli");
+    expect(bundles).not.toContain("--compile");
+  });
+});
+
+/**
+ * M6. Help → About → Open-Source Notices… opens a file that lives INSIDE the app bundle, so three separate
+ * things have to agree or a built app opens nothing: the file exists in the repo, the build stages and copies
+ * it, and `app-paths.ts` points at where it actually lands. Any one of them alone proves nothing.
+ */
+describe("build wiring: THIRD-PARTY-NOTICES.md (M6 About)", () => {
+  const NOTICES = join(import.meta.dir, "..", "..", "..", "THIRD-PARTY-NOTICES.md");
+
+  test("the attribution file exists at the repo root and carries real licence text", () => {
+    expect(existsSync(NOTICES)).toBe(true);
+    const text = readFileSync(NOTICES, "utf8");
+    // Not merely non-empty: a placeholder would satisfy that while shipping no attribution at all.
+    expect(text).toContain("MIT");
+    expect(text.length).toBeGreaterThan(1000);
+  });
+
+  test("hutch stages it into dist/ and electrobun copies it into Resources/app", () => {
+    const bundles = (hutchConfig.scripts as Record<string, string>)["build:bundles"] ?? "";
+    // Staged rather than copied straight from the repo root, because an electrobun `copy` key may not escape
+    // the project directory -- the same constraint the locale files below are subject to.
+    expect(bundles).toContain("cp ../../THIRD-PARTY-NOTICES.md dist/THIRD-PARTY-NOTICES.md");
+    expect(electrobunConfig.build?.copy?.["dist/THIRD-PARTY-NOTICES.md"]).toBe("THIRD-PARTY-NOTICES.md");
+  });
+
+  test("resolveAppPaths points Main at the copy inside the bundle, with an override for dev and tests", () => {
+    const base = { resourcesFolder: "/R", userData: "/U", execPath: "/bun", env: {} };
+    // `copy`'s destinations are relative to Resources/app -- the same reason "dist/runner": "runner" produces
+    // app/runner/bootstrap.js -- so the notices land at app/THIRD-PARTY-NOTICES.md and NOT beside the sources.
+    expect(resolveAppPaths(base).noticesFile).toBe("/R/app/THIRD-PARTY-NOTICES.md");
+    expect(resolveAppPaths({ ...base, env: { JSLAB_NOTICES_FILE: "/tmp/n.md" } }).noticesFile).toBe("/tmp/n.md");
+  });
+});
+
+describe("build wiring: locale files (spec §17, Main reads the same files)", () => {
+  const LOCALES_SOURCE = join(import.meta.dir, "..", "..", "ui", "src", "i18n", "locales");
+
+  test("en.json exists at the path the spec names and is a non-empty JSON object", () => {
+    const en = join(LOCALES_SOURCE, "en.json");
+    expect(existsSync(en)).toBe(true);
+    const parsed = JSON.parse(readFileSync(en, "utf8")) as unknown;
+    expect(typeof parsed).toBe("object");
+    expect(Array.isArray(parsed)).toBe(false);
+    // The seed carries real keys on purpose. Task 8 replaces its contents wholesale, but an empty file would
+    // make every downstream reader -- i18next's resource loader and the Main-side one -- special-case it.
+    expect(Object.keys(parsed as Record<string, unknown>).length).toBeGreaterThan(0);
+  });
+
+  test("hutch stages the locales into dist/ and electrobun copies them into Resources/app/locales", () => {
+    const bundles = hutchConfig.scripts["build:bundles"];
+    // Staged, not copied straight out of apps/ui: an electrobun `copy` key may not escape the project
+    // directory (the same constraint that made THIRD-PARTY-NOTICES.md take this route).
+    expect(bundles).toContain("mkdir -p dist/locales");
+    expect(bundles).toContain("cp ../ui/src/i18n/locales/*.json dist/locales/");
+    expect(electrobunConfig.build?.copy?.["dist/locales"]).toBe("locales");
+    for (const dest of Object.values(electrobunConfig.build?.copy ?? {})) {
+      expect(dest.startsWith("/")).toBe(false);
+      expect(dest.split("/")).not.toContain("..");
+    }
+  });
+
+  test("resolveAppPaths points Main at that folder, and JSLAB_LOCALES_DIR overrides it for dev and tests", () => {
+    const base = { resourcesFolder: "/R", userData: "/U", execPath: "/bun", env: {} };
+    expect(resolveAppPaths(base).localesDir).toBe("/R/app/locales");
+    expect(resolveAppPaths({ ...base, env: { JSLAB_LOCALES_DIR: "/tmp/loc" } }).localesDir).toBe("/tmp/loc");
+  });
+});
+
+/**
+ * TF-20 (spec §4.6). The packaged app's `Info.plist` is produced by Hutch during the build, so there is no
+ * plist in this repository to edit -- the document types are declared by a build hook instead. Both the hook
+ * script and the config that wires it are tracked project files: `apps/desktop/.hutch/devkit` is vendored and
+ * regenerated by `hutch electrobun sync`, so nothing here may depend on an edit inside it.
+ *
+ * What this proves and what it does not: it pins the wiring, the extension set, the handler rank and the
+ * app-path resolution. It cannot prove macOS actually offers JSLab for a `.ts` file -- that needs a packaged
+ * build and LaunchServices, which is exactly why the parity row's Verify column is M.
+ */
+describe("build wiring: file associations (TF-20)", () => {
+  test("both build hooks run the tracked patch script", () => {
+    const scripts = electrobunConfig.scripts ?? {};
+    // `postBuild` is the load-bearing one: on macOS the real .app is compressed into its install payload
+    // before `postWrap` fires, so `postWrap` alone would patch only the self-extracting installer stub.
+    expect(scripts.postBuild).toBe("./scripts/patch-plist.ts");
+    expect(scripts.postWrap).toBe("./scripts/patch-plist.ts");
+    expect(existsSync(join(import.meta.dir, "..", "scripts", "patch-plist.ts"))).toBe(true);
+  });
+
+  test("all eight extensions are declared, each as an Alternate-rank editor type", () => {
+    expect([...ASSOCIATED_EXTENSIONS]).toEqual(["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts"]);
+    const types = documentTypesFor(ASSOCIATED_EXTENSIONS);
+    expect(types).toHaveLength(8);
+    for (const type of types) {
+      // Ruling R7: never "Default". JSLab must not take .js away from the user's own editor.
+      expect(type.LSHandlerRank).toBe("Alternate");
+      expect(type.CFBundleTypeRole).toBe("Editor");
+    }
+    expect(types.flatMap((type) => type.CFBundleTypeExtensions)).toEqual([...ASSOCIATED_EXTENSIONS]);
+    expect(types[0]).toMatchObject({ CFBundleTypeName: "JS source", CFBundleTypeExtensions: ["js"] });
+  });
+
+  test("the app path comes from postWrap's variable, is derived for postBuild, or is refused", () => {
+    // `postWrap` names the bundle outright.
+    expect(resolveAppPath({ ELECTROBUN_WRAPPER_BUNDLE_PATH: "/b/Stub.app" })).toBe("/b/Stub.app");
+    // `postBuild` sets no app-path variable, so the real not-yet-compressed bundle is derived from the three
+    // it does set -- the empirical finding the M0-S5 spike recorded.
+    expect(
+      resolveAppPath({ ELECTROBUN_BUILD_DIR: "/b", ELECTROBUN_APP_NAME: "JSLab", ELECTROBUN_BUILD_ENV: "canary" }),
+    ).toBe("/b/JSLab-canary.app");
+    // An explicit argument wins over the environment.
+    expect(resolveAppPath({ ELECTROBUN_WRAPPER_BUNDLE_PATH: "/b/Stub.app" }, "/x/Given.app")).toBe("/x/Given.app");
+    // An environment that names nothing is refused rather than guessed at: patching the wrong path silently
+    // would ship a bundle with no document types and no failure to notice.
+    expect(resolveAppPath({ ELECTROBUN_BUILD_DIR: "/b" })).toBeNull();
+    expect(resolveAppPath({})).toBeNull();
   });
 });

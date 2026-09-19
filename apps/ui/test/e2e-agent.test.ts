@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { RunEvent } from "@jslab/rpc-schema";
-import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
+import { createTab, defaultSession, defaultSettings, type Snippet } from "@jslab/shared";
 import { createE2EAgent } from "../src/e2e/agent";
 import { keyEventInit } from "../src/e2e/keys";
 import type { EditorHandle } from "../src/editor/editor-handle";
@@ -31,6 +31,28 @@ describe("E2E agent", () => {
       tabOrder: ["t1"],
       tabs: [{ id: "t1", title: "scratch", code: "1 + 1", runState: null, entryCount: 0, autoRunArmed: false }],
     });
+  });
+
+  /**
+   * `snippetCount` is consumed by M5b Task 11's scenarios and by nothing else in the UI, so without this test the
+   * field is unpinned: hardcoding it to a constant passed the entire 518-test `apps/ui/test` suite (measured --
+   * mutation P1 survived). TWO different sizes are asserted, so no constant can satisfy both.
+   */
+  test("state reports the snippet library size, and it tracks the library (spec §13)", async () => {
+    const { agent, store } = setup();
+    expect(await agent("state", {})).toMatchObject({ snippetCount: 0 });
+    const at = "2026-09-16T10:00:00.000Z";
+    const snippet = (name: string): Snippet => ({
+      id: name,
+      name,
+      description: "",
+      body: "x",
+      language: null,
+      createdAt: at,
+      updatedAt: at,
+    });
+    store.getState().receiveSnippets([snippet("a"), snippet("b"), snippet("c")]);
+    expect(await agent("state", {})).toMatchObject({ snippetCount: 3 });
   });
 
   test("output renders visible entries as text with their lines", async () => {
@@ -125,6 +147,53 @@ describe("E2E agent", () => {
     );
   });
 
+  // OU-13. The agent half of the output-link scenario: that it finds the rendered control and delivers a real
+  // Cmd-click and a real Enter to it. What those gestures then DO is `entry-row.test.tsx`'s question.
+  test("the e2e.openOutputLink command activates an output URL by Cmd-click and from the keyboard (OU-13)", async () => {
+    const { agent } = setup();
+    const link = document.createElement("button");
+    link.dataset.testid = "output-link";
+    link.textContent = "https://example.com/out";
+    const seen: string[] = [];
+    // Only a MODIFIED click counts, which is what the row's own handler requires too.
+    link.addEventListener("click", (event) => {
+      if ((event as MouseEvent).metaKey) seen.push("click");
+    });
+    link.addEventListener("keydown", (event) => {
+      if ((event as KeyboardEvent).key === "Enter") seen.push("keyboard");
+    });
+    document.body.append(link);
+    try {
+      expect(await agent("command", { id: "e2e.openOutputLink" })).toEqual({
+        executed: "e2e.openOutputLink",
+        href: "https://example.com/out",
+      });
+      await agent("command", { id: "e2e.openOutputLink", args: { via: "keyboard" } });
+      expect(seen).toEqual(["click", "keyboard"]);
+    } finally {
+      link.remove();
+    }
+    // With no link on screen it fails loudly, so a scenario can never "pass" by activating nothing at all.
+    await expect(agent("command", { id: "e2e.openOutputLink" })).rejects.toThrow("found no link in the output");
+
+    // The accessibility guard, and the reason the keyboard path checks focus at all: a "link" that cannot take
+    // focus must fail loudly rather than let a scenario pass by dispatching Enter at something no keyboard user
+    // could ever reach. A <span> stands in for exactly that regression.
+    const inert = document.createElement("span");
+    inert.dataset.testid = "output-link";
+    // happy-dom lets any element take focus, so the real condition this guard exists for -- focus failing to
+    // land, as a non-focusable element behaves in an actual webview -- is simulated by a no-op focus().
+    inert.focus = () => {};
+    document.body.append(inert);
+    try {
+      await expect(agent("command", { id: "e2e.openOutputLink", args: { via: "keyboard" } })).rejects.toThrow(
+        "could not focus the link",
+      );
+    } finally {
+      inert.remove();
+    }
+  });
+
   test("state carries TypeScript diagnostics, and e2e.completions asks the editor for completions", async () => {
     const store = createAppStore();
     store.getState().hydrate({
@@ -164,6 +233,38 @@ describe("E2E agent", () => {
       executed: "e2e.installActions",
       actions: [{ title: "Install package zod", spec: "zod" }],
     });
+  });
+
+  /**
+   * XT-11 wiring. The geometry values are injected, so these assertions pin the SEAM (the handle's answer
+   * reaches `e2e.state`, and `e2e.foldAll` reaches the editor) rather than Monaco's real fold behaviour --
+   * that half is pinned by `packages/e2e/scenarios/format.test.ts` against a built app. Disclosed as such.
+   */
+  test("state carries the editor's fold and scroll geometry, and e2e.foldAll folds through the editor (XT-11)", async () => {
+    const { store } = setup();
+    const calls: string[] = [];
+    const agent = createE2EAgent({
+      store,
+      executeCommand: () => "unknown",
+      editor: () => null,
+      target: () => new EventTarget(),
+      viewGeometry: () => ({ scrollTop: 120, folding: '{"collapsedRegions":[1]}' }),
+      foldAll: () => {
+        calls.push("foldAll");
+        return true;
+      },
+    });
+    expect(await agent("state", {})).toMatchObject({
+      viewGeometry: { scrollTop: 120, folding: '{"collapsedRegions":[1]}' },
+    });
+    expect(await agent("command", { id: "e2e.foldAll" })).toEqual({ executed: "e2e.foldAll", folded: true });
+    expect(calls).toEqual(["foldAll"]);
+  });
+
+  test("an agent with no editor reports null geometry and a refused fold, rather than throwing (XT-11)", async () => {
+    const { agent } = setup();
+    expect(await agent("state", {})).toMatchObject({ viewGeometry: null });
+    expect(await agent("command", { id: "e2e.foldAll" })).toEqual({ executed: "e2e.foldAll", folded: false });
   });
 
   test("tab snapshots carry the working directory and the suffixed label", async () => {

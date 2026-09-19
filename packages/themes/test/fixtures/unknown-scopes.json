@@ -1,0 +1,15 @@
+{
+  "name": "JSLab Test Unknown",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#141821"
+  },
+  "tokenColors": [
+    { "scope": "markup.heading", "settings": { "foreground": "#E06C75" } },
+    { "scope": "meta.diff.header", "settings": { "foreground": "#61AFEF" } },
+    { "scope": ["invalid.illegal", "markup.inserted"], "settings": { "foreground": "#98C379" } },
+    { "scope": "commentary.block", "settings": { "foreground": "#FF0000" } },
+    { "scope": "stringify.call", "settings": { "foreground": "#FF00FF" } },
+    { "scope": "string", "settings": { "foreground": "#C3E88D" } }
+  ]
+}

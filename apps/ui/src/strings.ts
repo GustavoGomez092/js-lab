@@ -1,560 +1,1002 @@
-/** Every user-visible UI string added from M2 on, kept in one place for M5 i18n extraction (spec §17). */
-const NL = String.fromCharCode(10);
+import { t } from "./i18n";
 
+/** Every user-visible UI string, resolved through i18next (spec §17). Keys are this object's own paths. */
 export const strings = {
+  /** M6: the About dialog (`shell/AboutDialog.tsx`). */
+  about: {
+    title: t("about.title"),
+    version: (version: string) => t("about.version", { version }),
+    bun: (version: string) => t("about.bun", { version }),
+    electrobun: (version: string) => t("about.electrobun", { version }),
+    license: t("about.license"),
+    copyright: t("about.copyright"),
+    thirdParty: t("about.thirdParty"),
+    close: t("about.close"),
+  },
   install: {
     /** Spec §6.3. */
-    package: (name: string) => `Install package ${name}`,
-    types: (name: string) => `Install ${name}`,
+    package: (name: string) => t("install.package", { name }),
+    types: (name: string) => t("install.types", { name }),
     /** R23-1: shown in the status bar right after npm.install dispatches. */
     started: (spec: string, keys: string | null) =>
-      keys ? `Installing ${spec}… ${keys} shows progress.` : `Installing ${spec}…`,
+      keys ? t("install.startedWithKeys", { spec, keys }) : t("install.started", { spec }),
   },
   completions: {
     /** The detail line on an installed-package import suggestion: the version in node_modules (spec §6.1). */
-    packageDetail: (version: string | null) => (version === null ? "installed" : `v${version}`),
+    packageDetail: (version: string | null) =>
+      version === null ? t("completions.packageDetailNone") : t("completions.packageDetail", { version }),
+  },
+  logpoints: {
+    /** Spec §6.3: the glyph-margin dot's tooltip. */
+    tooltip: t("logpoints.tooltip"),
+    /** Spec §5.5: "A logpoint on a line with no loggable statement is shown hollow, with a tooltip." */
+    noValue: t("logpoints.noValue"),
+    // The two command titles that used to sit here moved to the command catalogue (`packages/shared/src/commands.ts`)
+    // in M5a Task 5, where every other menu, palette and keybinding title lives; they were dead duplicates here.
+  },
+  transpiled: {
+    title: t("transpiled.title"),
+    /** Spec §7.4: "a toggle hides the instrumentation calls". */
+    hideInstrumentation: t("transpiled.hideInstrumentation"),
+    empty: t("transpiled.empty"),
+    failed: t("transpiled.failed"),
+    /** R-M5a-7: shown while the editor's source differs from the source that produced the output on screen. */
+    stale: t("transpiled.stale"),
   },
   commands: {
     failed: (title: string, error: unknown) =>
-      `${title} failed: ${error instanceof Error ? error.message : String(error)}`,
-    onOff: (on: boolean) => (on ? "currently on" : "currently off"),
-    loopLimit: (limit: number) => `limit ${limit}`,
-    current: "current",
-    copyFailed: "Couldn't copy the output to the clipboard.",
-    folder: (name: string) => `folder: ${name}`,
+      t("commands.failed", { title, error: error instanceof Error ? error.message : String(error) }),
+    onOff: (on: boolean) => (on ? t("commands.on") : t("commands.off")),
+    loopLimit: (limit: number) => t("commands.loopLimit", { limit }),
+    current: t("commands.current"),
+    copyFailed: t("commands.copyFailed"),
+    folder: (name: string) => t("commands.folder", { name }),
   },
   limits: {
-    tooLarge: "This tab is larger than 64 MB. JSLab stops saving and running it until it's smaller.",
+    tooLarge: t("limits.tooLarge"),
   },
   format: {
-    failed: (message: string) => `Couldn't format: ${message}`,
-    busy: "Formatting…",
-    timedOut: "formatting took too long, so the formatter was restarted",
-    restarted: "the formatter was restarted",
-    crashed: "the formatter stopped unexpectedly",
-    disposed: "the formatter was closed",
+    failed: (message: string) => t("format.failed", { message }),
+    busy: t("format.busy"),
+    timedOut: t("format.timedOut"),
+    restarted: t("format.restarted"),
+    crashed: t("format.crashed"),
+    disposed: t("format.disposed"),
   },
   // Carried item T11-m4: a tab action (create/close/reopen/...) that Main rejects reports a status message
   // instead of leaving an unhandled rejection.
   tabs: {
     actionFailed: (error: unknown) =>
-      `Couldn't complete that action: ${error instanceof Error ? error.message : String(error)}`,
-    list: "Tabs",
-    newTab: "New Tab",
-    close: (title: string) => `Close ${title}`,
-    unsaved: "Unsaved changes",
-    rename: "Rename…",
-    closeOne: "Close",
-    closeOthers: "Close Others",
-    closeToRight: "Close to the Right",
-    reveal: "Reveal in Finder",
-    copyPath: "Copy Path",
-    renameTitle: "Rename Tab",
-    renameLabel: "Tab name",
-    renameHelp: "Leave empty to use the first line of code as the title.",
-    cancel: "Cancel",
-    save: "Rename",
+      t("tabs.actionFailed", { error: error instanceof Error ? error.message : String(error) }),
+    list: t("tabs.list"),
+    newTab: t("tabs.newTab"),
+    close: (title: string) => t("tabs.close", { title }),
+    unsaved: t("tabs.unsaved"),
+    rename: t("tabs.rename"),
+    closeOne: t("tabs.closeOne"),
+    closeOthers: t("tabs.closeOthers"),
+    closeToRight: t("tabs.closeToRight"),
+    reveal: t("tabs.reveal"),
+    copyPath: t("tabs.copyPath"),
+    renameTitle: t("tabs.renameTitle"),
+    renameLabel: t("tabs.renameLabel"),
+    renameHelp: t("tabs.renameHelp"),
+    cancel: t("tabs.cancel"),
+    save: t("tabs.save"),
+    /**
+     * Spec §17: the derived title of an empty, fileless tab. `deriveTitle` lives in `packages/shared`, which has
+     * no translator of its own, so it takes this as a parameter rather than hard-coding the English.
+     */
+    untitled: t("tabs.untitled"),
     // Task 15 (spec §5.12, EX-35): the per-tab audio indicator's accessible name, carrying the tab title so a
     // screen reader user with several tabs open can tell which one it's about (the motivating scenario for this
     // whole task) -- and its current state (playing vs. muted), announced honestly, not just drawn.
     audio: {
-      mute: (title: string) => `Mute ${title} (currently playing audio)`,
-      unmute: (title: string) => `Unmute ${title} (currently muted)`,
+      mute: (title: string) => t("tabs.audio.mute", { title }),
+      unmute: (title: string) => t("tabs.audio.unmute", { title }),
     },
   },
   files: {
-    saved: (name: string) => `Saved ${name}`,
-    saveFailed: (error: string) => `Couldn't save: ${error}`,
-    saveChanges: (name: string) => `Save changes to ${name}?`,
-    saveChangesDetail: "Your changes will be lost if you don't save them.",
-    dontSave: "Don't Save",
-    cancel: "Cancel",
-    save: "Save",
-    closeTitle: (name: string) => `Close "${name}"?`,
-    closeDetail: "Its contents are kept in Reopen Closed Tab.",
-    close: "Close",
-    largeTitle: "Open a large file?",
-    large: (name: string, size: string) => `${name} is ${size}. Large files can make JSLab slow.`,
-    open: "Open",
-    pasteTitle: "Paste a large amount of text?",
-    paste: (size: string) => `Pasting ${size} may make JSLab slow. Continue?`,
-    pasteButton: "Paste",
-    locationTitle: "Save to this location?",
-    location: (path: string) => `Save as ${path}?`,
-    notText: (name: string) => `${name} isn't a text file.`,
-    tooLarge: (name: string) => `${name} is larger than 50 MB and can't be opened.`,
+    saved: (name: string) => t("files.saved", { name }),
+    saveFailed: (error: string) => t("files.saveFailed", { error }),
+    saveChanges: (name: string) => t("files.saveChanges", { name }),
+    saveChangesDetail: t("files.saveChangesDetail"),
+    dontSave: t("files.dontSave"),
+    cancel: t("files.cancel"),
+    save: t("files.save"),
+    closeTitle: (name: string) => t("files.closeTitle", { name }),
+    closeDetail: t("files.closeDetail"),
+    close: t("files.close"),
+    largeTitle: t("files.largeTitle"),
+    large: (name: string, size: string) => t("files.large", { name, size }),
+    open: t("files.open"),
+    pasteTitle: t("files.pasteTitle"),
+    paste: (size: string) => t("files.paste", { size }),
+    pasteButton: t("files.pasteButton"),
+    locationTitle: t("files.locationTitle"),
+    location: (path: string) => t("files.location", { path }),
+    notText: (name: string) => t("files.notText", { name }),
+    /**
+     * B1: ⌘S / Save As on a tab whose contents Main couldn't read. The UI refuses before asking Main, so the
+     * empty placeholder can never be written over the user's real file. (Main refuses it again, independently.)
+     */
+    unreadableBuffer: t("files.unreadableBuffer"),
+    tooLarge: (name: string) => t("files.tooLarge", { name }),
     // Branch B (R-M3-SPIKE-1 NO-GO): a dropped folder can't carry its path into the webview on Electrobun 2.0.1.
-    folderDrop:
-      "A dropped folder can't become the working directory here. Use Actions → Set Working Directory… or the status bar.",
+    folderDrop: t("files.folderDrop"),
   },
   fonts: {
-    fallback: (font: string) => `Font "${font}" isn't available; using JetBrains Mono.`,
+    fallback: (font: string) => t("fonts.fallback", { font }),
     // m-2 (fix round 1): the default font itself can fail its own check; don't claim to "fall back to
     // JetBrains Mono" from JetBrains Mono.
-    bundledUnavailable: "The bundled code font couldn't load; using the system monospace font.",
+    bundledUnavailable: t("fonts.bundledUnavailable"),
+  },
+  /** Themes → Import VS Code Theme… (spec §9.3). */
+  themes: {
+    imported: (name: string) => t("themes.imported", { name }),
+    pickTitle: t("themes.pickTitle"),
+    pickHelp: (count: number) => t("themes.pickHelp", { count }),
+    cancel: t("themes.cancel"),
+    // The caveats an import reports (low-contrast syntax, dropped semantic colours) are Main's own strings: Main
+    // decides which of them apply and sends them as ready-to-show text on the result.
   },
   shell: {
-    run: "Run",
-    stop: "Stop",
-    autoRun: "Auto Run",
-    activity: "Activity",
-    running: "Running",
-    on: "on",
-    off: "off",
-    snippets: "Snippets",
-    npm: "NPM Packages",
-    aiChat: "AI Chat",
-    settings: "Settings",
-    laterMilestone: "Arrives in a later version",
-    safeMode: "Safe Mode",
-    sideBarPlaceholder: "This panel arrives in a later version.",
-    split: { horizontal: "Side by side", vertical: "Stacked" },
+    run: t("shell.run"),
+    stop: t("shell.stop"),
+    autoRun: t("shell.autoRun"),
+    activity: t("shell.activity"),
+    running: t("shell.running"),
+    on: t("shell.on"),
+    off: t("shell.off"),
+    snippets: t("shell.snippets"),
+    npm: t("shell.npm"),
+    aiChat: t("shell.aiChat"),
+    settings: t("shell.settings"),
+    laterMilestone: t("shell.laterMilestone"),
+    safeMode: t("shell.safeMode"),
+    sideBarPlaceholder: t("shell.sideBarPlaceholder"),
+    split: { horizontal: t("shell.split.horizontal"), vertical: t("shell.split.vertical") },
+    /**
+     * Accessible names for the two draggable splitters (`SplitPane`'s `role="separator"`).
+     *
+     * Both are on screen together whenever a browser-runtime tab shows the Web View preview: the Editor/Output
+     * splitter and the Output/Web View one. An unnamed focusable separator is announced only as its role and
+     * value ("separator, 55"), which is identical for both, so a screen reader user cannot tell which one they
+     * are on. MDN's separator_role is explicit that a focusable separator "should include `aria-label` if there
+     * is more than one focusable separator".
+     *
+     * These name what the splitter RESIZES, not what it is -- the role is already announced, so a trailing
+     * "divider" would only repeat it. They reuse the names those panes already carry elsewhere (`output.region`
+     * "Output", `output.webViewTab` "Web View", `palette.context.editor` "Editor") so a splitter is described in
+     * the same words as the things it moves.
+     *
+     * `aria-label` rather than `aria-labelledby`: the APG windowsplitter pattern prefers `aria-labelledby` only
+     * when the primary pane has a *visible* label. Neither primary pane has one -- the Editor carries no label,
+     * role or id at all, and the Output `<section>` is named by its own `aria-label` (not visible text) and has
+     * no `id` to reference -- so the pattern's "otherwise ... `aria-label`" branch is the one that applies.
+     *
+     * These two MUST stay distinct from each other; `split-pane.test.tsx` pins that.
+     */
+    splitter: {
+      editorOutput: t("shell.splitter.editorOutput"),
+      outputWebView: t("shell.splitter.outputWebView"),
+    },
     // M4 Task 8 (ruling R-M4-T8-DISABLED-1): mirrors the runtime <select>'s own disabled-option idiom -- native
     // `disabled` plus this string as the button's `title`, for the one runtime that never creates a webview.
     webView: {
-      show: "Show Web View",
-      hide: "Hide Web View",
-      unavailable: "Web View isn't available for the Bun runtime",
+      show: t("shell.webView.show"),
+      hide: t("shell.webView.hide"),
+      unavailable: t("shell.webView.unavailable"),
     },
-    cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
-    runtime: "Runtime",
-    language: "Language",
+    cursor: (line: number, column: number) => t("shell.cursor", { line, column }),
+    runtime: t("shell.runtime"),
+    language: t("shell.language"),
     workingDirectory: {
       // R24-1: the ellipsis signals that this opens a picker and matches the menu title.
-      set: "Set Working Directory…",
-      setHelp: "Run this tab in a folder: relative imports, .env and node_modules resolve there.",
-      change: (path: string) => `Working directory: ${path}. Change…`,
+      set: t("shell.workingDirectory.set"),
+      setHelp: t("shell.workingDirectory.setHelp"),
+      change: (path: string) => t("shell.workingDirectory.change", { path }),
       // R24-2: the chip keeps naming the problem and its fix after the output that reported it scrolls away.
-      missing: (path: string) => `Working directory not found: ${path}. Change…`,
-      clear: "Clear Working Directory",
+      missing: (path: string) => t("shell.workingDirectory.missing", { path }),
+      clear: t("shell.workingDirectory.clear"),
     },
     /** A button's tooltip with its shortcut, when it has one (FB-m3). */
-    withKeys: (label: string, keys: string | null) => (keys ? `${label} (${keys})` : label),
-    dismiss: (message: string) => `Dismiss: ${message}`,
+    withKeys: (label: string, keys: string | null) => (keys ? t("shell.withKeys", { label, keys }) : label),
+    dismiss: (message: string) => t("shell.dismiss", { message }),
     unresponsive: {
-      title: "This tab isn't responding",
-      body: "Your code has been busy for a few seconds without responding. You can kill it, or keep waiting.",
-      wait: "Wait",
-      kill: "Kill",
+      title: t("shell.unresponsive.title"),
+      body: t("shell.unresponsive.body"),
+      wait: t("shell.unresponsive.wait"),
+      kill: t("shell.unresponsive.kill"),
     },
+    /**
+     * B1: shown above the editor whenever the ACTIVE tab is one of these, for as long as it is. The startup
+     * notice alone was not enough -- it is dismissible and names a count, while this says which tab the user is
+     * looking at right now is not showing its file. Without it an empty editor is indistinguishable from a
+     * genuinely empty file, which is the trap that made saving look reasonable.
+     */
+    unreadableBuffer: t("shell.unreadableBuffer"),
     safeModeBanner: {
-      crashLoop: "JSLab didn't shut down cleanly while running code. Auto Run is paused for this session.",
-      manual: "Safe Mode: restarted from Help → Restart in Safe Mode. Auto Run is paused for this session.",
-      shift: "Safe Mode: Shift was held at launch. Auto Run is paused for this session.",
+      crashLoop: t("shell.safeModeBanner.crashLoop"),
+      manual: t("shell.safeModeBanner.manual"),
+      shift: t("shell.safeModeBanner.shift"),
     },
     runState: {
       /** The Run chord follows the effective bindings; omits the keycap when the binding was removed. */
-      safeModePaused: (keys: string | null) => (keys ? `Safe Mode: press ${keys} to run` : "Safe Mode: paused"),
-      paused: (keys: string | null) => (keys ? `Paused: press ${keys} to run` : "Paused"),
-      running: "Running…",
-      settled: (handles: number) => `Running: ${handles} active ${handles === 1 ? "handle" : "handles"}`,
-      stopping: "Stopping…",
-      stopped: "Stopped",
-      killed: "Run killed",
-      failed: "Failed",
-      unresponsive: "Not responding",
+      safeModePaused: (keys: string | null) =>
+        keys ? t("shell.runState.safeModePaused", { keys }) : t("shell.runState.safeModePausedNoKeys"),
+      paused: (keys: string | null) => (keys ? t("shell.runState.paused", { keys }) : t("shell.runState.pausedNoKeys")),
+      running: t("shell.runState.running"),
+      // The parameter is renamed to `count`: i18next selects a plural form from a variable of that exact
+      // name. It stays positional, so no call site changes.
+      settled: (count: number) => t("shell.runState.settled", { count }),
+      stopping: t("shell.runState.stopping"),
+      stopped: t("shell.runState.stopped"),
+      killed: t("shell.runState.killed"),
+      failed: t("shell.runState.failed"),
+      unresponsive: t("shell.runState.unresponsive"),
     },
   },
   notices: {
-    copyDebugLog: "Copy Debug Log",
+    copyDebugLog: t("notices.copyDebugLog"),
+    /** UI item 7: one control to clear a stack, shown only once more than two are up at the same time. */
+    dismissAll: t("notices.dismissAll"),
   },
   startup: {
-    failed: (message: string) => `JSLab failed to start: ${message}`,
-    retry: "Try Again",
+    failed: (message: string) => t("startup.failed", { message }),
+    retry: t("startup.retry"),
+    /**
+     * F1: Try Again re-runs the identical bootstrap, so on its own it is an infinite loop for any failure that
+     * isn't transient. These give the user somewhere else to go -- the tab files themselves, and a report.
+     */
+    stuck: t("startup.stuck"),
+    openDataFolder: t("startup.openDataFolder"),
+    copyDebugLog: t("startup.copyDebugLog"),
   },
   palette: {
-    label: "Command palette",
+    label: t("palette.label"),
     categories: {
-      run: "Run",
-      file: "File",
-      tab: "Tabs",
-      edit: "Edit",
-      format: "Format",
-      view: "View",
-      tools: "Tools",
-      runtime: "Runtime",
-      language: "Language",
-      theme: "Theme",
-      help: "Help",
-      app: "JSLab",
+      run: t("palette.categories.run"),
+      file: t("palette.categories.file"),
+      tab: t("palette.categories.tab"),
+      edit: t("palette.categories.edit"),
+      format: t("palette.categories.format"),
+      view: t("palette.categories.view"),
+      tools: t("palette.categories.tools"),
+      runtime: t("palette.categories.runtime"),
+      language: t("palette.categories.language"),
+      theme: t("palette.categories.theme"),
+      help: t("palette.categories.help"),
+      app: t("palette.categories.app"),
     },
-    placeholder: "Type a command",
-    context: { editor: "Editor", output: "Output" },
-    themeItem: (name: string) => `Theme: ${name}`,
-    empty: "No matching commands",
+    placeholder: t("palette.placeholder"),
+    context: { editor: t("palette.context.editor"), output: t("palette.context.output") },
+    themeItem: (name: string) => t("palette.themeItem", { name }),
+    empty: t("palette.empty"),
+    /** R-M4-PALETTE-HIDE-1: marks a listed-but-disabled command, so it reads as "exists, not right now" rather
+     * than as the typo that `empty` above describes. `CommandSpec.isEnabled` returns a bare boolean and carries
+     * no reason, so this is deliberately generic -- the per-command "why" would need an API that does not exist. */
+    unavailable: t("palette.unavailable"),
     footer: {
-      keys: { run: "↵", move: "↑↓", close: "esc" },
-      run: "run",
-      move: "move",
-      close: "close",
+      keys: {
+        run: t("palette.footer.keys.run"),
+        move: t("palette.footer.keys.move"),
+        close: t("palette.footer.keys.close"),
+      },
+      run: t("palette.footer.run"),
+      move: t("palette.footer.move"),
+      close: t("palette.footer.close"),
     },
   },
   output: {
-    filters: { all: "All", results: "Results", logs: "Logs", errors: "Errors" },
-    filterLabel: "Output filter",
+    filters: {
+      all: t("output.filters.all"),
+      results: t("output.filters.results"),
+      logs: t("output.filters.logs"),
+      errors: t("output.filters.errors"),
+    },
+    filterLabel: t("output.filterLabel"),
     /** R-WEBVIEW-TAB-1: the control beside the filter chips that fills the output panel with the Web View. */
-    webViewTab: "Web View",
-    copyAll: "Copy All",
-    clear: "Clear",
-    jumpToLine: (line: number) => `Go to line ${line}`,
-    truncated: (dropped: number) =>
-      `Output truncated: ${dropped} more entries were dropped. Raise the limit in Settings → Advanced.`,
-    region: "Output",
-    lastSuccessfulRun: "Last successful run",
-    copied: "Copied",
-    copyFailed: "Couldn't copy",
-    noMatches: "No entries match this filter",
-    showAll: "Show all",
-    noOutput: (keys: string | null) => (keys ? `No output yet — press ${keys}` : "No output yet"),
-    tableIndex: "(index)",
-    uncaughtInPromise: "Uncaught (in promise) ",
-    internalFrames: (count: number) => `${count} internal frames`,
+    webViewTab: t("output.webViewTab"),
+    copyAll: t("output.copyAll"),
+    /** OU-10: the two items on a single output row's entry menu, and the label of the control that opens it. */
+    copyEntry: t("output.copyEntry"),
+    copyEntryJson: t("output.copyEntryJson"),
+    /** TL-20: the entry menu's third item (spec §14.2). Opens the AI panel and asks about this row. */
+    explainResult: t("output.explainResult"),
+    entryMenu: t("output.entryMenu"),
+    clear: t("output.clear"),
+    jumpToLine: (line: number) => t("output.jumpToLine", { line }),
+    truncated: (dropped: number) => t("output.truncated", { dropped }),
+    /**
+     * OU-02: the exact number of collection entries beyond the pages already loaded, never an unqualified
+     * ellipsis. Distinct from `truncated` above, which is about *console entries* dropped by the output cap.
+     */
+    // Formatted before interpolation: i18next renders a bare number as "1234", losing the separator.
+    moreEntries: (remaining: number) => t("output.moreEntries", { remaining: remaining.toLocaleString("en-US") }),
+    /**
+     * The same count for an OBJECT's hidden properties, which are never paged — spec §5.9 lists object
+     * properties and collection entries as separate rows, so calling an object's remainder "entries" is simply
+     * the wrong noun. It is a separate key rather than a reworded shared one because the two renderings differ
+     * in kind as well as wording: the collection remainder is a button that fetches the next page, this one is
+     * plain text that cannot promise a page `run.expand` would never return.
+     */
+    // Formatted before interpolation for the same reason as `moreEntries` above.
+    moreProperties: (remaining: number) => t("output.moreProperties", { remaining: remaining.toLocaleString("en-US") }),
+    region: t("output.region"),
+    /**
+     * The output panel's polite live region (`OutputPanel`'s `<output className="visually-hidden">`).
+     *
+     * Deliberately a per-run SUMMARY, not a per-row announcement: a tight loop can log thousands of rows, and
+     * reading each one aloud would make the app unusable with a screen reader rather than accessible.
+     *
+     * Phrased as labelled counts rather than "3 entries, 1 error" on purpose. It needs no plural rules, which keeps
+     * it honest in locales that have none (m5e's `t()` sweep) and keeps the line inside the 120-column budget.
+     */
+    announce: {
+      runFinished: (entries: number, errors: number) => t("output.announce.runFinished", { entries, errors }),
+    },
+    lastSuccessfulRun: t("output.lastSuccessfulRun"),
+    copied: t("output.copied"),
+    copyFailed: t("output.copyFailed"),
+    noMatches: t("output.noMatches"),
+    showAll: t("output.showAll"),
+    noOutput: (keys: string | null) => (keys ? t("output.noOutput", { keys }) : t("output.noOutputNoKeys")),
+    tableIndex: t("output.tableIndex"),
+    uncaughtInPromise: t("output.uncaughtInPromise"),
+    internalFrames: (count: number) => t("output.internalFrames", { count }),
     /** A clickable stack-frame line (RR2-m5). */
-    frame: (fn: string, line: number, column: number) => `at ${fn} (L${line}:${column})`,
-    anonymous: "<anonymous>",
+    frame: (fn: string, line: number, column: number) => t("output.frame", { fn, line, column }),
+    anonymous: t("output.anonymous"),
     /** Spec §6.3: a runtime module-not-found error offers to install the missing package. */
-    installPackage: (name: string) => `Install ${name}`,
+    installPackage: (name: string) => t("output.installPackage", { name }),
     /** Spec §12.2: a WorkingDirectoryError row offers to change the working directory. */
-    changeWorkingDirectory: "Change…",
+    changeWorkingDirectory: t("output.changeWorkingDirectory"),
     /** R24-4: a relative module-not-found row offers to set a working directory when the tab has none. */
-    setWorkingDirectory: "Set Working Directory…",
+    setWorkingDirectory: t("output.setWorkingDirectory"),
+    /** OU-13: the hint on a URL in output. The button's own text is the URL, so this describes the action only. */
+    openLink: t("output.openLink"),
   },
   webDialog: {
     /** Task 13 (spec §5.12): JSLab's own non-blocking stand-in for `alert()`. */
-    region: "Page message",
-    dismiss: "Dismiss",
-    queued: (count: number) => `${count} more waiting`,
+    region: t("webDialog.region"),
+    dismiss: t("webDialog.dismiss"),
+    queued: (count: number) => t("webDialog.queued", { count }),
   },
   env: {
-    title: "Environment Variables",
-    help: "Every tab uses these variables. Paste a .env file into Key to add several at once. Changes apply from the next run.",
-    key: "Key",
-    value: "Value",
-    keyOf: (row: number) => `Key, row ${row}`,
-    valueOf: (key: string) => `Value of ${key}`,
-    reveal: (key: string) => `Show value of ${key}`,
-    hide: (key: string) => `Hide value of ${key}`,
-    remove: (key: string) => `Remove ${key}`,
+    title: t("env.title"),
+    help: t("env.help"),
+    key: t("env.key"),
+    value: t("env.value"),
+    keyOf: (row: number) => t("env.keyOf", { row }),
+    valueOf: (key: string) => t("env.valueOf", { key }),
+    reveal: (key: string) => t("env.reveal", { key }),
+    hide: (key: string) => t("env.hide", { key }),
+    remove: (key: string) => t("env.remove", { key }),
     // Fix round 1 (M-6): New value is masked by default, with its own toggle (no key to name yet).
-    revealNew: "Show new value",
-    hideNew: "Hide new value",
-    newKey: "New key",
-    newValue: "New value",
-    add: "Add",
-    save: "Save",
-    cancel: "Cancel",
+    revealNew: t("env.revealNew"),
+    hideNew: t("env.hideNew"),
+    newKey: t("env.newKey"),
+    newValue: t("env.newValue"),
+    add: t("env.add"),
+    save: t("env.save"),
+    cancel: t("env.cancel"),
     // R25-6: the reveal button's visible word, with the keycap glyphs kept out of the accessible name.
-    showButton: "Show",
-    hideButton: "Hide",
-    empty: "No variables yet. Type a key below, or paste a .env file.",
+    showButton: t("env.showButton"),
+    hideButton: t("env.hideButton"),
+    empty: t("env.empty"),
     // R25-2: a failed load disables Save, so a transient read failure can't wipe every saved variable.
-    loadFailed:
-      "Couldn't read your saved variables, so Save is off to protect them. Close this sheet and open it again.",
-    saveFailed: (error: string) => `Couldn't save env.json (${error}). Your changes are still here.`,
-    // R25-5: states the "next run" effect, since env changes have no other visible effect.
-    saved: (count: number) =>
-      count === 0
-        ? "Removed all environment variables. The next run starts without them."
-        : `Saved ${count} environment variable${count === 1 ? "" : "s"}. The next run uses them.`,
+    loadFailed: t("env.loadFailed"),
+    saveFailed: (error: string) => t("env.saveFailed", { error }),
+    // R25-5: states the "next run" effect, since env changes have no other visible effect. Zero is not a
+    // plural of the other two -- removing everything says something different -- so it keeps its own key.
+    saved: (count: number) => (count === 0 ? t("env.savedNone") : t("env.saved", { count })),
     // R25-3: shown after a .env block is pasted into New key.
-    pasted: (count: number) =>
-      `Added ${count} variable${count === 1 ? "" : "s"} from the paste. Check them, then Save.`,
+    pasted: (count: number) => t("env.pasted", { count }),
     // R-M3-T25-SAVE-1: the client-side limit checks that mirror @jslab/shared's envVarsSchema.
-    tooMany: (max: number) => `At most ${max} environment variables. Remove some before saving.`,
-    valueTooLong: (key: string, max: number) => `${key}'s value is longer than ${max} characters.`,
+    tooMany: (max: number) => t("env.tooMany", { max }),
+    valueTooLong: (key: string, max: number) => t("env.valueTooLong", { key, max }),
     errors: {
-      invalidKey: "Use letters, digits and _, and don't start with a digit.",
-      duplicateKey: "Another row already uses this key.",
+      invalidKey: t("env.errors.invalidKey"),
+      duplicateKey: t("env.errors.duplicateKey"),
     },
   },
+  /** Spec §14.1: the AI Chat panel. */
+  ai: {
+    title: t("ai.title"),
+    newChat: t("ai.newChat"),
+    stop: t("ai.stop"),
+    send: t("ai.send"),
+    inputLabel: t("ai.inputLabel"),
+    placeholder: t("ai.placeholder"),
+    conversation: t("ai.conversation"),
+    you: t("ai.you"),
+    assistant: t("ai.assistant"),
+    thinking: t("ai.thinking"),
+    stopped: t("ai.stopped"),
+    empty: t("ai.empty"),
+    /**
+     * The header's provider and model line; clicking it opens Settings → AI (spec §14.1).
+     *
+     * Two forms, because a blank `ai.model.<provider>` means "the manifest's default" and only Main knows what
+     * that resolves to. Interpolating an empty string into the two-part form would render a dangling separator.
+     */
+    providerModel: (provider: string, model: string) => t("ai.providerModel", { provider, model }),
+    providerOnly: (provider: string) => t("ai.providerOnly", { provider }),
+    // Spec §14.1: "No provider configured: the panel shows a card with 'Choose a provider'".
+    chooseProvider: t("ai.chooseProvider"),
+    chooseProviderHelp: t("ai.chooseProviderHelp"),
+    // Spec §14.1: each code block's three actions.
+    copy: t("ai.copy"),
+    copied: t("ai.copied"),
+    copyFailed: t("ai.copyFailed"),
+    insertAtCursor: t("ai.insertAtCursor"),
+    replaceEditor: t("ai.replaceEditor"),
+    retry: t("ai.retry"),
+    /**
+     * TL-20 (spec §14.2): the prompt Explain Result sends, worded as the spec words it.
+     *
+     * Translated, unlike the bundled system prompt Main builds: this one is rendered in the panel as the user's
+     * OWN turn, so leaving it English would put a foreign sentence in the transcript under the user's name.
+     */
+    explainLine: (line: number) => t("ai.explainLine", { line }),
+    /** The same, for a stdout/stderr row, which has no source line of its own to name. */
+    explainOutput: t("ai.explainOutput"),
+    /** Appended when a very large value was cut to fit one request (`ai/explain.ts`). */
+    explainTruncated: t("ai.explainTruncated"),
+    // Spec §14.3: errors are shown inline with a retry button. One headline per classified kind.
+    errors: {
+      auth: t("ai.errors.auth"),
+      rateLimit: t("ai.errors.rateLimit"),
+      network: t("ai.errors.network"),
+      contextTooLong: t("ai.errors.contextTooLong"),
+      modelNotFound: t("ai.errors.modelNotFound"),
+      http: t("ai.errors.http"),
+      stalled: t("ai.errors.stalled"),
+      tooLarge: t("ai.errors.tooLarge"),
+      notConfigured: t("ai.errors.notConfigured"),
+      unknown: t("ai.errors.unknown"),
+    },
+  },
+  snippets: {
+    title: t("snippets.title"),
+    searchLabel: t("snippets.searchLabel"),
+    searchPlaceholder: t("snippets.searchPlaceholder"),
+    list: t("snippets.list"),
+    newSnippet: t("snippets.newSnippet"),
+    // Spec §13.1: the editor context menu's own entry. It deliberately reads the same as the `snippets.create`
+    // command title -- the command catalogue and the UI strings are separate surfaces (note for M5e Phase B).
+    createAction: t("snippets.createAction"),
+    // Spec §13.1 actions.
+    insert: t("snippets.insert"),
+    insertInNewTab: t("snippets.insertInNewTab"),
+    copy: t("snippets.copy"),
+    edit: t("snippets.edit"),
+    delete: t("snippets.delete"),
+    deleteButton: t("snippets.deleteButton"),
+    cancel: t("snippets.cancel"),
+    // Spec §13.1: the confirmation is worded exactly like this.
+    deleteTitle: (name: string) => t("snippets.deleteTitle", { name }),
+    deleteMessage: t("snippets.deleteMessage"),
+    deleted: (name: string) => t("snippets.deleted", { name }),
+    undo: t("snippets.undo"),
+    copied: t("snippets.copied"),
+    copyFailed: t("snippets.copyFailed"),
+    preview: t("snippets.preview"),
+    // Empty states: 0 in the library, and 0 matching the query, say different things (M5 UI research §1).
+    empty: t("snippets.empty"),
+    noMatches: (query: string) => t("snippets.noMatches", { query }),
+    createNamed: (query: string) => t("snippets.createNamed", { query }),
+    import: t("snippets.import"),
+    export: t("snippets.export"),
+    importFailed: t("snippets.importFailed"),
+    // Two more hand-rolled plurals than the plan's inventory lists. The pluralized number is passed as
+    // `count` (i18next's form selector) while the other counts keep their own names.
+    imported: (added: number, overwritten: number, skipped: number) =>
+      t("snippets.imported", { count: added, overwritten, skipped }),
+    conflicts: (conflicts: number, total: number) => t("snippets.conflicts", { count: total, conflicts }),
+    overwrite: t("snippets.overwrite"),
+    keepBoth: t("snippets.keepBoth"),
+    skip: t("snippets.skip"),
+    exportedTo: (path: string) => t("snippets.exportedTo", { path }),
+    exportCancelled: t("snippets.exportCancelled"),
+    exportFailed: (error: string) => t("snippets.exportFailed", { error }),
+    loadFailed: t("snippets.loadFailed"),
+    saveFailed: (error: string) => t("snippets.saveFailed", { error }),
+    // The New Snippet form (spec §13.1).
+    newTitle: t("snippets.newTitle"),
+    editTitle: t("snippets.editTitle"),
+    nameLabel: t("snippets.nameLabel"),
+    nameHelp: t("snippets.nameHelp"),
+    descriptionLabel: t("snippets.descriptionLabel"),
+    languageLabel: t("snippets.languageLabel"),
+    languageNone: t("snippets.languageNone"),
+    bodyLabel: t("snippets.bodyLabel"),
+    bodyHelp: t("snippets.bodyHelp"),
+    save: t("snippets.save"),
+    nameRequired: t("snippets.nameRequired"),
+    nameInvalid: t("snippets.nameInvalid"),
+    nameTaken: t("snippets.nameTaken"),
+  },
   npm: {
-    title: "NPM Packages",
+    title: t("npm.title"),
     // The sheet's own exit control, in the header. Deliberately distinct from `remove` below: that one is the
     // destructive row action, and the two must never read as the same control.
-    close: "Close",
-    searchLabel: "Search npm packages",
-    searchPlaceholder: "Search npm, or type name@version",
-    weekly: (count: number) => `${count.toLocaleString("en-US")} weekly downloads`,
-    add: (name: string) => `Add ${name}`,
-    addButton: "Add",
+    close: t("npm.close"),
+    searchLabel: t("npm.searchLabel"),
+    searchPlaceholder: t("npm.searchPlaceholder"),
+    // Formatted before interpolation, for the thousands separator; see output.moreEntries.
+    weekly: (count: number) => t("npm.weekly", { downloads: count.toLocaleString("en-US") }),
+    add: (name: string) => t("npm.add", { name }),
+    addButton: t("npm.addButton"),
     // R26-3: a result with a pending install shows this instead of Add.
-    adding: "Adding…",
+    adding: t("npm.adding"),
     // R26-2: a result already in the installed table shows this instead of Add.
-    installedVersion: (version: string) => `Installed ${version}`,
-    name: "Name",
-    version: "Installed",
-    latest: "Latest",
+    installedVersion: (version: string) => t("npm.installedVersion", { version }),
+    name: t("npm.name"),
+    version: t("npm.version"),
+    latest: t("npm.latest"),
     // Shown in a Latest cell once an outdated check has succeeded and found nothing newer, so the cell reports a
     // real state instead of rendering blank.
-    upToDate: "Up to date",
+    upToDate: t("npm.upToDate"),
     // Shown in a Latest cell when no outdated check has succeeded yet, so "is there a newer one" is simply unknown.
-    latestUnknown: "—",
-    update: (name: string) => `Update ${name}`,
-    updateButton: "Update",
-    remove: (name: string) => `Remove ${name}`,
+    latestUnknown: t("npm.latestUnknown"),
+    update: (name: string) => t("npm.update", { name }),
+    updateButton: t("npm.updateButton"),
+    remove: (name: string) => t("npm.remove", { name }),
     // The row's destructive action carries a word, not a glyph: an unlabelled × under a blank column header was
     // being mistaken for the sheet's (previously missing) close control.
-    removeButton: "Remove",
-    updateAll: "Update All",
+    removeButton: t("npm.removeButton"),
+    updateAll: t("npm.updateAll"),
     // R26-1: the toolbar's Update All tooltip, distinct from its (unchanged) accessible name.
-    updateAllTitle: (count: number, majors: number) =>
-      `Update ${count} package${count === 1 ? "" : "s"} to their latest versions${
-        majors > 0 ? `, including ${majors} major update${majors === 1 ? "" : "s"}` : ""
-      }.`,
-    showTypes: "Show @types",
-    allowScripts: "Allow install scripts",
+    // R-M5E-T9-PLURAL-1: a single i18next key cannot pluralize on two independent counts (the package
+    // count and the major count), so the majors clause is its own pluralized key, composed onto the base
+    // sentence via the `{{body}}` idiom used elsewhere in this catalogue (see `npm.running.queued` and
+    // `npm.done.withKeys` above). The base sentence is resolved first, with `count` selecting ITS plural
+    // form; it is then re-passed as `{{body}}` into a second t() call whose own `count` (the majors
+    // number) selects the majors clause's plural form independently. This replaces an earlier
+    // construction that kept the placeholder name `majorCount` specifically because `count` was taken by
+    // the base sentence's form selector -- which correctly avoided pluralizing on the wrong number, but
+    // left `majorCount` unpluralized entirely (a fixed count of 1 still rendered "major updates").
+    updateAllTitle: (count: number, majors: number) => {
+      const body = t("npm.updateAllTitle.plain", { count });
+      return majors > 0 ? t("npm.updateAllTitle.withMajors", { body, count: majors }) : body;
+    },
+    showTypes: t("npm.showTypes"),
+    allowScripts: t("npm.allowScripts"),
     // R26-5: shown only once the first list has loaded, so a load-in-progress sheet never flashes "no packages".
-    none: "No packages yet. Search above, or type name@version and press Return.",
-    noResults: (query: string) => `No packages match "${query}".`,
-    typesHidden: (count: number) => `${count} @types package${count === 1 ? "" : "s"} hidden.`,
-    log: "Log",
+    none: t("npm.none"),
+    noResults: (query: string) => t("npm.noResults", { query }),
+    typesHidden: (count: number) => t("npm.typesHidden", { count }),
+    log: t("npm.log"),
     // R26-3 adds a `queued` count; do-not-change list R-M3: this is one of the two allowed signature changes.
+    // Each `kind` is its own key rather than an English verb spliced into a sentence -- a construction that
+    // does not survive translation. Every key is a STRING LITERAL: the key check's call-site scan matches
+    // only a double-quoted literal, so a template-literal key would be invisible to it and would read as
+    // unused. (This comment says it in words for the same reason: the scan reads comments too.)
     running: (kind: string, target: string, queued: number) => {
-      const verb =
-        kind === "remove" ? "Removing" : kind === "update" || kind === "updateAll" ? "Updating" : "Installing";
-      const subject = kind === "updateAll" ? "all packages" : target;
-      return `${verb} ${subject}…${queued > 0 ? ` ${queued} more queued.` : ""}`;
+      const body =
+        kind === "remove"
+          ? t("npm.running.removing", { target })
+          : kind === "update"
+            ? t("npm.running.updating", { target })
+            : kind === "updateAll"
+              ? t("npm.running.updatingAll")
+              : t("npm.running.installing", { target });
+      return queued > 0 ? t("npm.running.queued", { body, count: queued }) : body;
     },
     // R26-3: shown in the affected row's Latest cell while that row has a queued or running operation.
     rowStatus: (kind: string, status: string) => {
-      if (status === "queued") return "Queued";
-      return kind === "remove" ? "Removing…" : kind === "update" || kind === "updateAll" ? "Updating…" : "Installing…";
+      if (status === "queued") return t("npm.rowStatus.queued");
+      return kind === "remove"
+        ? t("npm.rowStatus.removing")
+        : kind === "update" || kind === "updateAll"
+          ? t("npm.rowStatus.updating")
+          : t("npm.rowStatus.installing");
     },
     // R26-4 adds `kind`; do-not-change list R-M3: the second of the two allowed signature changes.
     failed: (kind: string, target: string) =>
       kind === "updateAll"
-        ? "Couldn't update all packages."
-        : `Couldn't ${kind === "remove" ? "remove" : kind === "update" ? "update" : "install"} ${target}.`,
+        ? t("npm.failed.updateAll")
+        : kind === "remove"
+          ? t("npm.failed.remove", { target })
+          : kind === "update"
+            ? t("npm.failed.update", { target })
+            : t("npm.failed.install", { target }),
     // R26-4: the failure-card action row.
-    retry: "Retry",
-    allowAndRetry: "Allow Scripts and Retry",
-    copyLog: "Copy Log",
-    dismiss: "Dismiss",
-    scriptBlocked:
-      "Installed without running install scripts. To run them, turn on Allow install scripts and install again.",
+    retry: t("npm.retry"),
+    allowAndRetry: t("npm.allowAndRetry"),
+    copyLog: t("npm.copyLog"),
+    dismiss: t("npm.dismiss"),
+    scriptBlocked: t("npm.scriptBlocked"),
     // R26-1: the Major badge and its tooltip.
-    major: "Major",
+    major: t("npm.major"),
     majorTitle: (name: string, from: string | null, to: string | null) =>
-      `${name} ${from ?? "?"} → ${to ?? "?"} is a major update and may include breaking changes.`,
+      t("npm.majorTitle", { name, from: from ?? "?", to: to ?? "?" }),
     // R26-1: "Checked N min ago", above the installed table.
-    checkedAgo: (minutes: number) => `Checked for updates ${minutes < 1 ? "just now" : `${minutes} min ago`}`,
+    checkedAgo: (minutes: number) =>
+      minutes < 1 ? t("npm.checkedAgo.justNow") : t("npm.checkedAgo.minutes", { minutes }),
     // R26-6: reported in the status bar when a finished operation's sheet isn't open to show it inline.
     done: (kind: string, target: string, keys: string | null) => {
-      const verb = kind === "remove" ? "Removed" : kind === "update" || kind === "updateAll" ? "Updated" : "Installed";
-      const subject = kind === "updateAll" ? "all packages" : target;
-      return `${verb} ${subject}.${keys ? ` Press ${keys} to run again.` : ""}`;
+      const body =
+        kind === "remove"
+          ? t("npm.done.removed", { target })
+          : kind === "update"
+            ? t("npm.done.updated", { target })
+            : kind === "updateAll"
+              ? t("npm.done.updatedAll")
+              : t("npm.done.installed", { target });
+      return keys ? t("npm.done.withKeys", { body, keys }) : body;
     },
-    doneFailed: (kind: string, target: string, hint: string) => `${strings.npm.failed(kind, target)} ${hint}`,
-    outdatedFailed: (hint: string) => `Couldn't check for updates. ${hint}`,
+    doneFailed: (kind: string, target: string, hint: string) =>
+      t("npm.doneFailed", { failure: strings.npm.failed(kind, target), hint }),
+    outdatedFailed: (hint: string) => t("npm.outdatedFailed", { hint }),
     hints: {
-      network: "Check your connection and the registry in Settings → NPM.",
-      notFound: "The registry has no package with this name. Check the spelling.",
-      noMatchingVersion: "No published version matches. Try name@latest.",
-      peerConflict: "It needs a different version of a package you already have. The log names it.",
-      scriptBlocked: "Install scripts were blocked. Turn on Allow install scripts.",
-      nativeBuild: "A native module failed to build. See the log for the compiler error.",
-      disk: "JSLab couldn't write the packages folder. Check disk space and permissions.",
-      timeout: "Stopped after 5 minutes. Check your connection, then retry.",
-      unknown: "Open the log below to see what Bun reported.",
+      network: t("npm.hints.network"),
+      notFound: t("npm.hints.notFound"),
+      noMatchingVersion: t("npm.hints.noMatchingVersion"),
+      peerConflict: t("npm.hints.peerConflict"),
+      scriptBlocked: t("npm.hints.scriptBlocked"),
+      nativeBuild: t("npm.hints.nativeBuild"),
+      disk: t("npm.hints.disk"),
+      timeout: t("npm.hints.timeout"),
+      unknown: t("npm.hints.unknown"),
     },
   },
   settings: {
-    windowTitle: "Settings",
-    search: "Search settings",
-    results: "Search results",
-    restartRequired: "Restart required",
+    windowTitle: t("settings.windowTitle"),
+    search: t("settings.search"),
+    results: t("settings.results"),
+    restartRequired: t("settings.restartRequired"),
     tabs: {
-      general: "General",
-      editor: "Editor",
-      formatting: "Formatting",
-      appearance: "Appearance",
-      npm: "NPM",
-      build: "Build",
-      advanced: "Advanced",
+      general: t("settings.tabs.general"),
+      editor: t("settings.tabs.editor"),
+      formatting: t("settings.tabs.formatting"),
+      appearance: t("settings.tabs.appearance"),
+      keybindings: t("settings.tabs.keybindings"),
+      ai: t("settings.tabs.ai"),
+      npm: t("settings.tabs.npm"),
+      build: t("settings.tabs.build"),
+      advanced: t("settings.tabs.advanced"),
+    },
+    keybindings: {
+      title: t("settings.keybindings.title"),
+      help: t("settings.keybindings.help"),
+      search: t("settings.keybindings.search"),
+      columns: {
+        command: t("settings.keybindings.columns.command"),
+        keybinding: t("settings.keybindings.columns.keybinding"),
+        when: t("settings.keybindings.columns.when"),
+        source: t("settings.keybindings.columns.source"),
+      },
+      source: {
+        default: t("settings.keybindings.source.default"),
+        user: t("settings.keybindings.source.user"),
+        none: t("settings.keybindings.source.none"),
+      },
+      unregistered: t("settings.keybindings.unregistered"),
+      conflict: (titles: string) => t("settings.keybindings.conflict", { titles }),
+      openFile: t("settings.keybindings.openFile"),
+      empty: t("settings.keybindings.empty"),
+      loadFailed: t("settings.keybindings.loadFailed"),
+      change: t("settings.keybindings.change"),
+      capture: (title: string) => t("settings.keybindings.capture", { title }),
+      capturing: (title: string) => t("settings.keybindings.capturing", { title }),
+      captureHint: t("settings.keybindings.captureHint"),
+      reset: t("settings.keybindings.reset"),
+      resetRow: (title: string) => t("settings.keybindings.resetRow", { title }),
+      resetAll: t("settings.keybindings.resetAll"),
+      rejected: {
+        bareKey: t("settings.keybindings.rejected.bareKey"),
+        reserved: t("settings.keybindings.rejected.reserved"),
+      },
+      saveFailed: t("settings.keybindings.saveFailed"),
+      // Spec §18: the path is never quoted here -- Main logs the raw cause instead.
+      fileInvalid: t("settings.keybindings.fileInvalid"),
     },
     groups: {
-      dark: "Dark",
-      light: "Light",
-      bundled: "Bundled",
-      monospace: "Installed monospace",
-      installed: "Installed",
+      dark: t("settings.groups.dark"),
+      light: t("settings.groups.light"),
+      bundled: t("settings.groups.bundled"),
+      monospace: t("settings.groups.monospace"),
+      installed: t("settings.groups.installed"),
     },
-    loadingFonts: "Loading installed fonts…",
-    fontsUnavailable: "Couldn't load installed fonts",
-    openDataFolder: "Open Data Folder",
-    resetAll: "Reset All Settings…",
-    confirmReset: "Confirm Reset",
-    restartSafeMode: "Restart in Safe Mode",
-    loadFailed: (message: string) => `Settings failed to load: ${message}`,
+    loadingFonts: t("settings.loadingFonts"),
+    fontsUnavailable: t("settings.fontsUnavailable"),
+    /**
+     * TL-23: the model picker and its Refresh control, layered over the `ai.model.<provider>` text field.
+     *
+     * `useDefault` names the blank value rather than describing it ("Default", not "Leave blank"): blank is what
+     * the setting stores, and the whole point of keeping the field free text is that the user can always get back
+     * to it. The three states below are mutually exclusive and say genuinely different things -- still asking,
+     * asked and failed, asked and the server has nothing installed.
+     */
+    models: {
+      refresh: t("settings.models.refresh"),
+      picker: t("settings.models.picker"),
+      useDefault: t("settings.models.useDefault"),
+      loading: t("settings.models.loading"),
+      unavailable: t("settings.models.unavailable"),
+      empty: t("settings.models.empty"),
+    },
+    openDataFolder: t("settings.openDataFolder"),
+    resetAll: t("settings.resetAll"),
+    confirmReset: t("settings.confirmReset"),
+    restartSafeMode: t("settings.restartSafeMode"),
+    loadFailed: (message: string) => t("settings.loadFailed", { message }),
     npmrc: {
-      title: ".npmrc",
-      help: "Registry and authentication for package installs. Your ~/.npmrc is never used.",
-      privacyNote: "This file is readable only by you, and tokens never appear in JSLab's logs.",
-      editorLabel: ".npmrc contents",
-      save: "Save",
-      reset: "Reset",
-      saved: "Saved .npmrc",
-      resetDone: "Restored the default registry",
-      resetFailed: "Couldn't reset .npmrc.",
-      loadFailed: "Couldn't read .npmrc",
+      title: t("settings.npmrc.title"),
+      help: t("settings.npmrc.help"),
+      privacyNote: t("settings.npmrc.privacyNote"),
+      editorLabel: t("settings.npmrc.editorLabel"),
+      save: t("settings.npmrc.save"),
+      reset: t("settings.npmrc.reset"),
+      saved: t("settings.npmrc.saved"),
+      resetDone: t("settings.npmrc.resetDone"),
+      resetFailed: t("settings.npmrc.resetFailed"),
+      /**
+       * A failed load leaves `saved` null, which disables Save *and* Reset -- a `.npmrc` that is present but
+       * unreadable must never be written over sight unseen. So this message has to say that Reset is off because
+       * of this, and what the remedy is, since JSLab cannot repair the file itself. The code is best-effort:
+       * `saveFailed`'s arrives in the response payload, but a failed load arrives as a rejection.
+       */
+      loadFailed: (code: string | null) =>
+        code === "EFBIG"
+          ? t("settings.npmrc.loadFailedTooLarge")
+          : code
+            ? t("settings.npmrc.loadFailed", { code })
+            : t("settings.npmrc.loadFailedNoCode"),
       saveFailed: (code: string | null) =>
-        code
-          ? `Couldn't save .npmrc (${code}). Your changes are still here.`
-          : "Couldn't save .npmrc. Your changes are still here.",
-      examples: "Examples",
-      exampleText: `@acme:registry=https://npm.acme.dev/${NL}//npm.acme.dev/:_authToken=<token>`,
+        code ? t("settings.npmrc.saveFailed", { code }) : t("settings.npmrc.saveFailedNoCode"),
+      examples: t("settings.npmrc.examples"),
+      exampleText: t("settings.npmrc.exampleText"),
       warnings: {
-        missingEquals: (line: number) => `Line ${line}: missing "=".`,
-        registryNotUrl: (line: number) => `Line ${line}: registry isn't a web address.`,
+        missingEquals: (line: number) => t("settings.npmrc.warnings.missingEquals", { line }),
+        registryNotUrl: (line: number) => t("settings.npmrc.warnings.registryNotUrl", { line }),
       },
     },
     fields: {
-      "run.autoRun": { label: "Auto Run", help: "Run code automatically as you type." },
-      "run.autoLog": { label: "Auto Log", help: "Show the value of each top-level expression." },
+      "ai.provider": { label: t("settings.ai.provider.label"), help: t("settings.ai.provider.help") },
+      "ai.model.ollama": { label: t("settings.ai.model.ollama.label"), help: t("settings.ai.model.ollama.help") },
+      "ai.baseUrl.ollama": {
+        label: t("settings.ai.baseUrl.ollama.label"),
+        help: t("settings.ai.baseUrl.ollama.help"),
+      },
+      "ai.includeOutput": { label: t("settings.ai.includeOutput.label"), help: t("settings.ai.includeOutput.help") },
+      "run.autoRun": { label: t("settings.run.autoRun.label"), help: t("settings.run.autoRun.help") },
+      "run.autoLog": { label: t("settings.run.autoLog.label"), help: t("settings.run.autoLog.help") },
       "run.defaultRuntime": {
-        label: "Default Runtime",
-        help: "Runtime for new tabs.",
+        label: t("settings.run.defaultRuntime.label"),
+        help: t("settings.run.defaultRuntime.help"),
       },
-      "run.defaultLanguage": { label: "Default Language", help: "Language for new tabs." },
+      "run.defaultLanguage": {
+        label: t("settings.run.defaultLanguage.label"),
+        help: t("settings.run.defaultLanguage.help"),
+      },
       "run.formatOnRun": {
-        label: "Format on Run",
-        help: "Format code with Prettier before each run, unless you are typing.",
+        label: t("settings.run.formatOnRun.label"),
+        help: t("settings.run.formatOnRun.help"),
       },
-      "tabs.confirmClose": { label: "Confirm Close", help: "Ask before closing any tab." },
+      "tabs.confirmClose": { label: t("settings.tabs.confirmClose.label"), help: t("settings.tabs.confirmClose.help") },
       "app.uiLanguage": {
-        label: "Language",
-        help: "Language of menus and panels. More languages arrive in a later version.",
+        label: t("settings.app.uiLanguage.label"),
+        help: t("settings.app.uiLanguage.help"),
       },
-      "editor.lineNumbers": { label: "Line Numbers", help: "Show line numbers in the gutter." },
-      "editor.lineWrap": { label: "Line Wrap", help: "Wrap long lines to the editor width." },
-      "editor.vimKeys": { label: "Vim Keys", help: "Edit with Vim key bindings. ⌘R still runs in every mode." },
+      "editor.lineNumbers": {
+        label: t("settings.editor.lineNumbers.label"),
+        help: t("settings.editor.lineNumbers.help"),
+      },
+      "editor.lineWrap": { label: t("settings.editor.lineWrap.label"), help: t("settings.editor.lineWrap.help") },
+      "editor.vimKeys": { label: t("settings.editor.vimKeys.label"), help: t("settings.editor.vimKeys.help") },
       "editor.closeBrackets": {
-        label: "Close Brackets",
-        help: "Insert the closing bracket or quote when you type the opening one.",
+        label: t("settings.editor.closeBrackets.label"),
+        help: t("settings.editor.closeBrackets.help"),
       },
-      "editor.invisibles": { label: "Invisibles", help: "Render spaces and tabs." },
-      "editor.activeLine": { label: "Active Line", help: "Highlight the line with the cursor." },
-      "editor.autocomplete": { label: "Autocomplete", help: "Suggest completions while you type." },
-      "editor.linting": { label: "Linting", help: "Show TypeScript diagnostics inline. Never blocks running code." },
-      "editor.hoverInfo": { label: "Hover Info", help: "Show type information when hovering over code." },
+      "editor.invisibles": { label: t("settings.editor.invisibles.label"), help: t("settings.editor.invisibles.help") },
+      "editor.activeLine": { label: t("settings.editor.activeLine.label"), help: t("settings.editor.activeLine.help") },
+      "editor.autocomplete": {
+        label: t("settings.editor.autocomplete.label"),
+        help: t("settings.editor.autocomplete.help"),
+      },
+      "editor.linting": { label: t("settings.editor.linting.label"), help: t("settings.editor.linting.help") },
+      "editor.hoverInfo": { label: t("settings.editor.hoverInfo.label"), help: t("settings.editor.hoverInfo.help") },
       "editor.hoverDelayMs": {
-        label: "Hover Delay",
-        help: "Milliseconds before hover information appears (100–2000).",
+        label: t("settings.editor.hoverDelayMs.label"),
+        help: t("settings.editor.hoverDelayMs.help"),
       },
-      "editor.signatures": { label: "Signatures", help: "Show parameter hints while typing a call." },
-      "editor.formatOnSave": { label: "Format on Save", help: "Format code with Prettier before saving a file." },
-      "editor.minimap": { label: "Minimap", help: "Show a code overview next to the scroll bar." },
-      "prettier.printWidth": { label: "Print Width", help: "Line length Prettier wraps at." },
-      "prettier.tabWidth": { label: "Tab Width", help: "Spaces per indentation level." },
-      "prettier.useTabs": { label: "Use Tabs", help: "Indent with tabs instead of spaces." },
-      "prettier.semi": { label: "Semicolons", help: "Add a semicolon at the end of every statement." },
-      "prettier.singleQuote": { label: "Single Quotes", help: "Use single quotes instead of double quotes." },
-      "prettier.quoteProps": { label: "Quote Props", help: "When to quote object property names." },
-      "prettier.jsxSingleQuote": { label: "JSX Single Quotes", help: "Use single quotes in JSX attributes." },
-      "prettier.trailingComma": { label: "Trailing Commas", help: "Where to add trailing commas." },
-      "prettier.bracketSpacing": { label: "Bracket Spacing", help: "Put spaces between brackets in object literals." },
+      "editor.signatures": { label: t("settings.editor.signatures.label"), help: t("settings.editor.signatures.help") },
+      "editor.formatOnSave": {
+        label: t("settings.editor.formatOnSave.label"),
+        help: t("settings.editor.formatOnSave.help"),
+      },
+      "editor.minimap": { label: t("settings.editor.minimap.label"), help: t("settings.editor.minimap.help") },
+      "prettier.printWidth": {
+        label: t("settings.prettier.printWidth.label"),
+        help: t("settings.prettier.printWidth.help"),
+      },
+      "prettier.tabWidth": { label: t("settings.prettier.tabWidth.label"), help: t("settings.prettier.tabWidth.help") },
+      "prettier.useTabs": { label: t("settings.prettier.useTabs.label"), help: t("settings.prettier.useTabs.help") },
+      "prettier.semi": { label: t("settings.prettier.semi.label"), help: t("settings.prettier.semi.help") },
+      "prettier.singleQuote": {
+        label: t("settings.prettier.singleQuote.label"),
+        help: t("settings.prettier.singleQuote.help"),
+      },
+      "prettier.quoteProps": {
+        label: t("settings.prettier.quoteProps.label"),
+        help: t("settings.prettier.quoteProps.help"),
+      },
+      "prettier.jsxSingleQuote": {
+        label: t("settings.prettier.jsxSingleQuote.label"),
+        help: t("settings.prettier.jsxSingleQuote.help"),
+      },
+      "prettier.trailingComma": {
+        label: t("settings.prettier.trailingComma.label"),
+        help: t("settings.prettier.trailingComma.help"),
+      },
+      "prettier.bracketSpacing": {
+        label: t("settings.prettier.bracketSpacing.label"),
+        help: t("settings.prettier.bracketSpacing.help"),
+      },
       "prettier.bracketSameLine": {
-        label: "Bracket Same Line",
-        help: "Put the > of a multi-line JSX element at the end of the last line.",
+        label: t("settings.prettier.bracketSameLine.label"),
+        help: t("settings.prettier.bracketSameLine.help"),
       },
       "prettier.arrowParens": {
-        label: "Arrow Parens",
-        help: "Include parentheses around a sole arrow function parameter.",
+        label: t("settings.prettier.arrowParens.label"),
+        help: t("settings.prettier.arrowParens.help"),
       },
-      "appearance.theme": { label: "Theme", help: "Color theme for the editor and the window." },
+      "appearance.theme": { label: t("settings.appearance.theme.label"), help: t("settings.appearance.theme.help") },
       "appearance.followSystem": {
-        label: "Follow System Appearance",
-        help: "Switch between the light and dark themes below with macOS.",
+        label: t("settings.appearance.followSystem.label"),
+        help: t("settings.appearance.followSystem.help"),
       },
-      "appearance.lightTheme": { label: "Light Theme", help: "Theme used in light mode when following the system." },
-      "appearance.darkTheme": { label: "Dark Theme", help: "Theme used in dark mode when following the system." },
+      "appearance.lightTheme": {
+        label: t("settings.appearance.lightTheme.label"),
+        help: t("settings.appearance.lightTheme.help"),
+      },
+      "appearance.darkTheme": {
+        label: t("settings.appearance.darkTheme.label"),
+        help: t("settings.appearance.darkTheme.help"),
+      },
       "appearance.font": {
-        label: "Font",
-        help: "Font for the editor and output. Bundled fonts are listed first, then installed fonts.",
+        label: t("settings.appearance.font.label"),
+        help: t("settings.appearance.font.help"),
       },
-      "appearance.fontSize": { label: "Font Size", help: "Font size for the editor and output (8–72)." },
+      "appearance.fontSize": {
+        label: t("settings.appearance.fontSize.label"),
+        help: t("settings.appearance.fontSize.help"),
+      },
       "appearance.fontLigatures": {
-        label: "Font Ligatures",
-        help: "Combine character pairs like => into ligatures when the font supports them.",
+        label: t("settings.appearance.fontLigatures.label"),
+        help: t("settings.appearance.fontLigatures.help"),
       },
       "appearance.uiScale": {
-        label: "Zoom",
-        help: "Scales the editor, output and side bar. Also changed by ⌘= and ⌘−.",
+        label: t("settings.appearance.uiScale.label"),
+        help: t("settings.appearance.uiScale.help"),
       },
-      "view.tabBarForSingleTab": { label: "Tab Bar", help: "Show the tab bar even when only one tab is open." },
-      "view.activityBar": { label: "Activity Bar", help: "Show the activity bar on the left." },
-      "view.statusBar": { label: "Status Bar", help: "Show the status bar at the bottom." },
-      "view.sideBar": { label: "Side Bar", help: "Show the side bar." },
-      "view.layout": { label: "Layout", help: "Split direction for new tabs." },
-      "output.highlighting": { label: "Output Highlighting", help: "Color values in the output by type." },
+      "view.tabBarForSingleTab": {
+        label: t("settings.view.tabBarForSingleTab.label"),
+        help: t("settings.view.tabBarForSingleTab.help"),
+      },
+      "view.activityBar": { label: t("settings.view.activityBar.label"), help: t("settings.view.activityBar.help") },
+      "view.statusBar": { label: t("settings.view.statusBar.label"), help: t("settings.view.statusBar.help") },
+      "view.sideBar": { label: t("settings.view.sideBar.label"), help: t("settings.view.sideBar.help") },
+      "view.layout": { label: t("settings.view.layout.label"), help: t("settings.view.layout.help") },
+      "output.highlighting": {
+        label: t("settings.output.highlighting.label"),
+        help: t("settings.output.highlighting.help"),
+      },
       "output.showLineNumbers": {
-        label: "Output Line Numbers",
-        help: "Show the source line next to each output entry.",
+        label: t("settings.output.showLineNumbers.label"),
+        help: t("settings.output.showLineNumbers.help"),
       },
-      "run.showUndefined": { label: "Show Undefined", help: "Show expressions whose value is undefined." },
+      "run.showUndefined": { label: t("settings.run.showUndefined.label"), help: t("settings.run.showUndefined.help") },
       "run.loopProtection": {
-        label: "Loop Protection",
-        help: "Stop loops that run more iterations than the limit below.",
+        label: t("settings.run.loopProtection.label"),
+        help: t("settings.run.loopProtection.help"),
       },
       "run.loopProtectionMaxIterations": {
-        label: "Loop Limit",
-        help: "Iterations before loop protection stops a loop (100–10,000,000).",
+        label: t("settings.run.loopProtectionMaxIterations.label"),
+        help: t("settings.run.loopProtectionMaxIterations.help"),
       },
       "run.autoRunDelayMs": {
-        label: "Auto Run Delay",
-        help: "Milliseconds after you stop typing before code runs (0–5000).",
+        label: t("settings.run.autoRunDelayMs.label"),
+        help: t("settings.run.autoRunDelayMs.help"),
       },
       "run.unresponsiveTimeoutMs": {
-        label: "Unresponsive Timeout",
-        help: "Milliseconds without a heartbeat before JSLab offers to kill a run (1000–60000).",
+        label: t("settings.run.unresponsiveTimeoutMs.label"),
+        help: t("settings.run.unresponsiveTimeoutMs.help"),
       },
       "output.maxEntries": {
-        label: "Output Limit",
-        help: "Most entries kept per run before output is truncated (100–100,000).",
+        label: t("settings.output.maxEntries.label"),
+        help: t("settings.output.maxEntries.help"),
       },
-      "updates.auto": { label: "Automatic Updates", help: "Download and install updates automatically." },
+      "updates.auto": { label: t("settings.updates.auto.label"), help: t("settings.updates.auto.help") },
       "updates.channel": {
-        label: "Update Channel",
-        help: "Stable releases, or canary builds with the newest changes.",
+        label: t("settings.updates.channel.label"),
+        help: t("settings.updates.channel.help"),
       },
       "npm.allowInstallScripts": {
-        label: "Allow Install Scripts",
-        help: "Run packages' install scripts. Each package is added to trustedDependencies; scripts run with your permissions. Applies to future installs. Packages you already trusted keep running their install scripts.",
+        label: t("settings.npm.allowInstallScripts.label"),
+        help: t("settings.npm.allowInstallScripts.help"),
       },
       "npm.autoInstallTypes": {
-        label: "Install Types Automatically",
-        help: "Install @types/<package> automatically when an installed package has no types of its own.",
+        label: t("settings.npm.autoInstallTypes.label"),
+        help: t("settings.npm.autoInstallTypes.help"),
       },
       "build.decorators": {
-        label: "Decorators",
-        help: "Decorator syntax: 2023-11 (the standard), Legacy (TypeScript experimentalDecorators) or None.",
+        label: t("settings.build.decorators.label"),
+        help: t("settings.build.decorators.help"),
       },
-      "build.pipelineOperator": { label: "Pipeline Operator", help: "Hack-style |> with % as the topic token." },
-      "build.doExpressions": { label: "Do Expressions", help: "do { … } blocks that produce a value." },
+      "build.pipelineOperator": {
+        label: t("settings.build.pipelineOperator.label"),
+        help: t("settings.build.pipelineOperator.help"),
+      },
+      "build.doExpressions": {
+        label: t("settings.build.doExpressions.label"),
+        help: t("settings.build.doExpressions.help"),
+      },
       "build.throwExpressions": {
-        label: "Throw Expressions",
-        help: "throw as an expression, for example value ?? throw new Error().",
+        label: t("settings.build.throwExpressions.label"),
+        help: t("settings.build.throwExpressions.help"),
       },
-      "build.functionSent": { label: "function.sent", help: "The value last passed to a generator's next()." },
+      "build.functionSent": {
+        label: t("settings.build.functionSent.label"),
+        help: t("settings.build.functionSent.help"),
+      },
       "build.regexpModifiers": {
-        label: "RegExp Modifiers",
-        help: "Inline flags such as (?i:a) in regular expressions.",
+        label: t("settings.build.regexpModifiers.label"),
+        help: t("settings.build.regexpModifiers.help"),
       },
       "build.optionalChainingAssign": {
-        label: "Optional Chaining Assignment",
-        help: "a?.b = c assigns only when a is not null or undefined.",
+        label: t("settings.build.optionalChainingAssign.label"),
+        help: t("settings.build.optionalChainingAssign.help"),
       },
     } as Record<string, { label: string; help: string }>,
     options: {
-      runtime: { "browser-node": "Browser & Node APIs", bun: "Bun", browser: "Browser" },
-      language: { typescript: "TypeScript", javascript: "JavaScript", tsx: "TSX", jsx: "JSX" },
-      uiLanguage: { system: "System", en: "English", es: "Español", ja: "日本語", zh: "中文", pt: "Português" },
-      quoteProps: { "as-needed": "As needed", consistent: "Consistent", preserve: "Preserve" },
-      trailingComma: { all: "All", es5: "ES5", none: "None" },
-      arrowParens: { always: "Always", avoid: "Avoid" },
-      layout: { horizontal: "Horizontal", vertical: "Vertical" },
-      channel: { stable: "Stable", canary: "Canary" },
-      decorators: { none: "None", "2023-11": "2023-11 (standard)", legacy: "Legacy (experimentalDecorators)" },
+      runtime: {
+        "browser-node": t("settings.options.runtime.browser-node"),
+        bun: t("settings.options.runtime.bun"),
+        browser: t("settings.options.runtime.browser"),
+      },
+      language: {
+        typescript: t("settings.options.language.typescript"),
+        javascript: t("settings.options.language.javascript"),
+        tsx: t("settings.options.language.tsx"),
+        jsx: t("settings.options.language.jsx"),
+      },
+      uiLanguage: {
+        system: t("settings.options.uiLanguage.system"),
+        en: t("settings.options.uiLanguage.en"),
+        es: t("settings.options.uiLanguage.es"),
+        ja: t("settings.options.uiLanguage.ja"),
+        zh: t("settings.options.uiLanguage.zh"),
+        pt: t("settings.options.uiLanguage.pt"),
+      },
+      quoteProps: {
+        "as-needed": t("settings.options.quoteProps.as-needed"),
+        consistent: t("settings.options.quoteProps.consistent"),
+        preserve: t("settings.options.quoteProps.preserve"),
+      },
+      trailingComma: {
+        all: t("settings.options.trailingComma.all"),
+        es5: t("settings.options.trailingComma.es5"),
+        none: t("settings.options.trailingComma.none"),
+      },
+      arrowParens: { always: t("settings.options.arrowParens.always"), avoid: t("settings.options.arrowParens.avoid") },
+      layout: { horizontal: t("settings.options.layout.horizontal"), vertical: t("settings.options.layout.vertical") },
+      channel: { stable: t("settings.options.channel.stable"), canary: t("settings.options.channel.canary") },
+      decorators: {
+        none: t("settings.options.decorators.none"),
+        "2023-11": t("settings.options.decorators.2023-11"),
+        legacy: t("settings.options.decorators.legacy"),
+      },
+      // Spec §14.3's provider table. Only the ids this build implements are offered (see SETTINGS_FIELDS), so
+      // the five unimplemented ones deliberately have no label here -- a label would be a promise.
+      aiProvider: {
+        none: t("settings.options.aiProvider.none"),
+        ollama: t("settings.options.aiProvider.ollama"),
+      },
     },
   },
-} as const;
+};

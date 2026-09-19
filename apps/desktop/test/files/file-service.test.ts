@@ -146,4 +146,44 @@ describe("FileService", () => {
     await service().write(bom, file?.content ?? "");
     expect(await readFile(bom)).toEqual(original);
   });
+
+  // R-M5b-S2 sweep: the size limit now sits before the allocation, not after it. The error cannot show that --
+  // read-then-measure refused this same file with this same message -- so the assertion has to be the cost.
+  //
+  // Measured in a child process, and that is load-bearing. RSS never shrinks, so if any earlier test in this
+  // run has already mapped 512 MB, a second 512 MB read reuses those pages and the delta collapses. Measured:
+  // with the check moved after the read, an in-process version of this test passed while the same assertion in
+  // bounded-read.test.ts failed at 512 MB -- it was proving the order the files happened to run in. The whole
+  // scenario therefore lives in the child, which gets its own baseline and cannot be preloaded by a neighbour.
+  test("confirmLarge refuses a file swapped for a huge one WITHOUT reading it into memory", async () => {
+    const big = join(dir, "grew.js");
+    const service = join(import.meta.dir, "..", "..", "src", "main", "files", "file-service.ts");
+    const script = [
+      `const { FileService, nodeFileSystem } = await import(${JSON.stringify(service)});`,
+      `const { writeFile, open } = await import("node:fs/promises");`,
+      `await writeFile(${JSON.stringify(big)}, "x".repeat(15));`,
+      `const files = new FileService(nodeFileSystem, { largeFileBytes: 10, maxFileBytes: 20 });`,
+      `const [large] = (await files.prepareOpen([${JSON.stringify(big)}])).large;`,
+      `console.log("TOKEN:" + (large && large.token ? "yes" : "no"));`,
+      // What the 5-minute token window actually allows: the file the user confirmed is not the file that gets
+      // read. 512 MB to `stat`, zero blocks on disk, so it costs nothing unless something really reads it.
+      `const handle = await open(${JSON.stringify(big)}, "w");`,
+      `try { await handle.truncate(512 * 1024 * 1024); } finally { await handle.close(); }`,
+      `const before = process.memoryUsage().rss;`,
+      `const result = await files.confirmLarge([large ? large.token : ""]);`,
+      `const after = process.memoryUsage().rss;`,
+      // `result` is read only after the second sample, so a mutant's bytes stay reachable until measured.
+      `console.log("READY:" + result.ready.length);`,
+      `console.log("ERRORS:" + JSON.stringify(result.errors));`,
+      `console.log("DELTA:" + Math.round((after - before) / (1024 * 1024)));`,
+    ].join("\n");
+    const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
+    await child.exited;
+    const out = await new Response(child.stdout).text();
+
+    expect(out).toContain("TOKEN:yes");
+    expect(out).toContain("READY:0");
+    expect(out).toContain(`ERRORS:["grew.js is larger than 50 MB and can't be opened."]`);
+    expect(Number(/DELTA:(-?\d+)/.exec(out)?.[1] ?? Number.NaN)).toBeLessThan(64);
+  });
 });

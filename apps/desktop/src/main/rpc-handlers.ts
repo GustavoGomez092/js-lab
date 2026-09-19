@@ -6,36 +6,85 @@ import {
   e2eResponseSchema,
   runExpandParamsSchema,
   runStartParamsSchema,
+  runTranspiledParamsSchema,
   type StartupNotice,
   tabParamsSchema,
   tabPatchSchema,
 } from "@jslab/rpc-schema";
-import { effectiveRuntime, type KeybindingRule, scriptFileName } from "@jslab/shared";
+import { type ConversationTurn, effectiveRuntime, type KeybindingRule, scriptFileName } from "@jslab/shared";
+import type { ThemeDefinition } from "@jslab/themes";
 import { createValidators, InvalidPayloadError } from "./rpc/validate";
 import type { RunCoordinator } from "./runs/run-coordinator";
 import type { SafeModeState } from "./services/safe-mode";
 import type { SessionStore } from "./services/session-store";
 import type { SettingsStore } from "./services/settings-store";
+import { strings } from "./strings";
 
 export { InvalidPayloadError };
 
 export interface RpcHandlerDeps {
-  coordinator: Pick<RunCoordinator, "start" | "stop" | "kill" | "wait" | "expand" | "mute">;
+  coordinator: Pick<RunCoordinator, "start" | "stop" | "kill" | "wait" | "expand" | "mute" | "transpiled">;
   settings: Pick<SettingsStore, "current">;
-  session: Pick<SessionStore, "session" | "readBuffers" | "setBuffer" | "patchTab">;
+  session: Pick<SessionStore, "session" | "readBuffers" | "readBuffer" | "setBuffer" | "patchTab">;
   safeMode: SafeModeState;
-  versions: { app: string; bun: string };
+  /**
+   * M6: `electrobun` is REQUIRED here even though it is optional on `BootstrapPayload`. The payload field is
+   * optional only so the ~70 existing UI test fixtures that build `{ app, bun }` keep compiling; making it
+   * required at the composition root is what actually forces `index.ts` to send it, so the About dialog can
+   * never silently lose the framework version to a forgotten field.
+   */
+  versions: { app: string; bun: string; electrobun: string };
   log(message: string, detail?: unknown): void;
   onUiHeartbeat(): void;
   /** True for JSLAB_E2E=1 launches. */
   e2e?: boolean;
   onE2EResponse?(response: E2EResponse): void;
-  keybindings?: { rules: KeybindingRule[] };
+  /**
+   * The view's RPC is live. `app.bootstrap` is the first request a view makes (`apps/ui/src/main.tsx`), and its
+   * message hub already exists by then, so from this point an `e2e.request` is queued rather than dropped.
+   */
+  onViewReady?(): void;
+  keybindings?: { rules: readonly KeybindingRule[] };
   notices?: StartupNotice[];
+  /** Spec §9.3: the imported themes, so the UI has them before its first paint (Finding T1). */
+  themes?: { themes: readonly ThemeDefinition[] };
+  /** Spec §14.3: the conversation restored into the AI panel at launch. */
+  conversation?: { messages: readonly ConversationTurn[] };
 }
 
 /** A valid request that Main declines to act on (for example an automatic run while Safe Mode is active). */
 export class RunRefusedError extends Error {}
+
+/**
+ * F1: read each tab's buffer on its own, so one unreadable file doesn't fail the whole `app.bootstrap`.
+ *
+ * `SessionStore.readBuffers()` throws on the first tab whose buffer exists but can't be read (EACCES, EISDIR,
+ * EIO). That rejection reached `main.tsx`'s catch, which showed a failure screen whose only control re-ran the
+ * identical bootstrap -- an infinite loop the user could only escape by deleting files by hand. Reading per tab
+ * keeps the app openable: the tabs that loaded are returned, and the ones that didn't are named in a notice.
+ *
+ * `readBuffer` has already put each skipped tab in the store's unreadable set, so `setBuffer` refuses to write
+ * its buffer file. B1: that guard covers only the internal buffer file, NOT the tab's `filePath` -- so the ids
+ * are reported to the UI (`unreadableBuffers`) and `file.save`/Save As refuse them as well. Without that, the UI
+ * turned the omission into `""`, the tab read as dirty, and a plain ⌘S truncated the user's real file.
+ * `readBuffers()` keeps its all-or-nothing contract for every other caller.
+ */
+async function readBuffersPerTab(
+  session: RpcHandlerDeps["session"],
+  log: RpcHandlerDeps["log"],
+): Promise<{ buffers: Record<string, string>; unreadable: string[] }> {
+  const buffers: Record<string, string> = {};
+  const unreadable: string[] = [];
+  for (const id of session.session.tabOrder) {
+    try {
+      buffers[id] = await session.readBuffer(id);
+    } catch (error) {
+      unreadable.push(id);
+      log("Couldn't read a tab's buffer at startup", { tabId: id, error: String(error) });
+    }
+  }
+  return { buffers, unreadable };
+}
 
 /** Handlers for the UI RPC. Every inbound payload is validated before use (spec §18). */
 export function createRpcHandlers(deps: RpcHandlerDeps) {
@@ -43,16 +92,40 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
 
   return {
     requests: {
-      "app.bootstrap": async (): Promise<BootstrapPayload> => ({
-        settings: deps.settings.current,
-        session: deps.session.session,
-        buffers: await deps.session.readBuffers(),
-        safeMode: deps.safeMode,
-        versions: deps.versions,
-        ...(deps.e2e ? { e2e: true } : {}),
-        ...(deps.keybindings ? { keybindings: deps.keybindings.rules } : {}),
-        ...(deps.notices && deps.notices.length > 0 ? { notices: deps.notices } : {}),
-      }),
+      "app.bootstrap": async (): Promise<BootstrapPayload> => {
+        // Announced before any awaiting: this is the earliest proof the view can receive messages, and holding it
+        // back until the payload is built would leave the E2E bridge waiting through every buffer read.
+        deps.onViewReady?.();
+        const { buffers, unreadable } = await readBuffersPerTab(deps.session, deps.log);
+        const notices = [...(deps.notices ?? [])];
+        if (unreadable.length > 0) {
+          notices.push({ id: "buffersUnreadable", message: strings.notices.buffersUnreadable(unreadable.length) });
+        }
+        return {
+          settings: deps.settings.current,
+          session: deps.session.session,
+          buffers,
+          // B1: the ids, not just the count in the notice -- the UI must be able to tell these tabs apart from
+          // genuinely empty ones, or it invents `""` for them and offers to save that over their files.
+          ...(unreadable.length > 0 ? { unreadableBuffers: unreadable } : {}),
+          safeMode: deps.safeMode,
+          versions: deps.versions,
+          ...(deps.e2e ? { e2e: true } : {}),
+          // A COPY, not the store's own array (M5d Finding K1): this crosses the RPC boundary as mutable
+          // `KeybindingRule[]`, and handing out the live set would let a caller edit what Main believes is on disk.
+          ...(deps.keybindings ? { keybindings: [...deps.keybindings.rules] } : {}),
+          ...(notices.length > 0 ? { notices } : {}),
+          // M5d Finding T1: without this the first paint offers only the built-ins, and an imported theme appears
+          // only once some later import happens to push `theme.changed`.
+          ...(deps.themes && deps.themes.themes.length > 0 ? { userThemes: [...deps.themes.themes] } : {}),
+          // Spec §14.3: restored at launch. A COPY, for the same reason `keybindings` is one -- this crosses the
+          // RPC boundary as a mutable array, and handing out the store's own would let a caller edit what Main
+          // believes is on disk.
+          ...(deps.conversation && deps.conversation.messages.length > 0
+            ? { conversation: [...deps.conversation.messages] }
+            : {}),
+        };
+      },
       "run.start": (input: unknown): { runId: string } => {
         const { tabId, code, language, logpoints, reason, runtime } = parse(runStartParamsSchema, "run.start", input);
         // Defence in depth (spec §5.14): Main never starts an automatic run in Safe Mode, whatever the UI sends.
@@ -79,8 +152,12 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
         });
       },
       "run.expand": (input: unknown): Promise<EncodedValue | null> => {
-        const { tabId, runId, handleId } = parse(runExpandParamsSchema, "run.expand", input);
-        return deps.coordinator.expand(tabId, runId, handleId);
+        const { tabId, runId, handleId, offset } = parse(runExpandParamsSchema, "run.expand", input);
+        return deps.coordinator.expand(tabId, runId, handleId, offset);
+      },
+      "run.transpiled": (input: unknown): Promise<{ code: string; source: string } | null> => {
+        const { tabId, hideInstrumentation } = parse(runTranspiledParamsSchema, "run.transpiled", input);
+        return deps.coordinator.transpiled(tabId, hideInstrumentation);
       },
     },
     messages: {

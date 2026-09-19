@@ -8,9 +8,7 @@ import {
 } from "@jslab/shared";
 import type { MainApi } from "../api";
 import type { EditorHandle } from "../editor/editor-handle";
-import { copyEntriesToClipboard } from "../output/copy";
-import { entryToText } from "../output/text";
-import { visibleEntries } from "../state/output";
+import { copyAllEntries, copyAllText, copyEntriesToClipboard } from "../output/copy";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import type { TabActions } from "../tabs/tab-actions";
@@ -64,11 +62,14 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
     { id: "output.clear", run: () => s().clearOutput() },
     {
       id: "output.copyAll",
+      // R-M2-T19A-1: a chip that matches nothing leaves nothing to copy, so the command goes away exactly as the
+      // toolbar button is disabled in that state. Copying an empty string would silently replace whatever the user
+      // had on their clipboard.
+      isEnabled: () => copyAllEntries(s()).length > 0,
       run: async () => {
-        const state = s();
-        const text = visibleEntries(state.output, { showUndefined: state.settings?.run.showUndefined ?? false })
-          .map((entry) => entryToText(entry.event))
-          .join("\n");
+        // R-M2-T19A-1: the entries visible under the current filter chip, resolved by the same owner the toolbar
+        // button uses. This used to map over every visible entry and ignore the chip.
+        const text = copyAllText(s());
         // As built (M1 T17 fix round): a denied or failed clipboard write reports a status, never an unhandled rejection.
         if ((await copyEntriesToClipboard(text)) === "failed") s().setStatusMessage(strings.commands.copyFailed);
       },
@@ -131,12 +132,21 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
       }),
     ),
 
+    // M6: About opens a dialog in this window, so unlike the Help links it needs nothing from Main.
+    { id: "help.about", run: () => s().openModal({ kind: "about" }) },
+    // ST-11 (spec §7.4): Main owns the URLs; the UI only names the action.
+    { id: "help.documentation", run: () => deps.api.appCommand("openDocumentation") },
+    { id: "help.reportIssue", run: () => deps.api.appCommand("reportIssue") },
+    { id: "help.whatsNew", run: () => deps.api.appCommand("openWhatsNew") },
     { id: "help.copyDebugLog", run: () => deps.api.appCommand("copyDebugLog") },
     { id: "help.openLogsFolder", run: () => deps.api.appCommand("openLogsFolder") },
+    { id: "help.installCli", run: () => deps.api.appCommand("installCli") },
+    { id: "help.uninstallCli", run: () => deps.api.appCommand("uninstallCli") },
     { id: "help.restartSafeMode", run: () => deps.api.appCommand("restartSafeMode") },
     { id: "app.openDataFolder", run: () => deps.api.appCommand("openDataFolder") },
     { id: "app.settings", run: () => deps.api.appCommand("openSettings") },
     { id: "view.toggleFullScreen", run: () => deps.api.appCommand("toggleFullScreen") },
+    { id: "view.zoomWindow", run: () => deps.api.appCommand("zoomWindow") },
 
     // M3: Tools sheets (spec §11.2, §12.1) and the working directory (spec §12.2).
     {

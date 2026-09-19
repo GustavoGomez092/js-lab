@@ -1,5 +1,16 @@
-import { readFile } from "node:fs/promises";
+import { readBoundedText } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
+import { MAX_SYSTEM_PROFILER_OUTPUT_BYTES } from "./subprocess-output";
+
+/**
+ * The font cache's byte cap. JSLab writes this file itself, from its own parse of `system_profiler` output, so its
+ * size tracks exactly one thing: how many font families are installed. macOS ships a few hundred; 16 MB is on the
+ * order of a hundred thousand families at a generous 160 bytes each.
+ *
+ * A cap is affordable here precisely because the cost of refusing is so small: `#readCache` returns null, which
+ * `list()` already treats as "stale", so the next call re-runs the scan and rewrites the file.
+ */
+export const MAX_FONT_CACHE_BYTES = 16 * 1024 * 1024;
 
 /**
  * Upstream gap: WKWebView lacks `queryLocalFonts`, so the installed families come from
@@ -48,7 +59,13 @@ export function parseSystemFonts(json: string): SystemFontList {
 }
 
 export async function runSystemProfiler(timeoutMs = 60_000): Promise<string> {
-  const proc = Bun.spawn(["system_profiler", "SPFontsDataType", "-json"], { stdout: "pipe", stderr: "ignore" });
+  // The 60 s kill below bounds how LONG this runs, never how much it buffers: 60 s of a flooding child is many
+  // gigabytes of Main's heap. maxBuffer is what bounds the memory, by ending the child (see subprocess-output).
+  const proc = Bun.spawn(["system_profiler", "SPFontsDataType", "-json"], {
+    stdout: "pipe",
+    stderr: "ignore",
+    maxBuffer: MAX_SYSTEM_PROFILER_OUTPUT_BYTES,
+  });
   const timer = setTimeout(() => proc.kill(), timeoutMs);
   try {
     const [output, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
@@ -114,7 +131,12 @@ export class SystemFontsService {
 
   async #readCache(): Promise<{ at: number; fonts: SystemFontList } | null> {
     try {
-      const value = JSON.parse(await readFile(this.deps.cacheFile, "utf8")) as { at?: unknown; fonts?: SystemFontList };
+      // The cache lives in JSLab's own user-writable data dir, so it may not be a regular file by the time it is
+      // read; the reader refuses a FIFO instead of parking Main, and every failure here already means "stale".
+      const value = JSON.parse(await readBoundedText(this.deps.cacheFile, MAX_FONT_CACHE_BYTES)) as {
+        at?: unknown;
+        fonts?: SystemFontList;
+      };
       if (typeof value.at !== "number" || !Array.isArray(value.fonts?.monospace) || !Array.isArray(value.fonts?.other))
         return null;
       return { at: value.at, fonts: value.fonts };

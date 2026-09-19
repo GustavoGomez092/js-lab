@@ -24,8 +24,18 @@ export interface AppPaths {
   /** The web runner's third-party chunk cache (spec §5.12): `apps/desktop/src/main/bundling/vendor-cache.ts`. */
   vendorCacheDir: string;
   envFile: string;
+  /** Spec §4.5: the snippet library (§13.4). */
+  snippetsFile: string;
+  /**
+   * Spec §14.3: "the current conversation is kept in `ai/conversation.json` and restored at launch". Its own
+   * `ai/` folder, exactly as the spec writes the path -- `writeFileAtomic` creates the parent directory, so
+   * nothing has to mkdir it ahead of the first save.
+   */
+  conversationFile: string;
   socketPath: string;
   screenshotsDir: string;
+  /** Spec §4.5: user-imported themes (`*.jslab-theme.json`), written by the VS Code importer (§9.3). */
+  themesDir: string;
   runnerBootstrap: string;
   /**
    * M4 §5.12: the bundled runner-web bootstrap Main injects into a browser-mode tab's page. The page itself is
@@ -33,7 +43,24 @@ export interface AppPaths {
    */
   webRunnerBootstrap: string;
   transformWorker: string;
+  /**
+   * Spec §17: the locale files Main reads. They are authored at `apps/ui/src/i18n/locales/` -- the path the
+   * spec names -- and staged into the bundle by hutch.config.ts's `build:bundles`, exactly as
+   * THIRD-PARTY-NOTICES.md is. Main reads them at runtime rather than inlining them at build time, so it
+   * really does read the same files the UI ships.
+   */
+  localesDir: string;
+  /**
+   * M6: the attribution file Help → About opens. Authored at the repo root and staged into the bundle by
+   * hutch.config.ts's `build:bundles`, then copied to `Resources/app/THIRD-PARTY-NOTICES.md` by
+   * electrobun.config.ts -- exactly the route the locale files above take, and for the same reason (a
+   * `build.copy` key may not escape the project directory). Main reads the real shipped file; nothing
+   * guesses this path.
+   */
+  noticesFile: string;
   bunBinary: string;
+  /** Spec §16.1: the Bun-compiled `jslab` binary the install symlink points at. */
+  cliBinary: string;
 }
 
 /**
@@ -57,12 +84,18 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     npmHome: join(dataDir, "npm-home"),
     vendorCacheDir: join(dataDir, "cache", "vendor"),
     envFile: join(dataDir, "env.json"),
+    snippetsFile: join(dataDir, "snippets.json"),
+    conversationFile: join(dataDir, "ai", "conversation.json"),
     socketPath: join(dataDir, "jslab.sock"),
     screenshotsDir: join(dataDir, "e2e-screenshots"),
+    themesDir: join(dataDir, "themes"),
     runnerBootstrap: input.env.JSLAB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "bootstrap.js"),
     webRunnerBootstrap: input.env.JSLAB_WEB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "web-bootstrap.js"),
     transformWorker: input.env.JSLAB_TRANSFORM_WORKER ?? join(appDir, "workers", "transform-worker.js"),
+    localesDir: input.env.JSLAB_LOCALES_DIR ?? join(appDir, "locales"),
+    noticesFile: input.env.JSLAB_NOTICES_FILE ?? join(appDir, "THIRD-PARTY-NOTICES.md"),
     bunBinary: input.env.JSLAB_BUN_PATH ?? input.execPath,
+    cliBinary: input.env.JSLAB_CLI_BINARY ?? join(appDir, "bin", "jslab"),
   };
 }
 

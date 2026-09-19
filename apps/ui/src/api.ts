@@ -1,4 +1,5 @@
 import type {
+  AiSendParams,
   AppAction,
   BootstrapPayload,
   E2EResponse,
@@ -13,13 +14,15 @@ import type {
   RunStartParams,
   SaveResult,
   SettingsUpdateParams,
+  Snippet,
   TabCloseResult,
   TabCreateParams,
   TabPatch,
   TabWithContent,
+  ThemeImportResult,
   ViewMessages,
 } from "@jslab/rpc-schema";
-import type { Settings, TabState } from "@jslab/shared";
+import type { ConversationTurn, Settings, TabState } from "@jslab/shared";
 
 /**
  * Everything the UI needs from Main. Components depend on this interface only; `rpc.ts` implements it with
@@ -29,6 +32,11 @@ export interface MainApi {
   bootstrap(): Promise<BootstrapPayload>;
   startRun(params: RunStartParams): Promise<{ runId: string }>;
   expand(params: RunExpandParams): Promise<EncodedValue | null>;
+  /**
+   * Spec §7.4: the latest Babel output for a tab, or null when it has never transpiled successfully. `source` is
+   * the source Main transpiled to produce `code`, which is what "stale" is judged against (R-M5a-7).
+   */
+  transpiled(tabId: string, hideInstrumentation: boolean): Promise<{ code: string; source: string } | null>;
   stop(tabId: string): void;
   kill(tabId: string): void;
   wait(tabId: string): void;
@@ -45,6 +53,11 @@ export interface MainApi {
   saveViewState(tabId: string, viewState: unknown): void;
 
   updateSettings(patch: SettingsUpdateParams["patch"]): Promise<Settings>;
+
+  /** Spec §9.3: Main opens the dialog and converts the file -- the UI never names a path (spec §18). */
+  importTheme(): Promise<ThemeImportResult>;
+  /** Answers a multi-theme `.vsix` with the entry the user picked; `token` names the archive Main still holds. */
+  importThemePick(token: string, path: string): Promise<ThemeImportResult>;
 
   saveFile(tabId: string, content: string): Promise<FileSaveResult>;
   openFileDialog(): void;
@@ -67,10 +80,42 @@ export interface MainApi {
   getEnv(): Promise<EnvVars>;
   saveEnv(variables: EnvVars): Promise<SaveResult>;
 
+  /** Spec §13: the snippet library. The UI holds it whole and writes it back on every mutation (R-M5b-6). */
+  snippetsList(): Promise<Snippet[]>;
+  snippetsSave(snippets: Snippet[]): Promise<SaveResult>;
+  /** Spec §13.1 Options menu. Answered by the `snippets.imported` / `snippets.exported` messages, never inline. */
+  snippetsImportDialog(): void;
+  snippetsExportDialog(snippets: Snippet[]): void;
+
   pickWorkingDirectory(tabId: string): void;
   clearWorkingDirectory(tabId: string): void;
 
+  /**
+   * OU-13: hand a URL from an output row to the user's browser, through Main's one external-link path. The URL
+   * is validated again by Main (`linkOpenParamsSchema`), because output text is written by the user's program.
+   */
+  openExternal(url: string): void;
+
+  /**
+   * Spec §14.3: ask the configured provider for a reply. The answer arrives as `ai.chunk` / `ai.done` /
+   * `ai.error` messages, never inline -- it is a stream, and Main is the only process that talks to a provider.
+   */
+  aiSend(params: AiSendParams): void;
+  /** Spec §14.1's Stop button. Main aborts the real HTTP request, not just its own reading of it. */
+  aiStop(requestId: string): void;
+  /**
+   * Spec §14.3: persist the conversation to `ai/conversation.json`. The whole transcript, never a delta -- the
+   * UI is its only holder (see `ai/persist.ts`).
+   */
+  aiSaveConversation(messages: ConversationTurn[]): void;
+
   appCommand(action: AppAction): void;
+  /**
+   * The command ids this window's registry actually holds (spec §6.5). Settings → Keybindings annotates its
+   * catalogue with these: the registry lives in this window's React tree, so the Settings window -- a separate
+   * window with its own narrower RPC -- can only learn them through Main (Finding S1).
+   */
+  publishCommands(ids: string[]): void;
   e2eRespond(response: E2EResponse): void;
 
   // M4 §5.12: what this tab's `<electrobun-webview>` did, reported back to the runtime driving it in Main

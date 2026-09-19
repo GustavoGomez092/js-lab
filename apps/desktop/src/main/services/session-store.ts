@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, unlink } from "node:fs/promises";
+import { mkdir, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   bufferFileName,
@@ -20,6 +20,7 @@ import {
   type WindowState,
   windowStateSchema,
 } from "@jslab/shared";
+import { readRegularFileText } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 import {
   createDebouncedWriter,
@@ -46,6 +47,8 @@ export interface CreateTabOptions {
   filePath?: string | null;
   lastSavedHash?: string | null;
   content?: string;
+  /** Spec §12.2, reachable from the CLI's `--cwd` (spec §16.2). */
+  workingDirectory?: string | null;
   /** Defaults to true. */
   activate?: boolean;
 }
@@ -57,6 +60,11 @@ export interface SessionStoreOptions {
   tabDefaults?: () => Partial<TabState>;
   /** Timer-path write failures (as-built createDebouncedWriter onError). */
   onWriteError?: (error: unknown) => void;
+  /**
+   * Spec §7.5: the welcome tab's content, applied only on a genuinely first launch -- no session.json and no
+   * backup (R-M5a-5). A corrupt or recovered file is never a first run, so a user's tabs are never replaced.
+   */
+  firstRun?: { title: string; content: string; language: Language };
 }
 
 /** A repaired tab's old buffer is moved only when its old id can't escape the buffers folder (Task 4 Step 11). */
@@ -70,6 +78,8 @@ export class SessionStore {
   readonly #listeners = new Set<(session: Session) => void>();
   // As built by the M1 fix wave: tabs whose buffer file exists but couldn't be read are never written over.
   readonly #unreadableBuffers = new Set<string>();
+  /** The first-run content this launch was given, so `setBuffer` can tell an edit from a resend of the same bytes. */
+  #firstRunContent: string | null = null;
   // Repaired tab ids (R-M1-18) whose old buffer failed to move for a reason other than "nothing to move" (ENOENT):
   // the old file is left in place, and readBuffers surfaces this the same way as any other unreadable buffer
   // (R-M2-T4-1, commit ed16be9).
@@ -113,8 +123,16 @@ export class SessionStore {
         return parsed.report.session;
       },
     };
-    const { value, recovered, primary, corruptCopy } = await loadJson(join(dataDir, "session.json"), parser, () =>
-      defaultSession(newTab),
+    // The byte cap is waived here, and only the byte cap: session.json grows with the tab count and each tab's
+    // stored view state, so any number chosen would eventually discard a session the user really has. The reader
+    // still opens O_NONBLOCK and fstats the handle it will read, so a FIFO at session.json is refused instead of
+    // blocking Main forever -- reported as corrupt, recovered from the .bak or defaults, and then renamed over by
+    // the rewrite below, so the profile heals itself.
+    const { value, recovered, primary, corruptCopy } = await loadJson(
+      join(dataDir, "session.json"),
+      parser,
+      () => defaultSession(newTab),
+      Number.POSITIVE_INFINITY,
     );
     const report = parsed.report;
     const newerVersion = report?.newerThanBuild ? report.fileVersion : null;
@@ -131,6 +149,31 @@ export class SessionStore {
       primary,
       corruptCopy,
     );
+    // Set on every launch, not only the first one: a welcome tab the user has not touched is still pristine after a
+    // relaunch, and `setBuffer` needs this to recognise the resend of those same bytes (R-M5a-REGRESSION-2).
+    store.#firstRunContent = options.firstRun?.content ?? null;
+    // R-M5a-5: `loadJson` reports this exact pair only when neither session.json nor session.json.bak could be
+    // read. A corrupt primary recovers to "defaults" and a good backup to "backup" -- neither is a first launch,
+    // so a returning user's tabs are never replaced by the sample.
+    if (primary === "missing" && recovered === "none" && options.firstRun) {
+      const [onlyId] = session.tabOrder;
+      const tab = onlyId ? session.tabs[onlyId] : undefined;
+      // Only ever the single tab `defaultSession` just created for an empty folder.
+      if (onlyId && tab && session.tabOrder.length === 1) {
+        const welcome: TabState = {
+          ...tab,
+          title: options.firstRun.title,
+          titleIsCustom: true,
+          language: options.firstRun.language,
+          // R-M5a-REGRESSION-2: nothing of the user's is here yet, so ⌘W should still close the window.
+          pristine: true,
+        };
+        // `store.session` is this same object graph, and nothing has been committed, scheduled or written yet, so
+        // amending it here is equivalent to having created the tab this way -- true at this point and nowhere else.
+        session.tabs[onlyId] = welcome;
+        await writeFileAtomic(join(dataDir, "buffers", bufferFileName(welcome)), options.firstRun.content);
+      }
+    }
     // Task 4 Step 11 (R-M1-18): a repaired tab keeps its content when its old id is a plain file name.
     const repairedTabIds = report?.repairedTabIds ?? [];
     for (const [from, to] of repairedTabIds) {
@@ -175,7 +218,7 @@ export class SessionStore {
     if (!tab) return "";
     if (this.#repairErrors.has(tabId)) this.#failUnreadable(tabId, this.#repairErrors.get(tabId));
     try {
-      const content = await readFile(this.#bufferPath(tab), "utf8");
+      const content = await readRegularFileText(this.#bufferPath(tab));
       this.#unreadableBuffers.delete(tabId);
       return content;
     } catch (error) {
@@ -194,8 +237,30 @@ export class SessionStore {
   }
 
   setBuffer(tabId: string, content: string): void {
-    if (!this.#session.tabs[tabId] || this.#unreadableBuffers.has(tabId)) return;
+    const tab = this.#session.tabs[tabId];
+    if (!tab || this.#unreadableBuffers.has(tabId)) return;
+    // R-M5a-REGRESSION-2: the welcome tab stops being pristine as soon as it no longer holds what JSLab wrote
+    // there. Comparing the content, rather than treating any write as an edit, is defensive rather than
+    // load-bearing: `createBufferSync` only flushes what `pushContent` pushed from `onDidChangeContent`, so an
+    // untouched welcome tab never sends `buffer.changed` at all and no identical-bytes write is known to reach
+    // here. The comparison means that if one ever did, it still could not retire the flag behind the user's back.
+    if (tab.pristine && content !== this.#firstRunContent)
+      this.#commit({ ...this.#session, tabs: { ...this.#session.tabs, [tabId]: { ...tab, pristine: false } } });
     this.#writerFor(tabId).schedule(content);
+  }
+
+  /**
+   * True while this tab's buffer file exists but couldn't be read, so JSLab does not know the tab's real text.
+   *
+   * B1: `setBuffer` has always consulted this set, but it guards only the internal buffer file under
+   * `<dataDir>/buffers/`. The tab's `filePath` -- the user's own source file -- is written by `file-handlers.ts`
+   * through `FileService`, which never saw this. Exposing it lets that path refuse too, so the rule is the same
+   * wherever a tab's text gets written: a tab whose content JSLab couldn't read is never written anywhere.
+   *
+   * Cleared by a later successful `readBuffer` (the file was repaired) and by `closeTab`.
+   */
+  isBufferUnreadable(tabId: string): boolean {
+    return this.#unreadableBuffers.has(tabId);
   }
 
   async createTab(options: CreateTabOptions = {}): Promise<TabState> {
@@ -264,7 +329,7 @@ export class SessionStore {
     const { tab } = entry;
     const closedPath = join(this.dataDir, "buffers", closedBufferFileName(tab));
     // Same rule as readBuffer: a closed buffer that exists but can't be read is never replaced by an empty one.
-    const content = await readFile(closedPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    const content = await readRegularFileText(closedPath).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return "";
       throw error;
     });

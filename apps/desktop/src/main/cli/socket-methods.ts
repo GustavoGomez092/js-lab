@@ -1,4 +1,4 @@
-import type { E2EUiMethod } from "@jslab/rpc-schema";
+import { type CliOpenParams, type CliOpenResult, cliOpenParamsSchema, type E2EUiMethod } from "@jslab/rpc-schema";
 import { z } from "zod";
 import type { CaptureResult } from "../platform/window-capture";
 import type { E2EBridge } from "./e2e-bridge";
@@ -8,6 +8,8 @@ export type E2EWindow = "main" | "settings";
 
 export interface SocketMethodDeps {
   e2eEnabled: boolean;
+  /** Spec §16.3: the CLI's method. Present in every launch, unlike everything below it. */
+  open(params: CliOpenParams): Promise<CliOpenResult>;
   bridge: Pick<E2EBridge, "request">;
   settingsBridge?: Pick<E2EBridge, "request">;
   mainState(): Record<string, unknown>;
@@ -28,11 +30,14 @@ const stateParams = z.object({ window: windowParam });
 const screenshotParams = z.object({ name: z.string().regex(/^[\w.-]{1,64}$/), window: windowParam });
 
 /**
- * The socket method table. `e2e.*` exists only for `JSLAB_E2E=1` launches (spec §16.3, §18).
- * M5 adds the CLI's always-available `open` method before the e2e guard.
+ * The socket method table. `open` is the CLI's method and is always available (spec §16.3). `e2e.*` exists only for
+ * `JSLAB_E2E=1` launches (spec §16.3, §18) and is registered after the guard below.
  */
 export function createSocketMethods(deps: SocketMethodDeps): Record<string, SocketMethod> {
   const methods: Record<string, SocketMethod> = {};
+  // Spec §16.3: `open` is the CLI's method and exists in every launch, so it is registered *before* the e2e guard
+  // below. A zod failure here is already the spec's `{ id, ok: false, error }` reply — `handleLine` never throws.
+  methods.open = async (params) => ({ ...(await deps.open(cliOpenParamsSchema.parse(params ?? {}))) });
   if (!deps.e2eEnabled) return methods;
 
   const bridgeFor = (window: E2EWindow = "main") => {

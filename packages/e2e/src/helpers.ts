@@ -9,6 +9,8 @@ export interface TabSnapshot {
   runState: string | null;
   activeHandles: number;
   autoRunArmed: boolean;
+  /** The tab's logpoint lines (spec §6.3); `apps/ui/src/e2e/snapshot.ts` has emitted these since M5a Task 1. */
+  logpoints: number[];
   entryCount: number;
   stale: boolean;
   truncated: number;
@@ -25,6 +27,8 @@ export interface UiState {
   // biome-ignore lint/suspicious/noExplicitAny: scenarios read arbitrary settings paths
   settings: Record<string, any> | null;
   cursor?: { line: number; column: number } | null;
+  /** Spec §13; emitted by `apps/ui/src/e2e/snapshot.ts` since M5b Task 9. */
+  snippetCount?: number;
   [key: string]: unknown;
 }
 

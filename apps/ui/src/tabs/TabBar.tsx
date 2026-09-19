@@ -21,6 +21,9 @@ export function TabBar(props: {
   const order = useStore(store, (s) => s.tabOrder);
   const byId = useStore(store, (s) => s.tabs);
   const buffers = useStore(store, (s) => s.buffers);
+  // B1: these tabs hold a placeholder, not their file's text, so they must never show the unsaved-changes dot --
+  // that dot is the invitation to press ⌘S, which used to truncate the file.
+  const unreadable = useStore(store, (s) => s.unreadableBuffers);
   const activeId = useStore(store, (s) => s.activeTabId);
   // Task 15 (spec §5.12, EX-35): every tab's audio-active state, not just the active tab's -- the whole point is
   // spotting which *background* tab is making noise.
@@ -64,7 +67,7 @@ export function TabBar(props: {
         const title = summaries.title(tab, code);
         const label = tabLabel(title, tab.workingDirectory);
         const active = id === activeId;
-        const dirty = summaries.dirty(tab, code);
+        const dirty = !unreadable.includes(id) && summaries.dirty(tab, code);
         const dropClass = dropTarget?.id === id ? (dropTarget.after ? " drop-after" : " drop-before") : "";
         return (
           <div

@@ -441,7 +441,7 @@ The encoding is JSON-safe and tagged. The full type is in Appendix B. Rules:
 |---|---|
 | Eager depth | 3 levels; deeper values become `handle` |
 | Properties per object eagerly | 100; the rest are available through a handle (`more: n`) |
-| Collection entries (Array/Map/Set/typed arrays) | 1,000 eagerly; the rest through a handle |
+| Collection entries (Array/Map/Set/typed arrays) | 1,000 eagerly; the rest through a handle, **a page at a time** — `run.expand` takes an `offset`, and each reply carries `from` (this page's first index), `more` (entries beyond it) and `next` (the offset for the following page). Object properties above are *not* paged: they report `more` and stop. |
 | String preview | 10,000 chars; full text through a handle, up to 1 MB |
 | Per-event encoded size | 256 KB; beyond that, the root becomes a handle with a preview |
 
@@ -669,7 +669,7 @@ Special cases:
   - Horizontal (side by side, default) or vertical (stacked).
   - The divider is draggable; the default is 55/45, stored per tab. Double-clicking the divider resets the split to 50/50.
   - Status bar "Split" toggles the orientation, and View → Output toggles the output area.
-- **Output area tiles:** Console and Web View. Tiles are arranged by dragging their headers (stacked or side by side, stored per tab). The Web View tile is unavailable in the `bun` runtime. **Not built as of M4 (parity WV-06):** the header-drag affordance does not exist, so the stored arrangement is honoured and persists across a relaunch but can only be changed by editing `session.json`. The tile toggle itself is a real command (`view.toggleWebView`, ⌥⌘W, View → Web View).
+- **Output area tiles:** Console and Web View. The Web View tile is unavailable in the `bun` runtime. **Header-drag arrangement was not built as of M4 (parity WV-06), and has since been superseded:** R-WEBVIEW-TAB-1 retired tile arrangement entirely. The Web View is no longer a peer tile that can be rearranged around the Console — it is either the bottom preview pane (below the Console, sized by `tiles.consoleSize`) or, when the Web View tab is selected, the whole output panel. The tile toggle itself is a real command (`view.toggleWebView`, ⌥⌘W, View → Web View).
 - **Status bar** (toggle `view.statusBar`, 28 px):
   - Left: run state (dot and label), Safe Mode badge, status message.
   - Right: runtime selector, language selector, Web View toggle (M4), Split orientation toggle, WD chip (M3; click → change/clear; tooltip shows the full path), Vim mode, cursor position.
@@ -883,7 +883,7 @@ Invalid files produce a readable error.
 - **Tabs:** tab order, active tab id, reopen-closed stack (content stored in `buffers/closed/`).
 - **Per tab:**
   - `id`, `title`, `titleIsCustom`, `language`, `runtime`, `filePath`, `workingDirectory`, `gistId`
-  - `layout` (split orientation and size, tiles arrangement, output/web-view visibility)
+  - `layout` (split orientation and size, Web View console share, output/web-view visibility)
   - `viewState` (Monaco cursor/scroll/folding)
   - `lastSavedHash`
 - Logpoints are **not** persisted, which matches RunJS's documented behavior.
@@ -1486,7 +1486,7 @@ type ConsoleLevel = 'log'|'info'|'warn'|'error'|'debug'|'dir'|'table'|'trace'|'a
 
 ```ts
 type Session = {
-  version: 1;
+  version: 4;
   window: { x: number; y: number; width: number; height: number; displayId?: string; fullscreen: boolean };
   tabOrder: string[];
   activeTabId: string;
@@ -1499,7 +1499,7 @@ type TabState = {
   filePath: string | null; lastSavedHash: string | null;
   workingDirectory: string | null; gistId: string | null;
   layout: { orientation: 'horizontal'|'vertical'; editorSize: number; outputVisible: boolean;
-            tiles: { arrangement: 'stacked'|'sideBySide'; order: ('console'|'webview')[]; webviewVisible: boolean; consoleSize: number } };
+            tiles: { webviewVisible: boolean; consoleSize: number } };
   viewState: unknown | null;                   // Monaco ICodeEditorViewState
 };
 ```

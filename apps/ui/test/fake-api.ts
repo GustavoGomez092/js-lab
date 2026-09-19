@@ -1,5 +1,6 @@
 import { mock } from "bun:test";
 import type {
+  AiSendParams,
   AppAction,
   E2EResponse,
   EnvVars,
@@ -9,12 +10,14 @@ import type {
   NpmSearchResponse,
   PackageTypesResult,
   SaveResult,
+  Snippet,
   TabCloseResult,
   TabCreateParams,
   TabWithContent,
+  ThemeImportResult,
   ViewMessages,
 } from "@jslab/rpc-schema";
-import { createTab, defaultSettings } from "@jslab/shared";
+import { type ConversationTurn, createTab, defaultSettings } from "@jslab/shared";
 import { act } from "@testing-library/react";
 import type { MainApi } from "../src/api";
 
@@ -27,6 +30,14 @@ export function createFakeApi() {
     }),
     startRun: mock(async (_params: unknown) => ({ runId: "r1" })),
     expand: mock(async (_params: unknown) => null),
+    // The return type is written out so a test can re-implement this as the never-transpiled case (`null`), which
+    // an inferred `{ code, source }` would reject.
+    transpiled: mock(
+      async (_tabId: string, _hideInstrumentation: boolean): Promise<{ code: string; source: string } | null> => ({
+        code: "",
+        source: "",
+      }),
+    ),
     stop: mock((_tabId: string) => {}),
     kill: mock((_tabId: string) => {}),
     wait: mock((_tabId: string) => {}),
@@ -43,6 +54,12 @@ export function createFakeApi() {
     reorderTabs: mock((_order: string[]) => {}),
     saveViewState: mock((_tabId: string, _viewState: unknown) => {}),
     updateSettings: mock(async (_patch: unknown) => defaultSettings()),
+    // The default is the cancelled-dialog answer (an empty error), so a test that doesn't care about importing
+    // never accidentally asserts against a success it didn't ask for.
+    importTheme: mock(async (): Promise<ThemeImportResult> => ({ ok: false, error: "" })),
+    importThemePick: mock(
+      async (_token: string, _path: string): Promise<ThemeImportResult> => ({ ok: false, error: "" }),
+    ),
     saveFile: mock(async (_tabId: string, _content: string): Promise<FileSaveResult> => ({ needsSaveAs: true })),
     openFileDialog: mock(() => {}),
     confirmLargeFiles: mock((_tokens: string[]) => {}),
@@ -73,9 +90,18 @@ export function createFakeApi() {
     ),
     getEnv: mock(async (): Promise<EnvVars> => ({})),
     saveEnv: mock(async (_variables: EnvVars): Promise<SaveResult> => ({ ok: true })),
+    snippetsList: mock(async (): Promise<Snippet[]> => []),
+    snippetsSave: mock(async (_snippets: Snippet[]): Promise<SaveResult> => ({ ok: true })),
+    snippetsImportDialog: mock(() => {}),
+    snippetsExportDialog: mock((_snippets: Snippet[]) => {}),
     pickWorkingDirectory: mock((_tabId: string) => {}),
     clearWorkingDirectory: mock((_tabId: string) => {}),
+    openExternal: mock((_url: string) => {}),
+    aiSend: mock((_params: AiSendParams) => {}),
+    aiStop: mock((_requestId: string) => {}),
+    aiSaveConversation: mock((_messages: ConversationTurn[]) => {}),
     appCommand: mock((_action: AppAction) => {}),
+    publishCommands: mock((_ids: string[]) => {}),
     e2eRespond: mock((_response: E2EResponse) => {}),
     webRunnerReady: mock((_tabId: string, _generation: number) => {}),
     webRunnerExit: mock((_tabId: string, _generation: number) => {}),

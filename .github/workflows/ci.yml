@@ -23,6 +23,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
+      - run: bun run i18n:check
       - run: bun run test
 
   e2e-smoke:
@@ -41,6 +42,11 @@ jobs:
           sh "$RUNNER_TEMP/hutch-install.sh" --version 0.24.3
           echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
       - run: bun install --frozen-lockfile
+      # `hutch run build:dev` chains `build:bundles`, whose first step refuses to continue when
+      # `apps/desktop/dist/bin/jslab` is missing. That binary is compiled at the repo root under real Bun —
+      # Hutch's Cottontail shell rejects the build flags it needs — and `apps/desktop/dist` is gitignored, so
+      # nothing on a fresh runner produces it. Without this step the job fails before it reaches e2e.
+      - run: bun run build:cli
       - run: hutch run build:dev
         working-directory: apps/desktop
       - run: bun run e2e

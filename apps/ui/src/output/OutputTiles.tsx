@@ -3,7 +3,9 @@ import { useCallback } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
 import { SplitPane } from "../shell/SplitPane";
+import type { DisplayEvent } from "../state/output";
 import type { AppStore } from "../state/store";
+import { strings } from "../strings";
 import { OutputPanel } from "./OutputPanel";
 import type { WebviewDock } from "./WebViewHosts";
 
@@ -45,6 +47,7 @@ export function OutputTiles({
   runKeys = null,
   onInstall,
   onWebviewDock,
+  onExplain,
 }: {
   store: AppStore;
   api: MainApi;
@@ -54,6 +57,8 @@ export function OutputTiles({
   /** Fix round 1 (F1/F2): which DOM node the active tab's webview should currently portal into, or `null` when
    * there isn't one right now. `WebViewHosts` (a sibling, not a descendant, of this component) is the consumer. */
   onWebviewDock(dock: WebviewDock | null): void;
+  /** TL-20 (spec §14.2): passed straight through to the Console tile's rows. */
+  onExplain?(event: DisplayEvent): void;
 }) {
   const tabId = useStore(store, (s) => s.tab?.id ?? null);
   const runtime = useStore(store, (s) => s.tab?.runtime);
@@ -95,6 +100,7 @@ export function OutputTiles({
       onInstall={onInstall}
       webviewSupported={webviewSupported}
       webViewSlot={fullScreen ? dock : null}
+      {...(onExplain ? { onExplain } : {})}
     />
   );
 
@@ -109,6 +115,9 @@ export function OutputTiles({
   return (
     <SplitPane
       orientation="vertical"
+      // Distinct from the outer Editor/Output splitter's name: when this preview is on screen both separators
+      // are, and the name is all that tells them apart.
+      label={strings.shell.splitter.outputWebView}
       size={tiles.consoleSize}
       // Unconditionally true here -- reached only when `showSplit` already established both panes belong on
       // screen, so there is nothing left to hide at this level (fix round 1, F4).

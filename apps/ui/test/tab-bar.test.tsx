@@ -1,13 +1,41 @@
 import { describe, expect, mock, test } from "bun:test";
-import { contentHash, createTab, defaultSession, defaultSettings, type TabState } from "@jslab/shared";
+import { contentHash, createTab, defaultSession, defaultSettings, isDirty, type TabState } from "@jslab/shared";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createAppStore } from "../src/state/store";
+import { strings } from "../src/strings";
 import { RenameDialog } from "../src/tabs/RenameDialog";
 import { reorderByDrop } from "../src/tabs/reorder";
 import { TabBar } from "../src/tabs/TabBar";
 import type { TabActions } from "../src/tabs/tab-actions";
 import { createTabSummaryCache } from "../src/tabs/tab-summary";
 import { createFakeApi } from "./fake-api";
+
+/** Mutates the real `strings.tabs.untitled` for the duration of `run`, then restores it (R-M5E-DT-1). */
+async function withLocalizedUntitled<T>(value: string, run: () => T | Promise<T>): Promise<T> {
+  const original = strings.tabs.untitled;
+  (strings.tabs as { untitled: string }).untitled = value;
+  try {
+    return await run();
+  } finally {
+    (strings.tabs as { untitled: string }).untitled = original;
+  }
+}
+
+function fakeTabActions() {
+  return {
+    activate: mock((_id: string | null) => {}),
+    close: mock(async (_id?: string) => true),
+    closeOthers: mock(async (_id?: string) => {}),
+    closeToRight: mock(async (_id?: string) => {}),
+    newTab: mock(async () => {}),
+    reopen: mock(async () => {}),
+    next: mock(() => {}),
+    previous: mock(() => {}),
+    goto: mock((_n: number) => {}),
+    reorder: mock((_order: string[]) => {}),
+    setBeforeClose: mock((_guard: (id: string) => Promise<boolean>) => {}),
+  } satisfies TabActions;
+}
 
 function setup() {
   const store = createAppStore();
@@ -29,19 +57,7 @@ function setup() {
         false,
       );
   });
-  const tabs = {
-    activate: mock((_id: string | null) => {}),
-    close: mock(async (_id?: string) => true),
-    closeOthers: mock(async (_id?: string) => {}),
-    closeToRight: mock(async (_id?: string) => {}),
-    newTab: mock(async () => {}),
-    reopen: mock(async () => {}),
-    next: mock(() => {}),
-    previous: mock(() => {}),
-    goto: mock((_n: number) => {}),
-    reorder: mock((_order: string[]) => {}),
-    setBeforeClose: mock((_guard: (id: string) => Promise<boolean>) => {}),
-  } satisfies TabActions;
+  const tabs = fakeTabActions();
   const { api } = createFakeApi();
   render(<TabBar store={store} tabs={tabs} api={api} />);
   return { store, tabs, api };
@@ -166,6 +182,40 @@ describe("tab bar", () => {
   });
 });
 
+/**
+ * B1: the unsaved-changes dot is the visual invitation to press ⌘S, and pressing it on a tab holding a placeholder
+ * is what truncated the user's file. Such a tab must never show the dot -- even though the raw comparison still
+ * reports it modified, because the placeholder differs from the real file's saved hash.
+ */
+describe("a tab whose buffer couldn't be read (B1)", () => {
+  const REAL = "export const answer = 42;\n";
+
+  test("shows no unsaved-changes dot, though a genuinely edited tab still does", () => {
+    const store = createAppStore();
+    const unreadable = createTab({ id: "u", filePath: "/w/app.ts", lastSavedHash: contentHash(REAL) });
+    const edited = createTab({ id: "e", filePath: "/w/other.ts", lastSavedHash: contentHash("saved") });
+    const base = defaultSession(() => unreadable);
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: { ...base, tabs: { u: unreadable, e: edited }, tabOrder: ["u", "e"], activeTabId: "u" },
+      // "u" is absent, exactly as Main leaves a tab whose buffer it couldn't read.
+      buffers: { e: "edited" },
+      unreadableBuffers: ["u"],
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const { api } = createFakeApi();
+    render(<TabBar store={store} tabs={fakeTabActions()} api={api} />);
+
+    // The trap itself, still true: the placeholder differs from the real file's hash, so the raw check says modified.
+    expect(isDirty(unreadable, "")).toBe(true);
+
+    const [u, e] = screen.getAllByRole("tab");
+    expect(u?.querySelector(".tab-dirty")).toBeNull();
+    expect(e?.querySelector(".tab-dirty")).not.toBeNull();
+  });
+});
+
 describe("working directory label (EX-33)", () => {
   test("a tab with a working directory shows the folder name after its title", () => {
     const { store } = setup();
@@ -173,5 +223,51 @@ describe("working directory label (EX-33)", () => {
       store.getState().applyTabUpdate({ ...(store.getState().tabs.c as TabState), workingDirectory: "/work/api" }),
     );
     expect(screen.getByText("Mine · api")).toBeTruthy();
+  });
+});
+
+/**
+ * R-M5E-DT-1: the headline defect. `TabBar.tsx:67` calls `summaries.title(tab, code)`, and until this fix
+ * `tab-summary.ts:31` wired that up to a BARE `deriveTitle` reference -- so an empty, fileless, non-custom
+ * tab always showed deriveTitle's own hard-coded English default ("Untitled"), never the localized string
+ * that already exists at `strings.tabs.untitled`, no matter what language the app is running in.
+ */
+describe("an untitled tab's label is localized (R-M5E-DT-1)", () => {
+  function setupEmptyTab() {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "empty" })),
+      buffers: { empty: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const { api } = createFakeApi();
+    render(<TabBar store={store} tabs={fakeTabActions()} api={api} />);
+  }
+
+  test("the real tab bar shows the current locale's fallback, not the English literal", async () => {
+    await withLocalizedUntitled("無題", () => {
+      setupEmptyTab();
+      const tab = screen.getByRole("tab");
+      expect(tab.textContent?.replace("×", "")).toBe("無題");
+    });
+  });
+
+  test("the rename dialog pre-fills the current locale's fallback for the same tab", async () => {
+    await withLocalizedUntitled("無題", () => {
+      const store = createAppStore();
+      store.getState().hydrate({
+        settings: defaultSettings(),
+        session: defaultSession(() => createTab({ id: "empty" })),
+        buffers: { empty: "" },
+        safeMode: { active: false, reason: null },
+        versions: { app: "0", bun: "1.4.0" },
+      });
+      render(<RenameDialog store={store} />);
+      act(() => store.getState().openModal({ kind: "rename", tabId: "empty" }));
+      const input = screen.getByLabelText("Tab name") as HTMLInputElement;
+      expect(input.value).toBe("無題");
+    });
   });
 });

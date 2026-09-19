@@ -15,6 +15,7 @@
     "@tanstack/react-virtual": "3.14.12",
     "dejavu-fonts-ttf": "2.37.3",
     "hack-font": "3.3.0",
+    "i18next": "26.4.2",
     "monaco-editor": "0.56.0",
     "monaco-vim": "0.4.2",
     "prettier": "3.8.3",
@@ -25,7 +26,9 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "test": "bun test ./test && bun test ./isolated",
+    "i18n:check": "bun scripts/i18n-check.ts",
+    "i18n:extract": "bun scripts/i18n-extract.ts",
+    "test": "bun test ./test && bun test ./isolated && bun test ./editor-isolated",
     "typecheck": "bun ../desktop/scripts/devkit-tsconfig.ts && tsc --noEmit -p ."
   },
   "devDependencies": {

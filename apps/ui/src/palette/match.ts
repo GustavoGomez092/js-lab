@@ -55,6 +55,23 @@ export interface PaletteSection {
   items: RankedItem[];
 }
 
+/** R-M4-PALETTE-HIDE-1: disabled rows render but never take the selection, so `flat[selected]` is always
+ * runnable. Returns -1 when every row is disabled -- the caller then drops `aria-activedescendant` and Enter
+ * is a genuine no-op, because no listed command can actually run. */
+export function firstEnabledIndex(items: readonly { enabled: boolean }[]): number {
+  return items.findIndex((item) => item.enabled);
+}
+
+/** Moves the selection `direction` rows, skipping disabled ones. Stops at the ends rather than wrapping, which
+ * is what the arrow handlers did before this change (`Math.min`/`Math.max`). Falls back to the first enabled
+ * row when `from` itself is disabled or out of range. */
+export function stepEnabledIndex(items: readonly { enabled: boolean }[], from: number, direction: 1 | -1): number {
+  for (let next = from + direction; next >= 0 && next < items.length; next += direction) {
+    if (items[next]?.enabled) return next;
+  }
+  return items[from]?.enabled ? from : firstEnabledIndex(items);
+}
+
 export function buildSections(
   items: readonly PaletteItem[],
   query: string,
@@ -64,7 +81,10 @@ export function buildSections(
   const hasQuery = query.trim().length > 0;
   const ranked = items
     .map((item, index) => {
-      if (!item.enabled) return null;
+      // R-M4-PALETTE-HIDE-1: a disabled command is NOT dropped here. Dropping it collapsed "this exists but not
+      // right now" into `strings.palette.empty` ("No matching commands"), which is exactly what a typo produces.
+      // It still ranks on score alone -- it is not demoted, so it keeps its place next to its siblings and the
+      // palette stays a place you can learn the app from. Selection skips it instead (`stepEnabledIndex`).
       if (context === "output" && item.context === "editor") return null;
       const match = matchTitle(query, item.title);
       if (!match) return null;

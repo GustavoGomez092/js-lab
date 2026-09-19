@@ -1,11 +1,21 @@
+import { MAX_NPMRC_CHARS } from "@jslab/rpc-schema";
 import { DEFAULT_REGISTRY } from "@jslab/shared";
 
 export type NpmrcConfig = ReadonlyMap<string, string>;
 export type EnvLike = Record<string, string | undefined>;
 
-/** Parses `<packages>/.npmrc` (spec §11.5). A later key wins; comments start with `;` or `#`. */
+/**
+ * Parses `<packages>/.npmrc` (spec §11.5). A later key wins; comments start with `;` or `#`.
+ *
+ * Text over `MAX_NPMRC_CHARS` parses to an empty config, the same defensive cap its sibling `parseDotenv`
+ * carries. This is a backstop, not the real guard: Main's only production caller reads the file through
+ * `readBoundedText`, which throws before text this large can ever reach here. That ordering matters, because an
+ * empty config is what makes `registryFor` fall back to the public registry — so if this cap were the *only*
+ * bound, an oversized `.npmrc` would silently retarget a private registry, exactly the failure FR-12 fixed.
+ */
 export function parseNpmrc(text: string): Map<string, string> {
   const config = new Map<string, string>();
+  if (text.length > MAX_NPMRC_CHARS) return config;
   for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith(";") || trimmed.startsWith("#")) continue;

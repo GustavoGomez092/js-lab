@@ -152,3 +152,21 @@ test("scriptFileName names __filename from the file, or from the title with the 
     "Untitled.ts",
   );
 });
+
+describe("deriveTitle's fallback is supplied, not hard-coded (spec §17)", () => {
+  test("defaults to Untitled and accepts a translated replacement", () => {
+    const tab = { title: "", titleIsCustom: false, filePath: null };
+    expect(deriveTitle(tab, "   ")).toBe("Untitled");
+    expect(deriveTitle(tab, "   ", "無題")).toBe("無題");
+    // The fallback is only reached for an empty buffer; real content still wins.
+    expect(deriveTitle(tab, "const x = 1", "無題")).toBe("const x = 1");
+  });
+
+  /**
+   * `scriptFileName` deliberately does NOT take the translated fallback: its result is a FILE NAME (the runner's
+   * `__filename`, and Save As's default), not a label, so it stays "Untitled.ts" in every locale.
+   */
+  test("scriptFileName keeps the untranslated stem, because it names a file", () => {
+    expect(scriptFileName(createTab({ language: "typescript" }), "   ")).toBe("Untitled.ts");
+  });
+});

@@ -19,7 +19,14 @@ test("Copy Debug Log produces a redacted report and logs rotate under logs/ (ST-
   const report = JSON.parse(await waitFor(() => (existsSync(clip) ? readFileSync(clip, "utf8") : null)));
   expect(readFileSync(clip, "utf8")).not.toContain(homedir());
   expect(report).toMatchObject({ electrobunVersion: "2.0.1", arch: "arm64" });
-  expect(report.settings.version).toBe(3);
+  // Not a literal. `SETTINGS_VERSION` legitimately changes (it has, twice) and this test is about the REPORT,
+  // not about which version is current -- a hardcoded number here only made a correct bump turn it red. What the
+  // report must actually do is carry the version the app itself has; a stale or invented version in
+  // `redactSettings` is the real regression. Mutation-checked by hardcoding a version in
+  // apps/desktop/src/main/logging/debug-report.ts, which turns this red.
+  const live = (await app.state()).ui.settings as { version?: number } | undefined;
+  expect(typeof live?.version, "the app must report its own settings version").toBe("number");
+  expect(report.settings.version, "the debug report must carry the app's own settings version").toBe(live?.version);
   expect(Array.isArray(report.log)).toBe(true);
   expect(existsSync(join(app.userData, "logs", "main.log"))).toBe(true);
   await app.command("help.openLogsFolder");
@@ -40,11 +47,28 @@ test("Restart in Safe Mode quits and the next launch is in manual Safe Mode", as
 });
 
 test("a corrupt settings.json is recovered with a notice naming the saved copy (spec §20)", async () => {
+  // One launch, no retries. `settingsRecovered` is `info` severity, so it auto-dismisses NOTICE_AUTO_DISMISS_MS
+  // (8s) after it mounts (apps/ui/src/shell/parts.tsx) -- by design, per WCAG 2.2.3: a warning or an error never
+  // would, only an informational recovery fades.
+  //
+  // This test used to retry five whole launches to outrun that, on the theory that the bridge's first `e2e.state`
+  // round trip *might* stall until its own 15s timeout. Measurement replaced the theory: it stalled on 6 launches
+  // out of 6, always at ~15.00s, because Main sent `e2e.request` into a webview whose bundle had not run yet and
+  // nothing was there to receive it. `launchApp` burned those 15s before it even returned, so the notice had
+  // already faded every single time -- retrying sampled a distribution with no winning outcomes, which is exactly
+  // why five rolls cost ~104s and still failed. The bridge now holds a send until the view reports in
+  // (apps/desktop/src/main/cli/e2e-bridge.ts), so the first round trip answers in well under a second.
   const userData = await createUserData();
   await writeFile(join(userData, "settings.json"), "{not json");
   const app = await launchApp({ userData });
   apps.push(app);
-  const notices = (await app.state()).ui.notices as { id: string; message: string }[];
+  const notices = await waitFor(
+    async () => {
+      const current = (await app.state()).ui.notices as { id: string; message: string }[];
+      return current.length > 0 ? current : null;
+    },
+    { timeoutMs: 5_000, message: "the settingsRecovered notice never appeared" },
+  );
   expect(notices.map((notice) => notice.id)).toEqual(["settingsRecovered"]);
   expect(notices[0]?.message).toMatch(/A copy was saved as settings\.corrupt-\d+\.json$/);
 });

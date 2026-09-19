@@ -59,7 +59,9 @@ export type RunnerState = "evaluating" | "settled" | "idle" | "stopped";
 export type MainToRunner =
   | { type: "run"; runId: string; entry: string; settings: { maxEntries: number } }
   | { type: "stop" }
-  | { type: "expand"; reqId: number; handleId: string }
+  // OU-02: `offset` is the index of the first collection entry to encode. Absent is the pre-OU-02 shape and means
+  // 0, so a runner built before this field still understands every message Main sends.
+  | { type: "expand"; reqId: number; handleId: string; offset?: number }
   | { type: "dispose" };
 
 export type RunnerToMain =
@@ -91,7 +93,9 @@ export type HostToWebMessage =
   // Optional (default false), so a caller (and every test fixture) that predates this task is unaffected.
   | { type: "run"; runId: string; code: string; settings: { maxEntries: number }; muted?: boolean }
   | { type: "stop" }
-  | { type: "expand"; reqId: number; handleId: string }
+  // OU-02: `offset` is the index of the first collection entry to encode. Absent is the pre-OU-02 shape and means
+  // 0, so a runner built before this field still understands every message Main sends.
+  | { type: "expand"; reqId: number; handleId: string; offset?: number }
   | { type: "dispose" }
   /**
    * Task 15 (spec §5.12, EX-35): sets or clears mute for the page's whole lifetime, not just the current run --

@@ -8,10 +8,12 @@ import type {
   SettingsViewMessages,
   SettingsWindowMessages,
   SettingsWindowRequests,
+  StartupNotice,
   ViewMessages,
 } from "@jslab/rpc-schema";
-import { DEFAULT_KEYBINDINGS, resolveKeybindings } from "@jslab/shared";
-import { listThemes } from "@jslab/themes";
+import { MAX_OPEN_FILE_BYTES } from "@jslab/rpc-schema";
+import { DEFAULT_KEYBINDINGS, resolveKeybindings, resolveLocale } from "@jslab/shared";
+import { listThemes, registerUserThemes } from "@jslab/themes";
 import Electrobun, {
   ApplicationMenu,
   BrowserView,
@@ -22,41 +24,58 @@ import Electrobun, {
   Updater,
   Utils,
 } from "electrobun/main";
+import { AiModelListService } from "./ai/model-list";
+import { createOllamaAdapter } from "./ai/ollama";
+import { createAdapterRegistry } from "./ai/provider";
 import { e2eBunCacheDir, resolveAppPaths } from "./app-paths";
 import { E2EBridge } from "./cli/e2e-bridge";
+import { type CliInstallResult, cliStatus, installCli, nodeInstallFs, uninstallCli } from "./cli/install";
+import { createOpenService } from "./cli/open-service";
 import { createSocketMethods } from "./cli/socket-methods";
-import { type SocketServer, startSocketServer } from "./cli/socket-server";
+import type { SocketServer } from "./cli/socket-server";
+import { startCliSocket } from "./cli/start-cli-socket";
+import { createUiDispatch } from "./cli/ui-dispatch";
 import { createErrorPolicy } from "./error-policy";
 import { FileService, nodeFileSystem, OPEN_EXTENSIONS } from "./files/file-service";
+import { readBoundedBytes, readBoundedText } from "./fs/bounded-read";
+import { createTranslator } from "./i18n";
 import { createRedactor } from "./logging/redact";
 import { RotatingLog } from "./logging/rotating-log";
 import { createMainServices } from "./main-services";
-import { resolveMainViewUrl } from "./main-view-url";
+import { resolveMainViewUrl, withLocale } from "./main-view-url";
 import { buildMenu, createMenuController, dispatchMenuAction } from "./menu";
 import { externalLinkFrom, navigationRulesFor } from "./navigation";
 import { readE2EOpenDialog, readE2ESaveDialog } from "./platform/e2e-dialogs";
 import { mergeLoginEnv, readLoginShellEnv } from "./platform/login-shell-env";
 import { relaunchApp } from "./platform/relaunch";
 import { saveDialog } from "./platform/save-dialog";
+import { MAX_SHORT_SUBPROCESS_OUTPUT_BYTES } from "./platform/subprocess-output";
 import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
+import { createOllamaAiHandlers } from "./rpc/ai-handlers";
+import { createAiModelHandlers } from "./rpc/ai-model-handlers";
 import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } from "./rpc/app-handlers";
 import { createEnvHandlers } from "./rpc/env-handlers";
 import { createFileHandlers } from "./rpc/file-handlers";
 import { createFontHandlers } from "./rpc/font-handlers";
+import { createCommandPublishHandlers, createKeybindingHandlers } from "./rpc/keybinding-handlers";
 import { createNpmHandlers } from "./rpc/npm-handlers";
 import { createNpmrcHandlers } from "./rpc/npmrc-handlers";
 import { createE2EResponseHandler, createSettingsHandlers } from "./rpc/settings-handlers";
+import { createSnippetHandlers } from "./rpc/snippet-handlers";
+import { createThemeHandlers, MAX_IMPORT_BYTES } from "./rpc/theme-handlers";
 import { createTypesHandlers } from "./rpc/types-handlers";
 import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
+import { SecretStore } from "./secrets/keychain";
 import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
-import { startupNotices } from "./startup-notices";
-import { strings } from "./strings";
+import { ThemeStore } from "./services/theme-store";
+import { languageChangeNotice, startupNotices } from "./startup-notices";
+import { installStrings, strings } from "./strings";
 import { afterUiFlush, createUiFlushHandlers, createUiFlushWaiter } from "./ui-flush";
 import { onReload, shouldReloadView } from "./ui-watchdog";
 import { type DisplayInfo, displayForFrame, frameToSave, restoreFrame } from "./windows/frame-restore";
@@ -95,6 +114,22 @@ let logError: (message: string, detail?: unknown) => void = (message, detail) =>
   console.error(`[jslab] ${message}`, detail ?? "");
 // Set once the main window and its RPC exist; until then there is nowhere to show a notice.
 let showUnexpectedErrorNotice: () => void = () => {};
+/**
+ * D1: the same late binding, for a notice Main raises from the composition root rather than from an error handler.
+ *
+ * It must be a `let` assigned later rather than a closure over `rpc`, unlike the run and npm callbacks passed to
+ * `createMainServices` below. Those are safe because none of them can run before `rpc` exists; this one can. A
+ * settings write is refused inside `createMainServices` itself when the recovery rewrite at open produces an
+ * over-cap snapshot, and that happens before `rpc` and `mainWindow` are declared -- so capturing them the way those
+ * callbacks do would turn a refused write into a TDZ crash during startup.
+ *
+ * Dropping a notice raised before the window exists is correct rather than merely tolerable: the condition is
+ * permanent, so the next settings change raises it again -- but that is only true because `main-services.ts`
+ * latches its once-per-session guard on DELIVERY rather than on the attempt. This sender therefore has to report
+ * whether the notice was actually shown. Returning void let an undelivered startup notice spend that guard, after
+ * which the user saw no banner at all, ever (D1/D3).
+ */
+let sendAppNotice: (notice: StartupNotice) => boolean = () => false;
 
 /**
  * Spec §20 (FA-I3, error-policy.ts). A rejection anywhere in `start()` -- a failing store recovery rewrite, for
@@ -108,7 +143,10 @@ const errorPolicy = createErrorPolicy({
   // `ffi.request.showMessageBox`) shows a native dialog independent of any BrowserWindow -- exactly what's needed
   // here, since startup can fail before a window exists.
   showFatal: async (message) => {
-    await Utils.showMessageBox({ type: "error", title: "JSLab", message: strings.dialogs.startupFailed(message) });
+    // Before resolveAppPaths, so there is no translator yet -- and a startup that failed this early may have
+    // failed at reading the bundle the locale files themselves live in. English is the honest fallback here
+    // (spec §20: one dialog, then exit 1).
+    await Utils.showMessageBox({ type: "error", title: "JSLab", message: `JSLab couldn't start: ${message}` });
   },
   // Utils.quit() itself falls back to process.exit() when native FFI isn't available (see Utils.ts), and returns
   // false only if a quit is already in flight; process.exit covers that remaining case.
@@ -128,6 +166,13 @@ async function start(): Promise<void> {
     env: process.env,
   });
 
+  // Spec §17, the first of two installs. Main's strings have to resolve before `createMainServices` below, which
+  // can raise a settings notice while it opens the stores -- and that is strictly earlier than
+  // `settings.current.app.uiLanguage`, the setting naming the user's language, can possibly be read. The system
+  // locale is the honest answer until then; the second install below corrects it if the user chose one explicitly.
+  const systemLocale = Intl.DateTimeFormat().resolvedOptions().locale || process.env.LANG;
+  installStrings(createTranslator({ dir: paths.localesDir, locale: resolveLocale("system", systemLocale) }));
+
   // Spec §18: env.json values are masked in logs and the debug report once the env store is open.
   let envSecrets: () => readonly string[] = () => [];
   const redact = createRedactor(() => envSecrets());
@@ -142,7 +187,12 @@ async function start(): Promise<void> {
   const osInfo = {
     get macOS(): string {
       if (macOSVersionCache === null) {
-        macOSVersionCache = Bun.spawnSync(["sw_vers", "-productVersion"]).stdout.toString().trim() || "unknown";
+        // The only SYNCHRONOUS subprocess read in Main, so an unbounded one would grow the heap on the event-loop
+        // thread itself. `sw_vers -productVersion` prints 7 bytes (measured); the cap ends a child that doesn't.
+        macOSVersionCache =
+          Bun.spawnSync(["sw_vers", "-productVersion"], { maxBuffer: MAX_SHORT_SUBPROCESS_OUTPUT_BYTES })
+            .stdout.toString()
+            .trim() || "unknown";
       }
       return macOSVersionCache;
     },
@@ -173,6 +223,9 @@ async function start(): Promise<void> {
     shiftHeld,
     log,
     redact,
+    // D1: a settings write refused as too large is silent, permanent and repeats forever, so the log line it used
+    // to produce was not telling the user anything. `sendAppNotice` is bound once the window exists (see above).
+    notify: (notice) => sendAppNotice(notice),
     onEvents: (tabId, runId, events) => rpc.send["run.events"]({ tabId, runId, events }),
     onState: (tabId, runId, state, activeHandles) =>
       rpc.send["run.state"]({ tabId, runId, state, ...(activeHandles === undefined ? {} : { activeHandles }) }),
@@ -195,7 +248,14 @@ async function start(): Promise<void> {
     onNpmLog: (opId, text) => rpc.send["npm.log"]({ opId, text }),
     onNpmChanged: (list) => rpc.send["npm.changed"](list),
   });
-  const { settings, session, env, npm, types, runLock, safeMode, transform, spares, coordinator } = services;
+  const { settings, session, env, npm, types, runLock, safeMode, transform, spares, coordinator, conversation } =
+    services;
+  // Spec §17: fixed for the life of this launch, which is what "changing the language needs a restart" means.
+  // Settings are open now, so the user's own choice replaces the system-locale guess installed above.
+  const locale = resolveLocale(settings.current.app.uiLanguage, systemLocale);
+  // Main's own `t()`, reading the very locale files the UI ships (AppPaths.localesDir).
+  const t = createTranslator({ dir: paths.localesDir, locale });
+  installStrings(t);
   envSecrets = () => env.secrets();
   if (settings.recovered !== "none") log(`settings.json recovered from ${settings.recovered}`);
   if (session.recovered !== "none") log(`session.json recovered from ${session.recovered}`);
@@ -210,6 +270,10 @@ async function start(): Promise<void> {
   }
   const keybindings = await KeybindingsStore.open(paths.dataDir);
   if (keybindings.invalid) log(strings.log.keybindingsInvalid(keybindings.path));
+  // Spec §9.3: registered in Main as well as in each window, so `listThemes()` below already offers the imported
+  // themes in the native Themes menu on the very first build (Finding T1).
+  const themes = await ThemeStore.open(paths.themesDir, log);
+  registerUserThemes(themes.themes);
   if (safeMode.active) logger.info(strings.log.safeMode(String(safeMode.reason)));
 
   // The UI gets a longer boot grace period for its first heartbeat (cold WKWebView init, bundle load, etc.);
@@ -228,19 +292,71 @@ async function start(): Promise<void> {
   // Warm the cache early so the Settings window's font picker has the list (spec §9.4). E2E runs seed the cache.
   if (!e2eEnabled) void systemFonts.list();
 
+  /**
+   * One Keychain and one adapter registry, shared by both AI consumers (spec §14.3).
+   *
+   * `ai.send` on the main window and TL-23's `ai.models.list` on the Settings window have to agree about which
+   * providers exist and which stored key belongs to each. Handing them the SAME registry and the SAME store is
+   * what makes that structural: two registries would be the seam where "implemented in this build" could answer
+   * differently depending on which window asked, and a model picker that disagreed with the panel it configures
+   * is worse than one that is missing.
+   *
+   * Deliberately NOT warmed at startup the way the font cache above is: contacting a provider is a network
+   * request to someone else's machine, so it waits until the AI tab is actually opened and asks.
+   */
+  const secrets = new SecretStore();
+  const aiRegistry = createAdapterRegistry([createOllamaAdapter()]);
+  const aiModels = new AiModelListService({ registry: aiRegistry, settings, secrets, log });
+
   // The bridge sends through `rpc`, which is defined next; send runs only after startup.
   const e2eBridge = new E2EBridge((request) => rpc.send["e2e.request"](request));
   let socketServer: SocketServer | null = null;
+  // The CLI's UI command path (spec §16.3, `--run`). Like `e2eBridge` above, this reads `mainWindow` and `rpc`,
+  // both declared below, only from callbacks that never run before startup finishes.
+  const cliDispatch = createUiDispatch({
+    isOpen: () => mainWindow.isOpen(),
+    open: () => void mainWindow.open(),
+    send: (message) => rpc.send["menu.command"](message),
+  });
 
   const writeClipboard = (text: string) =>
     e2eEnabled ? writeFileSync(join(paths.dataDir, "e2e-clipboard.txt"), text) : Utils.clipboardWriteText(text);
+
+  // Spec §16.1. Under E2E the "home" is this launch's private data folder, so a scenario can assert the symlink
+  // without ever writing into the real ~/.local/bin. `escalate` is deliberately omitted: the default install is
+  // ~/.local/bin and nothing in JSLab raises an administrator prompt on its own (see the M5c plan's ruling).
+  const cliInstallDeps = {
+    home: e2eEnabled ? paths.dataDir : homedir(),
+    path: baseEnv.PATH ?? "",
+    target: paths.cliBinary,
+    fs: nodeInstallFs,
+  };
+  let cliInstalled = false;
+  // `menu`, `mainWindow` and `rpc` are declared below; these bodies run only after startup has built them.
+  const refreshCliInstalled = async () => {
+    cliInstalled = (await cliStatus(cliInstallDeps)).installed;
+    menu.refresh();
+  };
+  const reportCliResult = (result: CliInstallResult) => {
+    log(result.message);
+    // §16.1: this one id reports a successful install AND a failed one, so its tone comes from the result rather
+    // than from the id (UI item 7). Every other notice takes its severity from DEFAULT_NOTICE_SEVERITY.
+    if (mainWindow.isOpen())
+      rpc.send["app.notice"]({
+        id: "cliInstall",
+        message: result.message,
+        severity: result.ok ? "info" : "error",
+      });
+    void refreshCliInstalled();
+  };
 
   // Shared by the main window and the Settings window (whose RPC accepts only its own actions, FA-m11). `mainWindow`
   // and `settingsWindow` are declared later; the handlers read them only when invoked, after startup.
   const appHandlerDeps: AppHandlerDeps = {
     logTail: (lines) => logger.tail(lines),
     settings,
-    paths: { dataDir: paths.dataDir, logsDir },
+    paths: { dataDir: paths.dataDir, logsDir, noticesFile: paths.noticesFile },
+    keybindings,
     versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
     os: osInfo,
     redact,
@@ -248,6 +364,10 @@ async function start(): Promise<void> {
     clipboard: writeClipboard,
     openPath: (target) =>
       e2eEnabled ? appendFileSync(join(paths.dataDir, "e2e-opened.txt"), `${target}\n`) : Utils.openPath(target),
+    // ST-11 (spec §7.4): Help → Documentation / Report Issue / What's New reuse the ONE external-link path
+    // below rather than adding a second one. `openExternal` is declared later and read only when an action
+    // runs, exactly as `mainWindow` and `settingsWindow` are.
+    openExternal: (link) => openExternal(link),
     restartInSafeMode: () => {
       logger.info(strings.log.restartRequested);
       requestSafeModeOnNextLaunch(paths.dataDir);
@@ -260,11 +380,28 @@ async function start(): Promise<void> {
       const current = mainWindow.window;
       if (current) current.setFullScreen(!current.isFullScreen());
     },
+    // Standard macOS zoom (Window ▸ Zoom, and a double-click on the toolbar row): fill the display's work area, or
+    // go back to the pre-zoom frame. Whether the window is zoomed is read from the window itself rather than from a
+    // flag Main keeps, which would drift the moment the user resized the window by hand.
+    zoomWindow: () => {
+      const current = mainWindow.window;
+      if (!current) return;
+      if (current.isMaximized()) current.unmaximize();
+      else current.maximize();
+    },
     // M-2 (R-M3-T19-FIX-1): the UI flushes pending edits before the window closes. `uiFlush` is declared below and read
     // only when this runs, after startup.
     // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
     closeWindow: () => void afterUiFlush({ uiFlush, then: () => mainWindow.close() })(),
     openSettings: () => void settingsWindow.open(),
+    installCli: () =>
+      void installCli(cliInstallDeps, "user").then(reportCliResult, (error: unknown) =>
+        log(strings.cli.installFailed(String(error))),
+      ),
+    uninstallCli: () =>
+      void uninstallCli(cliInstallDeps).then(reportCliResult, (error: unknown) =>
+        log(strings.cli.installFailed(String(error))),
+      ),
   };
   const appHandlers = createAppHandlers(appHandlerDeps);
 
@@ -277,6 +414,10 @@ async function start(): Promise<void> {
   // source exists, which is whenever a `webviewBridge` was passed above -- i.e. always, in a real app. Without
   // this group the UI's `webRunner.ready` / `.exit` / `.message` reach no handler at all, and a browser tab's run
   // hangs until `waitForReady` gives up rather than failing with anything a user could act on.
+  // Finding S1: the command registry lives in the MAIN window's React tree, which the Settings window cannot reach.
+  // Main holds the ids that window publishes and serves them to the Settings catalogue. Empty until its first
+  // publish, which is the honest answer when no main window is open.
+  let publishedCommands: readonly string[] = [];
   const webRunnerHandlers = services.webviews ? [createWebRunnerHandlers({ webviews: services.webviews, log })] : [];
   const rpc = BrowserView.defineRPC<JSLabRPC>({
     maxRequestTime: 10_000,
@@ -287,24 +428,80 @@ async function start(): Promise<void> {
         session,
         safeMode,
         keybindings,
-        versions: { app: APP_VERSION, bun: Bun.version },
+        // M6: all three, so the About dialog can name the framework version too. The debug report already
+        // carried `electrobun`; the bootstrap payload did not, which is why the UI could never show it.
+        versions: { app: APP_VERSION, bun: Bun.version, electrobun: ELECTROBUN_VERSION },
         log,
         e2e: e2eEnabled,
         onE2EResponse: (response) => e2eBridge.receive(response),
+        // The view's RPC is live from `app.bootstrap` on, and from that moment its message hub queues anything
+        // React has not subscribed to yet -- so an `e2e.request` can no longer be dropped by a loading bundle.
+        onViewReady: () => e2eBridge.viewReady(),
         // The as-built body, unchanged: shouldReloadView (src/main/ui-watchdog.ts) leaves its 30 s boot grace only
         // once sawFirstHeartbeat is true. Dropping that line would reload the view every 30 s (review I1).
         onUiHeartbeat: () => {
           sawFirstHeartbeat = true;
           lastUiHeartbeat = Date.now();
+          // A CLI `--run` that arrived while the view was booting goes out as soon as it can receive it.
+          cliDispatch.markReady();
         },
         // The stores report what their own load found, including the corrupt copy saved this launch (FA-m4).
         notices: startupNotices({ settings, session }),
+        themes,
+        // Spec §14.3: the conversation `app.bootstrap` restores into the AI panel.
+        conversation,
       }),
       createWorkspaceHandlers({ session, coordinator, spares, log }),
+      createCommandPublishHandlers({
+        onPublished: (ids) => {
+          publishedCommands = ids;
+        },
+        log,
+      }),
       ...webRunnerHandlers,
       createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
       createNpmHandlers({ npm, log }),
       createEnvHandlers({ env, log }),
+      createSnippetHandlers({
+        snippets: services.snippets,
+        // The same adapters the file handlers use, so E2E scripts snippet dialogs exactly like Open and Save As.
+        openDialog: ({ startingFolder }) =>
+          e2eEnabled
+            ? readE2EOpenDialog(paths.dataDir)
+            : Utils.openFileDialog({
+                startingFolder,
+                allowedFileTypes: "json",
+                canChooseFiles: true,
+                canChooseDirectory: false,
+                allowsMultipleSelection: false,
+              }),
+        saveDialog: (options) => (e2eEnabled ? readE2ESaveDialog(paths.dataDir) : saveDialog(options)),
+        // Not `Bun.file(path).text()`: that reads the whole file before anything can refuse it, and cannot get
+        // the `O_NONBLOCK` that keeps a FIFO from parking Main (R-M5b-S2).
+        readBoundedFile: readBoundedText,
+        writeFile: (path, content) => Bun.write(path, content).then(() => undefined),
+        documentsDir: Utils.paths.documents,
+        send: {
+          imported: (payload) => rpc.send["snippets.imported"](payload),
+          exported: (payload) => rpc.send["snippets.exported"](payload),
+        },
+        log,
+      }),
+      // Spec §14.3: every provider request is made HERE, in Main, and the key is read from the Keychain here too
+      // -- the view sends a prompt and receives text. XT-08's store finally has its first consumer.
+      createOllamaAiHandlers({
+        settings,
+        secrets,
+        registry: aiRegistry,
+        // Spec §14.3: where `ai.conversationSave` lands. Main owns the file; the UI owns the conversation.
+        conversation,
+        send: {
+          chunk: (payload) => rpc.send["ai.chunk"](payload),
+          done: (payload) => rpc.send["ai.done"](payload),
+          error: (payload) => rpc.send["ai.error"](payload),
+        },
+        log,
+      }),
       createTypesHandlers({ types, log }),
       createWorkingDirectoryHandlers({
         session,
@@ -369,16 +566,52 @@ async function start(): Promise<void> {
         },
         log,
       }),
+      createThemeHandlers({
+        store: themes,
+        // Mirrors createFileHandlers' dialog branch above, E2E path included, so a scenario can script the choice.
+        openDialog: async () =>
+          e2eEnabled
+            ? await readE2EOpenDialog(paths.dataDir)
+            : await Utils.openFileDialog({
+                startingFolder: Utils.paths.documents,
+                allowedFileTypes: "json,vsix",
+                canChooseFiles: true,
+                canChooseDirectory: false,
+                allowsMultipleSelection: false,
+              }),
+        // R-M5d-B3: the size is what lets an oversized file be refused before it is read into memory.
+        fileSize: async (path) => (await stat(path).catch(() => null))?.size ?? null,
+        readFileBytes: (path) => readBoundedBytes(path, MAX_IMPORT_BYTES),
+        onChanged: (all) => {
+          registerUserThemes(all);
+          rpc.send["theme.changed"]({ themes: [...all] });
+          // Task 4 finding 2: the Themes submenu is rebuilt from `listThemes()` on every refresh, so this one call
+          // is all it takes for an imported theme to reach the native menu.
+          menu.refresh();
+        },
+        log,
+      }),
     ),
   });
 
   settings.onChange((next) => rpc.send["settings.changed"]({ settings: next }));
+
+  // Spec §17: changing the UI language needs a restart, and the notice belongs in the main window -- that is
+  // where the menus the user just changed the language of actually are. Held as a snapshot because subscribers
+  // run after `settings.current` has already been replaced, so there is no "before" left to compare against.
+  let previousSettings = settings.current;
+  settings.onChange((next) => {
+    const notice = languageChangeNotice(previousSettings, next, strings);
+    previousSettings = next;
+    if (notice && mainWindow.isOpen()) rpc.send["app.notice"](notice);
+  });
 
   const url = await resolveMainViewUrl({
     channel: await Updater.localInfo.channel(),
     env: process.env,
     probe: (target, signal) => fetch(target, { method: "HEAD", signal }),
   });
+  const localizedUrl = withLocale(url, locale);
   const displays = (): DisplayInfo[] => Screen.getAllDisplays();
   // A blocked web or mail link opens in the default browser; E2E runs record it instead (never the user's browser).
   const openExternal = (link: string) =>
@@ -388,7 +621,7 @@ async function start(): Promise<void> {
     const restored = restoreFrame(session.session.window, displays());
     const created = new BrowserWindow({
       title: "JSLab",
-      url,
+      url: localizedUrl,
       frame: restored.frame,
       titleBarStyle: "hiddenInset",
       rpc,
@@ -415,12 +648,17 @@ async function start(): Promise<void> {
     created.on("move", saveFrame);
     // Every new window (a Dock reopen included) is a fresh boot with the watchdog's 30 s grace (R-M2-T18-3).
     ({ sawFirstHeartbeat, bootWindowStartedAt, lastUiHeartbeat } = onReload(Date.now()));
+    // ...and a fresh boot cannot receive `e2e.request` until its bundle runs, so hold E2E sends until it
+    // bootstraps. Without this the first send is dropped and burns the bridge's whole timeout (6/6 launches).
+    e2eBridge.viewBooting();
     return created;
   };
   const mainWindow = createMainWindowController({
     create: createWindow,
     onClosed: () => {
       e2eBridge.rejectAll("The JSLab window closed");
+      // Whatever view loads next has to report ready again before a queued CLI command can reach it.
+      cliDispatch.markClosed();
       // M4 final review (C): this window's UI owned every `<electrobun-webview>` Main was driving. Reopening from
       // the Dock builds a fresh view with an empty registry, so Main's own entries must go with the old one --
       // otherwise the next run on every browser tab hits a stale entry, skips `webRunner.ensure`, and fails after
@@ -437,11 +675,21 @@ async function start(): Promise<void> {
     if (mainWindow.isOpen())
       rpc.send["app.notice"]({ id: "unexpectedError", message: strings.notices.unexpectedError });
   };
+  // D1: the same channel, for a notice raised by the composition root (a settings write refused as too large).
+  // The UI's `addNotice` shows one banner per id, and main-services raises this once per session anyway.
+  sendAppNotice = (notice) => {
+    // Reporting delivery, not attempting it: main-services spends its one telling only on a notice that landed.
+    if (!mainWindow.isOpen()) return false;
+    rpc.send["app.notice"](notice);
+    return true;
+  };
 
   // `MenuItem` (menu.ts) is the devkit's own `ApplicationMenuItemConfig` shape at its source (final review T14),
   // proved at compile time by `MENU_IS_DEVKIT_CONFIG`, so a built menu is passed straight to
   // `ApplicationMenu.setApplicationMenu` with no adapter.
-  const resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, keybindings.rules);
+  // Finding K1: reassigned by `keybindings.onChange` below. `build` closes over it and re-reads on every
+  // `menu.refresh()`, so a saved keybindings.json reaches the native menu's shortcut text without a relaunch.
+  let resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, keybindings.rules);
   const menu = createMenuController({
     build: () =>
       buildMenu({
@@ -450,10 +698,13 @@ async function start(): Promise<void> {
         bindings: resolvedBindings,
         themes: listThemes(),
         canReopen: session.session.closedStack.length > 0,
+        cliInstalled,
+        t,
       }),
     apply: (items) => ApplicationMenu.setApplicationMenu(items),
   });
   menu.refresh();
+  void refreshCliInstalled();
   settings.onChange(() => menu.refresh());
   session.onChange(() => menu.refresh());
   ApplicationMenu.on("application-menu-clicked", (event: unknown) => {
@@ -473,14 +724,22 @@ async function start(): Promise<void> {
   const settingsRpc = BrowserView.defineRPC<SettingsRPC>({
     maxRequestTime: 60_000,
     handlers: mergeHandlers(
-      createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
+      // Only the Settings window's own handler set gets `onViewReady`: the main window serves `settings.get` from
+      // a separate instance above, and must never open this window's gate.
+      createSettingsHandlers({ settings, e2e: e2eEnabled, log, onViewReady: () => settingsE2E.viewReady() }),
       createFontHandlers({ fonts: systemFonts, log }),
+      // TL-23: the model picker's Refresh. On THIS surface, because the Settings window is what asks.
+      createAiModelHandlers({ models: aiModels, log }),
       createNpmrcHandlers({ path: paths.packagesNpmrc, onSaved: () => npm.resetOutdated(), log }),
+      createKeybindingHandlers({ store: keybindings, registeredCommands: () => publishedCommands, t, log }),
       createSettingsAppHandlers(appHandlerDeps),
       createE2EResponseHandler(settingsE2E, log),
     ),
   });
-  const settingsUrl = url.startsWith("views://") ? "views://mainview/settings.html" : `${url}/settings.html`;
+  const settingsUrl = withLocale(
+    url.startsWith("views://") ? "views://mainview/settings.html" : `${url}/settings.html`,
+    locale,
+  );
   const settingsWindow = createMainWindowController({
     create: () => {
       // The same display-aware restore as the main window (Task 18, spec §10.1).
@@ -489,7 +748,7 @@ async function start(): Promise<void> {
         displays(),
       );
       const created = new BrowserWindow({
-        title: strings.window.settingsTitle,
+        title: t("app.settingsWindowTitle"),
         url: settingsUrl,
         frame: restored.frame,
         // The nav column has a 40px top pad and is the drag region, which is built for the inset title bar (review M13).
@@ -510,6 +769,8 @@ async function start(): Promise<void> {
       };
       created.on("resize", saveFrame);
       created.on("move", saveFrame);
+      // The same boot gap as the main window: hold E2E sends until this window's bundle reaches `settings.get`.
+      settingsE2E.viewBooting();
       return created;
     },
     onClosed: () => settingsE2E.rejectAll("The Settings window closed"),
@@ -517,41 +778,77 @@ async function start(): Promise<void> {
   settings.onChange((next) => {
     if (settingsWindow.isOpen()) settingsRpc.send["settings.changed"]({ settings: next });
   });
+  // Finding K1: a saved keybindings.json takes effect in the running app. The menu is rebuilt from the freshly
+  // resolved bindings and BOTH windows are told, so the main window's dispatcher, palette keycaps and chrome keycaps
+  // follow -- and so does the Settings window's Keybindings pane, which must keep showing what is actually on disk
+  // even when the write came from somewhere other than the pane itself (Task 10 owns this second half).
+  keybindings.onChange((rules) => {
+    resolvedBindings = resolveKeybindings(DEFAULT_KEYBINDINGS, rules);
+    menu.refresh();
+    if (mainWindow.isOpen()) rpc.send["keybindings.changed"]({ rules: [...rules] });
+    if (settingsWindow.isOpen()) settingsRpc.send["keybindings.changed"]({ rules: [...rules] });
+  });
 
-  if (e2eEnabled) {
-    socketServer = await startSocketServer({
-      path: paths.socketPath,
-      log,
-      methods: createSocketMethods({
-        e2eEnabled,
-        bridge: e2eBridge,
-        settingsBridge: settingsE2E,
-        mainState: () => ({
-          safeMode,
-          dataDir: paths.dataDir,
-          windowOpen: mainWindow.isOpen(),
-          pid: process.pid,
-          windowFrame: mainWindow.window?.getFrame() ?? null,
-          primaryWorkArea: Screen.getPrimaryDisplay().workArea,
-          menu: menu.current(),
-          settingsWindowOpen: settingsWindow.isOpen(),
-        }),
-        uiAvailable: (window = "main") => (window === "main" ? mainWindow.isOpen() : settingsWindow.isOpen()),
-        reopenWindow: () => void mainWindow.open(),
-        screenshot: async (name, window) => {
-          await mkdir(paths.screenshotsDir, { recursive: true });
-          const out = join(paths.screenshotsDir, `${name}.png`);
-          const target = window === "main" ? mainWindow.window : settingsWindow.window;
-          const result = await captureWindow(windowNumberOf(target?.ptr ?? null), out, () =>
-            Utils.screenCapture.hasAccess(),
-          );
-          if ("skipped" in result) log(`Screenshot ${name} skipped: ${result.skipped}`);
-          return result;
-        },
-        quit: () => Utils.quit(),
+  // Spec §16.3: `jslab` opens files and code through the same session path as File → Open, so a CLI-opened tab is
+  // indistinguishable from one the user opened themselves.
+  const openTabs = createOpenService({
+    session,
+    readBoundedFile: (path) => readBoundedText(path, MAX_OPEN_FILE_BYTES),
+    defaults: () => ({ language: settings.current.run.defaultLanguage, runtime: settings.current.run.defaultRuntime }),
+    announce: (payload) => {
+      if (mainWindow.isOpen()) rpc.send["file.opened"](payload);
+    },
+    updated: (payload) => {
+      if (mainWindow.isOpen()) rpc.send["tab.updated"](payload);
+    },
+    present: ({ run }) => {
+      // Focus (or reopen) the window first; a closed window's UI bootstraps the new tabs from the session it just
+      // joined, so nothing is lost when `file.opened` above was skipped.
+      mainWindow.open();
+      if (run) cliDispatch.dispatch("run.start");
+    },
+    log,
+  });
+
+  // Spec §16.3: the socket serves `open` in every launch, not only under JSLAB_E2E=1 -- without this there is no
+  // socket for `jslab` to connect to in a normal launch. `startCliSocket` is what keeps that from being a
+  // regression for the second JSLab a user opens: it finds this path already owned, and losing the CLI socket must
+  // never be a failed startup.
+  socketServer = await startCliSocket({
+    path: paths.socketPath,
+    log,
+    methods: createSocketMethods({
+      e2eEnabled,
+      open: openTabs,
+      bridge: e2eBridge,
+      settingsBridge: settingsE2E,
+      mainState: () => ({
+        safeMode,
+        dataDir: paths.dataDir,
+        windowOpen: mainWindow.isOpen(),
+        pid: process.pid,
+        windowFrame: mainWindow.window?.getFrame() ?? null,
+        primaryWorkArea: Screen.getPrimaryDisplay().workArea,
+        menu: menu.current(),
+        settingsWindowOpen: settingsWindow.isOpen(),
       }),
-    });
-    logger.info(strings.log.e2eEnabled(socketServer.path));
+      uiAvailable: (window = "main") => (window === "main" ? mainWindow.isOpen() : settingsWindow.isOpen()),
+      reopenWindow: () => void mainWindow.open(),
+      screenshot: async (name, window) => {
+        await mkdir(paths.screenshotsDir, { recursive: true });
+        const out = join(paths.screenshotsDir, `${name}.png`);
+        const target = window === "main" ? mainWindow.window : settingsWindow.window;
+        const result = await captureWindow(windowNumberOf(target?.ptr ?? null), out, () =>
+          Utils.screenCapture.hasAccess(),
+        );
+        if ("skipped" in result) log(`Screenshot ${name} skipped: ${result.skipped}`);
+        return result;
+      },
+      quit: () => Utils.quit(),
+    }),
+  });
+  if (socketServer) {
+    logger.info(e2eEnabled ? strings.log.e2eEnabled(socketServer.path) : strings.log.cliSocket(socketServer.path));
   }
 
   // Warm the first runner so the first run is fast (spec §5.3).
@@ -572,6 +869,8 @@ async function start(): Promise<void> {
     // A reload is a fresh boot (R-M2-T18-3): the reloaded view gets the 30 s boot grace until its own first
     // heartbeat, instead of the 6 s steady-state deadline left over from the view it replaces.
     ({ sawFirstHeartbeat, bootWindowStartedAt, lastUiHeartbeat } = onReload(now));
+    // A reloaded view is an empty page again until it bootstraps, so E2E sends wait for it just like a new window.
+    e2eBridge.viewBooting();
     // M4 final review (C): the reloaded view starts with an empty webview registry, so Main's entries for the view
     // being replaced are stale the instant this navigates. Dropping them here is what makes the next run create a
     // new element instead of driving one nobody owns any more. This reload is the likeliest trigger of all: it
@@ -596,8 +895,14 @@ async function start(): Promise<void> {
     // Final review T14: a hung flush must not keep JSLab from quitting. FA-I1: settings writes are awaited too.
     // A quit started by a startup failure keeps its exit code 1 (FA-I3).
     void flushBeforeQuit(
-      // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
-      () => afterUiFlush({ uiFlush, then: () => Promise.all([session.flush(), settings.flush()]) })(),
+      () =>
+        afterUiFlush({
+          uiFlush,
+          // Spec §14.3: the conversation is debounced like session.json, so a reply that settled inside the
+          // debounce window would be lost on quit without this flush.
+          // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)
+          then: () => Promise.all([session.flush(), settings.flush(), conversation.flush()]),
+        })(),
       log,
     ).finally(() => Utils.quit(errorPolicy.exitCode));
   });

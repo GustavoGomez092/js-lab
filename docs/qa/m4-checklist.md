@@ -86,10 +86,10 @@ scenario; this pass checks them by eye.
 - [ ] **Q7 Web view focusable (WV-05).** Click into the Web View tile: a focusable element in the user's own page
   (an `<input>`, say) takes focus and accepts typing. — **pending user:** nothing automated covers webview focus;
   this needs a real click and real keystrokes into a native webview surface.
-- [ ] **Q8 Tile arrangement (WV-06).** **Known gap, not merely unverified.** Spec §7.1 says tiles are arranged by
-  dragging their headers. **No drag affordance is implemented** — the Console and Web View tiles have no header
-  drag handler, and `layout.tiles.arrangement` (`stacked` / `side-by-side`) is reachable only by hand-editing
-  `session.json`. The stored value *is* honoured and does survive a relaunch. Record as not done; do not tick.
+- [ ] **Q8 Tile arrangement (WV-06).** **Moot — nothing to check.** Header-drag arrangement was never built in M4,
+  and R-WEBVIEW-TAB-1 has since retired the underlying `layout.tiles.arrangement`/`order` fields entirely
+  (`SESSION_VERSION` 4 migrates them away). The Web View is now either the bottom preview pane or the whole
+  output panel; there is no arrangement left for a header drag to change. Record as not applicable; do not tick.
 - [ ] **Q9 Overlays over the web view.** With the Web View tile visible, open the command palette (⇧⌘P) over it.
   **A native webview surface paints above HTML regardless of z-index**, so check whether the palette is occluded.
   — pending user: this is a compositor behaviour only visible on a real screen.
@@ -156,8 +156,11 @@ scenario; this pass checks them by eye.
 7. **`process.memoryUsage()` is not available in `browser-node`.** That runtime's `process` is a page-load
    snapshot (`env`, `cwd()`, `platform`, `argv`, `versions`, plus a microtask-queue `nextTick`); `memoryUsage` is
    implemented nowhere in `packages/runner-web`. It is available in `bun`, which runs a real Bun process.
-8. **Large collections still stop at 10,000 entries.** Paging for expanded collections was listed for M4 and did
-   not land; entries past the first 10,000 aren't reachable (parity OU-02).
+8. **Large collections page rather than stop (closed in M5).** An expanded Array, Map, Set or typed array offers
+   "… N more entries" and loads the next page through `run.expand`'s `offset`; the button always states the exact
+   remainder, so nothing is dropped silently. Object properties are deliberately **not** paged (spec §5.9 lists
+   them as a separate row) — an object past `maxProps` states its remainder without offering a page. The `browser`
+   and `browser-node` runtimes carry the same wire field but have no real-process integration test for it.
 
 ## Automated suites
 

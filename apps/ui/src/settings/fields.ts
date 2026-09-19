@@ -1,10 +1,29 @@
-import { DECORATOR_MODES, LANGUAGES, RUNTIMES, type SettingKey, UI_LANGUAGES } from "@jslab/shared";
+import {
+  AI_PROVIDER_NONE,
+  type AiProvider,
+  AVAILABLE_AI_PROVIDERS,
+  DECORATOR_MODES,
+  LANGUAGES,
+  RUNTIMES,
+  type SettingKey,
+  UI_LANGUAGES,
+} from "@jslab/shared";
 import { strings } from "../strings";
 
-export type SettingsTab = "general" | "editor" | "formatting" | "appearance" | "npm" | "build" | "advanced";
+export type SettingsTab =
+  | "general"
+  | "editor"
+  | "formatting"
+  | "appearance"
+  | "keybindings"
+  | "ai"
+  | "npm"
+  | "build"
+  | "advanced";
 
+// Spec §8's own order: "General · Editor · Formatting · Appearance · Keybindings · AI · NPM · Build · Advanced".
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = (
-  ["general", "editor", "formatting", "appearance", "npm", "build", "advanced"] as const
+  ["general", "editor", "formatting", "appearance", "keybindings", "ai", "npm", "build", "advanced"] as const
 ).map((id) => ({ id, label: strings.settings.tabs[id] }));
 
 export type FieldKind =
@@ -13,13 +32,31 @@ export type FieldKind =
   | { type: "number"; min: number; max: number; step: number }
   | { type: "enum"; options: { value: string; label: string }[] }
   | { type: "theme" }
-  | { type: "font" };
+  | { type: "font" }
+  /**
+   * Free text whose EMPTY value is meaningful -- `ai.baseUrl.<provider>` blank means "the provider's standard
+   * endpoint" and `ai.model.<provider>` blank means "the manifest's default" (spec §8, §14.3).
+   *
+   * Deliberately not reusing `theme`/`font`, whose coercion rejects blank: with those, clearing the field would
+   * silently keep the old value and the user could never get back to the default they started from.
+   */
+  | { type: "text" };
 
 export interface FieldDef {
   key: SettingKey;
   tab: SettingsTab;
   kind: FieldKind;
   restart?: boolean;
+  /**
+   * TL-23: this field also offers the models this provider reports, with a Refresh control.
+   *
+   * Deliberately a property of the FIELD and not a `FieldKind`. The options are dynamic, so they cannot be baked
+   * into the kind the way `enum`'s are -- but more importantly the kind must stay `text`, whose coercion keeps
+   * blank as a VALUE. Turning this into an `enum` (or reusing `theme`/`font`, which reject blank) would take away
+   * the only way back to the manifest's default, which is where every user starts. The picker therefore layers
+   * OVER the text input rather than replacing it, and the text input stays editable at all times.
+   */
+  models?: AiProvider;
 }
 
 const bool: FieldKind = { type: "bool" };
@@ -81,6 +118,21 @@ export const SETTINGS_FIELDS: FieldDef[] = [
   { key: "output.highlighting", tab: "appearance", kind: bool },
   { key: "output.showLineNumbers", tab: "appearance", kind: bool },
 
+  /**
+   * Spec §8 (AI). The picker offers only what this build implements, plus "none" -- `AVAILABLE_AI_PROVIDERS` is
+   * the same mechanism `AVAILABLE_RUNTIMES` uses, so a provider becomes selectable by shipping its adapter
+   * rather than by editing this list. `ai.provider` itself still accepts all six ids on disk.
+   */
+  {
+    key: "ai.provider",
+    tab: "ai",
+    kind: choices(o.aiProvider, [AI_PROVIDER_NONE, ...AVAILABLE_AI_PROVIDERS]),
+  },
+  // TL-23: still `text` -- see `FieldDef.models` for why the picker layers over it instead of replacing it.
+  { key: "ai.model.ollama", tab: "ai", kind: { type: "text" }, models: "ollama" },
+  { key: "ai.baseUrl.ollama", tab: "ai", kind: { type: "text" } },
+  { key: "ai.includeOutput", tab: "ai", kind: bool },
+
   { key: "npm.allowInstallScripts", tab: "npm", kind: bool },
   { key: "npm.autoInstallTypes", tab: "npm", kind: bool },
 
@@ -131,5 +183,8 @@ export function coerceFieldValue(field: FieldDef, raw: string | boolean): boolea
     case "theme":
     case "font":
       return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null;
+    // Blank is a VALUE here, not a rejection: it is how the user asks for the default back (see `FieldKind`).
+    case "text":
+      return typeof raw === "string" ? raw.trim() : null;
   }
 }

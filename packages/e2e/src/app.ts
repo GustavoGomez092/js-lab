@@ -32,7 +32,11 @@ export interface LaunchedApp {
   state(): Promise<E2EState>;
   output(): Promise<OutputEntry[]>;
   type(text: string, replace?: boolean): Promise<void>;
-  key(spec: string): Promise<void>;
+  /**
+   * Dispatches a synthetic keystroke and reports whether JSLab consumed it (`preventDefault`). Non-breaking: a
+   * caller that only wants the side effect keeps ignoring the value.
+   */
+  key(spec: string): Promise<{ defaultPrevented: boolean }>;
   command(id: string, args?: unknown): Promise<void>;
   /** Runs `tab.new` and resolves with the new tab's id once it is the active tab. */
   newTab(timeoutMs?: number): Promise<string>;
@@ -195,8 +199,19 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
       type: async (text, replace = true) => {
         await client.call("e2e.type", { text, replace });
       },
+      /**
+       * `snippets.expand` is bound to bare Tab, and its whole safety argument is that a disabled command never
+       * calls preventDefault (`App.tsx`'s key handler returns before it). That flag is therefore the assertion a
+       * scenario wants, rather than Monaco's indent: these are constructed KeyboardEvents, which carry no legacy
+       * `keyCode`, and Monaco's own keybinding dispatch reads exactly that -- so a synthetic Tab never reaches
+       * Monaco's indent at all, and waiting for the buffer to change would fail as a timeout instead.
+       *
+       * The agent's return value is wrapped in `result` by `createSocketMethods`'s `forward`, exactly as `output`
+       * above unwraps it. `{ defaultPrevented }` is NOT the top level of the reply.
+       */
       key: async (spec) => {
-        await client.call("e2e.key", { key: spec });
+        const reply = await client.call<{ result: { defaultPrevented: boolean } }>("e2e.key", { key: spec });
+        return reply.result;
       },
       command: async (id, args) => {
         await client.call("e2e.command", args === undefined ? { id } : { id, args });
@@ -218,14 +233,25 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
         }
         return reply.path ?? null;
       },
-      waitForRunState: (states, timeoutMs = 15_000) =>
-        waitFor(
-          async () => {
-            const runState = activeTab(await app.state()).runState;
-            return runState !== null && states.includes(runState) ? runState : null;
-          },
-          { timeoutMs, message: `Run state never became ${states.join(" or ")}` },
-        ),
+      waitForRunState: async (states, timeoutMs = 15_000) => {
+        // Report the state this wait last saw before giving up. Without it the two ways it fails are the same
+        // message, and a CI runner keeps no app log to tell them apart afterwards: a transient state the poll
+        // stepped over (the run reached it and moved on, so the state now reads "settled") looks exactly like a
+        // run that never started at all ("null" or "transpiling").
+        let lastObserved: string | null = null;
+        try {
+          return await waitFor(
+            async () => {
+              const runState = activeTab(await app.state()).runState;
+              lastObserved = runState;
+              return runState !== null && states.includes(runState) ? runState : null;
+            },
+            { timeoutMs, message: `Run state never became ${states.join(" or ")}` },
+          );
+        } catch (error) {
+          throw new Error(`${String(error)}; last observed run state: ${String(lastObserved)}`);
+        }
+      },
       waitForOutput: (predicate, timeoutMs = 15_000) =>
         waitFor(
           async () => {
@@ -249,7 +275,18 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
         // Deepest descendants first; each PID is one this launch spawned or a verified Main PID.
         await killLaunch();
       },
-      relaunch: (next = {}) => launchApp({ ...next, channel: options.channel, userData }),
+      /**
+       * Quits THIS instance, then launches a replacement against the same data folder.
+       *
+       * The quit is the contract, not a convenience. Without it the caller ends up with two live instances sharing
+       * one `userData` and one `jslab.sock`, and the first leaks past `afterEach` -- a scenario only ever disposes
+       * the app its variable currently points at. Every scenario that wanted a restart already spelled the quit out
+       * by hand (`logpoints`, `snippets`, `i18n`), so the helper now does what they were working around.
+       */
+      relaunch: async (next = {}) => {
+        await app.quit();
+        return launchApp({ ...next, channel: options.channel, userData });
+      },
       reopenWindow: async () => {
         await client.call("e2e.reopen");
         await waitFor(

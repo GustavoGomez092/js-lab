@@ -1,3 +1,4 @@
+import { MAX_CLI_LINE_CHARS } from "@jslab/rpc-schema";
 import { z } from "zod";
 
 /** macOS `sun_path` holds 104 bytes including the terminating NUL. */
@@ -19,12 +20,24 @@ export type SocketMethod = (params: unknown) => Promise<Record<string, unknown>>
 export class LineBuffer {
   #pending = "";
 
-  constructor(private readonly maxLineChars = 5_000_000) {}
+  // The bound is `@jslab/rpc-schema`'s, not a second copy of it: `cliOpenParamsSchema` bounds `code` against the
+  // same exported pair, so a request the schema accepts is always one this buffer can receive.
+  constructor(private readonly maxLineChars = MAX_CLI_LINE_CHARS) {}
 
   push(chunk: string): string[] {
     this.#pending += chunk;
     const lines = this.#pending.split("\n");
     this.#pending = lines.pop() ?? "";
+    // Completed lines are checked too, not only what is still pending: a whole oversized line arriving inside a
+    // single chunk used to pass straight through, so a request could exceed the cap by up to one chunk (~64 KiB).
+    // Enforcement otherwise rested entirely on the client's own guard (`client.ts`), which only a `jslab` build runs
+    // -- anything else writing to the 0600 socket was unbounded by this cap.
+    for (const line of lines) {
+      if (line.length > this.maxLineChars) {
+        this.#pending = "";
+        throw new Error("Request line too long");
+      }
+    }
     if (this.#pending.length > this.maxLineChars) {
       this.#pending = "";
       throw new Error("Request line too long");

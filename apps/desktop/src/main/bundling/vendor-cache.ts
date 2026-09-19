@@ -1,6 +1,7 @@
-import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Runtime } from "@jslab/shared";
+import { readRegularFileText } from "../fs/bounded-read";
 import { writeFileAtomic } from "../persistence/atomic-write";
 
 /**
@@ -286,8 +287,8 @@ export class VendorCache {
     }
     try {
       const [code, map] = await Promise.all([
-        readFile(this.#codePath(key), "utf8"),
-        readFile(this.#mapPath(key), "utf8"),
+        readRegularFileText(this.#codePath(key)),
+        readRegularFileText(this.#mapPath(key)),
       ]);
       return { code, map, closure: entry.closure ?? null };
     } catch {
@@ -384,7 +385,7 @@ export class VendorCache {
   async #readIndex(): Promise<VendorCacheIndex> {
     let raw: string;
     try {
-      raw = await readFile(this.#indexPath(), "utf8");
+      raw = await readRegularFileText(this.#indexPath());
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return {};
       return this.#rebuildIndexFromDisk();

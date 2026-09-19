@@ -1,0 +1,51 @@
+{
+  "app": {
+    "name": "JSLab",
+    "settingsWindowTitle": "JSLab 設定"
+  },
+  "commands": {
+    "app": {
+      "settings": "設定…"
+    },
+    "file": {
+      "save": "保存"
+    },
+    "run": {
+      "start": "実行",
+      "stop": "停止"
+    },
+    "tab": {
+      "new": "新規タブ"
+    }
+  },
+  "files": {
+    "cancel": "キャンセル"
+  },
+  "menu": {
+    "actions": "アクション",
+    "edit": "編集",
+    "file": "ファイル",
+    "help": "ヘルプ",
+    "language": "言語",
+    "layout": "レイアウト",
+    "runtime": "ランタイム",
+    "themes": "テーマ",
+    "tools": "ツール",
+    "view": {
+      "_": "表示"
+    },
+    "window": "ウインドウ"
+  },
+  "settings": {
+    "restartRequired": "再起動が必要",
+    "tabs": {
+      "advanced": "詳細",
+      "appearance": "外観",
+      "build": "ビルド",
+      "editor": "エディタ",
+      "formatting": "フォーマット",
+      "general": "一般",
+      "npm": "NPM"
+    }
+  }
+}

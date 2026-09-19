@@ -1,0 +1,51 @@
+{
+  "app": {
+    "name": "JSLab",
+    "settingsWindowTitle": "JSLab 设置"
+  },
+  "commands": {
+    "app": {
+      "settings": "设置…"
+    },
+    "file": {
+      "save": "保存"
+    },
+    "run": {
+      "start": "运行",
+      "stop": "停止"
+    },
+    "tab": {
+      "new": "新建标签页"
+    }
+  },
+  "files": {
+    "cancel": "取消"
+  },
+  "menu": {
+    "actions": "操作",
+    "edit": "编辑",
+    "file": "文件",
+    "help": "帮助",
+    "language": "语言",
+    "layout": "布局",
+    "runtime": "运行时",
+    "themes": "主题",
+    "tools": "工具",
+    "view": {
+      "_": "视图"
+    },
+    "window": "窗口"
+  },
+  "settings": {
+    "restartRequired": "需要重启",
+    "tabs": {
+      "advanced": "高级",
+      "appearance": "外观",
+      "build": "构建",
+      "editor": "编辑器",
+      "formatting": "格式化",
+      "general": "通用",
+      "npm": "NPM"
+    }
+  }
+}

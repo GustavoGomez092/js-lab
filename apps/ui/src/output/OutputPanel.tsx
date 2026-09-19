@@ -1,16 +1,17 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type { MainApi } from "../api";
-import { visibleEntries } from "../state/output";
+import { type DisplayEvent, visibleEntries } from "../state/output";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
-import { copyEntriesToClipboard } from "./copy";
+import { type AnnouncerState, EMPTY_ANNOUNCEMENT, nextAnnouncement } from "./announce";
+import { copyAllText, copyEntriesToClipboard } from "./copy";
 import { EntryRow } from "./EntryRow";
 import { FilterChips } from "./FilterChips";
 import { applyFilter, filterCounts } from "./filters";
+import { setOutputHandle } from "./output-handle";
 import { entryIsStale, lastSuccessfulRunLabel } from "./stale";
-import { entryToText } from "./text";
 import { WebDialog } from "./WebDialog";
 
 const COPY_STATUS_DURATION_MS = 2000;
@@ -31,6 +32,8 @@ interface OutputPanelProps {
   webViewSlot?: ReactNode;
   /** spec §7.1: whether this tab's runtime can host a Web View at all. A `bun` tab gets no Web View control. */
   webviewSupported?: boolean;
+  /** TL-20 (spec §14.2): opens the AI panel and asks about one row. Threaded down to every `EntryRow`. */
+  onExplain?(event: DisplayEvent): void;
 }
 
 export function OutputPanel({
@@ -40,6 +43,7 @@ export function OutputPanel({
   onInstall,
   webViewSlot = null,
   webviewSupported = false,
+  onExplain,
 }: OutputPanelProps) {
   const output = useStore(store, (s) => s.output);
   const showUndefined = useStore(store, (s) => s.settings?.run.showUndefined ?? false);
@@ -58,6 +62,17 @@ export function OutputPanel({
   const entries = useMemo(() => applyFilter(visible, filter), [visible, filter]);
   const staleLabel = lastSuccessfulRunLabel(output);
 
+  // Folded during render rather than in an effect, so the sentence lands in the same commit as the rows it
+  // describes instead of one render later. Safe because `nextAnnouncement` is idempotent (see its doc comment):
+  // React may render twice with the same inputs and must get the same answer.
+  const announcer = useRef<AnnouncerState>(EMPTY_ANNOUNCEMENT);
+  announcer.current = nextAnnouncement(announcer.current, {
+    runId: output.runId,
+    runState: output.runState,
+    entries: counts.all,
+    errors: counts.errors,
+  });
+
   const scroller = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
   // As built (M1 T17 fix round): Copy All reports "Copied" or "Couldn't copy" for two seconds.
@@ -69,6 +84,18 @@ export function OutputPanel({
     },
     [],
   );
+  // UI item 2: `view.focusOutput` runs outside React, so it needs a way to reach this scroller. Registered only
+  // while the log list is the thing on screen -- when the Web View is docked here instead, `logList` isn't
+  // rendered at all, `scroller.current` is null, and the command reports itself disabled.
+  useEffect(() => {
+    // Read rather than merely depended on: when the Web View is docked here, `logList` -- and with it the
+    // scroller -- is not rendered, so re-running (and clearing the handle) as this flips is the whole point.
+    if (showingWebView) return;
+    const node = scroller.current;
+    if (!node) return;
+    setOutputHandle({ focus: () => node.focus() });
+    return () => setOutputHandle(null);
+  }, [showingWebView]);
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scroller.current,
@@ -80,16 +107,26 @@ export function OutputPanel({
     if (pinnedToBottom.current && entries.length > 0) virtualizer.scrollToIndex(entries.length - 1, { align: "end" });
   }, [entries.length, virtualizer]);
 
-  const expand = (handle: string) =>
-    tabId && output.runId ? api.expand({ tabId, runId: output.runId, handleId: handle }) : Promise.resolve(null);
+  // OU-02: `offset` asks for a later page of a collection. Spread rather than written, so an absent offset leaves
+  // the request identical to the one every caller sent before the field existed.
+  const expand = (handle: string, offset?: number) =>
+    tabId && output.runId
+      ? api.expand({ tabId, runId: output.runId, handleId: handle, ...(offset === undefined ? {} : { offset }) })
+      : Promise.resolve(null);
+
+  // OU-10: hoisted out of `copyAll` so a row's entry menu reports into the same chip on the same schedule --
+  // one owner of "say whether the clipboard took it", rather than one per copy gesture.
+  const showCopyStatus = useCallback((status: "copied" | "failed") => {
+    if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
+    setCopyStatus(status);
+    copyStatusTimer.current = setTimeout(() => setCopyStatus(null), COPY_STATUS_DURATION_MS);
+  }, []);
 
   const copyAll = () => {
-    const text = entries.map((entry) => entryToText(entry.event)).join("\n");
-    void copyEntriesToClipboard(text).then((status) => {
-      if (copyStatusTimer.current) clearTimeout(copyStatusTimer.current);
-      setCopyStatus(status);
-      copyStatusTimer.current = setTimeout(() => setCopyStatus(null), COPY_STATUS_DURATION_MS);
-    });
+    // R-M2-T19A-1: the entries visible under the current filter chip -- the same owner the `output.copyAll`
+    // command uses, so the button and the palette can never copy different sets again.
+    const text = copyAllText(store.getState());
+    void copyEntriesToClipboard(text).then(showCopyStatus);
   };
 
   const logList = (
@@ -130,6 +167,10 @@ export function OutputPanel({
                 onInstall={onInstall}
                 onChangeWorkingDirectory={() => (tabId ? api.pickWorkingDirectory(tabId) : undefined)}
                 hasWorkingDirectory={hasWorkingDirectory}
+                onCopyStatus={showCopyStatus}
+                // OU-13: Main owns the one external-link path; the UI only says which URL the user activated.
+                onOpenLink={(url) => api.openExternal(url)}
+                {...(onExplain ? { onExplain } : {})}
               />
             </div>
           );
@@ -190,6 +231,27 @@ export function OutputPanel({
         dialogs={output.dialogs}
         onDismiss={(key) => store.getState().dismissWebDialog(key, tabId ?? undefined)}
       />
+      {/*
+        The output panel's only announcement to assistive tech. With Auto Run on, results appear with no user
+        action at all, which is precisely what a live region is for -- and precisely what floods one, hence the
+        per-run summary in `announce.ts` rather than a row-level log.
+
+        Three structural choices, not preferences:
+        - `<output>` carries an implicit `role="status"`, which is `aria-live="polite"` + `aria-atomic="true"`.
+          Polite, because an interruption per run under Auto Run would be worse than silence. It is also the
+          element `shell/parts.tsx` and `shell/ActivityBar.tsx` already use, and a `<div role="status">` would
+          trip Biome's `useSemanticElements` (see `FilterChips.tsx`'s note on the same rule).
+        - Rendered unconditionally, and OUTSIDE the `showingWebView` ternary below, so the region is in the markup
+          before it ever has content and is never torn down and rebuilt. A live region that is replaced rather
+          than mutated frequently announces nothing.
+        - `.visually-hidden` rather than new markup: the summary duplicates what the status bar already shows
+          sighted users, so it needs no pixels, and staying out of `.output`'s flex flow keeps layout unchanged.
+
+        What the tests can and cannot show: happy-dom has no accessibility tree and no layout, so `announce`'s
+        tests pin the element, its identity across re-renders, and the text that lands in it. That a screen reader
+        actually speaks it is manual QA and is not asserted anywhere.
+      */}
+      <output className="visually-hidden">{announcer.current.text}</output>
       {showingWebView ? webViewSlot : logList}
     </section>
   );

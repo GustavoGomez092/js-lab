@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import type { BunPlugin } from "bun";
+import { MAX_PACKAGE_JSON_BYTES, readBoundedTextSyncOrNull, readRegularFileTextSync } from "../fs/bounded-read";
 import type { BundleError } from "./bundler";
 import { buildCodeFrame, locateImport } from "./locate-import";
 import { isNodeBuiltin } from "./node-builtins";
@@ -294,14 +295,19 @@ export function browserEntryFor(
   if (index < 0) return undefined;
   const packageRoot = resolved.slice(0, index + marker.length - 1);
 
+  // F4: this read is synchronous and runs on Main's loop during bundling, so an unbounded read blocked it
+  // outright and a FIFO never returned at all. The bounded reader refuses both and yields null, which falls
+  // through to the same "keep Bun's answer" path an unreadable manifest already took.
+  const manifestText = readBoundedTextSyncOrNull(join(packageRoot, "package.json"), MAX_PACKAGE_JSON_BYTES);
+  if (manifestText === null) return undefined;
   let manifest: { exports?: unknown; browser?: unknown };
   try {
-    manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
+    manifest = JSON.parse(manifestText) as {
       exports?: unknown;
       browser?: unknown;
     };
   } catch {
-    return undefined; // unreadable or unparseable manifest: keep Bun's answer rather than guess
+    return undefined; // unparseable manifest: keep Bun's answer rather than guess
   }
 
   // An export or `browser` target must stay inside its own package and must actually exist. Either failing means
@@ -459,7 +465,13 @@ export function jslabResolve(
 
         let location: ReturnType<typeof locateImport>;
         try {
-          location = locateImport(readFileSync(args.importer, "utf8"), args.path);
+          // F1: `args.importer` is third-party- or user-controlled -- this runs on a resolution *miss*, and the
+          // vendor build resolves every transitive specifier (see the doc comment above), so the importer can sit
+          // inside `node_modules` or the user's working directory. A bare `readFileSync` there blocks Main's loop
+          // forever on a FIFO, and no try/catch can rescue a blocking syscall. The size stays deliberately
+          // unbounded (Bun has already read and parsed this very file to see the import), but the reader's
+          // `O_NONBLOCK` open and `isFile` check refuse a FIFO, which falls through to the unpositioned error.
+          location = locateImport(readRegularFileTextSync(args.importer), args.path);
         } catch {
           // best effort only; fall back to an unpositioned error below
         }

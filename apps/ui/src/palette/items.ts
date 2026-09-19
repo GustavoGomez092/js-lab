@@ -1,6 +1,7 @@
-import { COMMANDS, formatChordParts, type ResolvedBinding, shortcutFor } from "@jslab/shared";
+import { COMMANDS, commandTitleKey, formatChordParts, type ResolvedBinding, shortcutFor } from "@jslab/shared";
 import { listThemes } from "@jslab/themes";
 import type { CommandRegistry } from "../commands/registry";
+import { t } from "../i18n";
 import { strings } from "../strings";
 import type { PaletteItem } from "./match";
 
@@ -17,7 +18,7 @@ export function paletteItems(
     const chord = shortcutFor(bindings, meta.id);
     items.push({
       id: meta.id,
-      title: meta.title,
+      title: t(commandTitleKey(meta.id)),
       category: meta.category,
       context: "context" in meta ? meta.context : "any",
       description: spec.description?.() ?? null,

@@ -7,7 +7,7 @@ import { useOverlayPresence } from "../shell/overlay-presence";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { paletteItems } from "./items";
-import { buildSections, type RankedItem } from "./match";
+import { buildSections, firstEnabledIndex, type RankedItem, stepEnabledIndex } from "./match";
 
 export function CommandPalette(props: {
   store: AppStore;
@@ -51,6 +51,12 @@ function PaletteBody(props: {
   const items = useMemo(() => paletteItems(registry, bindings, store.getState().themeId), [registry, bindings, store]);
   const sections = useMemo(() => buildSections(items, query, context), [items, query, context]);
   const flat = useMemo(() => sections.flatMap((section) => section.items), [sections]);
+  // R-M4-PALETTE-HIDE-1: `active` is the raw index the user last moved to; `selected` normalises it onto an
+  // enabled row, and is the SINGLE owner of "the selection is never a disabled row". Normalising during render
+  // rather than in an effect covers every way the raw index lands on a disabled row -- the initial 0, the
+  // setActive(0) on every keystroke, and hovering a disabled row -- so none of those needs its own guard.
+  // -1 means nothing listed can run, and Enter is then a genuine no-op.
+  const selected = flat[active]?.enabled ? active : firstEnabledIndex(flat);
   // Fix round 1 (m-2): the close chord follows a rebound view.commandPalette keybinding, not a hard-coded ⌘⇧P.
   const closeChord = useMemo(() => shortcutFor(bindings, "view.commandPalette"), [bindings]);
 
@@ -73,7 +79,9 @@ function PaletteBody(props: {
   };
 
   const run = (item: RankedItem | undefined) => {
-    if (!item) return;
+    // R-M4-PALETTE-HIDE-1: a disabled row is inert on both paths -- it must not close the palette either, or a
+    // click would dismiss the very explanation the user just went looking for.
+    if (!item?.enabled) return;
     close();
     registry.execute(item.id, item.args);
   };
@@ -112,7 +120,7 @@ function PaletteBody(props: {
             role="combobox"
             aria-expanded="true"
             aria-controls="palette-list"
-            aria-activedescendant={flat.length > 0 ? optionId(active) : undefined}
+            aria-activedescendant={selected >= 0 ? optionId(selected) : undefined}
             aria-label={strings.palette.label}
             placeholder={strings.palette.placeholder}
             value={query}
@@ -123,13 +131,13 @@ function PaletteBody(props: {
             onKeyDown={(event) => {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
-                setActive((current) => Math.min(flat.length - 1, current + 1));
+                setActive(stepEnabledIndex(flat, selected, 1));
               } else if (event.key === "ArrowUp") {
                 event.preventDefault();
-                setActive((current) => Math.max(0, current - 1));
+                setActive(stepEnabledIndex(flat, selected, -1));
               } else if (event.key === "Enter") {
                 event.preventDefault();
-                run(flat[active]);
+                run(flat[selected]);
               } else if (event.key === "Escape") {
                 event.preventDefault();
                 close();
@@ -164,7 +172,8 @@ function PaletteBody(props: {
                     id={optionId(position)}
                     role="option"
                     tabIndex={-1}
-                    aria-selected={position === active}
+                    aria-selected={position === selected}
+                    aria-disabled={item.enabled ? undefined : true}
                     className="palette-item"
                     onMouseMove={() => setActive(position)}
                     onClick={() => run(item)}
@@ -172,6 +181,7 @@ function PaletteBody(props: {
                   >
                     <span className="palette-title">{highlight(item.title, item.ranges)}</span>
                     {item.description && <span className="palette-desc">{item.description}</span>}
+                    {!item.enabled && <span className="palette-unavailable">{strings.palette.unavailable}</span>}
                     {item.keys.length > 0 && (
                       <span className="palette-keys">
                         {item.keys.map((key) => (

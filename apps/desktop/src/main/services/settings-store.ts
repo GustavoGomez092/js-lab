@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type DeepPartial,
@@ -8,6 +7,7 @@ import {
   type Settings,
   settingsParser,
 } from "@jslab/shared";
+import { FileTooLargeError, readBoundedText } from "../fs/bounded-read";
 import { type AtomicWriteOptions, writeFileAtomic } from "../persistence/atomic-write";
 import {
   createDebouncedWriter,
@@ -18,9 +18,33 @@ import {
 } from "../persistence/json-store";
 import { strings } from "../strings";
 
+/**
+ * settings.json's byte cap, enforced in BOTH directions.
+ *
+ * The reason recorded here used to be "every field `settingsSchema` defines is a bounded scalar ... so a
+ * settings.json JSLab itself wrote is a few KB". That was false, and it was the whole justification for the number.
+ * `settingsSchema` is a `z.looseObject`, and so is every `section()` inside it, deliberately: unknown keys are
+ * passed through so an older build never discards a newer build's settings. They survive `parse`, survive
+ * `mergeSettings`, and reach `#snapshot()` -- so what JSLab writes is bounded by what it last READ, not by the
+ * schema. `#snapshot()` then pretty-prints, which expands (measured ~1.17x on a file of namespaced unknown keys).
+ *
+ * Measured end to end: a settings.json this reader ACCEPTED at 904,214 bytes was rewritten by JSLab itself at
+ * 1,054,676 -- over this cap -- and the next launch read its own file as corrupt, fell back to `.bak`, and lost the
+ * change the user had just made. R-M4-BOUNDED-6: a writer must not produce a file its own reader refuses.
+ *
+ * So the cap now bounds the write as well (`#writableSnapshot`), which makes that invariant hold by construction.
+ * The two tempting fixes are both wrong: raising the cap to a larger plausible number repeats the original defect,
+ * a bound that is merely plausible; and stripping unknown keys would discard a newer build's settings, which is the
+ * forward-compatibility `looseObject` exists to provide and a worse bug than this one.
+ *
+ * An over-cap file at READ time is still treated exactly as unparseable JSON: fall back to settings.json.bak, then
+ * to defaults.
+ */
+export const MAX_SETTINGS_BYTES = 1024 * 1024;
+
 async function storedVersion(path: string): Promise<number | null> {
   try {
-    const raw = JSON.parse(await readFile(path, "utf8")) as { version?: unknown };
+    const raw = JSON.parse(await readBoundedText(path, MAX_SETTINGS_BYTES)) as { version?: unknown };
     return typeof raw.version === "number" ? raw.version : 1;
   } catch {
     return null;
@@ -76,7 +100,12 @@ export class SettingsStore {
 
   static async open(dataDir: string, options: SettingsStoreOptions = {}): Promise<SettingsStore> {
     const path = join(dataDir, "settings.json");
-    const { value, recovered, primary, corruptCopy } = await loadJson(path, settingsParser, defaultSettings);
+    const { value, recovered, primary, corruptCopy } = await loadJson(
+      path,
+      settingsParser,
+      defaultSettings,
+      MAX_SETTINGS_BYTES,
+    );
     // The version of the file that was actually loaded: the primary, or the backup after a recovery.
     const version =
       recovered === "backup"
@@ -100,9 +129,8 @@ export class SettingsStore {
     // Rewrite after recovery, and after migrating an older file so it isn't migrated again on every launch.
     // Recovery rewrites skip the backup, so the good .bak survives (M1 T12 ruling); a migration of a valid file keeps it.
     // These run before the store is shared, so nothing can overlap them.
-    if (recovered !== "none") await store.write(path, store.#snapshot(), { backup: false });
-    else if (version !== null && version < SETTINGS_VERSION)
-      await store.write(path, store.#snapshot(), { backup: true });
+    if (recovered !== "none") await store.#rewrite({ backup: false });
+    else if (version !== null && version < SETTINGS_VERSION) await store.#rewrite({ backup: true });
     return store;
   }
 
@@ -144,6 +172,32 @@ export class SettingsStore {
   }
 
   /**
+   * The snapshot to write, or null when writing it would produce a settings.json this app's own reader refuses
+   * (R-M4-BOUNDED-6). Declining is the point: the file already on disk still loads, whereas writing an over-cap one
+   * costs the user every setting in it on the next launch. It is reported through `onWriteError`, the same channel
+   * every other failed settings write already uses.
+   */
+  #writableSnapshot(): string | null {
+    const data = this.#snapshot();
+    const bytes = Buffer.byteLength(data, "utf8");
+    if (bytes <= MAX_SETTINGS_BYTES) return data;
+    // A TYPED refusal rather than a plain Error (D1): this is the one write failure the user cannot otherwise
+    // discover -- it is silent, permanent and repeats for every later change -- so `main-services.ts` has to tell
+    // it apart from an ordinary, transient write error before showing a notice. It does that by `code`, the way
+    // every other refusal from `bounded-read.ts` is classified. FileTooLargeError already carries exactly this
+    // fact (path, size, limit, code "EFBIG"), so inventing a second class for it would be the duplication the
+    // shared reader exists to remove.
+    this.onWriteError(new FileTooLargeError(this.path, bytes, MAX_SETTINGS_BYTES));
+    return null;
+  }
+
+  /** The recovery/migration rewrite at open. A refused snapshot is skipped; any other write failure still throws. */
+  async #rewrite(options: AtomicWriteOptions): Promise<void> {
+    const data = this.#writableSnapshot();
+    if (data !== null) await this.write(this.path, data, options);
+  }
+
+  /**
    * One queued write, bounded by writeTimeoutMs (RR1-m2). Each write takes a new generation; a write that finishes after
    * a newer one started is not committed.
    */
@@ -169,7 +223,11 @@ export class SettingsStore {
   /** Queues the current snapshot behind any in-flight write and waits for it; rejects when that write fails. */
   #save(): Promise<void> {
     if (this.newerVersion !== null) return Promise.resolve();
-    this.#writer.schedule(this.#snapshot());
+    // A refused snapshot resolves rather than rejecting, matching the newerVersion case above: the change is kept
+    // in memory and deliberately not written, and #writableSnapshot has already reported why.
+    const data = this.#writableSnapshot();
+    if (data === null) return Promise.resolve();
+    this.#writer.schedule(data);
     return this.#writer.flush();
   }
 }

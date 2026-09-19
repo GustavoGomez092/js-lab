@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { emptyParamsSchema, npmrcSaveParamsSchema, type SaveResult } from "@jslab/rpc-schema";
+import { emptyParamsSchema, MAX_NPMRC_BYTES, npmrcSaveParamsSchema, type SaveResult } from "@jslab/rpc-schema";
 import { DEFAULT_NPMRC } from "@jslab/shared";
+import { readBoundedText } from "../fs/bounded-read";
 import { type AtomicWriteOptions, writeFileAtomic } from "../persistence/atomic-write";
 import { createValidators, type Log } from "./validate";
 
@@ -20,12 +20,18 @@ export function createNpmrcHandlers(deps: NpmrcHandlerDeps) {
   const write = (content: string) => (deps.write ?? writeFileAtomic)(deps.path, content, { mode: 0o600 });
   return {
     requests: {
-      "npmrc.get": (input: unknown): Promise<{ content: string }> => {
+      "npmrc.get": async (input: unknown): Promise<{ content: string }> => {
         parse(emptyParamsSchema, "npmrc.get", input);
-        return readFile(deps.path, "utf8").then(
-          (content) => ({ content }),
-          () => ({ content: DEFAULT_NPMRC }),
-        );
+        try {
+          // F2: this shipped the whole file over RPC with no cap at all. Only a missing file is the default now:
+          // the same rule FR-12 already applied to npm-service's #readNpmrc, so an oversized or unreadable
+          // .npmrc surfaces as a failure instead of silently offering the default to be saved over the user's
+          // real file.
+          return { content: await readBoundedText(deps.path, MAX_NPMRC_BYTES) };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { content: DEFAULT_NPMRC };
+          throw error;
+        }
       },
       "npmrc.save": (input: unknown): Promise<SaveResult> => {
         const { content } = parse(npmrcSaveParamsSchema, "npmrc.save", input);
@@ -38,12 +44,20 @@ export function createNpmrcHandlers(deps: NpmrcHandlerDeps) {
           (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }),
         );
       },
-      "npmrc.reset": (input: unknown): Promise<{ content: string }> => {
+      "npmrc.reset": async (input: unknown): Promise<{ content: string }> => {
         parse(emptyParamsSchema, "npmrc.reset", input);
-        return write(DEFAULT_NPMRC).then(() => {
-          deps.onSaved();
-          return { content: DEFAULT_NPMRC };
-        });
+        // F-NPMRC: the same rule `npmrc.get` applies, for the same reason. Writing the default over a file that is
+        // present but unreadable -- oversized, a FIFO, permission-denied -- destroys contents that neither the user
+        // nor JSLab has ever seen; only a genuinely absent file may be replaced sight unseen. The guard lives here
+        // rather than only in Settings because a UI-only guard leaves the path open to every other caller.
+        try {
+          await readBoundedText(deps.path, MAX_NPMRC_BYTES);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+        }
+        await write(DEFAULT_NPMRC);
+        deps.onSaved();
+        return { content: DEFAULT_NPMRC };
       },
     },
     messages: {},

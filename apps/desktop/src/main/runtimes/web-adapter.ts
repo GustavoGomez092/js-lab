@@ -13,6 +13,7 @@ import {
 } from "../bundling/bundler";
 import { resolveBareSpecifier, resolvedFromWorkingDirectory } from "../bundling/resolve-plugin";
 import { type CachedVendorChunk, hashBunLock, type VendorCache, vendorCacheKey } from "../bundling/vendor-cache";
+import { readRegularFileText } from "../fs/bounded-read";
 import type { Redactor } from "../logging/redact";
 import type { Log } from "../rpc/validate";
 import { createWebFetchRunner, type WebFetchRunner } from "../rpc/web-fetch-handlers";
@@ -452,7 +453,7 @@ class WebRunSession implements RunHandle {
     this.host.send({ type: "mute", muted });
   }
 
-  expand(handleId: string): Promise<EncodedValue | null> {
+  expand(handleId: string, offset?: number): Promise<EncodedValue | null> {
     const reqId = this.#nextReqId++;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -463,7 +464,10 @@ class WebRunSession implements RunHandle {
         clearTimeout(timer);
         resolve(value);
       });
-      this.host.send({ type: "expand", reqId, handleId });
+      // OU-02: the same spread as BunRunSession, so both transports build the identical message object. On this
+      // one the object is then JSON.stringify'd into the `__jslabHostMessage(...)` call, which drops an
+      // explicitly-undefined key anyway -- the spread is what makes the two adapters agree before that point.
+      this.host.send({ type: "expand", reqId, handleId, ...(offset === undefined ? {} : { offset }) });
     });
   }
 
@@ -874,8 +878,14 @@ export function createWebAdapter(deps: WebAdapterDeps): RuntimeAdapter {
   };
 }
 
+/**
+ * `bun.lock` from JSLab's own packages dir. The byte cap is waived and only that: a lockfile grows with the
+ * dependency graph, so no useful bound exists, and refusing a large one would disable the vendor cache for exactly
+ * the projects it helps most. The data dir is user-writable, so a FIFO can sit at this path; it is refused rather
+ * than blocking the run, and `vendorKeyFor`'s own catch turns that into "don't use the cache for this run".
+ */
 async function readBunLockFile(path: string): Promise<string> {
-  return Bun.file(path).text();
+  return readRegularFileText(path);
 }
 
 /**

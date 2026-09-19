@@ -22,13 +22,26 @@ describe("resolveAppPaths", () => {
       npmHome: "/Users/me/Library/Application Support/dev.jslab.app/stable/npm-home",
       vendorCacheDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/cache/vendor",
       envFile: "/Users/me/Library/Application Support/dev.jslab.app/stable/env.json",
+      snippetsFile: "/Users/me/Library/Application Support/dev.jslab.app/stable/snippets.json",
+      // Spec §14.3: the AI chat conversation, in its own `ai/` folder as the spec writes the path.
+      conversationFile: "/Users/me/Library/Application Support/dev.jslab.app/stable/ai/conversation.json",
       socketPath: "/Users/me/Library/Application Support/dev.jslab.app/stable/jslab.sock",
       screenshotsDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/e2e-screenshots",
+      themesDir: "/Users/me/Library/Application Support/dev.jslab.app/stable/themes",
       runnerBootstrap: "/Applications/JSLab.app/Contents/Resources/app/runner/bootstrap.js",
       // M4 §5.12: shipped beside the Bun runner's bootstrap, by the same `dist/runner` → `runner` copy rule.
       webRunnerBootstrap: "/Applications/JSLab.app/Contents/Resources/app/runner/web-bootstrap.js",
       transformWorker: "/Applications/JSLab.app/Contents/Resources/app/workers/transform-worker.js",
+      // Spec §17: staged into the bundle by hutch.config.ts and copied to Resources/app/locales, so Main
+      // reads the very files apps/ui/src/i18n/locales/ ships.
+      localesDir: "/Applications/JSLab.app/Contents/Resources/app/locales",
+      // M6: Help → About → Open-Source Notices…. Staged into the bundle by hutch.config.ts and copied to
+      // Resources/app by electrobun.config.ts's `"dist/THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md"`,
+      // so this is the file a BUILT app really opens -- not a path guessed beside the sources.
+      noticesFile: "/Applications/JSLab.app/Contents/Resources/app/THIRD-PARTY-NOTICES.md",
       bunBinary: "/Applications/JSLab.app/Contents/MacOS/bun",
+      // Spec §16.1: the symlink target Help -> Install `jslab` Command… creates.
+      cliBinary: "/Applications/JSLab.app/Contents/Resources/app/bin/jslab",
     });
   });
 
@@ -44,14 +57,19 @@ describe("resolveAppPaths", () => {
     expect(paths.runnerBootstrap).toBe("/src/bootstrap.ts");
     expect(paths.transformWorker).toBe("/src/worker.ts");
     expect(paths.bunBinary).toBe("/bin/bun");
+    expect(resolveAppPaths({ ...input, env: { JSLAB_CLI_BINARY: "/src/jslab" } }).cliBinary).toBe("/src/jslab");
+    expect(resolveAppPaths({ ...input, env: { JSLAB_NOTICES_FILE: "/src/NOTICES.md" } }).noticesFile).toBe(
+      "/src/NOTICES.md",
+    );
   });
 
   test("JSLAB_USER_DATA relocates every data path", () => {
     const paths = resolveAppPaths({ ...input, env: { JSLAB_USER_DATA: "/tmp-e2e/u1" } });
-    expect([paths.dataDir, paths.runLock, paths.socketPath]).toEqual([
+    expect([paths.dataDir, paths.runLock, paths.socketPath, paths.themesDir]).toEqual([
       "/tmp-e2e/u1",
       "/tmp-e2e/u1/run.lock",
       "/tmp-e2e/u1/jslab.sock",
+      "/tmp-e2e/u1/themes",
     ]);
   });
 

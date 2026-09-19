@@ -15,15 +15,25 @@ export const VIEW_MESSAGES = [
   "file.saveCancelled",
   "file.saveFailed",
   "app.notice",
+  "theme.changed",
+  "keybindings.changed",
   "npm.op",
   "npm.log",
   "npm.changed",
   "wd.changed",
+  "snippets.imported",
+  "snippets.exported",
+  "tab.updated",
   "app.flushState",
   "webRunner.ensure",
   "webRunner.execute",
   "webRunner.reload",
   "webRunner.destroy",
+  // Spec §14.3: the streamed reply. Listed here or the panel never hears it -- the exhaustiveness check below is
+  // what turns that omission into a typecheck failure rather than a panel that silently never fills in.
+  "ai.chunk",
+  "ai.done",
+  "ai.error",
 ] as const satisfies readonly (keyof ViewMessages)[];
 
 // Type-level exhaustiveness check: a ViewMessages key missing from VIEW_MESSAGES fails typecheck here (m-5).

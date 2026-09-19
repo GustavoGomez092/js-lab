@@ -12,6 +12,7 @@ import { filterCounts } from "../output/filters";
 import { entryToText } from "../output/text";
 import { initialOutput, visibleEntries } from "../state/output";
 import type { AppState } from "../state/store";
+import { strings } from "../strings";
 
 export interface TabSnapshot {
   id: string;
@@ -23,11 +24,14 @@ export interface TabSnapshot {
   runtime: Runtime;
   filePath: string | null;
   dirty: boolean;
+  /** B1: true when `code` below is a placeholder rather than the tab's real contents. */
+  unreadable: boolean;
   layout: TabLayout;
   code: string;
   runState: RunState | null;
   activeHandles: number;
   autoRunArmed: boolean;
+  logpoints: number[];
   entryCount: number;
   stale: boolean;
   truncated: number;
@@ -44,6 +48,8 @@ export interface UiSnapshot {
   diagnostics: number;
   focus: AppState["focus"];
   modal: string | null;
+  /** Which panel the side bar is showing, so a scenario can assert Show Transpiled Output switched it (spec §7.4). */
+  sideBarPanel: AppState["sideBarPanel"];
   outputFilter: AppState["outputFilter"];
   outputCounts: Record<AppState["outputFilter"], number>;
   statusMessage: string | null;
@@ -52,6 +58,8 @@ export interface UiSnapshot {
   themeId: string;
   vimMode: string | null;
   fontFallback: boolean;
+  /** Spec §13: how many snippets the library holds, so a scenario can watch an import or an export land. */
+  snippetCount: number;
   npm: {
     installed: { name: string; version: string | null; latest: string | null }[];
     operations: { kind: string; target: string; status: string; errorKind: string | null; notice: string | null }[];
@@ -76,19 +84,23 @@ export function snapshotState(state: AppState): UiSnapshot {
     return [
       {
         id,
-        title: deriveTitle(tab, code),
-        label: tabLabel(deriveTitle(tab, code), tab.workingDirectory),
+        title: deriveTitle(tab, code, strings.tabs.untitled),
+        label: tabLabel(deriveTitle(tab, code, strings.tabs.untitled), tab.workingDirectory),
         workingDirectory: tab.workingDirectory,
         titleIsCustom: tab.titleIsCustom,
         language: tab.language,
         runtime: tab.runtime,
         filePath: tab.filePath,
-        dirty: isDirty(tab, code),
+        // B1: a placeholder is never "modified" -- comparing it against the real file's hash is exactly what
+        // made an unreadable tab look like an unsaved edit worth writing back.
+        unreadable: state.unreadableBuffers.includes(id),
+        dirty: !state.unreadableBuffers.includes(id) && isDirty(tab, code),
         layout: tab.layout,
         code,
         runState: output.runState,
         activeHandles: output.activeHandles,
         autoRunArmed: state.runtimes[id]?.autoRunArmed ?? false,
+        logpoints: state.runtimes[id]?.logpoints ?? [],
         entryCount: output.entries.length,
         stale: output.stale,
         truncated: output.truncated,
@@ -106,6 +118,7 @@ export function snapshotState(state: AppState): UiSnapshot {
     diagnostics: state.diagnostics.length,
     focus: state.focus,
     modal: state.modal?.kind ?? null,
+    sideBarPanel: state.sideBarPanel,
     outputFilter: state.outputFilter,
     outputCounts: filterCounts(
       visibleEntries(state.output, { showUndefined: state.settings?.run.showUndefined ?? false }),
@@ -116,6 +129,7 @@ export function snapshotState(state: AppState): UiSnapshot {
     themeId: state.themeId,
     vimMode: state.vimMode,
     fontFallback: state.fontFallback,
+    snippetCount: state.snippets.length,
     npm: {
       installed: state.npm.installed.map(({ name, version, latest }) => ({ name, version, latest })),
       operations: state.npm.operations.map((op) => ({

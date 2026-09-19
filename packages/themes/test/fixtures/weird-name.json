@@ -1,0 +1,8 @@
+{
+  "name": "  Ayu  Mirage!! ",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#1F2430"
+  },
+  "tokenColors": [{ "scope": "comment", "settings": { "foreground": "#5C6773", "fontStyle": "italic" } }]
+}

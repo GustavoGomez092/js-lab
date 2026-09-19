@@ -46,6 +46,23 @@ describe("keybindings", () => {
     await waitFor(async () => activeTab(await app.state()).code === "[1, 2].length" || null);
   });
 
+  // M5a Task 5: the keyboard route to the logpoint gutter. The unit tests prove the commands against a fake
+  // handle; only a real window proves the chords reach them -- App's capture-phase listener has to win over
+  // Monaco for F9, and ⇧⌘F9 carries no `when`, so it must clear from anywhere in the window.
+  test("F9 toggles a logpoint on the caret's line and ⇧⌘F9 clears every one (spec §6.3)", async () => {
+    const app = await launchApp();
+    apps.push(app);
+    await app.type("const a = 1");
+    await app.key("f9");
+    const set = await waitFor(async () => {
+      const state = await app.state();
+      return activeTab(state).logpoints.length === 1 ? state : null;
+    });
+    expect(activeTab(set).logpoints).toEqual([1]);
+    await app.key("cmd+shift+f9");
+    await waitFor(async () => activeTab(await app.state()).logpoints.length === 0 || null);
+  });
+
   test("keybindings.json overrides replace defaults (XT-02)", async () => {
     const userData = await createUserData();
     await writeFile(

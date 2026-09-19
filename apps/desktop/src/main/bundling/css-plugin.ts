@@ -1,4 +1,5 @@
 import type { BunPlugin } from "bun";
+import { readRegularFileText } from "../fs/bounded-read";
 
 /**
  * Builds the JS source a `.css` import is replaced with: a module whose only job is to append a `<style>` element
@@ -23,7 +24,11 @@ export function cssInject(): BunPlugin {
     name: "jslab-css-inject",
     setup(build) {
       build.onLoad({ filter: /\.css$/ }, async (args) => {
-        const contents = await Bun.file(args.path).text();
+        // F-CSS: no byte cap, on purpose -- a legitimately large stylesheet must still bundle. But `args.path` is
+        // whatever Bun resolved, which reaches into `node_modules`, and `Bun.file(path).text()` on a FIFO never
+        // settles: a third-party `.css` that was a FIFO hung this promise, and the build, forever. Size is waived;
+        // being a regular file is not.
+        const contents = await readRegularFileText(args.path);
         return { contents: cssModuleSource(contents), loader: "js" };
       });
     },

@@ -34,8 +34,8 @@ These apply to every milestone plan:
 | M2 Workspace | `2026-09-13-jslab-m2-workspace.md` | Complete (manual QA items pending user) |
 | M3 Language & packages | `2026-09-14-jslab-m3-language-packages.md` | Complete (manual QA items pending user) |
 | M4 Browser runtimes | `2026-09-16-jslab-m4-browser-runtimes.md` | Complete (manual QA items pending user; WV-06 tile-header drag not built) |
-| M5 Productivity & extras | to be written at M4 completion | Not started |
-| M6 Ship | to be written at M5 completion | Not started |
+| M5 Productivity & extras | `2026-09-16-jslab-m5a-editor-productivity.md` (M5a: logpoint gutter, Show Transpiled Output, welcome tab) · `2026-09-16-jslab-m5b-snippets.md` (M5b: snippets panel, Tab expansion, completion provider, import/export) · `2026-09-16-jslab-m5d-theming-keybindings.md` (M5d: VS Code theme importer, Keybindings settings UI) | M5a, M5b, M5c (`jslab` CLI) and M5d complete (M5d manual QA items pending user, `docs/qa/m5d-checklist.md`); M5e (i18n) complete; AI chat ships **for Ollama**, with Explain Result and a conversation that survives relaunch (TL-18, TL-20). Still blocked on the owner: Gist needs a GitHub OAuth App (XT-04), and the other five AI providers need API keys (TL-22) |
+| M6 Ship | this file, §M6 | In progress. Done and gated: About with open-source notices (ST-13), the user manual (`docs/user/`, an index plus sixteen pages with a link-integrity test), and the §23 benchmark harness (`bun run bench`). Pending manual QA: file associations (TF-20) and the Help links (ST-11) — see `docs/qa/m6-checklist.md`. Out of scope by the owner's decision of 2026-09-19: signing, notarization, the updater and the Homebrew cask (PL-01, PL-03, PL-04, ST-09) |
 
 ## Dependency graph
 
@@ -124,7 +124,7 @@ M5 depends on M3 because snippets autocomplete, AI context and the CLI all use t
   9. Paging for expanded large collections in the output: entries past the first 10,000 aren't reachable yet.
 - **Parity rows:** EX-22, EX-25, EX-34, EX-35, LB-06, WV-01..WV-06.
 - **Exit:** all four guide scenarios pass manual QA.
-- **Outcome:** items 1–7 shipped. Item 8 was decided: **the default is `bun`, not `browser-node`** — recorded as spec decision **D13**, because a default tab on a web runtime began evaluating and never reported a result. **Item 9 did not land:** expanded collections still stop at 10,000 entries (parity OU-02), and it carries to M5. **WV-06 was not built:** tiles have no header-drag affordance, so the per-tab arrangement is honoured but only editable in `session.json`. **p5 is not covered** by any guide scenario; WV-04's other guides (canvas + rAF, React, Three.js/WebGL, Web Audio) are verified end to end, including all four in one tab. Eight accepted limitations are recorded in `docs/qa/m4-checklist.md` — among them that the runner channel is **not** authenticated (page code can forge an inbound command), that `import * as ns` over a bundled package diverges from Bun, and that shared built-in identity is broken across `stream`/`events`/`buffer`.
+- **Outcome:** items 1–7 shipped. Item 8 was decided: **the default is `bun`, not `browser-node`** — recorded as spec decision **D13**, because a default tab on a web runtime began evaluating and never reported a result. **Item 9 did not land in M4:** expanded collections stopped at 10,000 entries (parity OU-02). It carried to M5 and **closed there** — `run.expand` now takes an `offset` and the value tree offers "… N more entries". **WV-06 was not built, and was then superseded:** R-WEBVIEW-TAB-1 retired the tile arrangement entirely (`SESSION_VERSION` 4 migrates `arrangement`/`order` away), so there is no longer an arrangement for a header drag to change. The Web View is the bottom preview pane or the whole output panel; nothing else. **p5 is not covered** by any guide scenario; WV-04's other guides (canvas + rAF, React, Three.js/WebGL, Web Audio) are verified end to end, including all four in one tab. Eight accepted limitations are recorded in `docs/qa/m4-checklist.md` — among them that the runner channel is **not** authenticated (page code can forge an inbound command), that `import * as ns` over a bundled package diverges from Bun, and that shared built-in identity is broken across `stream`/`events`/`buffer`.
 - **Delivered beyond the original list:** a real Web View toggle command (⌥⌘W, View menu, command palette) rather than a status-bar-only switch; logged DOM elements rendering as their own opening tag with attributes and child count; the `browser`/`browser-node` E2E scenario suite and the opt-in package-guide suite against the loopback registry.
 
 ## M5: Productivity & extras
@@ -136,25 +136,43 @@ M5 depends on M3 because snippets autocomplete, AI context and the CLI all use t
   2. Snippets panel, completion provider, import/export.
   3. AI chat: provider adapters, streaming proxy, Keychain secrets, Explain Result.
   4. Gist: device flow, publish/update, open.
-  5. CLI: `jslab` binary and the socket `open` method on the existing `jslab.sock` server (M2), install/uninstall menu.
+  5. CLI: `jslab` binary and the socket `open` method on the existing `jslab.sock` server (M2), install/uninstall menu. **Done (M5c)** — plan: `docs/superpowers/plans/2026-09-16-jslab-m5c-cli.md`.
   6. VS Code theme importer.
   7. Keybindings settings UI.
   8. Show Transpiled Output, first-run welcome tab.
   9. i18n extraction and five locales.
+  10. Paging for expanded large collections in the output, closing M4 item 9 (parity OU-02).
 - **Parity rows:** EX-14..EX-16, EX-37, ED-20, OU-10, ST-08, ST-12, TL-12..TL-23, XT-01..XT-04, XT-08.
 - **Exit:** every parity row is implemented; the E2E harness runs the full scenario list.
 
 ## M6: Ship
 
-- **Goal:** Signed, notarized, auto-updating public beta, then 1.0.
-- **Spec:** §19, §22.3–22.5, §23, §4.6 (file associations).
-- **Feature list:**
-  1. Updater wiring (stable and canary) and What's New.
-  2. CI signing and notarization; release artifacts; Homebrew tap.
-  3. File associations via the `Info.plist` hook (per M0-S5).
-  4. About, credits, open-source notices.
-  5. User documentation site.
-  6. Performance benchmark job against §23 budgets.
-  7. Parity audit and beta feedback loop.
-- **Parity rows:** TF-20, ST-09, ST-11, PL-01, PL-03, PL-04.
-- **Exit:** parity gate passed; auto-update from beta N to N+1 verified on a clean machine.
+- **Goal, as planned:** Signed, notarized, auto-updating public beta, then 1.0.
+- **Goal, revised 2026-09-19 (owner's decision):** an unsigned, open-source 1.0. JSLab will not pay for an
+  Apple Developer ID, which removes not only signing and notarization but everything downstream of a signed
+  artifact — the Electrobun differential updater and the Homebrew cask both distribute or verify one. Builds
+  ship unsigned; the README's Download section tells users how to open them, and states it as how the app
+  ships rather than as a step still to come.
+- **Spec:** §19, §22.3–22.5, §23, §4.6 (file associations), §7.5 (the About dialog).
+- **Feature list** (original numbering kept; status added):
+  1. Updater wiring (stable and canary) — **out of scope** with PL-03 and ST-09. What's New itself **ships**,
+     pointing at the releases page (ST-11).
+  2. CI signing and notarization; release artifacts; Homebrew tap — **out of scope** with PL-01 and PL-04.
+     Release artifacts still publish; they are simply unsigned.
+  3. File associations via the `Info.plist` hook (per M0-S5) — **built**, pending manual QA (TF-20). No
+     automated test can close it: proving LaunchServices offers JSLab for a `.ts` file needs a packaged build.
+  4. About, credits, open-source notices — **done and gated** (ST-13). Replaces the native `{ role: "about" }`
+     panel rather than joining it, because the native one cannot name the Bun or Electrobun version or reach
+     the notices.
+  5. User documentation site — **done**: `docs/user/` is an index plus sixteen pages, guarded by a
+     link-integrity test. Ruled to ship as Markdown rather than a generated site: the content is the asset and
+     a site generator was unbudgeted risk. A future site can consume these files unchanged.
+  6. Performance benchmark job against §23 budgets — **done**: `bun run bench`. Four budgets measured, five
+     recorded in `budgets.ts` as unmeasurable without a GUI or a release build. Runnable on demand and
+     deliberately **not** CI-gating: timing on a shared runner is noisy, and a flaky gate is worse than none.
+  7. Parity audit and beta feedback loop — **in progress**. The audit has corrected eight rows whose status
+     lagged their own evidence.
+- **Parity rows:** TF-20, ST-09, ST-11, ST-13, PL-01, PL-03, PL-04.
+- **Exit, as planned:** parity gate passed; auto-update from beta N to N+1 verified on a clean machine.
+- **Exit, revised:** parity gate passed and `docs/qa/m6-checklist.md` signed off. The auto-update criterion is
+  withdrawn with PL-03 — it cannot be met without a signed artifact.

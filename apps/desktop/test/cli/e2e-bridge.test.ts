@@ -27,11 +27,64 @@ describe("E2EBridge", () => {
     bridge.rejectAll("window closed");
     await expect(pending).rejects.toThrow("window closed");
   });
+
+  /**
+   * The delivery gate. A webview whose bundle has not executed drops whatever is sent to it, so a request raised
+   * during a boot used to go nowhere and fail only at the bridge's own timeout -- measured at 6 cold launches out
+   * of 6, ~15.00s each. These cover the three things the gate has to get right.
+   */
+  test("a request raised while the view is booting is held, then sent once the view reports in", async () => {
+    const sent: E2ERequest[] = [];
+    const bridge = new E2EBridge((request) => sent.push(request), 5_000);
+    bridge.viewBooting();
+    const pending = bridge.request("state", {});
+    await Bun.sleep(20);
+    // Nothing went out: sending now is what silently loses the request.
+    expect(sent).toEqual([]);
+
+    bridge.viewReady();
+    await Bun.sleep(0);
+    expect(sent).toHaveLength(1);
+    bridge.receive({ reqId: sent[0]?.reqId ?? 0, ok: true, result: { ready: true } });
+    expect(await pending).toEqual({ ready: true });
+  });
+
+  test("the gate is open by default and still times out for a view that never boots", async () => {
+    const sent: E2ERequest[] = [];
+    const open = new E2EBridge((request) => sent.push(request));
+    const pending = open.request("state", {});
+    // Synchronously, in the same tick: an ungated bridge must behave exactly as it did before the gate existed.
+    expect(sent).toHaveLength(1);
+    // Settled rather than abandoned. A `void`ed request here keeps its 15 s timer alive and rejects long after
+    // this file is done, and Bun charges that unhandled rejection to whichever test happens to be running then --
+    // which is exactly how this test first broke an unrelated RunCoordinator case two files later.
+    open.receive({ reqId: sent[0]?.reqId ?? 0, ok: true, result: null });
+    expect(await pending).toBeNull();
+
+    const stuck = new E2EBridge(() => {}, 20);
+    stuck.viewBooting();
+    await expect(stuck.request("state", {})).rejects.toThrow(/did not answer state within 20 ms/);
+  });
+
+  test("a request retired while the gate was shut is never sent late", async () => {
+    const sent: E2ERequest[] = [];
+    const bridge = new E2EBridge((request) => sent.push(request));
+    bridge.viewBooting();
+    const pending = bridge.request("output", {});
+    bridge.rejectAll("window closed");
+    await expect(pending).rejects.toThrow("window closed");
+
+    // The window that closed is not the window that boots next; delivering to it would answer a dead request.
+    bridge.viewReady();
+    await Bun.sleep(0);
+    expect(sent).toEqual([]);
+  });
 });
 
 describe("createSocketMethods", () => {
   const deps = (e2eEnabled: boolean) => ({
     e2eEnabled,
+    open: mock(async (params: unknown) => ({ tabIds: ["t1"], params })),
     bridge: { request: mock(async (method: string, params: unknown) => ({ method, params })) },
     mainState: () => ({ windowOpen: true }),
     screenshot: mock(async (name: string, _window?: string) => ({ path: `/shots/${name}.png` })),
@@ -40,8 +93,8 @@ describe("createSocketMethods", () => {
     reopenWindow: mock(() => {}),
   });
 
-  test("exposes no e2e methods unless JSLAB_E2E=1", () => {
-    expect(Object.keys(createSocketMethods(deps(false)))).toEqual([]);
+  test("open is always available; e2e methods need JSLAB_E2E=1", () => {
+    expect(Object.keys(createSocketMethods(deps(false)))).toEqual(["open"]);
     expect(Object.keys(createSocketMethods(deps(true))).sort()).toEqual([
       "e2e.command",
       "e2e.key",
@@ -51,7 +104,19 @@ describe("createSocketMethods", () => {
       "e2e.screenshot",
       "e2e.state",
       "e2e.type",
+      "open",
     ]);
+  });
+
+  test("open validates its params and returns only tabIds, so it can't spoof the envelope", async () => {
+    const d = deps(false);
+    const methods = createSocketMethods(d);
+    expect(await methods.open?.({ code: "1 + 1", run: true })).toEqual({
+      tabIds: ["t1"],
+      params: { code: "1 + 1", run: true },
+    });
+    await expect(methods.open?.({ files: ["relative.ts"] }) ?? Promise.resolve()).rejects.toThrow();
+    await expect(methods.open?.({}) ?? Promise.resolve()).rejects.toThrow();
   });
 
   test("validates params, forwards to the UI and merges Main state", async () => {

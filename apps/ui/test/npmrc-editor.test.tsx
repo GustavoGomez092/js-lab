@@ -143,6 +143,35 @@ describe(".npmrc editor (spec §11.5)", () => {
     expect(screen.queryByRole("button", { name: strings.settings.confirmReset })).toBeNull();
   });
 
+  /**
+   * F-NPMRC. A failed load leaves `saved` null and shows the load error, and Save is correctly neutralised by that.
+   * Reset was not: it gated on an in-flight request only, so after a failed load the button stayed live and its two
+   * clicks wrote the default straight over a `.npmrc` that is present but unreadable -- the very file the load
+   * refused to guess the contents of.
+   */
+  test("Reset is disabled after a failed load, so the default is never written over an unreadable .npmrc", async () => {
+    const editor = fakeEditorFactory();
+    const api = {
+      getNpmrc: mock(async () => {
+        throw new Error("EACCES: permission denied");
+      }),
+      saveNpmrc: mock(async (_content: string) => ({ ok: true as const })),
+      resetNpmrc: mock(async () => DEFAULT_NPMRC),
+    };
+    render(<NpmrcEditor api={api} createEditor={editor.create} />);
+    // The mock rejects with "EACCES: permission denied", so the code reaches the message rather than being dropped.
+    expect(await screen.findByText(strings.settings.npmrc.loadFailed("EACCES"))).toBeTruthy();
+
+    const reset = screen.getByRole("button", { name: strings.settings.npmrc.reset }) as HTMLButtonElement;
+    expect(reset.disabled).toBe(true);
+    // R27-1's two clicks -- arm, then confirm -- are what used to reach Main's unconditional write.
+    await act(async () => {
+      reset.click();
+    });
+    expect(screen.queryByRole("button", { name: strings.settings.confirmReset })).toBeNull();
+    expect(api.resetNpmrc).not.toHaveBeenCalled();
+  });
+
   test("Confirm Reset disarms when focus or a click moves elsewhere (R27-1)", async () => {
     const editor = fakeEditorFactory();
     let handle: NpmrcEditorHandle | null = null;

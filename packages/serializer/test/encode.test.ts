@@ -506,3 +506,140 @@ describe("robustness", () => {
     );
   });
 });
+
+describe("paging an expanded collection (OU-02)", () => {
+  test("a second page starts where the first ended, and the remainder stays honest", () => {
+    // maxEntries is EXPANDED_LIMITS.maxEntries (10,000) in production; a small number exercises the same code.
+    const e = make({ ...DEFAULT_LIMITS, maxEntries: 2 });
+    const encoded = e.encode([10, 11, 12, 13, 14]) as {
+      items: unknown[];
+      more: number;
+      handle: string;
+      next: number;
+      from?: number;
+    };
+    expect(encoded.items).toHaveLength(2);
+    expect(encoded.more).toBe(3);
+    expect(encoded.next).toBe(2);
+    // The FIRST page carries no `from`: absent means 0, and writing a redundant 0 would widen every truncated
+    // collection on the wire for nothing.
+    expect(encoded.from).toBeUndefined();
+
+    const second = e.expand(encoded.handle, encoded.next) as {
+      items: [number, { v: string }][];
+      more?: number;
+      from: number;
+      next?: number;
+    };
+    // Real indices, not positions within the page: the user sees 2, 3, 4 — not 0, 1, 2 again.
+    expect(second.items.map(([index, value]) => [index, value.v])).toEqual([
+      [2, "12"],
+      [3, "13"],
+      [4, "14"],
+    ]);
+    expect(second.from).toBe(2);
+    // `more` and `next` are OMITTED when nothing is left, exactly as the eager encoder already omits them for a
+    // collection that fit whole. Asserting `toBe(0)` here would pin a field the encoder deliberately never writes.
+    expect(second.more).toBeUndefined();
+    expect(second.next).toBeUndefined();
+  });
+
+  test("an offset past the end is an empty page, not an error", () => {
+    const e = make();
+    const encoded = e.encode([1, 2, 3]) as { handle?: string };
+    // A short array has no `more` and so no handle; register one the way a truncating encode would.
+    const handle = e.registry.register({ kind: "value", value: [1, 2, 3] });
+    const page = e.expand(handle, 99) as { t: string; items: unknown[]; from: number; more?: number };
+    expect(page).toMatchObject({ t: "array", items: [], from: 99 });
+    expect(page.more).toBeUndefined();
+    expect(encoded.handle).toBeUndefined();
+  });
+
+  test("Sets, Maps and typed arrays page from the same offset", () => {
+    const e = make({ ...DEFAULT_LIMITS, maxEntries: 1 });
+
+    const set = e.encode(new Set([1, 2, 3])) as { handle: string; next: number };
+    expect(set.next).toBe(1);
+    const secondSetPage = e.expand(set.handle, set.next) as {
+      t: string;
+      size: number;
+      from: number;
+      items: unknown[];
+    };
+    expect(secondSetPage).toMatchObject({ t: "set", size: 3, from: 1 });
+    // `expand` re-encodes under EXPANDED_LIMITS (maxEntries 10,000), not under this encoder's maxEntries of 1,
+    // so the second page is the whole remainder.
+    expect(secondSetPage.items).toHaveLength(2);
+
+    const map = e.encode(
+      new Map([
+        ["a", 1],
+        ["b", 2],
+      ]),
+    ) as { handle: string; next: number };
+    const secondMapPage = e.expand(map.handle, map.next) as {
+      entries: [{ v: string }, { v: string }][];
+      from: number;
+    };
+    expect(secondMapPage.from).toBe(1);
+    expect(secondMapPage.entries.map(([k, v]) => [k.v, v.v])).toEqual([["b", "2"]]);
+
+    const typed = e.encode(new Uint8Array([7, 8, 9])) as { handle: string; next: number };
+    const secondTypedPage = e.expand(typed.handle, typed.next) as {
+      t: string;
+      items: number[];
+      from: number;
+      more?: number;
+    };
+    expect(secondTypedPage).toMatchObject({ t: "typedArray", items: [8, 9], from: 1 });
+    expect(secondTypedPage.more).toBeUndefined();
+  });
+
+  test("a Map and a Set stop exactly at the page edge, never one entry past it", () => {
+    // `#map`/`#set` have no random access, so they count an index instead of slicing. That makes the bound
+    // `index >= end` the only thing holding the page to its width, and an off-by-one there (`index > end`) is
+    // invisible to `more`/`next` — which are computed from `end` in `#take`, not from what the loop pushed. The
+    // page would then carry one entry more than the remainder it advertises. Arrays and typed arrays cannot drift
+    // this way (their loops are bounded by `i < end` directly), which is why this case needs its own pin.
+    const e = make({ ...DEFAULT_LIMITS, maxEntries: 2 });
+
+    const map = e.encode(
+      new Map([
+        ["a", 1],
+        ["b", 2],
+        ["c", 3],
+      ]),
+    ) as { entries: [{ v: string }, { v: string }][]; more: number; next: number };
+    expect(map.entries.map(([k, v]) => [k.v, v.v])).toEqual([
+      ["a", "1"],
+      ["b", "2"],
+    ]);
+    expect(map.more).toBe(1);
+    expect(map.next).toBe(2);
+
+    const set = e.encode(new Set([1, 2, 3])) as { items: { v: string }[]; more: number; next: number };
+    expect(set.items.map((v) => v.v)).toEqual(["1", "2"]);
+    expect(set.more).toBe(1);
+    expect(set.next).toBe(2);
+  });
+
+  test("a sparse array's remainder counts entries beyond the page, not items pushed", () => {
+    // The basis change: `more` is `total - end`. With holes, "items pushed" and "entries beyond this page" differ,
+    // and only the second is what the "… N more entries" button may promise.
+    const e = make({ ...DEFAULT_LIMITS, maxEntries: 2 });
+    // biome-ignore lint/suspicious/noSparseArray: testing holes against the paging arithmetic
+    const encoded = e.encode([1, , , 4, 5]) as { items: unknown[]; more: number; next: number };
+    expect(encoded.more).toBe(3);
+    expect(encoded.next).toBe(2);
+  });
+
+  test("an object is not paged, and still reports its true remainder (documented boundary)", () => {
+    // spec §5.9 (design.md:443-444) separates "Properties per object eagerly" from "Collection entries";
+    // OU-02 is the second row only.
+    const e = make({ ...DEFAULT_LIMITS, maxProps: 2 });
+    const encoded = e.encode({ a: 1, b: 2, c: 3 }) as { more: number; next?: number; from?: number };
+    expect(encoded.more).toBe(1);
+    expect(encoded.next).toBeUndefined();
+    expect(encoded.from).toBeUndefined();
+  });
+});

@@ -1,21 +1,27 @@
 import { appNoticeSchema, MAX_TEXT_CHARS } from "@jslab/rpc-schema";
 import {
+  AI_PROVIDER_NONE,
   commandMeta,
+  commandTitleKey,
   DEFAULT_KEYBINDINGS,
   formatChord,
   resolveKeybindings,
   shortcutFor,
   tabLabel,
 } from "@jslab/shared";
+import { registerUserThemes } from "@jslab/themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
+import { explainPrompt } from "../ai/explain";
+import { persistConversation } from "../ai/persist";
 import type { MainApi } from "../api";
 import { createAppCommands } from "../commands/app-commands";
 import { createEditorCommands, EDITOR_ACTIONS } from "../commands/editor-commands";
 import { createOutputCommands } from "../commands/output-commands";
 import { CommandRegistry } from "../commands/registry";
 import { createViewCommands } from "../commands/view-commands";
-import { createE2EAgent } from "../e2e/agent";
+import { createE2EAgent, reportAudioIndicators } from "../e2e/agent";
+import { measureLayout } from "../e2e/layout-metrics";
 import { Editor } from "../editor/Editor";
 import { getEditorHandle } from "../editor/editor-handle";
 import { EnvVarsSheet } from "../env/EnvVarsSheet";
@@ -23,6 +29,7 @@ import { createFileCommands } from "../files/file-commands";
 import { createFileFlows } from "../files/file-flows";
 import { createFormatActions } from "../format/format-actions";
 import { type Formatter, shouldFormatBeforeRun } from "../format/formatter";
+import { t } from "../i18n";
 import { contextFromState, KeybindingResolver } from "../keybindings/resolver";
 import { NpmSheet } from "../npm/NpmSheet";
 import { operationStatusMessage } from "../npm/npm-panel";
@@ -30,9 +37,13 @@ import { OutputTiles } from "../output/OutputTiles";
 import { WebViewHosts, type WebviewDock } from "../output/WebViewHosts";
 import { recordAppRender, webViewTileCounters } from "../output/WebViewTile";
 import { CommandPalette } from "../palette/CommandPalette";
+import { paletteContext } from "../palette/context";
+import { snippetBodyFactory, snippetColorize } from "../snippets/monaco-bridge";
+import { createSnippetActions, createSnippetCommands } from "../snippets/snippet-actions";
 import { startAutoRun } from "../state/auto-run";
 import { createBufferSync } from "../state/buffer-sync";
 import { createEventCoalescer, createFrameScheduler } from "../state/event-coalescer";
+import type { DisplayEvent } from "../state/output";
 import type { AppStore } from "../state/store";
 import { strings } from "../strings";
 import { RenameDialog } from "../tabs/RenameDialog";
@@ -41,12 +52,14 @@ import { createTabActions } from "../tabs/tab-actions";
 import { createTabSummaryCache } from "../tabs/tab-summary";
 import { startThemeSync } from "../themes/apply";
 import { startAppearanceSync } from "../themes/fonts";
+import { ThemePickDialog } from "../themes/ThemePickDialog";
 import { createThemeCommands } from "../themes/theme-commands";
+import { AboutDialog } from "./AboutDialog";
 import { ActivityBar } from "./ActivityBar";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { createDialogs } from "./dialogs";
 import { BUSY_STATES } from "./labels";
-import { SafeModeBanner, StartupNotices, UnresponsiveDialog } from "./parts";
+import { SafeModeBanner, StartupNotices, UnreadableBufferBanner, UnresponsiveDialog } from "./parts";
 import { SideBar } from "./SideBar";
 import { SplitPane } from "./SplitPane";
 import { StatusBar } from "./StatusBar";
@@ -97,6 +110,9 @@ export function App({
   const runState = useStore(store, (s) => s.output.runState);
   const safeMode = useStore(store, (s) => s.safeMode);
   const notices = useStore(store, (s) => s.notices);
+  // B1: whether the tab on screen right now is showing a placeholder instead of its file. A plain boolean, so
+  // this subscription only re-renders the shell when the answer actually flips.
+  const activeUnreadable = useStore(store, (s) => s.unreadableBuffers.includes(s.activeTabId ?? ""));
   const settings = useStore(store, (s) => s.settings);
   const sideBarPanel = useStore(store, (s) => s.sideBarPanel);
   const tabCount = useStore(store, (s) => s.tabOrder.length);
@@ -119,6 +135,7 @@ export function App({
       runState,
       safeMode,
       notices,
+      activeUnreadable,
       settings,
       sideBarPanel,
       tabCount,
@@ -183,7 +200,9 @@ export function App({
           tabId,
           code,
           language: freshTab.language,
-          logpoints: [],
+          // Spec §6.3 / §5.5: the tab's own logpoint lines, read at send time like `code` above, so a toggle
+          // that landed while a format was in flight is still included.
+          logpoints: fresh.runtimes[tabId]?.logpoints ?? [],
           reason,
           runtime: freshTab.runtime,
         });
@@ -239,7 +258,11 @@ export function App({
     return () => tabs.setBeforeClose(null);
   }, [tabs, flows, bufferSync]);
 
-  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, store.getState().keybindings), [store]);
+  // Finding K1: this was `useMemo(..., [store])` reading state imperatively, so it ran once at mount and a saved
+  // binding could not take effect before a relaunch. Subscribing is what makes Settings -> Keybindings work;
+  // everything downstream (keysFor, the resolver, the keycaps, the palette) already follows `bindings`.
+  const keybindingRules = useStore(store, (s) => s.keybindings);
+  const bindings = useMemo(() => resolveKeybindings(DEFAULT_KEYBINDINGS, keybindingRules), [keybindingRules]);
   // R23-1: hoisted above the registry so app-commands' npm.install status message can show its keycap too.
   const keysFor = useCallback(
     (command: string) => {
@@ -249,15 +272,68 @@ export function App({
     [bindings],
   );
 
+  // Only `insert` / `insertInNewTab` reach the panel, and neither touches the side bar -- so this can be built
+  // before the registry exists. Side-bar control lives in the command deps below (ruling R-M5b-D3/D4-FIX-b).
+  const snippetActions = useMemo(() => createSnippetActions({ store, editor: getEditorHandle, tabs }), [store, tabs]);
+
+  /**
+   * Spec §14.1: what an AI code block's two editor buttons do.
+   *
+   * `typeText(code, false)` inserts at the caret and replaces the selection, which is what every other
+   * insert-at-cursor path in the app uses; `replaceAll` replaces the buffer as ONE undoable edit, so a user who
+   * did not want the whole file rewritten gets it back with a single undo.
+   */
+  const aiActions = useMemo(
+    () => ({
+      insertAtCursor: (code: string) => getEditorHandle()?.typeText(code, false),
+      replaceEditor: (code: string) => getEditorHandle()?.replaceAll(code),
+    }),
+    [],
+  );
+
   const registry = useMemo(() => {
     const created = new CommandRegistry((id, error) =>
-      store.getState().setStatusMessage(strings.commands.failed(commandMeta(id)?.title ?? id, error)),
+      store.getState().setStatusMessage(strings.commands.failed(commandMeta(id) ? t(commandTitleKey(id)) : id, error)),
     );
+    // `view.sideBar` keeps ONE writer -- the `view.toggleSideBar` command -- exactly as `view.showTranspiled` below
+    // does. A second mechanism writing the setting directly is what ruling R-M5b-D3/D4-FIX-a forbids.
+    const snippetDeps = {
+      store,
+      api,
+      editor: getEditorHandle,
+      tabs,
+      panelShowing: () =>
+        Boolean(store.getState().settings?.view.sideBar) && store.getState().sideBarPanel === "snippets",
+      openPanel: () => {
+        const state = store.getState();
+        state.setSideBarPanel("snippets");
+        if (!state.settings?.view.sideBar) created.execute("view.toggleSideBar");
+      },
+      closePanel: () => {
+        if (store.getState().settings?.view.sideBar) created.execute("view.toggleSideBar");
+      },
+    };
     created.register(
       ...createAppCommands({ store, api, tabs, run: () => run("manual"), editor: getEditorHandle, keysFor }),
-      ...createEditorCommands(getEditorHandle),
+      ...createEditorCommands(getEditorHandle, store),
       ...createThemeCommands(store, api),
       ...createViewCommands(store, api),
+      ...createSnippetCommands(snippetDeps),
+      // Spec §14.1: Ctrl+Cmd+I. The same three-way toggle the activity-bar button has (R-M5b-3), and it routes
+      // through `view.toggleSideBar` so `view.sideBar` keeps its single writer (R-M5b-D3/D4-FIX-a).
+      {
+        id: "tools.aiChat",
+        run: () => {
+          const state = store.getState();
+          const showing = Boolean(state.settings?.view.sideBar) && state.sideBarPanel === "ai";
+          if (showing) {
+            created.execute("view.toggleSideBar");
+            return;
+          }
+          state.setSideBarPanel("ai");
+          if (!state.settings?.view.sideBar) created.execute("view.toggleSideBar");
+        },
+      },
       ...createFileCommands(flows, api),
       ...createOutputCommands(store),
       {
@@ -268,20 +344,21 @@ export function App({
             state.closeModal();
             return;
           }
-          // Fix round 1 (m-5): store.focus is only updated by explicit focus-capture handlers (OutputPanel,
-          // Monaco) and is never reset when focus moves elsewhere (toolbar, tab bar, side bar, blur to body),
-          // so it can go stale. The live DOM focus (the same signal contextFromState uses for outputFocus) is
-          // the source of truth; state.focus is only a fallback when nothing meaningful has focus.
-          const active = document.activeElement;
-          const context =
-            active && active !== document.body
-              ? active.closest(".output")
-                ? "output"
-                : "editor"
-              : state.focus === "output"
-                ? "output"
-                : "editor";
-          state.openModal({ kind: "palette", context });
+          // Fix round 1 (m-5), now shared with the focus commands (UI item 2): live DOM focus is the source of
+          // truth and state.focus is only the fallback -- see palette/context.ts for why.
+          state.openModal({ kind: "palette", context: paletteContext(document.activeElement, state.focus) });
+        },
+      },
+      // spec §7.4: Show Transpiled Output "opens a read-only side tab", so unlike the activity bar's `togglePanel`
+      // this only ever *opens* the panel -- invoking it while that panel is already showing must not close it.
+      // Opening goes through `view.toggleSideBar` rather than writing `view.sideBar` here, so the persisted setting
+      // keeps a single owner and a second invocation writes nothing.
+      {
+        id: "view.showTranspiled",
+        run: () => {
+          const state = store.getState();
+          state.setSideBarPanel("transpiled");
+          if (!state.settings?.view.sideBar) created.execute("view.toggleSideBar");
         },
       },
       {
@@ -301,6 +378,8 @@ export function App({
       stop: keysFor("run.stop"),
       settings: keysFor("app.settings"),
       npm: keysFor("tools.npmPackages"),
+      snippets: keysFor("tools.snippets"),
+      aiChat: keysFor("tools.aiChat"),
     }),
     [keysFor],
   );
@@ -344,6 +423,18 @@ export function App({
         registry.execute(command, args);
       }),
       api.on("settings.changed", ({ settings }) => store.getState().receiveSettings(settings)),
+      // Finding K1: a keybindings.json write in Main reaches the running app here. The dispatcher, the palette's
+      // keycaps and the chrome's keycaps all derive from `bindings`, which now follows the store.
+      api.on("keybindings.changed", ({ rules }) => store.getState().setKeybindings(rules)),
+      // Spec §9.3: a theme was imported, so the whole imported set is re-registered and the current selection is
+      // re-applied -- that is what makes the picker, the palette and Monaco show it without a settings change.
+      api.on("theme.changed", ({ themes }) => {
+        registerUserThemes(themes);
+        const current = store.getState().settings;
+        // `updateSettings`, not `receiveSettings`: this must not bump `settingsRevision` and so invalidate the
+        // `writeSettings` that is in flight selecting the theme that just arrived.
+        if (current) store.getState().updateSettings({ ...current });
+      }),
       // Task 26: Main's npm list changed; receiveNpmList bumps packagesRevision itself when names/versions change,
       // so the type feeder's package cache still invalidates without a separate, redundant bump here.
       api.on("npm.changed", (list) => store.getState().receiveNpmList(list)),
@@ -359,6 +450,9 @@ export function App({
       // Task 24: the working directory changed (wd.pick/wd.clear); the editor's own subscription invalidates
       // the type feeder for the active tab once the store's tab is updated (Editor.tsx, unchanged here).
       api.on("wd.changed", ({ tab }) => store.getState().applyTabUpdate(tab)),
+      // Spec §16.3: a tab Main changed on its own -- `jslab --title` on an already-open file. The same store action
+      // `wd.changed` above and `file.saved` below use; without it the UI never learns the rename (M5c F3).
+      api.on("tab.updated", ({ tab }) => store.getState().applyTabUpdate(tab)),
       api.on("file.opened", (payload) => void flows.handleOpened(payload)),
       api.on("file.saved", (payload) => flows.handleSaved(payload)),
       api.on("file.saveCancelled", (payload) => flows.handleSaveCancelled(payload)),
@@ -381,6 +475,14 @@ export function App({
     };
   }, [store, api, registry, flows, coalescer, bufferSync, keycaps]);
 
+  // R-M5D-REGISTRY-1 / Finding S1: Settings → Keybindings renders a catalogue derived from COMMANDS, annotated with
+  // what this window actually registered. The registry lives here, in the main window's React tree, and Settings is a
+  // separate window with its own narrower RPC -- so the ids travel through Main. Published on every registry build,
+  // which is precisely when a command could have appeared or gone away.
+  useEffect(() => {
+    api.publishCommands(registry.list().map((spec) => spec.id));
+  }, [api, registry]);
+
   useEffect(() => {
     if (!e2e) return;
     const agent = createE2EAgent({
@@ -390,6 +492,13 @@ export function App({
       executeCommand: (id, args) => registry.execute(id, args),
       missingEditorActions: () => getEditorHandle()?.missingActions(Object.values(EDITOR_ACTIONS)) ?? [],
       editorOptions: () => getEditorHandle()?.getOptions() ?? null,
+      // XT-11: fold and scroll state, plus the named fold trigger a scenario needs because a synthetic Tab or
+      // chord never reaches Monaco's own keybinding dispatch (`packages/e2e/src/app.ts`).
+      viewGeometry: () => getEditorHandle()?.getViewGeometry() ?? null,
+      foldAll: () => getEditorHandle()?.runAction("editor.foldAll") ?? false,
+      // EX-35: the tab audio indicators as the tab bar actually rendered them. Deliberately NOT derived from
+      // `runtimes[].audioActive` or `tabs[].layout.muted` -- see `AudioIndicatorReport`.
+      audioIndicators: reportAudioIndicators,
       registeredCommands: () => registry.list().map((spec) => spec.id),
       tsDiagnostics: () => getEditorHandle()?.typeDiagnostics() ?? Promise.resolve([]),
       completions: (offset) => getEditorHandle()?.completionsAt(offset) ?? Promise.resolve([]),
@@ -404,6 +513,18 @@ export function App({
         outputPlain: document.querySelector(".output-plain") !== null,
         lineAnchors: document.querySelector(".entry-line") !== null,
         staleLabel: document.querySelector(".output-stale-label") !== null,
+        // M5a (spec §7.4): the read-only transpiled-output panel, so a scenario can tell it is on screen, and
+        // (R-M5a-7) whether it is currently admitting that what it shows is output for code that has since changed.
+        transpiledPanel: document.querySelector(".transpiled-panel") !== null,
+        transpiledStale: document.querySelector(".transpiled-stale-label") !== null,
+        // Spec §13.1: the snippets panel, so a scenario can tell it is on screen.
+        snippetsPanel: document.querySelector(".snippets-panel") !== null,
+        // Spec §13.4 / ruling R-M5b-8: the overwrite / keep both / skip chooser, and a refused import's alert. Both
+        // exist so an E2E scenario can wait for a POSITIVE signal that an import round trip landed. Without them the
+        // only observables are `snippetCount` and `snippets.json`, which are *already* at their expected values
+        // before the import is even dispatched -- so an assertion on those alone passes whether or not the import ran.
+        snippetsConflicts: document.querySelector(".snippets-conflicts") !== null,
+        snippetsError: document.querySelector('.snippets-status[role="alert"]') !== null,
         // M4 Task 16: the Web View tile's docking placeholder, which `OutputTiles` renders only for a runtime that
         // can host a webview and only while that tab's own Web View toggle is on -- so this is what an E2E
         // scenario reads to tell "the tile is on screen" from "a bun tab never gets one" (spec §7.1, parity WV-01).
@@ -435,6 +556,42 @@ export function App({
           counters: webViewTileCounters(),
         };
       },
+      // M5e: the shell's own boxes, measured by a real layout engine, for the layout-under-translation scenario.
+      // `.status-item` / `.tab-title` are two of the four tolerance rules Task 13 added and nothing tested; the
+      // rest are here so "nothing renders at zero size" and "nothing overflows the page" can be checked per region.
+      layoutMetrics: () =>
+        measureLayout(
+          {
+            // `#root` and not `<html>`: `#root` is `overflow: hidden`, so it clips its own overflow and the page
+            // element never reports it. A horizontal-overflow check has to be made against the box that contains it.
+            rootEl: "#root",
+            app: ".app",
+            appMain: ".app-main",
+            toolbar: ".toolbar",
+            activityBar: ".activity-bar",
+            tabBar: ".tab-bar",
+            statusBar: ".status-bar",
+            statusLeft: ".status-left",
+            statusRight: ".status-right",
+            output: ".output",
+            sideBar: ".side-bar",
+            snippetsPanel: ".snippets-panel",
+            palette: ".palette",
+            paletteList: ".palette-list",
+            // ST-13 (M6): the About dialog and its version list. `measureFirst` returns `null` when the selector
+            // matches nothing, so one reporter answers both "is it on screen, at a real size" and "what does it
+            // say" -- and the text is what makes the second question answerable at all.
+            aboutDialog: ".about-dialog",
+            aboutFacts: '[data-testid="about-facts"]',
+          },
+          {
+            statusItems: ".status-item",
+            tabs: ".tab",
+            tabTitles: ".tab-title",
+            paletteItems: ".palette-item",
+            paletteTitles: ".palette-title",
+          },
+        ),
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {
       agent(method, params).then(
@@ -489,6 +646,33 @@ export function App({
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [store, resolver, registry]);
 
+  // Spec §14.3: the conversation is written to `ai/conversation.json` whenever it settles, and New Chat clears
+  // it. Subscribed HERE rather than in `AiChatPanel`, because that panel unmounts whenever the side bar closes
+  // -- including mid-reply, which the store deliberately supports -- so a panel-owned save would miss exactly
+  // the replies that finished while the user was looking at something else.
+  useEffect(() => persistConversation(store, api), [store, api]);
+
+  /**
+   * TL-20 (spec §14.2): "from an output entry, it opens the panel and sends …".
+   *
+   * Opening is unconditional -- the user asked for the panel and gets it. Queuing the prompt is not: with no
+   * provider configured the panel shows spec §14.1's "Choose a provider" card, and a prompt sent behind that
+   * card would only come back as a `notConfigured` error the user cannot act on. The card already says the one
+   * useful thing and opens Settings → AI, so it is left to say it.
+   */
+  const explainEntry = useCallback(
+    (event: DisplayEvent) => {
+      const state = store.getState();
+      state.setSideBarPanel("ai");
+      // `view.sideBar` keeps its single writer, the command (R-M5b-D3/D4-FIX-a) -- never a direct settings
+      // write. Only when closed, so Explain Result can never toggle the panel shut on the user.
+      if (!state.settings?.view.sideBar) registry.execute("view.toggleSideBar");
+      if ((state.settings?.ai.provider ?? AI_PROVIDER_NONE) === AI_PROVIDER_NONE) return;
+      state.requestAiExplain(explainPrompt(event));
+    },
+    [store, registry],
+  );
+
   const togglePanel = useCallback(
     (panel: "snippets" | "ai") => {
       const state = store.getState();
@@ -536,6 +720,7 @@ export function App({
         onToggleAutoRun={() => registry.execute("run.toggleAutoRun")}
         onRun={() => registry.execute("run.start")}
         onStop={() => registry.execute("run.stop")}
+        onZoom={() => registry.execute("view.zoomWindow")}
       >
         {tabCount > 1 || settings.view.tabBarForSingleTab ? (
           <TabBar store={store} tabs={tabs} api={api} />
@@ -552,6 +737,9 @@ export function App({
           unexpectedError: { label: strings.notices.copyDebugLog, run: () => api.appCommand("copyDebugLog") },
         }}
       />
+      {/* B1: not dismissible and not a count -- it stands for as long as THIS tab is showing a placeholder, so an
+          empty editor can never be mistaken for a genuinely empty file. */}
+      {activeUnreadable && <UnreadableBufferBanner />}
       <div className="app-main">
         {settings.view.activityBar && (
           <ActivityBar
@@ -564,6 +752,7 @@ export function App({
             settingsKeys={keycaps.settings}
             npmOpen={npmOpen}
             npmKeys={keycaps.npm}
+            snippetsKeys={keycaps.snippets}
             onRun={() => registry.execute("run.start")}
             onStop={() => registry.execute("run.stop")}
             onPanel={togglePanel}
@@ -571,9 +760,21 @@ export function App({
             onNpm={() => registry.execute("tools.npmPackages")}
           />
         )}
-        {settings.view.sideBar && <SideBar panel={sideBarPanel} />}
+        {settings.view.sideBar && (
+          <SideBar
+            aiActions={aiActions}
+            panel={sideBarPanel}
+            store={store}
+            api={api}
+            dialogs={dialogs}
+            actions={snippetActions}
+            colorize={snippetColorize}
+            createBody={snippetBodyFactory}
+          />
+        )}
         <SplitPane
           orientation={orientation}
+          label={strings.shell.splitter.editorOutput}
           size={editorSize}
           secondVisible={outputVisible}
           onResize={(size) => store.getState().setEditorSize(size)}
@@ -584,6 +785,7 @@ export function App({
               api={api}
               onLargePaste={flows.confirmLargePaste}
               onInstall={install}
+              onCreateSnippet={() => registry.execute("snippets.create")}
               vimSlot={vimSlot}
             />
           }
@@ -594,6 +796,7 @@ export function App({
               runKeys={keycaps.run}
               onInstall={install}
               onWebviewDock={setWebviewDock}
+              onExplain={explainEntry}
             />
           }
         />
@@ -613,6 +816,8 @@ export function App({
         />
       )}
       <RenameDialog store={store} />
+      <AboutDialog store={store} api={api} />
+      <ThemePickDialog store={store} api={api} />
       <ConfirmDialog store={store} dialogs={dialogs} />
       <EnvVarsSheet store={store} api={api} />
       <NpmSheet store={store} api={api} />

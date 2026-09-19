@@ -56,6 +56,8 @@ function setup(
       }),
       findTabByPath: mock((path: string) => Object.values(tabs).find((tab) => tab.filePath === path) ?? null),
       setLastDirectory: mock(() => {}),
+      // B1: no tab here has an unreadable buffer; `save-truncation.test.ts` drives the real SessionStore for that.
+      isBufferUnreadable: mock((_tabId: string) => false),
     },
     openDialog: mock(async () => options.openPaths ?? []),
     saveDialog: mock(async () => {

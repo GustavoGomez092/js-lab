@@ -1,3 +1,4 @@
+import type { SideBarPanel } from "../state/store";
 import { strings } from "../strings";
 
 const ICONS = {
@@ -29,7 +30,9 @@ function Icon({ path }: { path: string }) {
 export function ActivityBar(props: {
   busy: boolean;
   sideBarOpen: boolean;
-  panel: "snippets" | "ai";
+  // Wider than the two buttons this bar owns: the side bar can also be showing Transpiled Output, which has no
+  // activity-bar button of its own (spec §7.4 puts it in the Actions menu), and then neither button is pressed.
+  panel: SideBarPanel;
   canOpenSettings: boolean;
   /** Keycap text from the effective keybindings, or null when the command is unbound (FB-m3). */
   runKeys: string | null;
@@ -38,6 +41,7 @@ export function ActivityBar(props: {
   /** True while the NPM Packages sheet is open. */
   npmOpen?: boolean;
   npmKeys?: string | null;
+  snippetsKeys?: string | null;
   onRun(): void;
   onStop(): void;
   onPanel(panel: "snippets" | "ai"): void;
@@ -69,7 +73,7 @@ export function ActivityBar(props: {
       {props.busy && <output className="activity-spinner" aria-label={strings.shell.running} />}
       <button
         type="button"
-        title={strings.shell.snippets}
+        title={strings.shell.withKeys(strings.shell.snippets, props.snippetsKeys ?? null)}
         aria-label={strings.shell.snippets}
         aria-pressed={open("snippets")}
         onClick={() => props.onPanel("snippets")}

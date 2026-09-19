@@ -1,20 +1,24 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
 import { type BootstrapPayload, MAX_TEXT_CHARS, type TabCloseResult } from "@jslab/rpc-schema";
 import {
+  COMMANDS,
   parseChord as chordOf,
   createTab,
   DEFAULT_KEYBINDINGS,
   defaultSession,
   defaultSettings,
   formatChord,
+  formatChordParts,
   type KeybindingRule,
   MAX_CLOSED_TABS,
   mergeSettings,
   resolveKeybindings,
   type Settings,
   shortcutFor,
+  type TabState,
 } from "@jslab/shared";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { convertVsCodeTheme, listThemes, registerUserThemes } from "@jslab/themes";
+import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type ComponentType, Profiler } from "react";
 import type { MainApi } from "../src/api";
 import { type EditorHandle, type OffsetEdit, setEditorHandle } from "../src/editor/editor-handle";
@@ -25,6 +29,7 @@ import { applyEdits } from "../src/format/line-diff";
 import * as OutputPanelModule from "../src/output/OutputPanel";
 import { ActivityBar } from "../src/shell/ActivityBar";
 import { runStateLabel } from "../src/shell/labels";
+import { setSnippetMonaco } from "../src/snippets/monaco-bridge";
 import { BUFFER_SYNC_DELAY_MS } from "../src/state/buffer-sync";
 import { type AppStore, createAppStore } from "../src/state/store";
 import { strings } from "../src/strings";
@@ -54,13 +59,15 @@ function renderApp(
   safeMode: BootstrapPayload["safeMode"] = { active: false, reason: null },
   keybindings: KeybindingRule[] = [],
   scheduleFrame: (callback: () => void) => void = (callback) => callback(),
-  options: { formatter?: Formatter; settings?: Settings } = {},
+  options: { formatter?: Formatter; settings?: Settings; unreadable?: boolean } = {},
 ) {
   const store = createAppStore();
   store.getState().hydrate({
     settings: options.settings ?? defaultSettings(),
     session: defaultSession(() => createTab({ id: "t1" })),
-    buffers: { t1: "1 + 1" },
+    // B1: Main leaves a tab whose buffer it couldn't read absent from `buffers` rather than inventing it as empty.
+    buffers: options.unreadable ? {} : { t1: "1 + 1" },
+    unreadableBuffers: options.unreadable ? ["t1"] : [],
     safeMode,
     keybindings,
     versions: { app: "0.0.1", bun: "1.3.13" },
@@ -105,15 +112,65 @@ function fakeEditor(store: AppStore, tabId: string, focused = true) {
   return { handle, applyOffsetEdits };
 }
 
+/**
+ * A `dataTransfer` shaped as a real file drop delivers one. happy-dom has no `DragEvent` and its `DataTransfer`
+ * can't be populated with files, so this is a plain object; @testing-library assigns it onto the event and React's
+ * synthetic event exposes it unchanged, which is all App's handlers need (they read `types` and spread
+ * `files`/`items`). A dropped folder arrives in *both* lists -- as a directory entry in `items` and as a
+ * name-only File in `files` -- which is what App's `webkitGetAsEntry` filter exists to separate.
+ */
+function fileDataTransfer(files: File[], folderNames: string[] = []) {
+  const entry = (isDirectory: boolean, file: File) => ({
+    webkitGetAsEntry: () => ({ isDirectory }),
+    getAsFile: () => file,
+  });
+  const folders = folderNames.map((name) => new File([""], name));
+  return {
+    types: ["Files"],
+    files: [...folders, ...files],
+    items: [...folders.map((file) => entry(true, file)), ...files.map((file) => entry(false, file))],
+  };
+}
+
+/** A drag that carries something other than files (selected text, a tab reorder) must be left to the browser. */
+const textDataTransfer = { types: ["text/plain"], files: [], items: [] };
+
 describe("App shell", () => {
-  test("Cmd+R starts a manual run with the current code", () => {
+  // R-M5D-REGISTRY-1 / Finding S1: the keybindings editor lives in the Settings window, which cannot reach this
+  // window's registry, so the ids go to Main. Publishing the REGISTRY's own list rather than COMMANDS is what lets a
+  // catalogue row say that a command exists in the shared list but is not registered in the running window.
+  test("publishes the registry's command ids to Main, so Settings can annotate its catalogue", () => {
     const { api } = renderApp();
+    expect(api.publishCommands).toHaveBeenCalled();
+    const ids = api.publishCommands.mock.calls.at(-1)?.[0] ?? [];
+    expect(ids).toContain("run.start");
+    expect(ids).toContain("view.commandPalette");
+    // Every published id is a real command id, and none is published twice.
+    for (const id of ids) expect(COMMANDS.some((command) => command.id === id)).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("theme.changed registers the imported themes, so every surface sees them (spec §9.3)", async () => {
+    const converted = convertVsCodeTheme({ name: "Deep Dark", type: "dark", colors: {} });
+    if (!converted.ok) throw new Error(converted.error);
+    const { emit } = renderApp();
+    // renderApp hydrates without any imported themes, which clears the registry -- so this is genuinely absent
+    // until the message arrives, and the assertion below cannot pass by accident.
+    expect(listThemes().some((theme) => theme.id === "deep-dark")).toBe(false);
+    await emit("theme.changed", { themes: [converted.theme] });
+    expect(listThemes().some((theme) => theme.id === "deep-dark")).toBe(true);
+    registerUserThemes([]);
+  });
+
+  test("Cmd+R starts a manual run with the current code and the tab's logpoints", () => {
+    const { store, api } = renderApp();
+    act(() => store.getState().toggleLogpoint(1));
     press("KeyR");
     expect(api.startRun).toHaveBeenCalledWith({
       tabId: "t1",
       code: "1 + 1",
       language: "typescript",
-      logpoints: [],
+      logpoints: [1],
       reason: "manual",
       // DEFAULT_RUNTIME, which M4 Task 9a returned to "bun" until browser runs finish.
       runtime: "bun",
@@ -258,6 +315,23 @@ describe("App shell", () => {
     expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.safeModePaused("⌘R"));
   });
 
+  /**
+   * B1: this banner is the only thing that tells an empty editor apart from a genuinely empty file -- which is the
+   * precondition of the truncation trap. It is not dismissible and not a count: it stands for exactly as long as
+   * the ACTIVE tab is showing a placeholder, so it must follow the active tab rather than the session.
+   */
+  test("a tab whose buffer couldn't be read shows a banner, which goes away on switching to a readable tab", () => {
+    const { store } = renderApp(undefined, [], undefined, { unreadable: true });
+    expect(screen.getByTestId("unreadable-buffer-banner").textContent).toBe(strings.shell.unreadableBuffer);
+    act(() => store.getState().openTab(createTab({ id: "t2" }), "2 + 2", true));
+    expect(screen.queryByTestId("unreadable-buffer-banner")).toBeNull();
+  });
+
+  test("an ordinary readable tab shows no unreadable-buffer banner", () => {
+    renderApp();
+    expect(screen.queryByTestId("unreadable-buffer-banner")).toBeNull();
+  });
+
   test("edits are sent to Main once per coalescing delay, and language changes at once (X5)", async () => {
     const { store, api } = renderApp();
     act(() => store.getState().editCode("2"));
@@ -349,6 +423,32 @@ describe("App shell", () => {
     await emit("menu.command", { command: "tab.close" });
     expect(api.closeTab).toHaveBeenCalledWith("t1");
     expect([store.getState().tabOrder, store.getState().activeTabId]).toEqual([["t2"], "t2"]);
+  });
+
+  // M5c F3 (spec §16.3): `jslab --title renamed-by-cli a.ts` on an ALREADY-OPEN file renames the tab in Main, which
+  // pushes `tab.updated`. This asserts App *subscribes* to that push. tab-patch.test.ts calls `applyTabUpdate`
+  // directly, so it still passes with App's `api.on("tab.updated", ...)` deleted -- and nothing else would notice:
+  // F3 narrowed `computeTabPatch` to send `title` only when it actually changed, removing the (wrong, but
+  // converging) unconditional title push that used to drag Main back into agreement. Without the subscription Main
+  // holds "renamed-by-cli", the tab bar keeps "a.ts", and no further event reconciles them until a restart.
+  test("a tab.updated push from Main renames the tab in the store and the tab bar (M5c F3)", async () => {
+    const { store, emit } = renderApp();
+    const opened: TabState = {
+      ...(store.getState().tabs.t1 as TabState),
+      filePath: "/w/a.ts",
+      title: "a.ts",
+      titleIsCustom: false,
+    };
+    act(() => store.setState({ tabs: { t1: opened } }));
+    expect(document.querySelector(".tab-title")?.textContent).toBe("a.ts");
+
+    await emit("tab.updated", { tabId: "t1", tab: { ...opened, title: "renamed-by-cli", titleIsCustom: true } });
+
+    expect([store.getState().tabs.t1?.title, store.getState().tabs.t1?.titleIsCustom]).toEqual([
+      "renamed-by-cli",
+      true,
+    ]);
+    expect(document.querySelector(".tab-title")?.textContent).toBe("renamed-by-cli");
   });
 
   test("run messages for a background tab update only that tab", async () => {
@@ -683,10 +783,248 @@ describe("App shell", () => {
     expect([settings.disabled, settings.title]).toEqual([true, strings.shell.laterMilestone]);
   });
 
+  // Task F: the drop wiring on the app root (spec §10.2) had no test at all -- `flows.dropFiles` was only ever
+  // called directly, so the JSX guards around it were unfalsifiable. Every event below is dispatched at the editor
+  // stub, a descendant of `.app` that is *not* inside the toolbar, so a handler moved off the root is not reached.
+  test("dragging files over the window prevents the default, and a non-file drag is left to the browser (§10.2)", () => {
+    renderApp();
+    const target = screen.getByTestId("editor");
+    // Without this preventDefault the WKWebView takes the drop itself and navigates to the file, so the app never
+    // sees it -- the whole point of the dragover handler.
+    const overFiles = createEvent.dragOver(target, { dataTransfer: fileDataTransfer([new File(["x"], "a.ts")]) });
+    fireEvent(target, overFiles);
+    expect(overFiles.defaultPrevented).toBe(true);
+    const overText = createEvent.dragOver(target, { dataTransfer: textDataTransfer });
+    fireEvent(target, overText);
+    expect(overText.defaultPrevented).toBe(false);
+  });
+
+  test("a file dropped anywhere in the window opens as a tab, and the browser's own open is prevented (§10.2)", async () => {
+    const { api } = renderApp();
+    const target = screen.getByTestId("editor");
+    const drop = createEvent.drop(target, { dataTransfer: fileDataTransfer([new File(["const a = 1"], "notes.tsx")]) });
+    fireEvent(target, drop);
+    expect(drop.defaultPrevented).toBe(true);
+    await waitFor(() => expect(api.createTab).toHaveBeenCalledTimes(1));
+    expect(api.createTab.mock.calls).toEqual([
+      [{ title: "notes.tsx", titleIsCustom: true, language: "tsx", content: "const a = 1" }],
+    ]);
+  });
+
+  test("a dropped folder is refused with the working-directory hint, and a non-file drop is ignored (§10.2)", async () => {
+    const { store, api } = renderApp();
+    const target = screen.getByTestId("editor");
+    // A folder reaches `files` as a name-only File too; without the `items` filter it would open as an empty tab.
+    fireEvent(target, createEvent.drop(target, { dataTransfer: fileDataTransfer([], ["assets"]) }));
+    await waitFor(() => expect(store.getState().statusMessage).toBe(strings.files.folderDrop));
+    expect(api.createTab).not.toHaveBeenCalled();
+    const textDrop = createEvent.drop(target, { dataTransfer: textDataTransfer });
+    fireEvent(target, textDrop);
+    expect(textDrop.defaultPrevented).toBe(false);
+  });
+
   test("⌘, asks Main to open the Settings window", () => {
     const { api } = renderApp();
     press("Comma");
     expect(api.appCommand).toHaveBeenCalledWith("openSettings");
+  });
+
+  test("Show Transpiled Output opens the side bar on the transpiled panel (spec §7.4)", async () => {
+    const { store, api, emit } = renderApp();
+    api.updateSettings.mockImplementation(async (patch: unknown) =>
+      mergeSettings(store.getState().settings ?? defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+    );
+    expect(store.getState().sideBarPanel).toBe("snippets");
+    await emit("menu.command", { command: "view.showTranspiled" });
+    expect(store.getState().sideBarPanel).toBe("transpiled");
+    expect(api.updateSettings).toHaveBeenCalledWith({ view: { sideBar: true } });
+    // Task 8 shipped the panel with no way to open it; the point of the command is that it is now on screen.
+    expect(document.querySelector(".transpiled-panel")).not.toBeNull();
+    // Already open on that panel: the command re-opens rather than toggling it shut.
+    await emit("menu.command", { command: "view.showTranspiled" });
+    expect(store.getState().sideBarPanel).toBe("transpiled");
+    expect(api.updateSettings.mock.calls.length).toBe(1);
+    expect(document.querySelector(".transpiled-panel")).not.toBeNull();
+  });
+
+  test("⌘B opens the Snippets panel, switches to it from Transpiled, then hides the side bar (R-M5b-3)", async () => {
+    const { store, api, emit } = renderApp();
+    api.updateSettings.mockImplementation(async (patch: unknown) =>
+      mergeSettings(store.getState().settings ?? defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+    );
+    const shown = () => document.querySelector(".snippets-panel") !== null;
+    expect([shown(), api.updateSettings.mock.calls.length]).toEqual([false, 0]);
+
+    await act(async () => {
+      press("KeyB");
+      await Bun.sleep(1);
+    });
+    expect([shown(), store.getState().sideBarPanel]).toEqual([true, "snippets"]);
+    expect(api.updateSettings).toHaveBeenCalledWith({ view: { sideBar: true } });
+
+    // Open on another panel: ⌘B SWITCHES, and writes no setting -- `view.sideBar` has one owner, and it is already
+    // true. A second mechanism writing it directly (the shape ruling R-M5b-D3/D4-FIX-a forbids) fails this line.
+    await emit("menu.command", { command: "view.showTranspiled" });
+    expect(store.getState().sideBarPanel).toBe("transpiled");
+    const writes = api.updateSettings.mock.calls.length;
+    await act(async () => {
+      press("KeyB");
+      await Bun.sleep(1);
+    });
+    expect([shown(), store.getState().sideBarPanel, api.updateSettings.mock.calls.length]).toEqual([
+      true,
+      "snippets",
+      writes,
+    ]);
+
+    // Open on Snippets: ⌘B hides the side bar -- exactly what the activity-bar button does.
+    await act(async () => {
+      press("KeyB");
+      await Bun.sleep(1);
+    });
+    expect([shown(), api.updateSettings.mock.calls.length]).toEqual([false, writes + 1]);
+  });
+
+  /**
+   * The App -> SideBar -> SnippetsPanel wiring for Monaco's two contributions (spec §13.1). Both props are
+   * OPTIONAL, so dropping either from App's SideBar mount is typecheck-clean -- and the panel behaves identically
+   * without them UNLESS the bridge slot is full, which is why this test fills it. MEASURED: before this test,
+   * deleting `colorize={snippetColorize}` or `createBody={snippetBodyFactory}` from App survived the entire suite.
+   */
+  test("App routes the Monaco bridge through to the snippets preview and the form's body editor", async () => {
+    const SIZES = { offsetHeight: 600, offsetWidth: 400 } as const;
+    const originals = new Map<string, PropertyDescriptor | undefined>();
+    // R-M5b-D2: @tanstack/virtual-core sizes the scroller from offsetWidth/offsetHeight, which happy-dom reports as
+    // 0, so the list renders NO rows and nothing is ever selected to preview. Patch copied from the precedent that
+    // documents it verbatim (apps/ui/test/output-panel.test.tsx:55-77), scoped to this test and undone in `finally`.
+    for (const [prop, size] of Object.entries(SIZES)) {
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, prop);
+      originals.set(prop, original);
+      Object.defineProperty(HTMLElement.prototype, prop, {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.classList.contains("snippets-scroller") ? size : (original?.get?.call(this) ?? 0);
+        },
+      });
+    }
+    try {
+      const { store, api } = renderApp();
+      api.updateSettings.mockImplementation(async (patch: unknown) =>
+        mergeSettings(store.getState().settings ?? defaultSettings(), patch as Parameters<typeof mergeSettings>[1]),
+      );
+      api.snippetsList.mockImplementation(async () => [
+        {
+          id: "s1",
+          name: "log",
+          description: "print a value",
+          body: "console.log(1)",
+          language: null,
+          createdAt: "2026-09-16T10:00:00.000Z",
+          updatedAt: "2026-09-16T10:00:00.000Z",
+        },
+      ]);
+      // Stands in for what Editor.tsx publishes once Monaco is mounted. Under happy-dom the slot is otherwise
+      // empty, and an empty slot is exactly what makes a dropped prop invisible.
+      setSnippetMonaco({
+        colorize: async (code: string) => `<span class="mtk1">${code}</span>`,
+        createBody: (host: HTMLElement) => {
+          const marker = host.ownerDocument.createElement("div");
+          marker.className = "monaco-body-marker";
+          host.append(marker);
+          return { getValue: () => "", focus: () => {}, dispose: () => marker.remove() };
+        },
+      });
+
+      await act(async () => {
+        press("KeyB");
+        await Bun.sleep(1);
+      });
+      // The preview really colorized -- which only happens if App handed the panel `colorize`.
+      await waitFor(() => expect(document.querySelector(".snippets-preview .mtk1")).not.toBeNull());
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: strings.snippets.newSnippet }));
+        await Bun.sleep(1);
+      });
+      // ...and the form used the injected factory rather than silently shipping the <textarea> fallback (R-M5b-5).
+      expect(document.querySelector(".snippets-body .monaco-body-marker")).not.toBeNull();
+      expect(document.querySelector(".snippets-body textarea")).toBeNull();
+    } finally {
+      setSnippetMonaco(null);
+      for (const [prop, original] of originals) {
+        if (original) Object.defineProperty(HTMLElement.prototype, prop, original);
+        else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[prop];
+      }
+    }
+  });
+
+  // The activity bar's Snippets tooltip gains the ⌘B keycap (FB-m3's rule, applied to the new binding). Nothing
+  // else asserts this button's `title`, so without this test dropping `snippetsKeys` is a silent, surviving mutant.
+  test("the activity bar's Snippets tooltip carries the ⌘B keycap, keeping its aria-label intact (FB-m3)", () => {
+    renderApp();
+    const button = screen.getByRole("button", { name: strings.shell.snippets });
+    expect(button.getAttribute("title")).toBe(`${strings.shell.snippets} (⌘B)`);
+  });
+
+  /**
+   * Finding K1. `bindings` was `useMemo(..., [store])` reading `store.getState().keybindings` imperatively, so it
+   * ran once at mount and a saved binding could not take effect before a relaunch. Every keybinding test above
+   * passes its rules at HYDRATE time, i.e. before mount, which is exactly why they all passed despite the defect;
+   * these change the bindings on an already mounted app.
+   */
+  test("a rebound chord dispatches to the new command as soon as the store changes (K1)", () => {
+    const { store, api } = renderApp();
+    press("KeyR");
+    expect(api.startRun).toHaveBeenCalledTimes(1);
+    act(() => store.getState().setKeybindings([{ key: "cmd+r", command: "run.stop" }]));
+    press("KeyR");
+    // Both halves matter: asserting only that Stop fired would also pass for an app that still fires Run too.
+    expect(api.startRun).toHaveBeenCalledTimes(1);
+    expect(api.stop).toHaveBeenCalledWith("t1");
+  });
+
+  test("a removal rule added after mount stops the default chord from firing at all (K1)", () => {
+    const { store, api } = renderApp();
+    act(() => store.getState().setKeybindings([{ key: "cmd+r", command: "-run.start" }]));
+    press("KeyR");
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  test("a keybindings.changed broadcast from Main rebinds the running app (K1)", async () => {
+    const { store, api, emit } = renderApp();
+    await emit("keybindings.changed", { rules: [{ key: "cmd+r", command: "run.stop" }] });
+    expect(store.getState().keybindings).toEqual([{ key: "cmd+r", command: "run.stop" }]);
+    press("KeyR");
+    expect(api.startRun).not.toHaveBeenCalled();
+    expect(api.stop).toHaveBeenCalledWith("t1");
+  });
+
+  // The chrome's keycaps are one of the four surfaces this task owes. FB-m3 above pins them at hydrate time;
+  // this pins them on a LIVE rebind, which is the case Finding K1 broke.
+  test("the chrome keycaps follow a rebind made after mount (K1)", () => {
+    const { store } = renderApp();
+    expect(document.querySelector(".toolbar .tb-btn.run .kbd")?.textContent).toBe("⌘R");
+    const rules = [{ key: "cmd+enter", command: "run.start" }];
+    const run = formatChord(shortcutFor(resolveKeybindings(DEFAULT_KEYBINDINGS, rules), "run.start") ?? chordOf("x"));
+    expect(run).not.toBe("⌘R");
+    act(() => store.getState().setKeybindings(rules));
+    expect(document.querySelector(".toolbar .tb-btn.run .kbd")?.textContent).toBe(run);
+    expect(screen.getByTestId("run-status").textContent).toBe(strings.shell.runState.paused(run));
+  });
+
+  // The palette's keycaps are the fourth surface: it reads `bindings` through the same memo chain, so a rebind
+  // made while it is closed must show on the next open.
+  test("the palette's keycaps follow a rebind made after mount (K1)", () => {
+    const { store } = renderApp();
+    const rules = [{ key: "cmd+enter", command: "run.start" }];
+    const parts = formatChordParts(
+      shortcutFor(resolveKeybindings(DEFAULT_KEYBINDINGS, rules), "run.start") ?? chordOf("x"),
+    );
+    expect(parts).not.toEqual(["⌘", "R"]);
+    act(() => store.getState().setKeybindings(rules));
+    press("KeyP", { shiftKey: true });
+    const row = screen.getAllByRole("option").find((o) => o.querySelector(".palette-title")?.textContent === "Run");
+    expect([...(row?.querySelectorAll(".palette-keys b") ?? [])].map((b) => b.textContent)).toEqual(parts);
   });
 });
 

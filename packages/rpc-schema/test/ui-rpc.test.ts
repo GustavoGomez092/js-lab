@@ -3,14 +3,20 @@ import {
   appCommandSchema,
   appNoticeSchema,
   bufferChangedSchema,
+  commandsPublishedSchema,
+  DEFAULT_NOTICE_SEVERITY,
   e2eResponseSchema,
   fileConfirmLargeSchema,
   fileConfirmSaveAsSchema,
   fileSaveParamsSchema,
+  keybindingsSaveParamsSchema,
   MAX_OPEN_FILE_BYTES,
   MAX_TEXT_CHARS,
+  noticeSeverity,
   runExpandParamsSchema,
   runStartParamsSchema,
+  runTranspiledParamsSchema,
+  STARTUP_NOTICE_IDS,
   settingsAppCommandSchema,
   settingsUpdateParamsSchema,
   tabCreateParamsSchema,
@@ -83,6 +89,15 @@ describe("inbound validators", () => {
     expect(runExpandParamsSchema.safeParse({ tabId: "t1", runId, handleId: "h12" }).success).toBe(true);
     expect(runExpandParamsSchema.safeParse({ tabId: "t1", runId: "nope", handleId: "h12" }).success).toBe(false);
     expect(runExpandParamsSchema.safeParse({ tabId: "t1", runId, handleId: "../etc" }).success).toBe(false);
+  });
+
+  test("run.transpiled requires a safe tab id and an explicit hideInstrumentation flag", () => {
+    expect(runTranspiledParamsSchema.safeParse({ tabId: "t1", hideInstrumentation: false }).success).toBe(true);
+    // Not optional and not coerced: a missing or truthy-string flag would silently pick an output the caller
+    // never asked for (instrumented vs not), so both are rejected at the boundary.
+    expect(runTranspiledParamsSchema.safeParse({ tabId: "t1" }).success).toBe(false);
+    expect(runTranspiledParamsSchema.safeParse({ tabId: "t1", hideInstrumentation: "yes" }).success).toBe(false);
+    expect(runTranspiledParamsSchema.safeParse({ tabId: "../escape", hideInstrumentation: true }).success).toBe(false);
   });
 
   test("buffer.changed caps content size", () => {
@@ -161,7 +176,16 @@ describe("inbound validators", () => {
       settingsUpdateParamsSchema.safeParse({ patch: { editor: { lineWrap: false }, view: { layout: "vertical" } } })
         .success,
     ).toBe(true);
-    expect(settingsUpdateParamsSchema.safeParse({ patch: { ai: { provider: "openai" } } }).success).toBe(false);
+    // A section name no schema defines. This used to be spelled `ai`, which stopped being unknown the moment
+    // TL-18 added that section -- so the "unknown sections are rejected" claim needs a name that really is one.
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { nosuchsection: { enabled: true } } }).success).toBe(false);
+    // ...and the AI section really is known now, dotted field name included (`ai.model.ollama`, spec §8). That
+    // second case is the wire's half of the first-dot key split: a record key with a dot in it must be accepted,
+    // or the Settings window could never patch a per-provider model at all.
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { ai: { provider: "ollama" } } }).success).toBe(true);
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { ai: { "model.ollama": "mistral:latest" } } }).success).toBe(
+      true,
+    );
     expect(settingsUpdateParamsSchema.safeParse({ patch: { editor: { lineWrap: { nested: true } } } }).success).toBe(
       false,
     );
@@ -205,7 +229,7 @@ describe("inbound validators", () => {
   });
 
   test("the Settings window's app.command accepts only the Settings actions (FA-m11)", () => {
-    for (const action of ["resetSettings", "openDataFolder", "restartSafeMode"]) {
+    for (const action of ["resetSettings", "openDataFolder", "restartSafeMode", "openKeybindingsFile"]) {
       expect(settingsAppCommandSchema.safeParse({ action }).success).toBe(true);
     }
     for (const action of ["closeWindow", "toggleFullScreen", "openSettings", "copyDebugLog", "exec"]) {
@@ -213,10 +237,97 @@ describe("inbound validators", () => {
     }
   });
 
+  // M5c §16.1. The `cliInstall` notice id matters as much as the actions: `app.notice` is the one Main -> UI
+  // message the UI re-validates (App.tsx runs `appNoticeSchema` and silently drops anything that fails), so an id
+  // missing from STARTUP_NOTICE_IDS would mean the install result never reaches the user.
+  test("the main window can install the jslab CLI, the Settings window cannot, and its notice id is known", () => {
+    for (const action of ["installCli", "uninstallCli"]) {
+      expect(appCommandSchema.safeParse({ action }).success).toBe(true);
+      expect(settingsAppCommandSchema.safeParse({ action }).success).toBe(false);
+    }
+    expect(appNoticeSchema.safeParse({ id: "cliInstall", message: "jslab is installed." }).success).toBe(true);
+  });
+
+  // M5d Task 10: both payloads cross into Main and are bounded there (spec §18).
+  test("commands.published accepts a bounded id list and nothing else", () => {
+    expect(commandsPublishedSchema.safeParse({ ids: [] }).success).toBe(true);
+    expect(commandsPublishedSchema.safeParse({ ids: ["run.start"] }).success).toBe(true);
+    expect(commandsPublishedSchema.safeParse({ ids: "run.start" }).success).toBe(false);
+    expect(commandsPublishedSchema.safeParse({ ids: [""] }).success).toBe(false);
+    expect(commandsPublishedSchema.safeParse({ ids: ["x".repeat(101)] }).success).toBe(false);
+    expect(commandsPublishedSchema.safeParse({ ids: Array.from({ length: 1000 }, () => "x") }).success).toBe(true);
+    expect(commandsPublishedSchema.safeParse({ ids: Array.from({ length: 1001 }, () => "x") }).success).toBe(false);
+  });
+
+  test("keybindings.save validates each rule and caps the override set", () => {
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: [] }).success).toBe(true);
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: [{ key: "cmd+j", command: "run.start" }] }).success).toBe(
+      true,
+    );
+    // `when` is optional, and a removal rule ("-<id>") is a legitimate command value.
+    expect(
+      keybindingsSaveParamsSchema.safeParse({ rules: [{ key: "cmd+j", command: "-run.start", when: "editorFocus" }] })
+        .success,
+    ).toBe(true);
+    expect(keybindingsSaveParamsSchema.safeParse({}).success).toBe(false);
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: "nope" }).success).toBe(false);
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: [{ key: "cmd+j" }] }).success).toBe(false);
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: [{ key: "", command: "run.start" }] }).success).toBe(false);
+    const rule = { key: "cmd+j", command: "run.start" };
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: Array.from({ length: 500 }, () => rule) }).success).toBe(
+      true,
+    );
+    expect(keybindingsSaveParamsSchema.safeParse({ rules: Array.from({ length: 501 }, () => rule) }).success).toBe(
+      false,
+    );
+  });
+
   test("app.notice carries a known notice id and bounded text (FA-I3)", () => {
     expect(appNoticeSchema.safeParse({ id: "unexpectedError", message: "Something went wrong." }).success).toBe(true);
     expect(appNoticeSchema.safeParse({ id: "exec", message: "x" }).success).toBe(false);
     expect(appNoticeSchema.safeParse({ id: "unexpectedError", message: "x".repeat(2001) }).success).toBe(false);
+  });
+
+  // UI item 7. One banner voice for every id was the defect; severity is what gives it more than one. The map has
+  // to be TOTAL, because an id with no severity is the failure mode that hides -- the notice still renders, just
+  // in whatever tone the fallback picks.
+  test("every notice id has a severity, and ids that differ in kind differ in severity", () => {
+    // Drift guard. TypeScript already rejects a map that is missing a key; this catches what it cannot -- an id
+    // added to the map that is no longer (or never was) a real notice id.
+    expect(Object.keys(DEFAULT_NOTICE_SEVERITY).sort()).toEqual([...STARTUP_NOTICE_IDS].sort());
+    expect(DEFAULT_NOTICE_SEVERITY).toEqual({
+      // Recoveries: JSLab already put things right, and says so.
+      settingsRecovered: "info",
+      sessionRecovered: "info",
+      cliInstall: "info",
+      // Spec §17's restart notice: the user asked for a language and is being told when they will see it.
+      // Nothing failed, so it speaks quietly and clears itself.
+      languageChanged: "info",
+      // Something the user still has, but degraded: changes that will not be saved, tabs that did not come back.
+      settingsNewer: "warning",
+      sessionNewer: "warning",
+      tabsDropped: "warning",
+      buffersUnreadable: "warning",
+      // D1 is worded after `settingsNewer` in Main's strings ("the same situation") and has the same consequence
+      // -- settings changes silently lost at restart -- so it gets that id's severity, not a louder one.
+      settingsTooLarge: "warning",
+      unexpectedError: "error",
+    });
+  });
+
+  test("a notice carries its id's severity unless Main overrides it", () => {
+    expect(noticeSeverity({ id: "unexpectedError", message: "x" })).toBe("error");
+    expect(noticeSeverity({ id: "settingsTooLarge", message: "x" })).toBe("warning");
+    // Spec §16.1: `cliInstall` reports BOTH a successful install and a failed one (CliInstallResult.ok), so it is
+    // the one id whose severity cannot be derived from the id alone.
+    expect(noticeSeverity({ id: "cliInstall", message: "x" })).toBe("info");
+    expect(noticeSeverity({ id: "cliInstall", message: "x", severity: "error" })).toBe("error");
+  });
+
+  test("app.notice accepts an optional severity and rejects one that is not a severity", () => {
+    expect(appNoticeSchema.safeParse({ id: "cliInstall", message: "ok" }).success).toBe(true);
+    expect(appNoticeSchema.safeParse({ id: "cliInstall", message: "ok", severity: "error" }).success).toBe(true);
+    expect(appNoticeSchema.safeParse({ id: "cliInstall", message: "ok", severity: "fatal" }).success).toBe(false);
   });
 
   test("file payloads cap content and token lists", () => {
@@ -255,5 +366,23 @@ describe("web runner bridge payloads", () => {
     expect(webRunnerMessageParamsSchema.safeParse({ tabId: "t1", raw: null }).success).toBe(false);
     expect(webRunnerMessageParamsSchema.safeParse({ tabId: "t1" }).success).toBe(false);
     expect(webRunnerMessageParamsSchema.safeParse({ tabId: "", raw: envelope }).success).toBe(false);
+  });
+});
+
+// OU-02: `run.expand` may now name where in a collection the page should start.
+describe("run.expand offsets (OU-02)", () => {
+  const base = { tabId: "t1", runId: "00000000-0000-4000-8000-000000000000", handleId: "h7" };
+
+  test("an offset is optional, non-negative and an integer", () => {
+    // Absent is the pre-OU-02 shape: it must parse, and must stay absent rather than defaulting to a written 0.
+    expect(runExpandParamsSchema.parse(base).offset).toBeUndefined();
+    expect(runExpandParamsSchema.parse({ ...base, offset: 0 }).offset).toBe(0);
+    expect(runExpandParamsSchema.parse({ ...base, offset: 10_000 }).offset).toBe(10_000);
+    expect(runExpandParamsSchema.safeParse({ ...base, offset: -1 }).success).toBe(false);
+    expect(runExpandParamsSchema.safeParse({ ...base, offset: 1.5 }).success).toBe(false);
+    // A string must not be coerced: the UI reads `next` straight off an encoded page, and a coercing schema would
+    // let a malformed value through to the encoder's arithmetic instead of failing at the boundary.
+    expect(runExpandParamsSchema.safeParse({ ...base, offset: "10" }).success).toBe(false);
+    expect(runExpandParamsSchema.safeParse({ ...base, offset: null }).success).toBe(false);
   });
 });

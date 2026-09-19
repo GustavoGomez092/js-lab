@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createTab, defaultSession, defaultSettings } from "@jslab/shared";
+import { convertVsCodeTheme } from "@jslab/themes";
 import { createRpcHandlers, InvalidPayloadError, type RpcHandlerDeps, RunRefusedError } from "../src/main/rpc-handlers";
+import { strings } from "../src/main/strings";
 
 function setup(safeMode: RpcHandlerDeps["safeMode"] = { active: false, reason: null }) {
   const session = defaultSession(() => createTab({ id: "t1" }));
@@ -12,16 +14,18 @@ function setup(safeMode: RpcHandlerDeps["safeMode"] = { active: false, reason: n
       wait: mock(() => {}),
       expand: mock(async () => ({ t: "number", v: "1" }) as const),
       mute: mock(() => {}),
+      transpiled: mock(async () => ({ code: "const a = 5;", source: "const a = 5" })),
     },
     settings: { current: defaultSettings() },
     session: {
       session,
       readBuffers: mock(async () => ({ t1: "1 + 1" })),
+      readBuffer: mock(async (_tabId: string) => "1 + 1"),
       setBuffer: mock(() => {}),
       patchTab: mock(async () => {}),
     },
     safeMode,
-    versions: { app: "0.0.1", bun: "1.3.13" },
+    versions: { app: "0.0.1", bun: "1.3.13", electrobun: "2.0.1" },
     log: mock(() => {}),
     onUiHeartbeat: mock(() => {}),
   } satisfies RpcHandlerDeps;
@@ -38,8 +42,141 @@ describe("requests", () => {
       session: deps.session.session,
       buffers: { t1: "1 + 1" },
       safeMode: { active: false, reason: null },
-      versions: { app: "0.0.1", bun: "1.3.13" },
+      // M6: `electrobun` joins the payload so the About dialog can name the framework version. Until now it
+      // existed only in the debug report, which is why the UI could never show it. Dropping it from
+      // `rpc-handlers.ts` turns this exact-equality assertion red.
+      versions: { app: "0.0.1", bun: "1.3.13", electrobun: "2.0.1" },
     });
+  });
+
+  /**
+   * Spec §14.3: "the current conversation is kept in `ai/conversation.json` and restored at launch". The exact
+   * equality above is the other half of this pair -- it holds only while a profile with nothing stored omits
+   * the field altogether, so the two tests cannot both pass if the payload starts carrying an empty array.
+   */
+  test("app.bootstrap restores the stored conversation, handing out a copy of it", async () => {
+    const { deps } = setup();
+    const messages = [
+      { id: "a", role: "user" as const, content: "why?", stopped: false },
+      { id: "b", role: "assistant" as const, content: "because", stopped: true },
+    ];
+    const conversation = { messages };
+    const handlers = createRpcHandlers({ ...deps, conversation });
+
+    const payload = await handlers.requests["app.bootstrap"]();
+    expect(payload.conversation).toEqual(messages);
+
+    // A COPY, for the reason `keybindings` is one: this crosses the RPC boundary as a mutable array, and
+    // handing out the store's own would let a caller edit what Main believes is on disk.
+    payload.conversation?.push({ id: "c", role: "user", content: "injected", stopped: false });
+    expect(conversation.messages).toHaveLength(2);
+  });
+
+  test("a profile with nothing stored omits the conversation rather than sending an empty array", async () => {
+    const { deps } = setup();
+    const handlers = createRpcHandlers({ ...deps, conversation: { messages: [] } });
+    expect(await handlers.requests["app.bootstrap"]()).not.toHaveProperty("conversation");
+  });
+
+  /**
+   * `app.bootstrap` is the first request a view makes, and its message hub already exists by then -- so this is the
+   * earliest moment an `e2e.request` is queued rather than dropped into a still-loading bundle. The E2E bridge
+   * holds every send until it hears this (apps/desktop/src/main/cli/e2e-bridge.ts); before that gate existed, the
+   * first `e2e.state` of a launch failed 6 times out of 6 at ~15 s each.
+   */
+  test("app.bootstrap reports the view's RPC as live, before it assembles the payload", async () => {
+    const { deps } = setup();
+    const seenBeforePayload: boolean[] = [];
+    const onViewReady = mock(() => seenBeforePayload.push(true));
+    const handlers = createRpcHandlers({
+      ...deps,
+      onViewReady,
+      // Reading a buffer is the slow part of a bootstrap. If the callback were announced afterwards, the bridge
+      // would go on waiting through every file -- so this records that it already fired by the time we get here.
+      session: {
+        ...deps.session,
+        readBuffer: mock(async () => {
+          seenBeforePayload.push(true);
+          return "1 + 1";
+        }),
+      },
+    });
+    expect(onViewReady).not.toHaveBeenCalled();
+    await handlers.requests["app.bootstrap"]();
+    expect(onViewReady).toHaveBeenCalledTimes(1);
+    expect(seenBeforePayload[0]).toBe(true);
+  });
+
+  /**
+   * F1: `readBuffers()` throws on the first tab whose buffer exists but can't be read, which failed the whole
+   * bootstrap and left the UI on a failure screen whose only control re-ran the identical request. Bootstrap now
+   * reads per tab, so one bad file costs one tab's contents instead of the whole app.
+   */
+  test("app.bootstrap opens with the tabs that loaded when one buffer can't be read", async () => {
+    const t1 = createTab({ id: "t1" });
+    const t2 = createTab({ id: "t2" });
+    const base = defaultSession(() => t1);
+    const session = { ...base, tabs: { t1, t2 }, tabOrder: ["t1", "t2"], activeTabId: "t1" };
+    const logged: string[] = [];
+    const handlers = createRpcHandlers({
+      coordinator: setup().deps.coordinator,
+      settings: { current: defaultSettings() },
+      session: {
+        session,
+        readBuffers: mock(async () => {
+          throw new Error("readBuffers must not be used by bootstrap");
+        }),
+        readBuffer: mock(async (tabId: string) => {
+          if (tabId === "t2") throw new Error(`Couldn't read the buffer for tab ${tabId}: EACCES`);
+          return "const a = 1";
+        }),
+        setBuffer: mock(() => {}),
+        patchTab: mock(async () => {}),
+      },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0.0.1", bun: "1.3.13", electrobun: "2.0.1" },
+      log: (message) => logged.push(message),
+      onUiHeartbeat: () => {},
+    });
+
+    const payload = await handlers.requests["app.bootstrap"]();
+    // The readable tab still arrives; the unreadable one is simply absent rather than invented as empty.
+    expect(payload.buffers).toEqual({ t1: "const a = 1" });
+    // B1: and it is NAMED, not merely counted. The UI cannot preserve the distinction above from a count alone --
+    // without these ids it filled the gap with `""`, which then read as an unsaved edit and offered to save it
+    // over the user's real file. The ids are exactly the tabOrder entries missing from `buffers`.
+    expect(payload.unreadableBuffers).toEqual(["t2"]);
+    expect(payload.notices).toEqual([{ id: "buffersUnreadable", message: strings.notices.buffersUnreadable(1) }]);
+    expect(logged).toContain("Couldn't read a tab's buffer at startup");
+  });
+
+  test("app.bootstrap carries the imported themes, and omits the key when there are none", async () => {
+    const { deps } = setup();
+    const converted = convertVsCodeTheme({ name: "Deep Dark", type: "dark", colors: {} });
+    if (!converted.ok) throw new Error(converted.error);
+    // Finding T1: without this the first paint offers only the built-ins, and an imported theme shows up only
+    // once some later import happens to push `theme.changed`.
+    const withThemes = createRpcHandlers({ ...deps, themes: { themes: [converted.theme] } });
+    expect((await withThemes.requests["app.bootstrap"]()).userThemes).toEqual([converted.theme]);
+    // A fresh install has imported nothing, and must not send an empty array for it either.
+    const none = createRpcHandlers({ ...deps, themes: { themes: [] } });
+    expect((await none.requests["app.bootstrap"]()).userThemes).toBeUndefined();
+  });
+
+  // Finding K1: the UI resolves its keymap from this payload, so a launch must already carry the user's overrides.
+  // Unlike `userThemes` above, an empty set is still sent -- the key is omitted only when Main has no store at all.
+  test("app.bootstrap carries the user's keybinding overrides as a copy", async () => {
+    const { deps } = setup();
+    const rules = [{ key: "cmd+j", command: "run.start" }];
+    const withRules = createRpcHandlers({ ...deps, keybindings: { rules } });
+    const payload = await withRules.requests["app.bootstrap"]();
+    expect(payload.keybindings).toEqual(rules);
+    // A copy, not the store's own array: the payload crosses the RPC boundary as mutable `KeybindingRule[]`, and
+    // handing out the live set would let a caller edit what Main believes is on disk.
+    expect(payload.keybindings).not.toBe(rules);
+    const empty = createRpcHandlers({ ...deps, keybindings: { rules: [] } });
+    expect((await empty.requests["app.bootstrap"]()).keybindings).toEqual([]);
+    expect((await createRpcHandlers({ ...deps }).requests["app.bootstrap"]()).keybindings).toBeUndefined();
   });
 
   test("run.start validates and forwards only the run fields", () => {
@@ -120,10 +257,44 @@ describe("requests", () => {
       t: "number",
       v: "1",
     });
-    expect(deps.coordinator.expand).toHaveBeenCalledWith("t1", runId, "h3");
+    // OU-02: the handler now forwards a fourth argument, `offset`, which is `undefined` for a caller that sent
+    // none -- so the expectation names four arguments even though only three were on the request.
+    expect(deps.coordinator.expand).toHaveBeenCalledWith("t1", runId, "h3", undefined);
     expect(() => handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "nope" })).toThrow(
       InvalidPayloadError,
     );
+  });
+
+  test("run.transpiled validates its payload and forwards it to the coordinator", async () => {
+    const { handlers, deps } = setup();
+    // R-M5a-7: `source` reaches the UI too -- the handler hands back the coordinator's whole answer, not just `code`.
+    expect(await handlers.requests["run.transpiled"]({ tabId: "t1", hideInstrumentation: true })).toEqual({
+      code: "const a = 5;",
+      source: "const a = 5",
+    });
+    expect(deps.coordinator.transpiled).toHaveBeenCalledWith("t1", true);
+    expect(() => handlers.requests["run.transpiled"]({ tabId: "t1" })).toThrow(InvalidPayloadError);
+    expect(() => handlers.requests["run.transpiled"]({ tabId: "../escape", hideInstrumentation: false })).toThrow(
+      InvalidPayloadError,
+    );
+  });
+
+  test("run.expand forwards the offset, and omits it when the caller sent none (OU-02)", async () => {
+    const { handlers, deps } = setup();
+    const runId = crypto.randomUUID();
+    await handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "h3", offset: 10_000 });
+    expect(deps.coordinator.expand).toHaveBeenLastCalledWith("t1", runId, "h3", 10_000);
+    await handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "h3" });
+    expect(deps.coordinator.expand).toHaveBeenLastCalledWith("t1", runId, "h3", undefined);
+    // The schema, not the handler, is what refuses a malformed offset -- and it refuses it before the coordinator
+    // is reached at all, which the call count proves.
+    expect(() => handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "h3", offset: -1 })).toThrow(
+      InvalidPayloadError,
+    );
+    expect(() => handlers.requests["run.expand"]({ tabId: "t1", runId, handleId: "h3", offset: 1.5 })).toThrow(
+      InvalidPayloadError,
+    );
+    expect(deps.coordinator.expand).toHaveBeenCalledTimes(2);
   });
 
   test("run.start passes the tab's working directory and script name from the session (spec §5.3)", () => {

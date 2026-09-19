@@ -53,7 +53,17 @@ export function StatusBar({
           <span data-testid="run-status">{label}</span>
         </span>
         {safeMode && <span className="status-badge">{strings.shell.safeMode}</span>}
-        {message && <span className="status-message">{message}</span>}
+        {/*
+          An `<output>`, not a `<span>`: implicit `role="status"` (polite + atomic), so a message routed through
+          `setStatusMessage` -- "Couldn't format: …", "Installing zod…", the 64 MB refusal -- is announced instead
+          of being shown only to users who can see it. Same element `shell/parts.tsx` already uses for banners.
+
+          Still rendered conditionally, like those banners and `ActivityBar`'s spinner. Rendering it always would
+          be the more robust live region, but `.status-left` is `display: flex; gap: 16px`, so a permanently
+          present empty element would open a 16px hole in the status bar -- a visible regression traded for a
+          reliability gain no test here can measure.
+        */}
+        {message && <output className="status-message">{message}</output>}
       </div>
       <div className="status-right">
         <select

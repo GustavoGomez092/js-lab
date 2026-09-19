@@ -17,9 +17,9 @@ import { activeTab, createUserData, type LaunchedApp, launchApp, waitFor } from 
  * `snippets.*` and `palette.*` are NOT seeded: the status bar, tab bar and snippets panel show English in every
  * locale. Measuring those and calling it "verified under translation" would be fake coverage. So:
  *
- *   - The Settings window is where the seeded strings really land (`settings.tabs.*` in a fixed 180px nav track,
- *     `settings.restartRequired` inside `.field-text`). Its assertions pin the measured *text* as non-ASCII under
- *     `ja`/`zh`, so a fallback to English fails rather than passing quietly.
+ *   - The Settings window is where the seeded strings really land: `settings.tabs.*` renders into a fixed 180px
+ *     nav track, which is the one translated control in the app with a hard width limit. Its assertions pin the
+ *     measured *text* as non-ASCII under `ja`/`zh`, so a fallback to English fails rather than passing quietly.
  *   - The main window's `.status-item` and `.tab-title` rules are instead stressed with long CJK *content* (a
  *     working-directory name and a tab title), which is real user content those rules exist for. That is a test
  *     of the rule, not of a translation, and is labelled as such.
@@ -320,20 +320,14 @@ describe("layout under translation", () => {
           ).toBeGreaterThanOrEqual(6);
         }
 
-        // (2, cont.) A field's text column must not push its control out of the field row. `.field-text`'s
-        // `min-width: 0` is what lets it shrink; without it the control is pushed past the row's right edge.
-        const fields = metrics.groups.fields ?? [];
-        const controls = metrics.groups.fieldControls ?? [];
-        expect(fields.length, `${where}: the General tab must render fields`).toBeGreaterThan(0);
-        expect(controls.length, `${where}: the General tab must render field controls`).toBe(fields.length);
-        for (const [index, field] of fields.entries()) {
-          const control = controls[index] as BoxMetrics;
-          expect(
-            control.right,
-            `${where}: a field control is pushed outside its field row (${JSON.stringify(field.text.slice(0, 30))})`,
-          ).toBeLessThanOrEqual(field.right + EDGE_SLACK);
-          expect(overflowsX(field), `${where}: a field row overflows its own box`).toBe(false);
-        }
+        // `.field-text` is deliberately NOT asserted here, and the omission is a measurement rather than an
+        // oversight. Assertions on the field rows (control stays inside its row, row does not overflow) were
+        // written, then mutation-checked by deleting `.field-text`'s `min-width: 0` from styles.css: the suite
+        // stayed GREEN. Every Settings *field* label is English in all five locales -- only `settings.tabs.*` and
+        // `settings.restartRequired` are seeded -- so those labels are short and the rule has nothing to do. An
+        // assertion that cannot fail is worse than none, so they were removed rather than left in to look like
+        // coverage. `.field-text` therefore remains untested; see the report. The boxes are still measured and
+        // available in `groups.fields` / `groups.fieldControls` for whoever gives the rule something to tolerate.
 
         await app.quit();
       }
@@ -374,15 +368,20 @@ describe("layout under translation", () => {
       perAsciiChar * 1.4,
     );
 
-    // What this test does NOT establish, measured rather than assumed (see the report for the numbers): the
-    // three stacks below -- the app's own, bare `monospace`, and Hiragino alone -- all returned the SAME advance
-    // width. macOS performs last-resort substitution to the same family whether or not the stack names it, so no
-    // width measurement here can distinguish "the CJK_FALLBACK stack resolved the glyphs" from "the OS
-    // substituted them anyway". This scenario therefore does not cover Task 13's font-fallback change, and the
-    // equality is asserted so that the day macOS stops substituting, this stops quietly claiming otherwise.
+    // Task 13's CJK fallback, pinned by measurement rather than by restating the constant.
+    //
+    // At first reading this looks unmeasurable: with the fallback in place all three stacks -- the app's own,
+    // bare `monospace`, and Hiragino alone -- return the SAME 104px, which suggests macOS substitutes a CJK face
+    // regardless and the stack makes no difference. It does make a difference. Removing CJK_FALLBACK from
+    // `fontStack()` drops the app stack to 96.03px (12.00px per glyph) while Hiragino alone stays at 104px: the
+    // face the browser substitutes behind "JetBrains Mono Variable" is NOT the family the fallback names, and it
+    // has different metrics. So this equality is what actually guards the shipped stack.
+    //
+    // It is not a tautology: both sides are widths the browser measured, and neither is read from CJK_FALLBACK.
+    // Mutation-checked -- deleting the fallback from `fontStack()` turns exactly this assertion red.
     expect(
-      probe.cjkUnderMonospaceOnly,
-      "monospace-only no longer substitutes to the same CJK metrics -- the fallback stack may now be measurable",
-    ).toBe(probe.cjkUnderAppStack);
+      probe.cjkUnderAppStack,
+      "a CJK run under the app's own font stack is not laid out at the named CJK fallback's metrics",
+    ).toBe(probe.cjkUnderHiraginoOnly);
   }, 300_000);
 });

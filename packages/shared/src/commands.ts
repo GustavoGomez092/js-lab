@@ -141,6 +141,10 @@ export const COMMANDS = [
   { id: "view.layoutVertical", title: "Vertical Layout", category: "view" },
   { id: "view.toggleLayout", title: "Toggle Vertical Split", category: "view" },
   { id: "view.toggleFullScreen", title: "Toggle Full Screen", category: "view" },
+  // Standard macOS window zoom: the Window ▸ Zoom item, and a double-click on the title bar row. Deliberately not
+  // full screen -- zoom fills the display's *work area*, leaving the menu bar and the Dock where they are, and a
+  // second zoom returns the window to the frame it had before.
+  { id: "view.zoomWindow", title: "Zoom", category: "view" },
 
   { id: "wd.set", title: "Set Working Directory…", category: "run" },
   { id: "wd.clear", title: "Clear Working Directory", category: "run" },

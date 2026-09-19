@@ -140,6 +140,7 @@ export function createAppCommands(deps: AppCommandDeps): CommandSpec[] {
     { id: "app.openDataFolder", run: () => deps.api.appCommand("openDataFolder") },
     { id: "app.settings", run: () => deps.api.appCommand("openSettings") },
     { id: "view.toggleFullScreen", run: () => deps.api.appCommand("toggleFullScreen") },
+    { id: "view.zoomWindow", run: () => deps.api.appCommand("zoomWindow") },
 
     // M3: Tools sheets (spec §11.2, §12.1) and the working directory (spec §12.2).
     {

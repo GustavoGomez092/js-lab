@@ -337,6 +337,15 @@ async function start(): Promise<void> {
       const current = mainWindow.window;
       if (current) current.setFullScreen(!current.isFullScreen());
     },
+    // Standard macOS zoom (Window ▸ Zoom, and a double-click on the toolbar row): fill the display's work area, or
+    // go back to the pre-zoom frame. Whether the window is zoomed is read from the window itself rather than from a
+    // flag Main keeps, which would drift the moment the user resized the window by hand.
+    zoomWindow: () => {
+      const current = mainWindow.window;
+      if (!current) return;
+      if (current.isMaximized()) current.unmaximize();
+      else current.maximize();
+    },
     // M-2 (R-M3-T19-FIX-1): the UI flushes pending edits before the window closes. `uiFlush` is declared below and read
     // only when this runs, after startup.
     // biome-ignore lint/suspicious/noThenProperty: afterUiFlush's deps object is never awaited or returned (R-M3-T19-FIX-1 names it `then`)

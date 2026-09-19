@@ -140,6 +140,7 @@ export const APP_ACTIONS = [
   "openDataFolder",
   "resetSettings",
   "toggleFullScreen",
+  "zoomWindow",
   "closeWindow",
   "openSettings",
   "installCli",

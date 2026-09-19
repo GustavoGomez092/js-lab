@@ -21,6 +21,8 @@ export interface AppHandlerDeps {
   openPath(path: string): void;
   restartInSafeMode(): void;
   toggleFullScreen(): void;
+  /** Standard macOS zoom: fill the display's work area, or go back to the pre-zoom frame. Never full screen. */
+  zoomWindow(): void;
   closeWindow(): void;
   openSettings(): void;
   /** Spec §16.1: Help → Install `jslab` Command…. Defaults to ~/.local/bin and never escalates. */
@@ -85,6 +87,9 @@ async function runAppAction(deps: AppHandlerDeps, action: AppAction): Promise<vo
       return;
     case "toggleFullScreen":
       deps.toggleFullScreen();
+      return;
+    case "zoomWindow":
+      deps.zoomWindow();
       return;
     case "closeWindow":
       deps.closeWindow();

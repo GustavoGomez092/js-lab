@@ -29,6 +29,7 @@ function setup(keybindings = keybindingsFake()) {
     openPath: mock((_path: string) => {}),
     restartInSafeMode: mock(() => {}),
     toggleFullScreen: mock(() => {}),
+    zoomWindow: mock(() => {}),
     closeWindow: mock(() => {}),
     openSettings: mock(() => {}),
     installCli: mock(() => {}),
@@ -56,6 +57,7 @@ describe("app.command", () => {
       "resetSettings",
       "restartSafeMode",
       "toggleFullScreen",
+      "zoomWindow",
       "closeWindow",
       "openSettings",
     ]) {
@@ -66,6 +68,7 @@ describe("app.command", () => {
     expect(deps.settings.reset).toHaveBeenCalledTimes(1);
     expect(deps.restartInSafeMode).toHaveBeenCalledTimes(1);
     expect(deps.toggleFullScreen).toHaveBeenCalledTimes(1);
+    expect(deps.zoomWindow).toHaveBeenCalledTimes(1);
     expect(deps.closeWindow).toHaveBeenCalledTimes(1);
     expect(deps.openSettings).toHaveBeenCalledTimes(1);
   });
@@ -73,18 +76,20 @@ describe("app.command", () => {
   test("the Settings window RPC rejects main-window actions such as closeWindow and runs its own (FA-m11)", async () => {
     const { deps } = setup();
     const handlers = createSettingsAppHandlers(deps);
-    for (const action of ["closeWindow", "toggleFullScreen", "openSettings", "openDataFolder"]) {
+    for (const action of ["closeWindow", "toggleFullScreen", "zoomWindow", "openSettings", "openDataFolder"]) {
       handlers.messages["app.command"]({ action });
     }
     await Bun.sleep(0);
     expect(deps.closeWindow).not.toHaveBeenCalled();
     expect(deps.toggleFullScreen).not.toHaveBeenCalled();
+    // Resizing the main window is as much out of the Settings window's reach as closing it (spec §7.5, FA-m11).
+    expect(deps.zoomWindow).not.toHaveBeenCalled();
     expect(deps.openSettings).not.toHaveBeenCalled();
     expect(deps.openPath.mock.calls).toEqual([["/data"]]);
     const rejected = (deps.log.mock.calls as unknown[][]).filter(
       (call) => call[0] === "Rejected invalid app.command payload",
     );
-    expect(rejected).toHaveLength(3);
+    expect(rejected).toHaveLength(4);
   });
 
   test("installCli and uninstallCli reach Main, and nothing else changes", async () => {

@@ -611,6 +611,7 @@ export function App({
         onToggleAutoRun={() => registry.execute("run.toggleAutoRun")}
         onRun={() => registry.execute("run.start")}
         onStop={() => registry.execute("run.stop")}
+        onZoom={() => registry.execute("view.zoomWindow")}
       >
         {tabCount > 1 || settings.view.tabBarForSingleTab ? (
           <TabBar store={store} tabs={tabs} api={api} />

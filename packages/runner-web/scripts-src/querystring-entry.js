@@ -14,7 +14,7 @@ const escapeQuery = globalThis.encodeURIComponent;
 // truncated `"%E0%A4%A"` -- threw `URIError` where Node's `querystring.unescape` returns the input unchanged.
 // Node's own implementation wraps the decode and falls back on failure; a runtime whose entire purpose is Node
 // compatibility must not diverge on input this ordinary (a hand-written query string is routinely malformed).
-const unescapeQuery = function (text) {
+const unescapeQuery = (text) => {
   try {
     return globalThis.decodeURIComponent(text);
   } catch {

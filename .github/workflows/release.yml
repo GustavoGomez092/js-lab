@@ -51,6 +51,12 @@ jobs:
           sh "$RUNNER_TEMP/hutch-install.sh" --version 0.24.3
           echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
       - run: bun install --frozen-lockfile
+      # Spec §16.1's `jslab` binary, compiled at the repo root under real Bun because Hutch's Cottontail shell
+      # rejects the build flags it needs. `hutch run build` chains `build:bundles`, which refuses to continue
+      # when `dist/bin/jslab` is absent, and `apps/desktop/dist` is gitignored — so on a fresh runner this step
+      # is what makes the canary build possible at all. It arrived with the CLI (M5c) and is not on `main`,
+      # which is why every release run so far has been green without it.
+      - run: bun run build:cli
       - name: Build the macOS app (canary channel)
         working-directory: apps/desktop
         shell: bash

@@ -47,6 +47,35 @@ describe("requests", () => {
   });
 
   /**
+   * `app.bootstrap` is the first request a view makes, and its message hub already exists by then -- so this is the
+   * earliest moment an `e2e.request` is queued rather than dropped into a still-loading bundle. The E2E bridge
+   * holds every send until it hears this (apps/desktop/src/main/cli/e2e-bridge.ts); before that gate existed, the
+   * first `e2e.state` of a launch failed 6 times out of 6 at ~15 s each.
+   */
+  test("app.bootstrap reports the view's RPC as live, before it assembles the payload", async () => {
+    const { deps } = setup();
+    const seenBeforePayload: boolean[] = [];
+    const onViewReady = mock(() => seenBeforePayload.push(true));
+    const handlers = createRpcHandlers({
+      ...deps,
+      onViewReady,
+      // Reading a buffer is the slow part of a bootstrap. If the callback were announced afterwards, the bridge
+      // would go on waiting through every file -- so this records that it already fired by the time we get here.
+      session: {
+        ...deps.session,
+        readBuffer: mock(async () => {
+          seenBeforePayload.push(true);
+          return "1 + 1";
+        }),
+      },
+    });
+    expect(onViewReady).not.toHaveBeenCalled();
+    await handlers.requests["app.bootstrap"]();
+    expect(onViewReady).toHaveBeenCalledTimes(1);
+    expect(seenBeforePayload[0]).toBe(true);
+  });
+
+  /**
    * F1: `readBuffers()` throws on the first tab whose buffer exists but can't be read, which failed the whole
    * bootstrap and left the UI on a failure screen whose only control re-ran the identical request. Bootstrap now
    * reads per tab, so one bad file costs one tab's contents instead of the whole app.

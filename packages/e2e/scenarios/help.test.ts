@@ -40,36 +40,28 @@ test("Restart in Safe Mode quits and the next launch is in manual Safe Mode", as
 });
 
 test("a corrupt settings.json is recovered with a notice naming the saved copy (spec §20)", async () => {
-  // `settingsRecovered` is `info` severity, so it auto-dismisses NOTICE_AUTO_DISMISS_MS (8s) after it mounts
-  // (apps/ui/src/shell/parts.tsx) -- by design, per WCAG 2.2.3: a warning or an error never would, only an
-  // informational recovery fades. `ui.ready` and `ui.notices` come from the one store commit (`hydrate` in
-  // apps/ui/src/state/store.ts), so the notice is guaranteed fresh the instant `launchApp` resolves; a single
-  // reading taken right after used to be the whole bug (it could land after the 8s deadline under load). Polling
-  // for it closes most of that gap, but the E2E bridge's very first `e2e.state` round trip after a launch can
-  // itself go unanswered until *its own* internal 15s timeout (apps/desktop/src/main/cli/e2e-bridge.ts) -- a
-  // launch-time race that alone outlasts the notice, which no amount of polling after that one launch can recover
-  // from. A fresh launch gives the race a fresh, independent roll, so retry the whole launch (new user data, new
-  // corrupt settings.json) rather than only the notice check.
-  const maxAttempts = 5;
-  let notices: { id: string; message: string }[] | null = null;
-  for (let attempt = 0; attempt < maxAttempts && !notices; attempt++) {
-    const userData = await createUserData();
-    await writeFile(join(userData, "settings.json"), "{not json");
-    const app = await launchApp({ userData });
-    apps.push(app);
-    notices = await waitFor(
-      async () => {
-        const current = (await app.state()).ui.notices as { id: string; message: string }[];
-        return current.length > 0 ? current : null;
-      },
-      { timeoutMs: 5_000 },
-    ).catch(() => null);
-  }
-  if (!notices) {
-    throw new Error(
-      `The settingsRecovered notice never appeared before it could auto-dismiss, across ${maxAttempts} launches`,
-    );
-  }
+  // One launch, no retries. `settingsRecovered` is `info` severity, so it auto-dismisses NOTICE_AUTO_DISMISS_MS
+  // (8s) after it mounts (apps/ui/src/shell/parts.tsx) -- by design, per WCAG 2.2.3: a warning or an error never
+  // would, only an informational recovery fades.
+  //
+  // This test used to retry five whole launches to outrun that, on the theory that the bridge's first `e2e.state`
+  // round trip *might* stall until its own 15s timeout. Measurement replaced the theory: it stalled on 6 launches
+  // out of 6, always at ~15.00s, because Main sent `e2e.request` into a webview whose bundle had not run yet and
+  // nothing was there to receive it. `launchApp` burned those 15s before it even returned, so the notice had
+  // already faded every single time -- retrying sampled a distribution with no winning outcomes, which is exactly
+  // why five rolls cost ~104s and still failed. The bridge now holds a send until the view reports in
+  // (apps/desktop/src/main/cli/e2e-bridge.ts), so the first round trip answers in well under a second.
+  const userData = await createUserData();
+  await writeFile(join(userData, "settings.json"), "{not json");
+  const app = await launchApp({ userData });
+  apps.push(app);
+  const notices = await waitFor(
+    async () => {
+      const current = (await app.state()).ui.notices as { id: string; message: string }[];
+      return current.length > 0 ? current : null;
+    },
+    { timeoutMs: 5_000, message: "the settingsRecovered notice never appeared" },
+  );
   expect(notices.map((notice) => notice.id)).toEqual(["settingsRecovered"]);
   expect(notices[0]?.message).toMatch(/A copy was saved as settings\.corrupt-\d+\.json$/);
 });

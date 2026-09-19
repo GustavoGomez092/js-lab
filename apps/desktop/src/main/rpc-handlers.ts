@@ -33,6 +33,11 @@ export interface RpcHandlerDeps {
   /** True for JSLAB_E2E=1 launches. */
   e2e?: boolean;
   onE2EResponse?(response: E2EResponse): void;
+  /**
+   * The view's RPC is live. `app.bootstrap` is the first request a view makes (`apps/ui/src/main.tsx`), and its
+   * message hub already exists by then, so from this point an `e2e.request` is queued rather than dropped.
+   */
+  onViewReady?(): void;
   keybindings?: { rules: readonly KeybindingRule[] };
   notices?: StartupNotice[];
   /** Spec §9.3: the imported themes, so the UI has them before its first paint (Finding T1). */
@@ -80,6 +85,9 @@ export function createRpcHandlers(deps: RpcHandlerDeps) {
   return {
     requests: {
       "app.bootstrap": async (): Promise<BootstrapPayload> => {
+        // Announced before any awaiting: this is the earliest proof the view can receive messages, and holding it
+        // back until the payload is built would leave the E2E bridge waiting through every buffer read.
+        deps.onViewReady?.();
         const { buffers, unreadable } = await readBuffersPerTab(deps.session, deps.log);
         const notices = [...(deps.notices ?? [])];
         if (unreadable.length > 0) {

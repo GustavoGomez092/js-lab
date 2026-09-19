@@ -93,11 +93,13 @@ describe("UI language (ST-08, spec §17)", () => {
 
     // Durable evidence the change was accepted, in place of the `languageChanged` notice. That notice is `info`
     // severity, so it removes itself NOTICE_AUTO_DISMISS_MS (8s) after it mounts (apps/ui/src/shell/parts.tsx),
-    // while the E2E bridge's first `e2e.state` round trip after a launch can go unanswered until its own 15s
-    // timeout (apps/desktop/src/main/cli/e2e-bridge.ts). 15s outlasts 8s, so polling or relaunching cannot make
-    // an assertion on it reliable -- help.test.ts already retries five whole launches for the same reason. The
-    // notice itself is covered where it is deterministic: apps/desktop/test/startup-notices.test.ts asserts its
-    // id and message, packages/rpc-schema asserts its `info` severity, and Q4 checks it by hand.
+    // and settings.json is simply the stronger assertion: it survives the notice either way.
+    //
+    // (This comment used to claim such an assertion could never be made reliable, because the bridge's first
+    // `e2e.state` after a launch outlasted the notice. That was a real defect, not a law: the bridge now waits for
+    // the view to report in before sending, so help.test.ts asserts on its notice from a single launch.) The
+    // notice itself is also covered where it is deterministic: apps/desktop/test/startup-notices.test.ts asserts
+    // its id and message, packages/rpc-schema asserts its `info` severity, and Q4 checks it by hand.
     await waitFor(
       async () => JSON.parse(await readFile(join(userData, "settings.json"), "utf8")).app?.uiLanguage === "ja" || null,
       { timeoutMs: 10_000, message: "app.uiLanguage was never persisted as ja" },
@@ -108,8 +110,8 @@ describe("UI language (ST-08, spec §17)", () => {
     expect(afterChange).toContain("File");
     expect(afterChange).not.toContain("ファイル");
 
-    // A real restart, not `relaunch()`: that helper launches a second app against the same data folder without
-    // quitting the first, which leaves two instances contending for one jslab.sock.
+    // An explicit restart. `relaunch()` now quits the previous instance itself, so it would do just as well here;
+    // this stays spelled out because the quit is part of what this scenario is describing.
     await app.quit();
     const restarted = await launchApp({ userData });
     apps.push(restarted);

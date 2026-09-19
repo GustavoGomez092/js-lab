@@ -275,7 +275,18 @@ export async function launchApp(options: LaunchOptions = {}): Promise<LaunchedAp
         // Deepest descendants first; each PID is one this launch spawned or a verified Main PID.
         await killLaunch();
       },
-      relaunch: (next = {}) => launchApp({ ...next, channel: options.channel, userData }),
+      /**
+       * Quits THIS instance, then launches a replacement against the same data folder.
+       *
+       * The quit is the contract, not a convenience. Without it the caller ends up with two live instances sharing
+       * one `userData` and one `jslab.sock`, and the first leaks past `afterEach` -- a scenario only ever disposes
+       * the app its variable currently points at. Every scenario that wanted a restart already spelled the quit out
+       * by hand (`logpoints`, `snippets`, `i18n`), so the helper now does what they were working around.
+       */
+      relaunch: async (next = {}) => {
+        await app.quit();
+        return launchApp({ ...next, channel: options.channel, userData });
+      },
       reopenWindow: async () => {
         await client.call("e2e.reopen");
         await waitFor(

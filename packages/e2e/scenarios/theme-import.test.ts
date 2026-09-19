@@ -82,8 +82,15 @@ test("importing a VS Code theme .json applies it, persists it and survives a rel
   expect(JSON.parse(await readFile(join(userData, "settings.json"), "utf8")).appearance.theme).toBe("test-deep");
 
   // It is a real theme afterwards: still selectable after a relaunch, and the built-ins still work (ST-03).
-  const relaunched = await current().relaunch();
+  const first = current();
+  const firstPids = first.pids();
+  expect(firstPids.length).toBeGreaterThan(0);
+  const relaunched = await first.relaunch();
   app = relaunched;
+  // `relaunch()` quits the previous instance (packages/e2e/src/app.ts). Asserted, not assumed: two instances
+  // against one data folder would also share one jslab.sock, and only `app` is ever disposed -- so a helper that
+  // stopped quitting would leak this launch silently rather than failing anything.
+  expect(first.alive()).toBe(false);
   expect((await relaunched.state()).ui.themeId).toBe("test-deep");
   await relaunched.command("theme.select", { themeId: "dracula" });
   await waitFor(async () => ((await relaunched.state()).ui.themeId === "dracula" ? true : null), {

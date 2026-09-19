@@ -8,6 +8,14 @@ export interface SettingsHandlerDeps {
   settings: Pick<SettingsStore, "current" | "update">;
   e2e: boolean;
   log: Log;
+  /**
+   * The calling window's RPC is live. `settings.get` is the first request the Settings window makes
+   * (`apps/ui/src/settings/settings-main.tsx`), so it is that window's equivalent of `app.bootstrap`.
+   *
+   * Pass it ONLY for the Settings window's own handler set: the main window serves `settings.get` from a separate
+   * instance of these handlers, and must never open the Settings window's delivery gate.
+   */
+  onViewReady?(): void;
 }
 
 /** `settings.get` / `settings.update`, served to both the main window and the Settings window (spec §8). */
@@ -17,6 +25,7 @@ export function createSettingsHandlers(deps: SettingsHandlerDeps) {
     requests: {
       "settings.get": (input: unknown): { settings: Settings; e2e: boolean } => {
         parse(emptyParamsSchema, "settings.get", input);
+        deps.onViewReady?.();
         return { settings: deps.settings.current, e2e: deps.e2e };
       },
       "settings.update": (input: unknown): Promise<Settings> =>

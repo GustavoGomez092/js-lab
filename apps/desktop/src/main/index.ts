@@ -405,6 +405,9 @@ async function start(): Promise<void> {
         log,
         e2e: e2eEnabled,
         onE2EResponse: (response) => e2eBridge.receive(response),
+        // The view's RPC is live from `app.bootstrap` on, and from that moment its message hub queues anything
+        // React has not subscribed to yet -- so an `e2e.request` can no longer be dropped by a loading bundle.
+        onViewReady: () => e2eBridge.viewReady(),
         // The as-built body, unchanged: shouldReloadView (src/main/ui-watchdog.ts) leaves its 30 s boot grace only
         // once sawFirstHeartbeat is true. Dropping that line would reload the view every 30 s (review I1).
         onUiHeartbeat: () => {
@@ -599,6 +602,9 @@ async function start(): Promise<void> {
     created.on("move", saveFrame);
     // Every new window (a Dock reopen included) is a fresh boot with the watchdog's 30 s grace (R-M2-T18-3).
     ({ sawFirstHeartbeat, bootWindowStartedAt, lastUiHeartbeat } = onReload(Date.now()));
+    // ...and a fresh boot cannot receive `e2e.request` until its bundle runs, so hold E2E sends until it
+    // bootstraps. Without this the first send is dropped and burns the bridge's whole timeout (6/6 launches).
+    e2eBridge.viewBooting();
     return created;
   };
   const mainWindow = createMainWindowController({
@@ -672,7 +678,9 @@ async function start(): Promise<void> {
   const settingsRpc = BrowserView.defineRPC<SettingsRPC>({
     maxRequestTime: 60_000,
     handlers: mergeHandlers(
-      createSettingsHandlers({ settings, e2e: e2eEnabled, log }),
+      // Only the Settings window's own handler set gets `onViewReady`: the main window serves `settings.get` from
+      // a separate instance above, and must never open this window's gate.
+      createSettingsHandlers({ settings, e2e: e2eEnabled, log, onViewReady: () => settingsE2E.viewReady() }),
       createFontHandlers({ fonts: systemFonts, log }),
       createNpmrcHandlers({ path: paths.packagesNpmrc, onSaved: () => npm.resetOutdated(), log }),
       createKeybindingHandlers({ store: keybindings, registeredCommands: () => publishedCommands, t, log }),
@@ -713,6 +721,8 @@ async function start(): Promise<void> {
       };
       created.on("resize", saveFrame);
       created.on("move", saveFrame);
+      // The same boot gap as the main window: hold E2E sends until this window's bundle reaches `settings.get`.
+      settingsE2E.viewBooting();
       return created;
     },
     onClosed: () => settingsE2E.rejectAll("The Settings window closed"),
@@ -811,6 +821,8 @@ async function start(): Promise<void> {
     // A reload is a fresh boot (R-M2-T18-3): the reloaded view gets the 30 s boot grace until its own first
     // heartbeat, instead of the 6 s steady-state deadline left over from the view it replaces.
     ({ sawFirstHeartbeat, bootWindowStartedAt, lastUiHeartbeat } = onReload(now));
+    // A reloaded view is an empty page again until it bootstraps, so E2E sends wait for it just like a new window.
+    e2eBridge.viewBooting();
     // M4 final review (C): the reloaded view starts with an empty webview registry, so Main's entries for the view
     // being replaced are stale the instant this navigates. Dropping them here is what makes the next run create a
     // new element instead of driving one nobody owns any more. This reload is the likeliest trigger of all: it

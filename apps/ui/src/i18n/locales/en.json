@@ -457,7 +457,10 @@
     "clear": "Clear",
     "copied": "Copied",
     "copyAll": "Copy All",
+    "copyEntry": "Copy",
+    "copyEntryJson": "Copy as JSON",
     "copyFailed": "Couldn't copy",
+    "entryMenu": "Entry actions",
     "filterLabel": "Output filter",
     "filters": {
       "all": "All",

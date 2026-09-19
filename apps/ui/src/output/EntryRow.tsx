@@ -1,7 +1,10 @@
 import type { RunEvent } from "@jslab/rpc-schema";
+import { useCallback, useRef, useState } from "react";
 import { runtimeMissingPackage, runtimeMissingRelative } from "../editor/install-assist";
 import type { OutputEntry } from "../state/output";
 import { strings } from "../strings";
+import { ContextMenu, type MenuEntry } from "../tabs/ContextMenu";
+import { copyEntry } from "./copy";
 import { entryLevel } from "./filters";
 import { formatPrimitive, tableModel } from "./format";
 import { type ExpandHandle, ValueView } from "./ValueView";
@@ -17,6 +20,12 @@ interface EntryRowProps {
   onChangeWorkingDirectory?(): void;
   /** R24-4: a primitive selector; when false, a relative module-not-found row offers to set a WD. */
   hasWorkingDirectory?: boolean;
+  /**
+   * OU-10: how the entry menu's Copy / Copy as JSON report themselves. `OutputPanel` points this at the very
+   * status chip Copy All already uses, so a row-level copy and a whole-panel copy say the same thing in the
+   * same place instead of growing a second notification path.
+   */
+  onCopyStatus?(status: "copied" | "failed"): void;
 }
 
 type ErrorEvent = Extract<RunEvent, { kind: "error" }>;
@@ -36,9 +45,37 @@ export function EntryRow({
   onInstall,
   onChangeWorkingDirectory,
   hasWorkingDirectory,
+  onCopyStatus,
 }: EntryRowProps) {
   const { event } = entry;
   const line = event.kind === "result" || event.kind === "console" || event.kind === "error" ? event.line : undefined;
+  // OU-10. `ContextMenu` -- the tab bar's -- is the app's one context-menu mechanism, so the menu lives where
+  // `TabBar` puts its own: in local state beside the thing it acts on, rendered only while open.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  // `ContextMenu` moves focus into itself on open, so closing must hand focus back to the control that opened
+  // it; otherwise a keyboard user is returned to the top of the document with the row lost behind them.
+  const closeMenu = useCallback(() => {
+    setMenu(null);
+    menuButton.current?.focus();
+  }, []);
+  // Anchored under the button rather than at the pointer, because this is the path with no pointer position.
+  const openMenuAtButton = () => {
+    const rect = menuButton.current?.getBoundingClientRect();
+    setMenu({ x: rect?.left ?? 0, y: rect?.bottom ?? 0 });
+  };
+  const menuItems: MenuEntry[] = [
+    {
+      id: "copy",
+      label: strings.output.copyEntry,
+      run: () => void copyEntry(event, "text").then((status) => onCopyStatus?.(status)),
+    },
+    {
+      id: "copyJson",
+      label: strings.output.copyEntryJson,
+      run: () => void copyEntry(event, "json").then((status) => onCopyStatus?.(status)),
+    },
+  ];
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: hover only mirrors the source-line highlight in the editor
     <div
@@ -47,6 +84,18 @@ export function EntryRow({
       style={{ paddingLeft: event.kind === "console" ? event.groupDepth * 16 : 0 }}
       onMouseEnter={() => onHover(line ?? null)}
       onMouseLeave={() => onHover(null)}
+      onContextMenu={(pointerEvent) => {
+        pointerEvent.preventDefault();
+        setMenu({ x: pointerEvent.clientX, y: pointerEvent.clientY });
+      }}
+      onKeyDown={(keyEvent) => {
+        // Shift+F10 and the Menu key are the platform gestures for "open the context menu here". macOS keyboards
+        // carry no Menu key at all, which is why the button below -- an ordinary Tab stop -- is the primary
+        // keyboard path rather than the fallback.
+        if (keyEvent.key !== "ContextMenu" && !(keyEvent.shiftKey && keyEvent.key === "F10")) return;
+        keyEvent.preventDefault();
+        openMenuAtButton();
+      }}
     >
       <span className="entry-stripe" aria-hidden="true" />
       <div className="entry-body">
@@ -71,14 +120,28 @@ export function EntryRow({
           title={strings.output.jumpToLine(line)}
           onClick={() => onReveal(line)}
           // Item 8: pointer/keyboard parity. The row reports hover on mouse enter/leave, which drives the editor's
-          // .line-hover decoration; this badge is the row's only focusable node, so tabbing to it must say which
-          // editor line the row belongs to exactly as the mouse does.
+          // .line-hover decoration; tabbing to this badge must say which editor line the row belongs to exactly as
+          // the mouse does. (Since OU-10 it shares the row with the entry-menu button, which carries no line.)
           onFocus={() => onHover(line)}
           onBlur={() => onHover(null)}
         >
           :{line}
         </button>
       )}
+      {/* OU-10: present on every row, including the stdout/stderr rows that have no line badge and would
+          otherwise contain nothing a keyboard could reach at all. */}
+      <button
+        type="button"
+        ref={menuButton}
+        className="entry-menu-button"
+        aria-label={strings.output.entryMenu}
+        aria-haspopup="menu"
+        aria-expanded={menu !== null}
+        onClick={openMenuAtButton}
+      >
+        ⋯
+      </button>
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeMenu} />}
     </div>
   );
 }

@@ -219,6 +219,142 @@ describe("EntryRow", () => {
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
+  // OU-10. The menu itself is the tab bar's `ContextMenu`, which has its own tests; these pin what this row
+  // contributes -- that the menu exists on an output row, what is on it, what each item copies, and that a
+  // keyboard can reach it.
+  describe("entry menu (OU-10)", () => {
+    const stubClipboard = () => {
+      const writes: string[] = [];
+      const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      Object.defineProperty(navigator, "clipboard", {
+        value: {
+          writeText: (text: string) => {
+            writes.push(text);
+            return Promise.resolve();
+          },
+        },
+        configurable: true,
+      });
+      const restore = () => {
+        if (original) Object.defineProperty(navigator, "clipboard", original);
+        else Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+      };
+      return { writes, restore };
+    };
+
+    // A string, deliberately: for a number the two menu items would put identical text on the clipboard, so the
+    // assertion below could not tell them apart and would survive both items being wired to the same copy.
+    const resultRow = { kind: "result", line: 1, source: "autolog", value: { t: "string", v: "hi" }, seq: 1, t: 0 };
+
+    // Literal labels, deliberately: an expectation written as `strings.output.copyEntry` would still pass if the
+    // catalogue entry were changed to the wrong words, because the implementation reads that same entry.
+    test("right-clicking a row opens a menu offering Copy and Copy as JSON", () => {
+      renderEntry(resultRow as RunEvent);
+      fireEvent.contextMenu(screen.getByTestId("entry"), { clientX: 5, clientY: 6 });
+      expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy", "Copy as JSON"]);
+    });
+
+    test("Copy puts the row's text on the clipboard, Copy as JSON its value as JSON", async () => {
+      const { writes, restore } = stubClipboard();
+      try {
+        renderEntry(resultRow as RunEvent);
+        fireEvent.contextMenu(screen.getByTestId("entry"), { clientX: 5, clientY: 6 });
+        fireEvent.click(screen.getByRole("menuitem", { name: "Copy" }));
+        await Bun.sleep(1);
+        fireEvent.contextMenu(screen.getByTestId("entry"), { clientX: 5, clientY: 6 });
+        fireEvent.click(screen.getByRole("menuitem", { name: "Copy as JSON" }));
+        await Bun.sleep(1);
+        // Bare text, then JSON -- the quotes are the whole difference between the two menu items.
+        expect(writes).toEqual(["hi", '"hi"']);
+      } finally {
+        restore();
+      }
+    });
+
+    test("a console row copies its arguments as a JSON list, not as joined text", async () => {
+      const { writes, restore } = stubClipboard();
+      try {
+        renderEntry({
+          kind: "console",
+          level: "log",
+          line: 3,
+          groupDepth: 0,
+          args: [
+            { t: "string", v: "hi" },
+            { t: "number", v: "2" },
+          ],
+          seq: 1,
+          t: 0,
+        } as RunEvent);
+        fireEvent.contextMenu(screen.getByTestId("entry"), { clientX: 1, clientY: 1 });
+        fireEvent.click(screen.getByRole("menuitem", { name: "Copy as JSON" }));
+        await Bun.sleep(1);
+        expect(writes).toEqual(['[\n  "hi",\n  2\n]']);
+      } finally {
+        restore();
+      }
+    });
+
+    test("a failed clipboard write is reported rather than thrown", async () => {
+      const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: () => Promise.reject(new Error("denied")) },
+        configurable: true,
+      });
+      const onCopyStatus = mock((_status: "copied" | "failed") => {});
+      try {
+        render(
+          <EntryRow
+            entry={{ key: "k", event: resultRow as DisplayEvent }}
+            stale={false}
+            expand={noExpand}
+            onReveal={() => {}}
+            onHover={() => {}}
+            onCopyStatus={onCopyStatus}
+          />,
+        );
+        fireEvent.contextMenu(screen.getByTestId("entry"), { clientX: 1, clientY: 1 });
+        fireEvent.click(screen.getByRole("menuitem", { name: "Copy" }));
+        await Bun.sleep(1);
+        expect(onCopyStatus.mock.calls).toEqual([["failed"]]);
+      } finally {
+        if (original) Object.defineProperty(navigator, "clipboard", original);
+      }
+    });
+
+    // The accessibility requirement, and the reason the row carries a button at all: a stdout row has no line
+    // badge, so without this control it holds nothing a keyboard can reach.
+    test("the menu opens from the keyboard on a row that has no line badge, and focus returns on close", () => {
+      renderEntry({ kind: "stdout", text: "raw output\n", seq: 1, t: 0 } as RunEvent);
+      expect(screen.queryByRole("button", { name: /^L\d/ })).toBeNull();
+      const opener = screen.getByRole("button", { name: "Entry actions" });
+      opener.focus();
+      expect(document.activeElement).toBe(opener);
+      expect(opener.getAttribute("aria-expanded")).toBe("false");
+
+      fireEvent.click(opener);
+      expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy", "Copy as JSON"]);
+      expect(opener.getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Copy" }));
+
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryAllByRole("menuitem")).toEqual([]);
+      expect(document.activeElement).toBe(opener);
+    });
+
+    test("Shift+F10 on the row opens the menu", () => {
+      renderEntry(resultRow as RunEvent);
+      fireEvent.keyDown(screen.getByTestId("entry"), { key: "F10", shiftKey: true });
+      expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy", "Copy as JSON"]);
+    });
+
+    test("an unmodified F10 does not open the menu", () => {
+      renderEntry(resultRow as RunEvent);
+      fireEvent.keyDown(screen.getByTestId("entry"), { key: "F10" });
+      expect(screen.queryAllByRole("menuitem")).toEqual([]);
+    });
+  });
+
   // R24-4: a relative module-not-found row offers to set a working directory when the tab has none.
   test("a relative module-not-found row offers Set Working Directory… when the tab has no working directory", () => {
     const onChange = mock(() => {});

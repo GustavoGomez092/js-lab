@@ -42,10 +42,16 @@ export interface AppHandlerDeps {
 /**
  * ST-11 (spec §7.4): the three Help links, in one place so a menu item cannot point somewhere no test checks.
  *
- * Each is a live page on the project's own repository — the README is JSLab's actual documentation entry point
- * (`docs/user/` holds only two topic pages and no index), and canary builds are published as prereleases on
- * every push to `main`, so the releases page is what "What's New" means here. A Help item that opens a 404 is
- * worse than one that does not exist, so these are asserted as exact values rather than assembled at runtime.
+ * Each is a live page on the project's own repository, and canary builds are published as prereleases on every
+ * push to `main`, so the releases page is what "What's New" means here. A Help item that opens a 404 is worse
+ * than one that does not exist, so these are asserted as exact values rather than assembled at runtime.
+ *
+ * Documentation still points at the README even though M6 landed a full manual under `docs/user/` (an index
+ * plus sixteen pages). That is deliberate, not stale: the manual exists on this branch, NOT on `main`, whose
+ * `docs/user/` holds `bun-vs-node.md` alone — so a `blob/main/docs/user/README.md` link would 404 for every
+ * user until the branch ships. Re-point it once the manual is on `main`, and update the literal in
+ * `app-handlers.test.ts` with it (that test asserts the URLs as literals on purpose, so this constant cannot
+ * be edited without a test noticing).
  */
 export const HELP_URLS = {
   documentation: "https://github.com/GustavoGomez092/js-lab#readme",

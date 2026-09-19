@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { defaultSettings } from "@jslab/shared";
 import { buildMessages } from "../src/main/ai/context";
+import { AiModelListService } from "../src/main/ai/model-list";
 import { createOllamaAdapter } from "../src/main/ai/ollama";
-import { AiRequestError } from "../src/main/ai/provider";
+import { AiRequestError, createAdapterRegistry } from "../src/main/ai/provider";
 
 /**
  * The live integration suite: the Ollama adapter against a REAL local server.
@@ -17,9 +19,9 @@ import { AiRequestError } from "../src/main/ai/provider";
  */
 const BASE_URL = process.env.JSLAB_OLLAMA_BASE_URL ?? "http://127.0.0.1:11434";
 
-async function probe(): Promise<string[]> {
+async function probe(baseUrl: string = BASE_URL): Promise<string[]> {
   try {
-    const response = await fetch(`${BASE_URL}/api/tags`, { signal: AbortSignal.timeout(2_000) });
+    const response = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(2_000) });
     if (!response.ok) return [];
     const body = (await response.json()) as { models?: { name?: unknown }[] };
     return (body.models ?? []).map((entry) => entry?.name).filter((name): name is string => typeof name === "string");
@@ -32,6 +34,20 @@ const available = await probe();
 // Prefer an instruction-tuned model: a base model answers a question with more of the question.
 const model = available.find((name) => name.includes("instruct")) ?? available[0] ?? "";
 const live = available.length > 0 ? test : test.skip;
+
+/**
+ * TL-23's service resolves the MANIFEST's default endpoint when `ai.baseUrl.ollama` is blank, and that default
+ * is spelled `localhost` -- not the `127.0.0.1` this suite probes above, and not whatever
+ * `JSLAB_OLLAMA_BASE_URL` may point at. Normally the same server; not necessarily. So it gets its own probe and
+ * skips on its own terms rather than borrowing a result that might describe a different machine.
+ *
+ * Written out as a literal rather than read from `models.json`: if a release ever moves the default endpoint,
+ * this test must FAIL rather than quietly follow it, because the model picker would then be pointing somewhere
+ * the user's server is not.
+ */
+const DEFAULT_ENDPOINT = "http://localhost:11434";
+const defaultEndpointModels = await probe(DEFAULT_ENDPOINT);
+const liveDefault = defaultEndpointModels.length > 0 ? test : test.skip;
 
 if (available.length === 0) {
   console.log(`[ai] No Ollama server at ${BASE_URL}; the live suite is skipped.`);
@@ -192,5 +208,35 @@ describe("Ollama, live (spec §14.3)", () => {
     );
     // Content is the model's business; that it answered at all is this suite's.
     expect(chunks.join("").trim().length).toBeGreaterThan(0);
+  });
+
+  /**
+   * TL-23's model list, end to end against a real server (spec §14.3).
+   *
+   * `AiModelListService` is unit-tested against a fake adapter, which proves its coalescing, caching and backoff
+   * but deliberately never opens a socket. What only a real server can prove is that the rest of the Main-side
+   * path holds together: a BLANK `ai.baseUrl.ollama` resolving through the manifest to a reachable endpoint, the
+   * Keychain lookup resolving to no key, the adapter, and a real `/api/tags` body arriving as model ids the
+   * picker can actually show. Those four have no fixture between them here.
+   */
+  liveDefault("the model list service reaches a real server through the manifest's default endpoint", async () => {
+    const service = new AiModelListService({
+      registry: createAdapterRegistry([createOllamaAdapter()]),
+      // Blank base URL and blank model: stock settings, so the manifest default is what gets resolved.
+      settings: { current: defaultSettings() },
+      log: () => {},
+    });
+
+    const result = await service.list("ollama", false);
+
+    expect(result.error).toBeNull();
+    expect(result.detail).toBe("");
+    // Every model the raw probe saw at that endpoint comes back through the service. Asserted this way rather
+    // than by comparing arrays, so neither the de-duplication nor the server's ordering is baked in here.
+    for (const name of defaultEndpointModels) expect(result.models).toContain(name);
+
+    // A second look is served from the cache rather than from the server, which is what stops the AI tab from
+    // re-asking a real provider every time it is opened.
+    expect((await service.list("ollama", false)).models).toEqual(result.models);
   });
 });

@@ -1,5 +1,6 @@
 import {
   AI_PROVIDER_NONE,
+  type AiProvider,
   AVAILABLE_AI_PROVIDERS,
   DECORATOR_MODES,
   LANGUAGES,
@@ -46,6 +47,16 @@ export interface FieldDef {
   tab: SettingsTab;
   kind: FieldKind;
   restart?: boolean;
+  /**
+   * TL-23: this field also offers the models this provider reports, with a Refresh control.
+   *
+   * Deliberately a property of the FIELD and not a `FieldKind`. The options are dynamic, so they cannot be baked
+   * into the kind the way `enum`'s are -- but more importantly the kind must stay `text`, whose coercion keeps
+   * blank as a VALUE. Turning this into an `enum` (or reusing `theme`/`font`, which reject blank) would take away
+   * the only way back to the manifest's default, which is where every user starts. The picker therefore layers
+   * OVER the text input rather than replacing it, and the text input stays editable at all times.
+   */
+  models?: AiProvider;
 }
 
 const bool: FieldKind = { type: "bool" };
@@ -117,7 +128,8 @@ export const SETTINGS_FIELDS: FieldDef[] = [
     tab: "ai",
     kind: choices(o.aiProvider, [AI_PROVIDER_NONE, ...AVAILABLE_AI_PROVIDERS]),
   },
-  { key: "ai.model.ollama", tab: "ai", kind: { type: "text" } },
+  // TL-23: still `text` -- see `FieldDef.models` for why the picker layers over it instead of replacing it.
+  { key: "ai.model.ollama", tab: "ai", kind: { type: "text" }, models: "ollama" },
   { key: "ai.baseUrl.ollama", tab: "ai", kind: { type: "text" } },
   { key: "ai.includeOutput", tab: "ai", kind: bool },
 

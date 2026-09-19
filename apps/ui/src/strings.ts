@@ -694,6 +694,22 @@ export const strings = {
     },
     loadingFonts: t("settings.loadingFonts"),
     fontsUnavailable: t("settings.fontsUnavailable"),
+    /**
+     * TL-23: the model picker and its Refresh control, layered over the `ai.model.<provider>` text field.
+     *
+     * `useDefault` names the blank value rather than describing it ("Default", not "Leave blank"): blank is what
+     * the setting stores, and the whole point of keeping the field free text is that the user can always get back
+     * to it. The three states below are mutually exclusive and say genuinely different things -- still asking,
+     * asked and failed, asked and the server has nothing installed.
+     */
+    models: {
+      refresh: t("settings.models.refresh"),
+      picker: t("settings.models.picker"),
+      useDefault: t("settings.models.useDefault"),
+      loading: t("settings.models.loading"),
+      unavailable: t("settings.models.unavailable"),
+      empty: t("settings.models.empty"),
+    },
     openDataFolder: t("settings.openDataFolder"),
     resetAll: t("settings.resetAll"),
     confirmReset: t("settings.confirmReset"),

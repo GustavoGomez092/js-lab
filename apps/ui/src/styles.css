@@ -1873,6 +1873,32 @@ button:disabled {
   border-radius: var(--radius);
 }
 
+/* TL-23: the model picker and Refresh sit under the text input, which keeps its full width and stays editable. */
+.field-model {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.field-model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-model-row button {
+  padding: 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+}
+
+/* The failure line belongs to the control, not to a field label, so it loses the badge's leading gap. */
+.field-model .field-note {
+  margin-left: 0;
+  text-align: right;
+}
+
 .settings-actions {
   display: flex;
   gap: 8px;

@@ -1,4 +1,4 @@
-import type { SettingsUpdateParams, SystemFontList } from "@jslab/rpc-schema";
+import type { AiModelList, SettingsUpdateParams, SystemFontList } from "@jslab/rpc-schema";
 import { readSetting, type Settings, settingPatch } from "@jslab/shared";
 import { getTheme, listThemes, resolveThemeId } from "@jslab/themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -13,6 +13,12 @@ import { createSettingsAgent } from "./settings-agent";
 import type { SettingsApi } from "./settings-rpc";
 
 type FontsState = { fonts: SystemFontList | null; refreshing: boolean };
+
+/** TL-23: one provider's model list, plus whether a fetch is in flight (what the Refresh control shows as busy). */
+type ModelsState = AiModelList & { loading: boolean };
+
+/** The state a provider is in before its first answer arrives: nothing to offer yet, and not a failure. */
+const MODELS_PENDING: ModelsState = { models: null, error: null, detail: "", loading: true };
 
 export function SettingsApp({
   api,
@@ -30,6 +36,7 @@ export function SettingsApp({
   const [tab, setTab] = useState<SettingsTab>("general");
   const [query, setQuery] = useState("");
   const [fonts, setFonts] = useState<FontsState>({ fonts: null, refreshing: true });
+  const [models, setModels] = useState<Record<string, ModelsState>>({});
   const [confirmReset, setConfirmReset] = useState(false);
   const npmrc = useRef<NpmrcEditorHandle | null>(null);
   const keys = useRef<KeybindingsPaneHandle | null>(null);
@@ -86,6 +93,43 @@ export function SettingsApp({
       clearTimeout(timer);
     };
   }, [api]);
+
+  const loadModels = useCallback(
+    async (provider: string, refresh: boolean) => {
+      setModels((prev) => ({ ...prev, [provider]: { ...(prev[provider] ?? MODELS_PENDING), loading: true } }));
+      try {
+        const result = await api.listAiModels(provider, refresh);
+        setModels((prev) => ({ ...prev, [provider]: { ...result, loading: false } }));
+      } catch (error) {
+        // Main reports a failed LIST as data, so reaching here means the REQUEST itself failed -- Main is gone,
+        // or the RPC timed out. Either way it is reported in the picker, never thrown into the tree and never
+        // left as a silently empty dropdown.
+        setModels((prev) => ({
+          ...prev,
+          [provider]: {
+            models: null,
+            error: "unknown",
+            detail: error instanceof Error ? error.message : String(error),
+            loading: false,
+          },
+        }));
+      }
+    },
+    [api],
+  );
+
+  // Asked once per provider, and only once a field that shows one is actually on screen: a Settings window opened
+  // on General must not reach out to a provider at all. The ref rather than a read of `models` is what stops a
+  // re-render from firing a second request before the first one's state has landed.
+  const requestedModels = useRef(new Set<string>());
+  useEffect(() => {
+    for (const field of visible) {
+      if (field.models && !requestedModels.current.has(field.models)) {
+        requestedModels.current.add(field.models);
+        void loadModels(field.models, false);
+      }
+    }
+  }, [visible, loadModels]);
 
   useEffect(() => {
     if (!e2e) return;
@@ -239,15 +283,20 @@ export function SettingsApp({
           />
         )}
         <div className="settings-fields">
-          {visible.map((field) => (
-            <FieldRow
-              key={field.key}
-              field={field}
-              value={readSetting(settings, field.key)}
-              fonts={fonts}
-              onChange={(value) => void set(field.key, value)}
-            />
-          ))}
+          {visible.map((field) => {
+            const provider = field.models;
+            return (
+              <FieldRow
+                key={field.key}
+                field={field}
+                value={readSetting(settings, field.key)}
+                fonts={fonts}
+                models={provider ? (models[provider] ?? MODELS_PENDING) : null}
+                {...(provider ? { onRefreshModels: () => void loadModels(provider, true) } : {})}
+                onChange={(value) => void set(field.key, value)}
+              />
+            );
+          })}
         </div>
         {!query && tab === "advanced" && (
           <div className="settings-actions">
@@ -284,13 +333,54 @@ function fontOptionNames(fonts: SystemFontList | null): string[] {
   return [...BUNDLED_FONTS.map((font) => font.name), ...(fonts?.monospace ?? []), ...(fonts?.other ?? [])];
 }
 
+/**
+ * TL-23's dropdown: the models the provider reported, over a field that stays free text.
+ *
+ * The blank option is first and always present, because blank is what "the manifest's default" is stored as --
+ * a user who picks a model has to be able to get back to it, and a list of fetched names alone could never say
+ * it. The current value is offered too when the list does not contain it (the font picker does the same), so a
+ * model configured by hand, or one since removed from the server, still reads as the selected one.
+ */
+function ModelPicker(props: { current: string; state: ModelsState; onPick(value: string): void }) {
+  const { current, state, onPick } = props;
+  const list = state.models ?? [];
+  return (
+    <select
+      aria-label={strings.settings.models.picker}
+      value={current}
+      onChange={(event) => onPick(event.target.value)}
+    >
+      <option value="">{strings.settings.models.useDefault}</option>
+      {current !== "" && !list.includes(current) && <option value={current}>{current}</option>}
+      {list.map((name) => (
+        <option key={name} value={name}>
+          {name}
+        </option>
+      ))}
+      {/* Still asking, asked and failed, and asked and the server has none are three different things to say. */}
+      {list.length === 0 && (
+        <option disabled>
+          {state.loading
+            ? strings.settings.models.loading
+            : state.error !== null
+              ? strings.settings.models.unavailable
+              : strings.settings.models.empty}
+        </option>
+      )}
+    </select>
+  );
+}
+
 function FieldRow(props: {
   field: FieldDef;
   value: unknown;
   fonts: FontsState;
+  /** TL-23: null for every field that offers no model list, which is all of them but `ai.model.<provider>`. */
+  models: ModelsState | null;
+  onRefreshModels?(): void;
   onChange(value: boolean | number | string): void;
 }) {
-  const { field, value, fonts, onChange } = props;
+  const { field, value, fonts, models, onRefreshModels, onChange } = props;
   const text = strings.settings.fields[field.key];
   const id = `field-${field.key.replace(".", "-")}`;
   const helpId = `${id}-help`;
@@ -306,7 +396,16 @@ function FieldRow(props: {
         </p>
       </div>
       <div className="field-control">
-        <FieldControl id={id} helpId={helpId} field={field} value={value} fonts={fonts} onChange={onChange} />
+        <FieldControl
+          id={id}
+          helpId={helpId}
+          field={field}
+          value={value}
+          fonts={fonts}
+          models={models}
+          {...(onRefreshModels ? { onRefreshModels } : {})}
+          onChange={onChange}
+        />
       </div>
     </div>
   );
@@ -318,9 +417,11 @@ function FieldControl(props: {
   field: FieldDef;
   value: unknown;
   fonts: FontsState;
+  models: ModelsState | null;
+  onRefreshModels?(): void;
   onChange(value: boolean | number | string): void;
 }) {
-  const { id, helpId, field, value, fonts, onChange } = props;
+  const { id, helpId, field, value, fonts, models, onRefreshModels, onChange } = props;
   const kind = field.kind;
   const [draft, setDraft] = useState(String(value ?? ""));
   useEffect(() => setDraft(String(value ?? "")), [value]);
@@ -343,7 +444,7 @@ function FieldControl(props: {
         const next = coerceFieldValue(field, draft);
         if (next !== null && next !== value) onChange(next);
       };
-      return (
+      const input = (
         <input
           id={id}
           type="text"
@@ -355,6 +456,27 @@ function FieldControl(props: {
             if (event.key === "Enter") commitText();
           }}
         />
+      );
+      // TL-23: an ordinary text field unless this one also offers a model list. The input is rendered either
+      // way and is never disabled -- it is the only control that can express a blank value, and a provider that
+      // cannot be reached must not take the field away from the user.
+      if (!models) return input;
+      return (
+        <div className="field-model">
+          {input}
+          <div className="field-model-row">
+            <ModelPicker current={String(value ?? "")} state={models} onPick={onChange} />
+            <button type="button" onClick={onRefreshModels} disabled={models.loading}>
+              {strings.settings.models.refresh}
+            </button>
+          </div>
+          {models.error !== null && (
+            // The provider's own words go in the tooltip, as data: `detail` is a remote server's text, never a key.
+            <p className="field-note" title={models.detail}>
+              {strings.settings.models.unavailable}
+            </p>
+          )}
+        </div>
       );
     }
     case "int":

@@ -20,6 +20,8 @@ export interface SettingsApi {
   get(): Promise<{ settings: Settings; e2e: boolean }>;
   update(patch: SettingsUpdateParams["patch"]): Promise<Settings>;
   listFonts(): Promise<SettingsWindowRequests["fonts.list"]["response"]>;
+  /** TL-23: the models the provider reports. `refresh` is the Refresh control; it never rejects (see Main). */
+  listAiModels(provider: string, refresh: boolean): Promise<SettingsWindowRequests["ai.models.list"]["response"]>;
   getNpmrc(): Promise<string>;
   saveNpmrc(content: string): Promise<SaveResult>;
   resetNpmrc(): Promise<string>;
@@ -52,6 +54,7 @@ export function createSettingsApi(): SettingsApi {
     get: () => rpc.request["settings.get"]({}),
     update: (patch) => rpc.request["settings.update"]({ patch }),
     listFonts: () => rpc.request["fonts.list"]({}),
+    listAiModels: (provider, refresh) => rpc.request["ai.models.list"]({ provider, refresh }),
     getNpmrc: () => rpc.request["npmrc.get"]({}).then((reply) => reply.content),
     saveNpmrc: (content) => rpc.request["npmrc.save"]({ content }),
     resetNpmrc: () => rpc.request["npmrc.reset"]({}).then((reply) => reply.content),

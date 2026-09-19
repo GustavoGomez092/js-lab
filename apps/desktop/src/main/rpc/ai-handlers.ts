@@ -14,7 +14,7 @@ import {
   type Settings,
 } from "@jslab/shared";
 import { buildMessages } from "../ai/context";
-import { resolveBaseUrl, resolveModel } from "../ai/models";
+import { readProviderSetting, resolveBaseUrl, resolveModel } from "../ai/models";
 import { createOllamaAdapter } from "../ai/ollama";
 import { type AdapterRegistry, AiRequestError, createAdapterRegistry } from "../ai/provider";
 import { aiAccount } from "../secrets/keychain";
@@ -188,18 +188,6 @@ export function createAiHandlers(deps: AiHandlerDeps) {
       }),
     },
   };
-}
-
-/**
- * Reads `ai.model.<provider>` / `ai.baseUrl.<provider>`.
- *
- * The section's field names really do contain a dot (spec §8 writes the key as `ai.model.ollama`), so this reads
- * the field by its composed name rather than by walking a nested object -- there is no nested object to walk.
- */
-function readProviderSetting(settings: Settings, field: "model" | "baseUrl", provider: AiProvider): string {
-  const values = settings.ai as unknown as Record<string, unknown>;
-  const value = values[`${field}.${provider}`];
-  return typeof value === "string" ? value : "";
 }
 
 /**

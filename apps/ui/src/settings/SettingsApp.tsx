@@ -2,6 +2,7 @@ import type { SettingsUpdateParams, SystemFontList } from "@jslab/rpc-schema";
 import { readSetting, type Settings, settingPatch } from "@jslab/shared";
 import { getTheme, listThemes, resolveThemeId } from "@jslab/themes";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { measureLayout } from "../e2e/layout-metrics";
 import { strings } from "../strings";
 import { applyThemeVariables } from "../themes/apply";
 import { BUNDLED_FONTS } from "../themes/fonts";
@@ -151,6 +152,31 @@ export function SettingsApp({
         return false;
       },
       target: () => document.activeElement ?? document.body,
+      // M5e: this window is where the seeded translations actually render (`settings.tabs.*` in the 180px nav
+      // track, `settings.restartRequired` inside `.field-text`), so it is the one place a layout assertion can
+      // measure translated text instead of an English fallback. `cjk: false`: the CJK advance-width probe reads
+      // `--code-font-family`, which only the main window sets (`applyAppearanceVariables`), so a reading here
+      // would describe a variable this window never applies.
+      layoutMetrics: () =>
+        measureLayout(
+          {
+            rootEl: "#root",
+            settings: ".settings",
+            nav: ".settings-nav",
+            main: ".settings-main",
+            heading: ".settings-main h1",
+            search: ".settings-search",
+          },
+          {
+            navButtons: ".settings-nav button",
+            fields: ".field",
+            fieldTexts: ".field-text",
+            fieldControls: ".field-control",
+            fieldLabels: ".field-text label",
+            fieldNotes: ".field-note",
+          },
+          { cjk: false },
+        ),
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {
       agent(method, params).then(

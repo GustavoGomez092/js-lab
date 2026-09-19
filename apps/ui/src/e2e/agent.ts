@@ -5,6 +5,7 @@ import type { InstallAction } from "../editor/install-assist";
 import type { AppStore } from "../state/store";
 import { typeIntoField } from "./fields";
 import { keyEventInit } from "./keys";
+import type { LayoutMetrics } from "./layout-metrics";
 import { snapshotOutput, snapshotState } from "./snapshot";
 
 /** A DOM element's viewport box, in CSS pixels -- which are also Electrobun DIPs (`overlaySync.ts`). */
@@ -65,6 +66,12 @@ export interface E2EAgentDeps {
   regions?(): Record<string, boolean>;
   /** M4 diagnostics: live geometry of the console/webview surfaces plus the Web View tile's re-measure counters. */
   overlayDiagnostics?(): OverlayDiagnostics;
+  /**
+   * M5e: real measured geometry of the shell's own regions, with the text each box contained, so an E2E scenario
+   * can assert the UI still lays out under a non-English locale. Separate from `overlayDiagnostics`, which answers
+   * a native-surface question and is read by the two webview scenarios.
+   */
+  layoutMetrics?(): LayoutMetrics;
   /** Every command id registered in the UI command registry (Task 22 verification: every menu action is dispatchable). */
   registeredCommands?(): string[];
   /** Monaco's TypeScript markers for the shown tab (Task 21). */
@@ -137,6 +144,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
           editorOptions: deps.editorOptions?.() ?? null,
           regions: deps.regions?.() ?? {},
           overlayDiagnostics: deps.overlayDiagnostics?.() ?? null,
+          layoutMetrics: deps.layoutMetrics?.() ?? null,
           registeredCommands: deps.registeredCommands?.() ?? [],
           tsDiagnostics: (await deps.tsDiagnostics?.()) ?? [],
         };

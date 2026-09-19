@@ -18,6 +18,7 @@ import { createOutputCommands } from "../commands/output-commands";
 import { CommandRegistry } from "../commands/registry";
 import { createViewCommands } from "../commands/view-commands";
 import { createE2EAgent } from "../e2e/agent";
+import { measureLayout } from "../e2e/layout-metrics";
 import { Editor } from "../editor/Editor";
 import { getEditorHandle } from "../editor/editor-handle";
 import { EnvVarsSheet } from "../env/EnvVarsSheet";
@@ -512,6 +513,37 @@ export function App({
           counters: webViewTileCounters(),
         };
       },
+      // M5e: the shell's own boxes, measured by a real layout engine, for the layout-under-translation scenario.
+      // `.status-item` / `.tab-title` are two of the four tolerance rules Task 13 added and nothing tested; the
+      // rest are here so "nothing renders at zero size" and "nothing overflows the page" can be checked per region.
+      layoutMetrics: () =>
+        measureLayout(
+          {
+            // `#root` and not `<html>`: `#root` is `overflow: hidden`, so it clips its own overflow and the page
+            // element never reports it. A horizontal-overflow check has to be made against the box that contains it.
+            rootEl: "#root",
+            app: ".app",
+            appMain: ".app-main",
+            toolbar: ".toolbar",
+            activityBar: ".activity-bar",
+            tabBar: ".tab-bar",
+            statusBar: ".status-bar",
+            statusLeft: ".status-left",
+            statusRight: ".status-right",
+            output: ".output",
+            sideBar: ".side-bar",
+            snippetsPanel: ".snippets-panel",
+            palette: ".palette",
+            paletteList: ".palette-list",
+          },
+          {
+            statusItems: ".status-item",
+            tabs: ".tab",
+            tabTitles: ".tab-title",
+            paletteItems: ".palette-item",
+            paletteTitles: ".palette-title",
+          },
+        ),
     });
     return api.on("e2e.request", ({ reqId, method, params }) => {
       agent(method, params).then(

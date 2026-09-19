@@ -209,6 +209,7 @@ Details are in the [roadmap](docs/superpowers/plans/2026-09-12-jslab-roadmap.md)
 - [Bun vs Node differences](docs/user/bun-vs-node.md)
 - [M3 manual QA checklist](docs/qa/m3-checklist.md)
 - [M4 manual QA checklist](docs/qa/m4-checklist.md)
+- [M6 manual QA checklist](docs/qa/m6-checklist.md) — the active one: About and the open-source notices, the user manual, and the §23 performance budgets
 
 ## License
 

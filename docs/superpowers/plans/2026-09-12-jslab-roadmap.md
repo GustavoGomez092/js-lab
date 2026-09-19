@@ -34,8 +34,8 @@ These apply to every milestone plan:
 | M2 Workspace | `2026-09-13-jslab-m2-workspace.md` | Complete (manual QA items pending user) |
 | M3 Language & packages | `2026-09-14-jslab-m3-language-packages.md` | Complete (manual QA items pending user) |
 | M4 Browser runtimes | `2026-09-16-jslab-m4-browser-runtimes.md` | Complete (manual QA items pending user; WV-06 tile-header drag not built) |
-| M5 Productivity & extras | `2026-09-16-jslab-m5a-editor-productivity.md` (M5a: logpoint gutter, Show Transpiled Output, welcome tab) · `2026-09-16-jslab-m5b-snippets.md` (M5b: snippets panel, Tab expansion, completion provider, import/export) · `2026-09-16-jslab-m5d-theming-keybindings.md` (M5d: VS Code theme importer, Keybindings settings UI) | M5a, M5b, M5c (`jslab` CLI) and M5d complete (M5d manual QA items pending user, `docs/qa/m5d-checklist.md`); AI chat, Gist and i18n outstanding |
-| M6 Ship | to be written at M5 completion | Not started |
+| M5 Productivity & extras | `2026-09-16-jslab-m5a-editor-productivity.md` (M5a: logpoint gutter, Show Transpiled Output, welcome tab) · `2026-09-16-jslab-m5b-snippets.md` (M5b: snippets panel, Tab expansion, completion provider, import/export) · `2026-09-16-jslab-m5d-theming-keybindings.md` (M5d: VS Code theme importer, Keybindings settings UI) | M5a, M5b, M5c (`jslab` CLI) and M5d complete (M5d manual QA items pending user, `docs/qa/m5d-checklist.md`); M5e (i18n) complete; AI chat ships **for Ollama**, with Explain Result and a conversation that survives relaunch (TL-18, TL-20). Still blocked on the owner: Gist needs a GitHub OAuth App (XT-04), and the other five AI providers need API keys (TL-22) |
+| M6 Ship | this file, §M6 | In progress. Done and gated: About with open-source notices (ST-13), the user manual (`docs/user/`, an index plus sixteen pages with a link-integrity test), and the §23 benchmark harness (`bun run bench`). Pending manual QA: file associations (TF-20) and the Help links (ST-11) — see `docs/qa/m6-checklist.md`. Out of scope by the owner's decision of 2026-09-19: signing, notarization, the updater and the Homebrew cask (PL-01, PL-03, PL-04, ST-09) |
 
 ## Dependency graph
 
@@ -147,15 +147,32 @@ M5 depends on M3 because snippets autocomplete, AI context and the CLI all use t
 
 ## M6: Ship
 
-- **Goal:** Signed, notarized, auto-updating public beta, then 1.0.
-- **Spec:** §19, §22.3–22.5, §23, §4.6 (file associations).
-- **Feature list:**
-  1. Updater wiring (stable and canary) and What's New.
-  2. CI signing and notarization; release artifacts; Homebrew tap.
-  3. File associations via the `Info.plist` hook (per M0-S5).
-  4. About, credits, open-source notices.
-  5. User documentation site.
-  6. Performance benchmark job against §23 budgets.
-  7. Parity audit and beta feedback loop.
-- **Parity rows:** TF-20, ST-09, ST-11, PL-01, PL-03, PL-04.
-- **Exit:** parity gate passed; auto-update from beta N to N+1 verified on a clean machine.
+- **Goal, as planned:** Signed, notarized, auto-updating public beta, then 1.0.
+- **Goal, revised 2026-09-19 (owner's decision):** an unsigned, open-source 1.0. JSLab will not pay for an
+  Apple Developer ID, which removes not only signing and notarization but everything downstream of a signed
+  artifact — the Electrobun differential updater and the Homebrew cask both distribute or verify one. Builds
+  ship unsigned; the README's Download section tells users how to open them, and states it as how the app
+  ships rather than as a step still to come.
+- **Spec:** §19, §22.3–22.5, §23, §4.6 (file associations), §7.5 (the About dialog).
+- **Feature list** (original numbering kept; status added):
+  1. Updater wiring (stable and canary) — **out of scope** with PL-03 and ST-09. What's New itself **ships**,
+     pointing at the releases page (ST-11).
+  2. CI signing and notarization; release artifacts; Homebrew tap — **out of scope** with PL-01 and PL-04.
+     Release artifacts still publish; they are simply unsigned.
+  3. File associations via the `Info.plist` hook (per M0-S5) — **built**, pending manual QA (TF-20). No
+     automated test can close it: proving LaunchServices offers JSLab for a `.ts` file needs a packaged build.
+  4. About, credits, open-source notices — **done and gated** (ST-13). Replaces the native `{ role: "about" }`
+     panel rather than joining it, because the native one cannot name the Bun or Electrobun version or reach
+     the notices.
+  5. User documentation site — **done**: `docs/user/` is an index plus sixteen pages, guarded by a
+     link-integrity test. Ruled to ship as Markdown rather than a generated site: the content is the asset and
+     a site generator was unbudgeted risk. A future site can consume these files unchanged.
+  6. Performance benchmark job against §23 budgets — **done**: `bun run bench`. Four budgets measured, five
+     recorded in `budgets.ts` as unmeasurable without a GUI or a release build. Runnable on demand and
+     deliberately **not** CI-gating: timing on a shared runner is noisy, and a flaky gate is worse than none.
+  7. Parity audit and beta feedback loop — **in progress**. The audit has corrected eight rows whose status
+     lagged their own evidence.
+- **Parity rows:** TF-20, ST-09, ST-11, ST-13, PL-01, PL-03, PL-04.
+- **Exit, as planned:** parity gate passed; auto-update from beta N to N+1 verified on a clean machine.
+- **Exit, revised:** parity gate passed and `docs/qa/m6-checklist.md` signed off. The auto-update criterion is
+  withdrawn with PL-03 — it cannot be met without a signed artifact.

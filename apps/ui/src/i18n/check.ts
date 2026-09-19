@@ -72,6 +72,18 @@ const without = (from: readonly string[], other: readonly string[]): string[] =>
   return from.filter((key) => !set.has(key));
 };
 
+/**
+ * CLDR's six plural categories, which are the suffixes i18next appends.
+ *
+ * A plural form is never written at a call site and its base key is never in `en.json`:
+ * `t("shell.runState.settled", { count })` is served by `settled_one` / `settled_other`. Matched naively,
+ * every plural in the catalogue reads as BOTH an unknown key (the base) and a pair of unused ones (the
+ * forms) -- measured, 9 of each the first time the sweep introduced them. English only ever ships `_one`
+ * and `_other`, but a locale with richer rules supplies the rest, so all six are matched here.
+ */
+const PLURAL_SUFFIX = /_(zero|one|two|few|many|other)$/;
+const pluralBase = (key: string): string => key.replace(PLURAL_SUFFIX, "");
+
 function valueAt(table: unknown, key: string): string | null {
   let node: unknown = table;
   for (const segment of key.split(".")) {
@@ -92,8 +104,14 @@ export function checkLocales(input: CheckInput): CheckReport {
     added: without(enKeys, input.manifest),
     removed: without(input.manifest, enKeys),
   };
-  const unknownKeys = without(used, enKeys);
-  const unusedKeys = without(enKeys, used);
+  // A used key is satisfied by its own entry OR by that entry's plural forms; a plural form is used when
+  // its base key is. Both directions are needed: the first keeps `t("env.saved")` from reading as unknown,
+  // the second keeps `env.saved_one` / `env.saved_other` from reading as unused once Task 11 drops
+  // `--bootstrap` and the unused-key sweep starts biting.
+  const enKeysAndBases = new Set([...enKeys, ...enKeys.map(pluralBase)]);
+  const usedSet = new Set(used);
+  const unknownKeys = used.filter((key) => !enKeysAndBases.has(key));
+  const unusedKeys = enKeys.filter((key) => !usedSet.has(key) && !usedSet.has(pluralBase(key)));
 
   const locales: LocaleReport[] = LOCALES.filter((locale) => locale !== SOURCE_LOCALE).map((locale) => {
     const table = input.locales[locale];

@@ -4,15 +4,16 @@ import { t } from "./i18n";
 export const strings = {
   install: {
     /** Spec §6.3. */
-    package: (name: string) => `Install package ${name}`,
-    types: (name: string) => `Install ${name}`,
+    package: (name: string) => t("install.package", { name }),
+    types: (name: string) => t("install.types", { name }),
     /** R23-1: shown in the status bar right after npm.install dispatches. */
     started: (spec: string, keys: string | null) =>
-      keys ? `Installing ${spec}… ${keys} shows progress.` : `Installing ${spec}…`,
+      keys ? t("install.startedWithKeys", { spec, keys }) : t("install.started", { spec }),
   },
   completions: {
     /** The detail line on an installed-package import suggestion: the version in node_modules (spec §6.1). */
-    packageDetail: (version: string | null) => (version === null ? "installed" : `v${version}`),
+    packageDetail: (version: string | null) =>
+      version === null ? t("completions.packageDetailNone") : t("completions.packageDetail", { version }),
   },
   logpoints: {
     /** Spec §6.3: the glyph-margin dot's tooltip. */
@@ -33,18 +34,18 @@ export const strings = {
   },
   commands: {
     failed: (title: string, error: unknown) =>
-      `${title} failed: ${error instanceof Error ? error.message : String(error)}`,
-    onOff: (on: boolean) => (on ? "currently on" : "currently off"),
-    loopLimit: (limit: number) => `limit ${limit}`,
+      t("commands.failed", { title, error: error instanceof Error ? error.message : String(error) }),
+    onOff: (on: boolean) => (on ? t("commands.on") : t("commands.off")),
+    loopLimit: (limit: number) => t("commands.loopLimit", { limit }),
     current: t("commands.current"),
     copyFailed: t("commands.copyFailed"),
-    folder: (name: string) => `folder: ${name}`,
+    folder: (name: string) => t("commands.folder", { name }),
   },
   limits: {
     tooLarge: t("limits.tooLarge"),
   },
   format: {
-    failed: (message: string) => `Couldn't format: ${message}`,
+    failed: (message: string) => t("format.failed", { message }),
     busy: t("format.busy"),
     timedOut: t("format.timedOut"),
     restarted: t("format.restarted"),
@@ -55,10 +56,10 @@ export const strings = {
   // instead of leaving an unhandled rejection.
   tabs: {
     actionFailed: (error: unknown) =>
-      `Couldn't complete that action: ${error instanceof Error ? error.message : String(error)}`,
+      t("tabs.actionFailed", { error: error instanceof Error ? error.message : String(error) }),
     list: t("tabs.list"),
     newTab: t("tabs.newTab"),
-    close: (title: string) => `Close ${title}`,
+    close: (title: string) => t("tabs.close", { title }),
     unsaved: t("tabs.unsaved"),
     rename: t("tabs.rename"),
     closeOne: t("tabs.closeOne"),
@@ -75,50 +76,50 @@ export const strings = {
     // screen reader user with several tabs open can tell which one it's about (the motivating scenario for this
     // whole task) -- and its current state (playing vs. muted), announced honestly, not just drawn.
     audio: {
-      mute: (title: string) => `Mute ${title} (currently playing audio)`,
-      unmute: (title: string) => `Unmute ${title} (currently muted)`,
+      mute: (title: string) => t("tabs.audio.mute", { title }),
+      unmute: (title: string) => t("tabs.audio.unmute", { title }),
     },
   },
   files: {
-    saved: (name: string) => `Saved ${name}`,
-    saveFailed: (error: string) => `Couldn't save: ${error}`,
-    saveChanges: (name: string) => `Save changes to ${name}?`,
+    saved: (name: string) => t("files.saved", { name }),
+    saveFailed: (error: string) => t("files.saveFailed", { error }),
+    saveChanges: (name: string) => t("files.saveChanges", { name }),
     saveChangesDetail: t("files.saveChangesDetail"),
     dontSave: t("files.dontSave"),
     cancel: t("files.cancel"),
     save: t("files.save"),
-    closeTitle: (name: string) => `Close "${name}"?`,
+    closeTitle: (name: string) => t("files.closeTitle", { name }),
     closeDetail: t("files.closeDetail"),
     close: t("files.close"),
     largeTitle: t("files.largeTitle"),
-    large: (name: string, size: string) => `${name} is ${size}. Large files can make JSLab slow.`,
+    large: (name: string, size: string) => t("files.large", { name, size }),
     open: t("files.open"),
     pasteTitle: t("files.pasteTitle"),
-    paste: (size: string) => `Pasting ${size} may make JSLab slow. Continue?`,
+    paste: (size: string) => t("files.paste", { size }),
     pasteButton: t("files.pasteButton"),
     locationTitle: t("files.locationTitle"),
-    location: (path: string) => `Save as ${path}?`,
-    notText: (name: string) => `${name} isn't a text file.`,
+    location: (path: string) => t("files.location", { path }),
+    notText: (name: string) => t("files.notText", { name }),
     /**
      * B1: ⌘S / Save As on a tab whose contents Main couldn't read. The UI refuses before asking Main, so the
      * empty placeholder can never be written over the user's real file. (Main refuses it again, independently.)
      */
     unreadableBuffer: t("files.unreadableBuffer"),
-    tooLarge: (name: string) => `${name} is larger than 50 MB and can't be opened.`,
+    tooLarge: (name: string) => t("files.tooLarge", { name }),
     // Branch B (R-M3-SPIKE-1 NO-GO): a dropped folder can't carry its path into the webview on Electrobun 2.0.1.
     folderDrop: t("files.folderDrop"),
   },
   fonts: {
-    fallback: (font: string) => `Font "${font}" isn't available; using JetBrains Mono.`,
+    fallback: (font: string) => t("fonts.fallback", { font }),
     // m-2 (fix round 1): the default font itself can fail its own check; don't claim to "fall back to
     // JetBrains Mono" from JetBrains Mono.
     bundledUnavailable: t("fonts.bundledUnavailable"),
   },
   /** Themes → Import VS Code Theme… (spec §9.3). */
   themes: {
-    imported: (name: string) => `Imported ${name}.`,
+    imported: (name: string) => t("themes.imported", { name }),
     pickTitle: t("themes.pickTitle"),
-    pickHelp: (count: number) => `That extension contains ${count} themes. Choose the one to import.`,
+    pickHelp: (count: number) => t("themes.pickHelp", { count }),
     cancel: t("themes.cancel"),
     // The caveats an import reports (low-contrast syntax, dropped semantic colours) are Main's own strings: Main
     // decides which of them apply and sends them as ready-to-show text on the result.
@@ -171,21 +172,21 @@ export const strings = {
       hide: t("shell.webView.hide"),
       unavailable: t("shell.webView.unavailable"),
     },
-    cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
+    cursor: (line: number, column: number) => t("shell.cursor", { line, column }),
     runtime: t("shell.runtime"),
     language: t("shell.language"),
     workingDirectory: {
       // R24-1: the ellipsis signals that this opens a picker and matches the menu title.
       set: t("shell.workingDirectory.set"),
       setHelp: t("shell.workingDirectory.setHelp"),
-      change: (path: string) => `Working directory: ${path}. Change…`,
+      change: (path: string) => t("shell.workingDirectory.change", { path }),
       // R24-2: the chip keeps naming the problem and its fix after the output that reported it scrolls away.
-      missing: (path: string) => `Working directory not found: ${path}. Change…`,
+      missing: (path: string) => t("shell.workingDirectory.missing", { path }),
       clear: t("shell.workingDirectory.clear"),
     },
     /** A button's tooltip with its shortcut, when it has one (FB-m3). */
-    withKeys: (label: string, keys: string | null) => (keys ? `${label} (${keys})` : label),
-    dismiss: (message: string) => `Dismiss: ${message}`,
+    withKeys: (label: string, keys: string | null) => (keys ? t("shell.withKeys", { label, keys }) : label),
+    dismiss: (message: string) => t("shell.dismiss", { message }),
     unresponsive: {
       title: t("shell.unresponsive.title"),
       body: t("shell.unresponsive.body"),
@@ -206,10 +207,13 @@ export const strings = {
     },
     runState: {
       /** The Run chord follows the effective bindings; omits the keycap when the binding was removed. */
-      safeModePaused: (keys: string | null) => (keys ? `Safe Mode: press ${keys} to run` : "Safe Mode: paused"),
-      paused: (keys: string | null) => (keys ? `Paused: press ${keys} to run` : "Paused"),
+      safeModePaused: (keys: string | null) =>
+        keys ? t("shell.runState.safeModePaused", { keys }) : t("shell.runState.safeModePausedNoKeys"),
+      paused: (keys: string | null) => (keys ? t("shell.runState.paused", { keys }) : t("shell.runState.pausedNoKeys")),
       running: t("shell.runState.running"),
-      settled: (handles: number) => `Running: ${handles} active ${handles === 1 ? "handle" : "handles"}`,
+      // The parameter is renamed to `count`: i18next selects a plural form from a variable of that exact
+      // name. It stays positional, so no call site changes.
+      settled: (count: number) => t("shell.runState.settled", { count }),
       stopping: t("shell.runState.stopping"),
       stopped: t("shell.runState.stopped"),
       killed: t("shell.runState.killed"),
@@ -223,7 +227,7 @@ export const strings = {
     dismissAll: t("notices.dismissAll"),
   },
   startup: {
-    failed: (message: string) => `JSLab failed to start: ${message}`,
+    failed: (message: string) => t("startup.failed", { message }),
     retry: t("startup.retry"),
     /**
      * F1: Try Again re-runs the identical bootstrap, so on its own it is an infinite loop for any failure that
@@ -251,7 +255,7 @@ export const strings = {
     },
     placeholder: t("palette.placeholder"),
     context: { editor: t("palette.context.editor"), output: t("palette.context.output") },
-    themeItem: (name: string) => `Theme: ${name}`,
+    themeItem: (name: string) => t("palette.themeItem", { name }),
     empty: t("palette.empty"),
     /** R-M4-PALETTE-HIDE-1: marks a listed-but-disabled command, so it reads as "exists, not right now" rather
      * than as the typo that `empty` above describes. `CommandSpec.isEnabled` returns a bare boolean and carries
@@ -280,14 +284,14 @@ export const strings = {
     webViewTab: t("output.webViewTab"),
     copyAll: t("output.copyAll"),
     clear: t("output.clear"),
-    jumpToLine: (line: number) => `Go to line ${line}`,
-    truncated: (dropped: number) =>
-      `Output truncated: ${dropped} more entries were dropped. Raise the limit in Settings → Advanced.`,
+    jumpToLine: (line: number) => t("output.jumpToLine", { line }),
+    truncated: (dropped: number) => t("output.truncated", { dropped }),
     /**
      * OU-02: the exact number of collection entries beyond the pages already loaded, never an unqualified
      * ellipsis. Distinct from `truncated` above, which is about *console entries* dropped by the output cap.
      */
-    moreEntries: (remaining: number) => `… ${remaining.toLocaleString("en-US")} more entries`,
+    // Formatted before interpolation: i18next renders a bare number as "1234", losing the separator.
+    moreEntries: (remaining: number) => t("output.moreEntries", { remaining: remaining.toLocaleString("en-US") }),
     region: t("output.region"),
     /**
      * The output panel's polite live region (`OutputPanel`'s `<output className="visually-hidden">`).
@@ -299,22 +303,22 @@ export const strings = {
      * it honest in locales that have none (m5e's `t()` sweep) and keeps the line inside the 120-column budget.
      */
     announce: {
-      runFinished: (entries: number, errors: number) => `Run finished. Entries: ${entries}. Errors: ${errors}.`,
+      runFinished: (entries: number, errors: number) => t("output.announce.runFinished", { entries, errors }),
     },
     lastSuccessfulRun: t("output.lastSuccessfulRun"),
     copied: t("output.copied"),
     copyFailed: t("output.copyFailed"),
     noMatches: t("output.noMatches"),
     showAll: t("output.showAll"),
-    noOutput: (keys: string | null) => (keys ? `No output yet — press ${keys}` : "No output yet"),
+    noOutput: (keys: string | null) => (keys ? t("output.noOutput", { keys }) : t("output.noOutputNoKeys")),
     tableIndex: t("output.tableIndex"),
     uncaughtInPromise: t("output.uncaughtInPromise"),
-    internalFrames: (count: number) => `${count} internal frames`,
+    internalFrames: (count: number) => t("output.internalFrames", { count }),
     /** A clickable stack-frame line (RR2-m5). */
-    frame: (fn: string, line: number, column: number) => `at ${fn} (L${line}:${column})`,
+    frame: (fn: string, line: number, column: number) => t("output.frame", { fn, line, column }),
     anonymous: t("output.anonymous"),
     /** Spec §6.3: a runtime module-not-found error offers to install the missing package. */
-    installPackage: (name: string) => `Install ${name}`,
+    installPackage: (name: string) => t("output.installPackage", { name }),
     /** Spec §12.2: a WorkingDirectoryError row offers to change the working directory. */
     changeWorkingDirectory: t("output.changeWorkingDirectory"),
     /** R24-4: a relative module-not-found row offers to set a working directory when the tab has none. */
@@ -324,18 +328,18 @@ export const strings = {
     /** Task 13 (spec §5.12): JSLab's own non-blocking stand-in for `alert()`. */
     region: t("webDialog.region"),
     dismiss: t("webDialog.dismiss"),
-    queued: (count: number) => `${count} more waiting`,
+    queued: (count: number) => t("webDialog.queued", { count }),
   },
   env: {
     title: t("env.title"),
     help: t("env.help"),
     key: t("env.key"),
     value: t("env.value"),
-    keyOf: (row: number) => `Key, row ${row}`,
-    valueOf: (key: string) => `Value of ${key}`,
-    reveal: (key: string) => `Show value of ${key}`,
-    hide: (key: string) => `Hide value of ${key}`,
-    remove: (key: string) => `Remove ${key}`,
+    keyOf: (row: number) => t("env.keyOf", { row }),
+    valueOf: (key: string) => t("env.valueOf", { key }),
+    reveal: (key: string) => t("env.reveal", { key }),
+    hide: (key: string) => t("env.hide", { key }),
+    remove: (key: string) => t("env.remove", { key }),
     // Fix round 1 (M-6): New value is masked by default, with its own toggle (no key to name yet).
     revealNew: t("env.revealNew"),
     hideNew: t("env.hideNew"),
@@ -350,18 +354,15 @@ export const strings = {
     empty: t("env.empty"),
     // R25-2: a failed load disables Save, so a transient read failure can't wipe every saved variable.
     loadFailed: t("env.loadFailed"),
-    saveFailed: (error: string) => `Couldn't save env.json (${error}). Your changes are still here.`,
-    // R25-5: states the "next run" effect, since env changes have no other visible effect.
-    saved: (count: number) =>
-      count === 0
-        ? "Removed all environment variables. The next run starts without them."
-        : `Saved ${count} environment variable${count === 1 ? "" : "s"}. The next run uses them.`,
+    saveFailed: (error: string) => t("env.saveFailed", { error }),
+    // R25-5: states the "next run" effect, since env changes have no other visible effect. Zero is not a
+    // plural of the other two -- removing everything says something different -- so it keeps its own key.
+    saved: (count: number) => (count === 0 ? t("env.savedNone") : t("env.saved", { count })),
     // R25-3: shown after a .env block is pasted into New key.
-    pasted: (count: number) =>
-      `Added ${count} variable${count === 1 ? "" : "s"} from the paste. Check them, then Save.`,
+    pasted: (count: number) => t("env.pasted", { count }),
     // R-M3-T25-SAVE-1: the client-side limit checks that mirror @jslab/shared's envVarsSchema.
-    tooMany: (max: number) => `At most ${max} environment variables. Remove some before saving.`,
-    valueTooLong: (key: string, max: number) => `${key}'s value is longer than ${max} characters.`,
+    tooMany: (max: number) => t("env.tooMany", { max }),
+    valueTooLong: (key: string, max: number) => t("env.valueTooLong", { key, max }),
     errors: {
       invalidKey: t("env.errors.invalidKey"),
       duplicateKey: t("env.errors.duplicateKey"),
@@ -385,32 +386,33 @@ export const strings = {
     deleteButton: t("snippets.deleteButton"),
     cancel: t("snippets.cancel"),
     // Spec §13.1: the confirmation is worded exactly like this.
-    deleteTitle: (name: string) => `Delete snippet "${name}"?`,
+    deleteTitle: (name: string) => t("snippets.deleteTitle", { name }),
     deleteMessage: t("snippets.deleteMessage"),
-    deleted: (name: string) => `Deleted "${name}".`,
+    deleted: (name: string) => t("snippets.deleted", { name }),
     undo: t("snippets.undo"),
     copied: t("snippets.copied"),
     copyFailed: t("snippets.copyFailed"),
     preview: t("snippets.preview"),
     // Empty states: 0 in the library, and 0 matching the query, say different things (M5 UI research §1).
     empty: t("snippets.empty"),
-    noMatches: (query: string) => `No snippets match "${query}".`,
-    createNamed: (query: string) => `Create "${query}"`,
+    noMatches: (query: string) => t("snippets.noMatches", { query }),
+    createNamed: (query: string) => t("snippets.createNamed", { query }),
     import: t("snippets.import"),
     export: t("snippets.export"),
     importFailed: t("snippets.importFailed"),
+    // Two more hand-rolled plurals than the plan's inventory lists. The pluralized number is passed as
+    // `count` (i18next's form selector) while the other counts keep their own names.
     imported: (added: number, overwritten: number, skipped: number) =>
-      `Imported ${added} snippet${added === 1 ? "" : "s"}, replaced ${overwritten}, skipped ${skipped}.`,
-    conflicts: (conflicts: number, total: number) =>
-      `${total} snippet${total === 1 ? "" : "s"} to import, ${conflicts} with a name you already use.`,
+      t("snippets.imported", { count: added, overwritten, skipped }),
+    conflicts: (conflicts: number, total: number) => t("snippets.conflicts", { count: total, conflicts }),
     overwrite: t("snippets.overwrite"),
     keepBoth: t("snippets.keepBoth"),
     skip: t("snippets.skip"),
-    exportedTo: (path: string) => `Exported to ${path}`,
+    exportedTo: (path: string) => t("snippets.exportedTo", { path }),
     exportCancelled: t("snippets.exportCancelled"),
-    exportFailed: (error: string) => `Couldn't export: ${error}`,
+    exportFailed: (error: string) => t("snippets.exportFailed", { error }),
     loadFailed: t("snippets.loadFailed"),
-    saveFailed: (error: string) => `Couldn't save your snippets (${error}). Nothing was changed.`,
+    saveFailed: (error: string) => t("snippets.saveFailed", { error }),
     // The New Snippet form (spec §13.1).
     newTitle: t("snippets.newTitle"),
     editTitle: t("snippets.editTitle"),
@@ -433,13 +435,14 @@ export const strings = {
     close: t("npm.close"),
     searchLabel: t("npm.searchLabel"),
     searchPlaceholder: t("npm.searchPlaceholder"),
-    weekly: (count: number) => `${count.toLocaleString("en-US")} weekly downloads`,
-    add: (name: string) => `Add ${name}`,
+    // Formatted before interpolation, for the thousands separator; see output.moreEntries.
+    weekly: (count: number) => t("npm.weekly", { downloads: count.toLocaleString("en-US") }),
+    add: (name: string) => t("npm.add", { name }),
     addButton: t("npm.addButton"),
     // R26-3: a result with a pending install shows this instead of Add.
     adding: t("npm.adding"),
     // R26-2: a result already in the installed table shows this instead of Add.
-    installedVersion: (version: string) => `Installed ${version}`,
+    installedVersion: (version: string) => t("npm.installedVersion", { version }),
     name: t("npm.name"),
     version: t("npm.version"),
     latest: t("npm.latest"),
@@ -448,42 +451,61 @@ export const strings = {
     upToDate: t("npm.upToDate"),
     // Shown in a Latest cell when no outdated check has succeeded yet, so "is there a newer one" is simply unknown.
     latestUnknown: t("npm.latestUnknown"),
-    update: (name: string) => `Update ${name}`,
+    update: (name: string) => t("npm.update", { name }),
     updateButton: t("npm.updateButton"),
-    remove: (name: string) => `Remove ${name}`,
+    remove: (name: string) => t("npm.remove", { name }),
     // The row's destructive action carries a word, not a glyph: an unlabelled × under a blank column header was
     // being mistaken for the sheet's (previously missing) close control.
     removeButton: t("npm.removeButton"),
     updateAll: t("npm.updateAll"),
     // R26-1: the toolbar's Update All tooltip, distinct from its (unchanged) accessible name.
+    // `majors` keeps the placeholder name `majorCount`: `count` is taken by the form selector, and i18next
+    // would otherwise pluralize on the wrong number.
     updateAllTitle: (count: number, majors: number) =>
-      `Update ${count} package${count === 1 ? "" : "s"} to their latest versions${
-        majors > 0 ? `, including ${majors} major update${majors === 1 ? "" : "s"}` : ""
-      }.`,
+      majors > 0
+        ? t("npm.updateAllTitle.withMajors", { count, majorCount: majors })
+        : t("npm.updateAllTitle.plain", { count }),
     showTypes: t("npm.showTypes"),
     allowScripts: t("npm.allowScripts"),
     // R26-5: shown only once the first list has loaded, so a load-in-progress sheet never flashes "no packages".
     none: t("npm.none"),
-    noResults: (query: string) => `No packages match "${query}".`,
-    typesHidden: (count: number) => `${count} @types package${count === 1 ? "" : "s"} hidden.`,
+    noResults: (query: string) => t("npm.noResults", { query }),
+    typesHidden: (count: number) => t("npm.typesHidden", { count }),
     log: t("npm.log"),
     // R26-3 adds a `queued` count; do-not-change list R-M3: this is one of the two allowed signature changes.
+    // Each `kind` is its own key rather than an English verb spliced into a sentence -- a construction that
+    // does not survive translation. Every key is a STRING LITERAL: the key check's call-site scan matches
+    // only a double-quoted literal, so a template-literal key would be invisible to it and would read as
+    // unused. (This comment says it in words for the same reason: the scan reads comments too.)
     running: (kind: string, target: string, queued: number) => {
-      const verb =
-        kind === "remove" ? "Removing" : kind === "update" || kind === "updateAll" ? "Updating" : "Installing";
-      const subject = kind === "updateAll" ? "all packages" : target;
-      return `${verb} ${subject}…${queued > 0 ? ` ${queued} more queued.` : ""}`;
+      const body =
+        kind === "remove"
+          ? t("npm.running.removing", { target })
+          : kind === "update"
+            ? t("npm.running.updating", { target })
+            : kind === "updateAll"
+              ? t("npm.running.updatingAll")
+              : t("npm.running.installing", { target });
+      return queued > 0 ? t("npm.running.queued", { body, count: queued }) : body;
     },
     // R26-3: shown in the affected row's Latest cell while that row has a queued or running operation.
     rowStatus: (kind: string, status: string) => {
-      if (status === "queued") return "Queued";
-      return kind === "remove" ? "Removing…" : kind === "update" || kind === "updateAll" ? "Updating…" : "Installing…";
+      if (status === "queued") return t("npm.rowStatus.queued");
+      return kind === "remove"
+        ? t("npm.rowStatus.removing")
+        : kind === "update" || kind === "updateAll"
+          ? t("npm.rowStatus.updating")
+          : t("npm.rowStatus.installing");
     },
     // R26-4 adds `kind`; do-not-change list R-M3: the second of the two allowed signature changes.
     failed: (kind: string, target: string) =>
       kind === "updateAll"
-        ? "Couldn't update all packages."
-        : `Couldn't ${kind === "remove" ? "remove" : kind === "update" ? "update" : "install"} ${target}.`,
+        ? t("npm.failed.updateAll")
+        : kind === "remove"
+          ? t("npm.failed.remove", { target })
+          : kind === "update"
+            ? t("npm.failed.update", { target })
+            : t("npm.failed.install", { target }),
     // R26-4: the failure-card action row.
     retry: t("npm.retry"),
     allowAndRetry: t("npm.allowAndRetry"),
@@ -493,17 +515,25 @@ export const strings = {
     // R26-1: the Major badge and its tooltip.
     major: t("npm.major"),
     majorTitle: (name: string, from: string | null, to: string | null) =>
-      `${name} ${from ?? "?"} → ${to ?? "?"} is a major update and may include breaking changes.`,
+      t("npm.majorTitle", { name, from: from ?? "?", to: to ?? "?" }),
     // R26-1: "Checked N min ago", above the installed table.
-    checkedAgo: (minutes: number) => `Checked for updates ${minutes < 1 ? "just now" : `${minutes} min ago`}`,
+    checkedAgo: (minutes: number) =>
+      minutes < 1 ? t("npm.checkedAgo.justNow") : t("npm.checkedAgo.minutes", { minutes }),
     // R26-6: reported in the status bar when a finished operation's sheet isn't open to show it inline.
     done: (kind: string, target: string, keys: string | null) => {
-      const verb = kind === "remove" ? "Removed" : kind === "update" || kind === "updateAll" ? "Updated" : "Installed";
-      const subject = kind === "updateAll" ? "all packages" : target;
-      return `${verb} ${subject}.${keys ? ` Press ${keys} to run again.` : ""}`;
+      const body =
+        kind === "remove"
+          ? t("npm.done.removed", { target })
+          : kind === "update"
+            ? t("npm.done.updated", { target })
+            : kind === "updateAll"
+              ? t("npm.done.updatedAll")
+              : t("npm.done.installed", { target });
+      return keys ? t("npm.done.withKeys", { body, keys }) : body;
     },
-    doneFailed: (kind: string, target: string, hint: string) => `${strings.npm.failed(kind, target)} ${hint}`,
-    outdatedFailed: (hint: string) => `Couldn't check for updates. ${hint}`,
+    doneFailed: (kind: string, target: string, hint: string) =>
+      t("npm.doneFailed", { failure: strings.npm.failed(kind, target), hint }),
+    outdatedFailed: (hint: string) => t("npm.outdatedFailed", { hint }),
     hints: {
       network: t("npm.hints.network"),
       notFound: t("npm.hints.notFound"),
@@ -547,16 +577,16 @@ export const strings = {
         none: t("settings.keybindings.source.none"),
       },
       unregistered: t("settings.keybindings.unregistered"),
-      conflict: (titles: string) => `Also bound to ${titles}`,
+      conflict: (titles: string) => t("settings.keybindings.conflict", { titles }),
       openFile: t("settings.keybindings.openFile"),
       empty: t("settings.keybindings.empty"),
       loadFailed: t("settings.keybindings.loadFailed"),
       change: t("settings.keybindings.change"),
-      capture: (title: string) => `Change the shortcut for ${title}`,
-      capturing: (title: string) => `Recording a shortcut for ${title}`,
+      capture: (title: string) => t("settings.keybindings.capture", { title }),
+      capturing: (title: string) => t("settings.keybindings.capturing", { title }),
       captureHint: t("settings.keybindings.captureHint"),
       reset: t("settings.keybindings.reset"),
-      resetRow: (title: string) => `Reset ${title} to its default shortcut`,
+      resetRow: (title: string) => t("settings.keybindings.resetRow", { title }),
       resetAll: t("settings.keybindings.resetAll"),
       rejected: {
         bareKey: t("settings.keybindings.rejected.bareKey"),
@@ -579,7 +609,7 @@ export const strings = {
     resetAll: t("settings.resetAll"),
     confirmReset: t("settings.confirmReset"),
     restartSafeMode: t("settings.restartSafeMode"),
-    loadFailed: (message: string) => `Settings failed to load: ${message}`,
+    loadFailed: (message: string) => t("settings.loadFailed", { message }),
     npmrc: {
       title: t("settings.npmrc.title"),
       help: t("settings.npmrc.help"),
@@ -598,19 +628,17 @@ export const strings = {
        */
       loadFailed: (code: string | null) =>
         code === "EFBIG"
-          ? "Couldn't read .npmrc: it's over the size limit. Save and Reset stay off until it can be read. Open the file and fix it by hand."
+          ? t("settings.npmrc.loadFailedTooLarge")
           : code
-            ? `Couldn't read .npmrc (${code}). Save and Reset stay off until it can be read. Open the file and fix it by hand.`
-            : "Couldn't read .npmrc. Save and Reset stay off until it can be read. Open the file and fix it by hand.",
+            ? t("settings.npmrc.loadFailed", { code })
+            : t("settings.npmrc.loadFailedNoCode"),
       saveFailed: (code: string | null) =>
-        code
-          ? `Couldn't save .npmrc (${code}). Your changes are still here.`
-          : "Couldn't save .npmrc. Your changes are still here.",
+        code ? t("settings.npmrc.saveFailed", { code }) : t("settings.npmrc.saveFailedNoCode"),
       examples: t("settings.npmrc.examples"),
       exampleText: t("settings.npmrc.exampleText"),
       warnings: {
-        missingEquals: (line: number) => `Line ${line}: missing "=".`,
-        registryNotUrl: (line: number) => `Line ${line}: registry isn't a web address.`,
+        missingEquals: (line: number) => t("settings.npmrc.warnings.missingEquals", { line }),
+        registryNotUrl: (line: number) => t("settings.npmrc.warnings.registryNotUrl", { line }),
       },
     },
     fields: {

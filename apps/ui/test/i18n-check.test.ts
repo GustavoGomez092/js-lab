@@ -121,6 +121,44 @@ describe("checkLocales (spec §17)", () => {
     expect(report.ok).toBe(false);
   });
 
+  test("a plural is matched through its base key, in both directions", () => {
+    // i18next serves `t("tabs", { count })` from `tabs_one` / `tabs_other`. The base key is never in
+    // en.json and neither form is ever written at a call site, so without plural awareness this one
+    // catalogue entry reports an unknown key AND two unused ones -- which is every plural there is.
+    const report = checkLocales(
+      big({
+        locales: { en: { ...bigEn, tabs_one: "{{count}} tab", tabs_other: "{{count}} tabs" }, ...empty },
+        manifest: [...bigManifest, "tabs_one", "tabs_other"],
+        sources: [...bigSources, { path: "b.ts", text: `t("tabs", { count: 2 })` }],
+      }),
+    );
+    expect(report.unknownKeys).toEqual([]);
+    expect(report.unusedKeys).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  test("plural forms whose base key nothing uses are still reported unused", () => {
+    // The other half of the pair: matching a base key must not become a blanket amnesty for any key that
+    // merely ends in a CLDR suffix, or a deleted plural control would leave its copy behind unnoticed.
+    const report = checkLocales(
+      big({
+        locales: { en: { ...bigEn, ghost_one: "{{count}} ghost", ghost_other: "{{count}} ghosts" }, ...empty },
+        manifest: [...bigManifest, "ghost_one", "ghost_other"],
+      }),
+    );
+    expect(report.unusedKeys).toEqual(["ghost_one", "ghost_other"]);
+    expect(report.ok).toBe(false);
+  });
+
+  test("a counted key with no plural forms in en is still unknown", () => {
+    // Passing `count` does not conjure an entry: the base key has to resolve to something.
+    const report = checkLocales(
+      big({ sources: [...bigSources, { path: "b.ts", text: `t("menu.brandNew", { count: 1 })` }] }),
+    );
+    expect(report.unknownKeys).toEqual(["menu.brandNew"]);
+    expect(report.ok).toBe(false);
+  });
+
   test("drift from the committed manifest fails in both directions", () => {
     const report = checkLocales(big({ manifest: [...bigManifest.slice(0, -1), "menu.gone"] }));
     expect(report.manifestDrift).toEqual({ added: ["menu.quit"], removed: ["menu.gone"] });

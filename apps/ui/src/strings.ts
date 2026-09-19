@@ -10,6 +10,10 @@ export const strings = {
     started: (spec: string, keys: string | null) =>
       keys ? `Installing ${spec}… ${keys} shows progress.` : `Installing ${spec}…`,
   },
+  completions: {
+    /** The detail line on an installed-package import suggestion: the version in node_modules (spec §6.1). */
+    packageDetail: (version: string | null) => (version === null ? "installed" : `v${version}`),
+  },
   commands: {
     failed: (title: string, error: unknown) =>
       `${title} failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -188,6 +192,8 @@ export const strings = {
   output: {
     filters: { all: "All", results: "Results", logs: "Logs", errors: "Errors" },
     filterLabel: "Output filter",
+    /** R-WEBVIEW-TAB-1: the control beside the filter chips that fills the output panel with the Web View. */
+    webViewTab: "Web View",
     copyAll: "Copy All",
     clear: "Clear",
     jumpToLine: (line: number) => `Go to line ${line}`,
@@ -263,6 +269,9 @@ export const strings = {
   },
   npm: {
     title: "NPM Packages",
+    // The sheet's own exit control, in the header. Deliberately distinct from `remove` below: that one is the
+    // destructive row action, and the two must never read as the same control.
+    close: "Close",
     searchLabel: "Search npm packages",
     searchPlaceholder: "Search npm, or type name@version",
     weekly: (count: number) => `${count.toLocaleString("en-US")} weekly downloads`,
@@ -275,9 +284,17 @@ export const strings = {
     name: "Name",
     version: "Installed",
     latest: "Latest",
+    // Shown in a Latest cell once an outdated check has succeeded and found nothing newer, so the cell reports a
+    // real state instead of rendering blank.
+    upToDate: "Up to date",
+    // Shown in a Latest cell when no outdated check has succeeded yet, so "is there a newer one" is simply unknown.
+    latestUnknown: "—",
     update: (name: string) => `Update ${name}`,
     updateButton: "Update",
     remove: (name: string) => `Remove ${name}`,
+    // The row's destructive action carries a word, not a glyph: an unlabelled × under a blank column header was
+    // being mistaken for the sheet's (previously missing) close control.
+    removeButton: "Remove",
     updateAll: "Update All",
     // R26-1: the toolbar's Update All tooltip, distinct from its (unchanged) accessible name.
     updateAllTitle: (count: number, majors: number) =>

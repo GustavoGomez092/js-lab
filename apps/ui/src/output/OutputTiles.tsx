@@ -8,18 +8,36 @@ import { OutputPanel } from "./OutputPanel";
 import type { WebviewDock } from "./WebViewHosts";
 
 /**
- * Tile arrangement (Task 8, spec §7.1 / Appendix C): the Console tile (`OutputPanel`) and the Web View tile,
- * stacked or side by side, per tab. Reuses `SplitPane` nested inside the Editor/Output split's own `second` slot
- * (`apps/ui/src/shell/App.tsx`) -- `SplitPane` renders exactly two panes, so a third tile is this nested instance,
- * not a change to that component (see `task-8-asbuilt.md` §1).
+ * Where the tab's Web View sits relative to the Console (`OutputPanel`), per tab.
  *
- * Fix round 1 (F1/F2): this component no longer owns the tab's `<electrobun-webview>` -- that lives permanently
- * in `WebViewHosts`, a sibling of the *outer* Editor/Output split, so it survives both hiding the Output panel and
+ * **R-WEBVIEW-TAB-1 replaced the tile arrangement with two fixed positions.** `tiles.arrangement` and
+ * `tiles.order` are gone: the Web View is no longer a peer tile that can be moved around the Console on an axis.
+ * It is either the **bottom preview pane** -- a real working area, keeping the draggable `SplitPane` divider,
+ * its double-click reset, its arrow keys and `tiles.consoleSize` -- or, when the Web View tab in the filter row
+ * is selected, **the entire output panel**, with the log list hidden behind it.
+ *
+ * Fix round 1 (F1/F2): this component does not own the tab's `<electrobun-webview>` -- that lives permanently in
+ * `WebViewHosts`, a sibling of the *outer* Editor/Output split, so it survives both hiding the Output panel and
  * switching tabs. This component only ever owns an empty placeholder `<div>` -- the real webview's *docking*
- * target -- reported upward via `onWebviewDock` whenever it exists. Because the split (and its placeholder) is
- * rendered **only** when the Web View is actually meant to be visible, `SplitPane`'s own hide-on-`false` path
- * (dropping `second` and its divider) is exactly what should happen here: there is nothing dishonest left to gate
- * (fix round 1, F4) -- a hidden Web View simply has no split, the same shape as a `bun` tab's console-only render.
+ * target -- reported upward via `onWebviewDock` whenever it exists.
+ *
+ * **The invariant that makes the two positions safe: there is exactly ONE dock node, ever.** `WebViewHosts` owns
+ * a single `<electrobun-webview>` per tab and points it at whichever node `onWebviewDock` last named; two docks
+ * rendered at once would leave it tracking one of them while the other sat blank, with no error anywhere. So the
+ * `dock` element below is built once per render and placed in exactly one of the two positions -- the early
+ * return for `fullScreen` is what makes "inside `OutputPanel`" and "the split's second pane" mutually exclusive
+ * by construction, rather than by two conditions that could both be true.
+ *
+ * **How the single node MOVES between them** (fix round 2, N1 -- the same mechanism, now reached through the UI
+ * rather than only a hand-edited session.json). `onDockRef` is a callback ref, not a `useRef` read inside an
+ * effect keyed on unrelated deps. A callback ref fires exactly when the DOM node it is attached to actually
+ * changes -- mount, unmount, *or* a remount React performs because the element moved to a different position in
+ * the tree. Full screen ↔ preview is precisely that case: the placeholder moves between `OutputPanel`'s body and
+ * `SplitPane`'s `second` slot, two different parents, so React unmounts the old node and mounts a new one in the
+ * same commit. React detaches refs in the mutation phase and attaches them in the layout phase, so the calls
+ * always arrive as `null` then the new node -- never the reverse, and never leaving `WebViewHosts` holding a
+ * detached node. The invariant this keeps: **the node `WebViewHosts` is ever told about is always the node
+ * currently in the tree**, because this is called on every attach/detach rather than from a dependency list.
  */
 export function OutputTiles({
   store,
@@ -40,60 +58,65 @@ export function OutputTiles({
   const tabId = useStore(store, (s) => s.tab?.id ?? null);
   const runtime = useStore(store, (s) => s.tab?.runtime);
   const tiles = useStore(store, (s) => s.tab?.layout.tiles);
-  // spec §7.1: unavailable for `bun` -- no Web View tile, and no `<electrobun-webview>` DOM node, ever, for a
-  // `bun` tab (StatusBar's toggle mirrors this with its own disabled state).
+  const outputView = useStore(store, (s) => s.outputView);
+  // spec §7.1: unavailable for `bun` -- no Web View, and no `<electrobun-webview>` DOM node, ever, for a `bun`
+  // tab (StatusBar's toggle and the Web View control in the filter row both mirror this).
   const webviewSupported = runtime !== undefined && runtime !== "bun";
-  const showSplit = webviewSupported && Boolean(tiles?.webviewVisible);
+  // "The Web View is showing" is one fact, and it is the tab's own toggle -- what `view.toggleWebView`, the View
+  // menu, the status bar and the palette all read, and what arms `WebViewHosts`'s lazy element creation.
+  const webviewShown = webviewSupported && Boolean(tiles?.webviewVisible);
+  // ...and `outputView` decides only how much room it gets. `webviewShown` gates this deliberately: switching to
+  // a tab whose Web View is off must show that tab's log list, not a full-screen dock for a webview that was
+  // never created for it.
+  const fullScreen = webviewShown && outputView === "webview";
+  const showSplit = webviewShown && !fullScreen;
 
-  // Fix round 2 (N1): a callback ref, not a `useRef` read inside an effect keyed on unrelated deps. A callback ref
-  // fires exactly when the DOM node it's attached to actually changes -- mount, unmount, *or* a remount React
-  // triggers because it sees a different element type at this JSX position. That last case is what an effect
-  // missed: an in-place `order` swap moves this div between SplitPane's `first`/`second` slots, so React unmounts
-  // the old node and mounts a new one in the same render -- but `[showSplit, tabId, onWebviewDock]` never changes,
-  // so the effect never re-ran and `WebViewHosts` kept reporting the old, now-detached node (the webview then
-  // silently collapsed to 0x0 at the viewport origin). The invariant this holds instead: the node `WebViewHosts`
-  // is ever told about is always the node currently in the tree, because React calls this on every attach/detach,
-  // not on a dependency list. (Reachable only via a hand-edited session.json today -- Task 15 adds the arrangement
-  // controls that reach it through the UI.)
+  // The node existing IS the condition -- it is rendered only in the two positions where it should be docked, so
+  // this deliberately does not re-test `fullScreen`/`showSplit` and cannot disagree with what is in the tree.
   const onDockRef = useCallback(
     (node: HTMLDivElement | null) => {
-      if (node && showSplit && tabId) onWebviewDock({ tabId, node });
+      if (node && tabId) onWebviewDock({ tabId, node });
       else onWebviewDock(null);
     },
-    [showSplit, tabId, onWebviewDock],
+    [tabId, onWebviewDock],
   );
 
-  const consoleTile = <OutputPanel store={store} api={api} runKeys={runKeys} onInstall={onInstall} />;
+  // Built once, placed once (see this component's doc comment). `className` differs between the two positions
+  // because the CSS must: a class change re-styles the node, it never remounts it.
+  const dock: ReactNode = (
+    <div className={`webview-tile-dock${fullScreen ? " webview-tile-dock-full" : ""}`} ref={onDockRef} />
+  );
 
-  if (!showSplit || !tiles) return consoleTile;
+  const consoleTile = (
+    <OutputPanel
+      store={store}
+      api={api}
+      runKeys={runKeys}
+      onInstall={onInstall}
+      webviewSupported={webviewSupported}
+      webViewSlot={fullScreen ? dock : null}
+    />
+  );
 
-  const panes: Record<"console" | "webview", ReactNode> = {
-    console: consoleTile,
-    webview: <div className="webview-tile-dock" ref={onDockRef} />,
-  };
-  // The schema (`tabTilesSchema`, packages/shared) refines `order` to always list both kinds exactly once, but
-  // that guarantee isn't visible to TypeScript's plain-array type -- these defaults are unreachable in practice.
-  const [firstKind = "console", secondKind = "webview"] = tiles.order;
-  const orientation = tiles.arrangement === "side-by-side" ? "horizontal" : "vertical";
-  // `consoleSize` always names the Console pane's own share, regardless of which side it renders on; SplitPane's
-  // `size` always applies to `first`, so convert when Console is `second` (task-8-asbuilt.md §1).
-  const consoleShare = tiles.consoleSize;
-  const size = firstKind === "console" ? consoleShare : 100 - consoleShare;
+  // Full screen: the dock is already inside `consoleTile`, in place of the log list. Not shown at all: no dock
+  // anywhere, the same console-only shape a `bun` tab renders. Either way there is no split and nothing to hide,
+  // so `SplitPane`'s own hide-on-`false` path never has to be asked for (fix round 1, F4).
+  if (fullScreen || !showSplit || !tiles) return consoleTile;
 
+  // The preview: Console above, Web View below. With `order` retired the Console is always `first`, so
+  // `consoleSize` is the size `SplitPane` wants directly -- the old conversion for "Console is second" is gone
+  // along with the field that could put it there.
   return (
     <SplitPane
-      orientation={orientation}
-      size={size}
+      orientation="vertical"
+      size={tiles.consoleSize}
       // Unconditionally true here -- reached only when `showSplit` already established both panes belong on
       // screen, so there is nothing left to hide at this level (fix round 1, F4).
       secondVisible
-      onResize={(next) => {
-        const consoleSize = firstKind === "console" ? next : 100 - next;
-        store.getState().setConsoleSize(consoleSize);
-      }}
+      onResize={(next) => store.getState().setConsoleSize(next)}
       onReset={() => store.getState().resetConsoleSize()}
-      first={panes[firstKind]}
-      second={panes[secondKind]}
+      first={consoleTile}
+      second={dock}
     />
   );
 }

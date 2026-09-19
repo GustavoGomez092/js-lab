@@ -47,6 +47,13 @@ describe("editor options", () => {
       suggestOnTriggerCharacters: true,
       hover: { enabled: true, delay: 400 },
       parameterHints: { enabled: true },
+      // User report (M4): line 1 sat flush against the bottom edge of the active tab. Monaco owns its own scroll
+      // region, so this is Monaco's `padding` option rather than CSS on `.editor` -- container padding fights
+      // Monaco's layout and line-position maths. 12px is the inset the rest of the shell already uses
+      // (`.output-toolbar`'s `padding: 0 12px`, `.entry`'s `5px 12px`), so the first line clears the tab bar by
+      // the same gap content clears every other edge by. Bottom matches: `scrollBeyondLastLine` is false, so
+      // without it the last line is jammed against the status bar.
+      padding: { top: 12, bottom: 12 },
     });
   });
 
@@ -72,6 +79,9 @@ describe("editor options", () => {
       renderWhitespace: "all",
       renderLineHighlight: "all",
       hover: { enabled: true, delay: 900 },
+      // Scales with zoom the same way `fontSize` does (`--ui-scale` is a CSS var Monaco's numeric option cannot
+      // read, so the scaling is applied here): round(12 * 1.1) === 13.
+      padding: { top: 13, bottom: 13 },
     });
     expect(editorOptionsFor(settings, true).fontFamily).toBe(
       '"JetBrains Mono Variable", ui-monospace, Menlo, monospace',

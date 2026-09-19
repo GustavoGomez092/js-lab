@@ -83,7 +83,12 @@ describe("browser runtimes (spec §5.12, §5.13)", () => {
     );
     // Two console writes reached the output: the string line above, and the element itself.
     expect(consoleText(entries)).toHaveLength(2);
-    await current().waitForRunState(["idle", "settled"], 30_000);
+    // `idle`, not "idle or settled". This code creates no timer, frame, socket, request, AudioContext or media
+    // element, so the only correct terminal state is `idle` with zero handles -- and accepting `settled` here was
+    // what let a browser run that finished holding a phantom handle pass the suite (the status bar reads a
+    // `settled` run as "Running: N active handles", since `settled` is in `BUSY_STATES`).
+    await current().waitForRunState(["idle"], 30_000);
+    expect(activeTab(await current().state()).activeHandles).toBe(0);
     await current().screenshot("web-runtime-browser");
   });
 
@@ -243,5 +248,32 @@ describe("browser runtimes (spec §5.12, §5.13)", () => {
     await typeCode(current(), ['console.log("after-kill:" + typeof document.body);']);
     await current().command("run.start");
     expect(await waitForConsole(current(), "after-kill:")).toBe("after-kill:object");
+  });
+
+  /**
+   * The coverage gap this suite shipped with (user report, M4): a `browser` tab running trivial TypeScript -- no
+   * async, no timer, no frame, no socket, no request, no audio -- left the status bar reading
+   * "Running: 1 active handle" indefinitely.
+   *
+   * Nothing here asserted that case. The `browser` scenario above accepted `["idle", "settled"]` -- *either* -- and
+   * the rAF scenario below only ever asserts `activeHandles > 0`, which is the opposite direction. So a run that
+   * finished holding a phantom handle satisfied every assertion in the file, even though `settled` is in
+   * `apps/ui/src/shell/labels.ts`'s `BUSY_STATES` and therefore presents to the user as a run that never stopped.
+   *
+   * This pins the only correct outcome for code that allocates nothing: `idle`, with zero handles.
+   */
+  test("a trivial TypeScript browser run finishes idle holding no handles (user report)", async () => {
+    app = await launchApp({ settings: { version: 3, run: { autoRun: false } } });
+    await useRuntime(current(), "runtime.browser", "browser");
+    await current().command("language.typescript");
+    await typeCode(current(), ['const test: string = "test";', 'console.log("trivial:" + test);']);
+    await current().command("run.start");
+
+    // Proves the run really evaluated, so the state assertions below are about a completed run rather than one
+    // that never started.
+    expect(await waitForConsole(current(), "trivial:")).toBe("trivial:test");
+
+    await current().waitForRunState(["idle"], 30_000);
+    expect(activeTab(await current().state()).activeHandles).toBe(0);
   });
 });

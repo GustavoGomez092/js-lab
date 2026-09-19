@@ -1,6 +1,6 @@
 <div align="center">
 
-# <img src="apps/desktop/assets/app-icon-1024.png" alt="" width="44" height="44" align="center"> JSLab
+# <img src="apps/desktop/assets/app-icon-1024.png" alt="" width="44" height="44" align="middle"> JSLab
 
 **A fast, native JavaScript & TypeScript scratchpad for macOS**
 

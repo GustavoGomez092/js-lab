@@ -115,7 +115,7 @@ export async function createMainServices(options: MainServicesOptions): Promise<
         editorSize: 55,
         outputVisible: true,
         // M4 Task 8: matches tabTilesSchema's own `.catch()` defaults (packages/shared/src/session.ts).
-        tiles: { arrangement: "stacked", order: ["console", "webview"], webviewVisible: false, consoleSize: 55 },
+        tiles: { webviewVisible: false, consoleSize: 55 },
         // Task 15: matches tabLayoutSchema's own `.catch()` default for `muted`.
         muted: false,
       },

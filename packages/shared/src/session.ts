@@ -8,18 +8,19 @@ export const MAX_CLOSED_TABS = 20;
  */
 export const TAB_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
 export const LAYOUT_ORIENTATIONS = ["horizontal", "vertical"] as const;
-/** M4 Task 8, spec §7.1 / Appendix C: the Web View tile's arrangement relative to the Console tile. */
-export const TILE_ARRANGEMENTS = ["stacked", "side-by-side"] as const;
-export const TILE_KINDS = ["console", "webview"] as const;
-export type TileKind = (typeof TILE_KINDS)[number];
-/** Session file format version. M1 wrote 1; M2 wrote 2; M4 Task 8 writes 3 (see SESSION_MIGRATIONS). */
-export const SESSION_VERSION = 3;
+/**
+ * Session file format version. M1 wrote 1; M2 wrote 2; M4 Task 8 wrote 3; R-WEBVIEW-TAB-1 writes 4
+ * (see SESSION_MIGRATIONS).
+ */
+export const SESSION_VERSION = 4;
 
-const defaultTileOrder = (): TileKind[] => ["console", "webview"];
-
+/**
+ * R-WEBVIEW-TAB-1: `arrangement` and `order` are retired. The Web View is no longer a peer tile that can be
+ * rearranged around the Console -- it is either the bottom preview pane (always below the console, `consoleSize`
+ * naming the console's share as before) or, when the Web View tab is selected, the whole output panel. Neither
+ * position is a choice the user makes on an axis, so there is nothing left for the two fields to say.
+ */
 const defaultTiles = () => ({
-  arrangement: "stacked" as const,
-  order: defaultTileOrder(),
   webviewVisible: false,
   consoleSize: 55,
 });
@@ -41,13 +42,6 @@ const defaultLayout = () => ({
  */
 export const tabTilesSchema = z
   .object({
-    arrangement: z.enum(TILE_ARRANGEMENTS).catch("stacked"),
-    // A valid order names both tiles exactly once; a missing one, a duplicate, or a third value falls back to the
-    // default order on its own, without discarding arrangement/webviewVisible/consoleSize alongside it.
-    order: z
-      .array(z.enum(TILE_KINDS))
-      .refine((order) => order.length === 2 && new Set(order).size === 2)
-      .catch(() => defaultTileOrder()),
     webviewVisible: z.boolean().catch(false),
     consoleSize: z.number().min(10).max(90).catch(55),
   })
@@ -166,6 +160,12 @@ export const SESSION_MIGRATIONS: Record<number, (raw: RawSession) => RawSession>
   // v2 (M2) → v3 (M4 Task 8): layout.tiles is additive with its own `.catch()` defaults (R-M4-T8-VERSION-1) --
   // a no-op bump, exactly like v1 → v2 was. Keeps `tiles` and Task 15's `muted` sharing this one bump.
   2: (raw) => ({ ...raw, version: 3 }),
+  // v3 → v4 (R-WEBVIEW-TAB-1): `tiles.arrangement` and `tiles.order` are retired. A no-op bump for the same
+  // reason the two before it were, but by the opposite mechanism: `tabTilesSchema` is a plain `z.object`, which
+  // STRIPS keys it does not name, so a v3 file carrying `arrangement: "side-by-side"` and a reversed `order`
+  // simply loses both on parse and keeps its `webviewVisible`/`consoleSize` -- no error, and nothing written back
+  // to disk still carries them. Deleting them here as well would be the same result reached twice.
+  3: (raw) => ({ ...raw, version: 4 }),
 };
 
 export interface SessionParseResult {

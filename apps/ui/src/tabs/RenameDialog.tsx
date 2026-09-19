@@ -17,7 +17,9 @@ function RenameForm({ store, tabId }: { store: AppStore; tabId: string }) {
   // otherwise), so its whole mount lifetime IS the open window -- see `overlay-presence.ts`.
   useOverlayPresence(true);
   const tab = store.getState().tabs[tabId];
-  const [value, setValue] = useState(() => (tab ? deriveTitle(tab, store.getState().buffers[tabId] ?? "") : ""));
+  const [value, setValue] = useState(() =>
+    tab ? deriveTitle(tab, store.getState().buffers[tabId] ?? "", strings.tabs.untitled) : "",
+  );
   // m-1: whatever had focus when the dialog opened (a tab, a menu item, ...) gets it back on close, so
   // rename/close/cancel never strands focus on the (now unmounted) dialog.
   const opener = useRef(document.activeElement);

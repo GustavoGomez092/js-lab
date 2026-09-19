@@ -89,6 +89,12 @@ export interface MainApi {
   pickWorkingDirectory(tabId: string): void;
   clearWorkingDirectory(tabId: string): void;
 
+  /**
+   * OU-13: hand a URL from an output row to the user's browser, through Main's one external-link path. The URL
+   * is validated again by Main (`linkOpenParamsSchema`), because output text is written by the user's program.
+   */
+  openExternal(url: string): void;
+
   appCommand(action: AppAction): void;
   /**
    * The command ids this window's registry actually holds (spec §6.5). Settings → Keybindings annotates its

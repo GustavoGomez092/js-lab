@@ -147,6 +147,36 @@ describe("E2E agent", () => {
     );
   });
 
+  // OU-13. The agent half of the output-link scenario: that it finds the rendered control and delivers a real
+  // Cmd-click and a real Enter to it. What those gestures then DO is `entry-row.test.tsx`'s question.
+  test("the e2e.openOutputLink command activates an output URL by Cmd-click and from the keyboard (OU-13)", async () => {
+    const { agent } = setup();
+    const link = document.createElement("button");
+    link.dataset.testid = "output-link";
+    link.textContent = "https://example.com/out";
+    const seen: string[] = [];
+    // Only a MODIFIED click counts, which is what the row's own handler requires too.
+    link.addEventListener("click", (event) => {
+      if ((event as MouseEvent).metaKey) seen.push("click");
+    });
+    link.addEventListener("keydown", (event) => {
+      if ((event as KeyboardEvent).key === "Enter") seen.push("keyboard");
+    });
+    document.body.append(link);
+    try {
+      expect(await agent("command", { id: "e2e.openOutputLink" })).toEqual({
+        executed: "e2e.openOutputLink",
+        href: "https://example.com/out",
+      });
+      await agent("command", { id: "e2e.openOutputLink", args: { via: "keyboard" } });
+      expect(seen).toEqual(["click", "keyboard"]);
+    } finally {
+      link.remove();
+    }
+    // With no link on screen it fails loudly, so a scenario can never "pass" by activating nothing at all.
+    await expect(agent("command", { id: "e2e.openOutputLink" })).rejects.toThrow("found no link in the output");
+  });
+
   test("state carries TypeScript diagnostics, and e2e.completions asks the editor for completions", async () => {
     const store = createAppStore();
     store.getState().hydrate({

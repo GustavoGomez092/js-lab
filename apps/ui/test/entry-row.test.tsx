@@ -383,4 +383,129 @@ describe("EntryRow", () => {
     fireEvent.click(screen.getByRole("button", { name: strings.output.setWorkingDirectory }));
     expect(onChange).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * OU-13. Two separate things are pinned here: that a URL in output is openable by mouse AND by keyboard, and
+   * that a `javascript:` URL never becomes a control at all. `output-links.test.ts` proves the scheme allowlist
+   * is what refuses it; this proves the refusal reaches the rendered row.
+   */
+  describe("URLs in output (OU-13)", () => {
+    const stdoutRow = (text: string) => ({ kind: "stdout", text, seq: 1, t: 0 }) as RunEvent;
+
+    function renderWithLinks(event: RunEvent) {
+      const onOpenLink = mock((_url: string) => {});
+      render(
+        <EntryRow
+          entry={{ key: "k", event: event as DisplayEvent }}
+          stale={false}
+          expand={noExpand}
+          onReveal={() => {}}
+          onHover={() => {}}
+          onOpenLink={onOpenLink}
+        />,
+      );
+      return onOpenLink;
+    }
+
+    test("Cmd-clicking a URL opens exactly the URL shown on screen", () => {
+      const onOpenLink = renderWithLinks(stdoutRow("see https://example.com/docs for more"));
+      const link = screen.getByTestId("output-link");
+      // Both sides anchored to the same literal rather than to each other: asserting the call against
+      // `link.textContent` would still pass if the label and the destination were both wrong together.
+      expect(link.textContent).toBe("https://example.com/docs");
+      fireEvent.click(link, { metaKey: true });
+      expect(onOpenLink.mock.calls).toEqual([["https://example.com/docs"]]);
+    });
+
+    test("Ctrl-click opens it too, and an unmodified click does not", () => {
+      const onOpenLink = renderWithLinks(stdoutRow("https://example.com/x"));
+      const link = screen.getByTestId("output-link");
+      // A plain click has to stay a plain click, or selecting output text with the mouse would open pages.
+      fireEvent.click(link);
+      expect(onOpenLink).not.toHaveBeenCalled();
+      fireEvent.click(link, { ctrlKey: true });
+      expect(onOpenLink.mock.calls).toEqual([["https://example.com/x"]]);
+    });
+
+    // The accessibility requirement. A link reachable only by Cmd-click is the same defect the OU-10 entry menu
+    // had to avoid, so this drives a real focus() and real key events rather than calling the handler.
+    test("a keyboard user can focus the link and open it with Enter or Space, unmodified", () => {
+      const onOpenLink = renderWithLinks(stdoutRow("https://example.com/k"));
+      const link = screen.getByTestId("output-link");
+      link.focus();
+      expect(document.activeElement).toBe(link);
+      fireEvent.keyDown(link, { key: "Enter" });
+      fireEvent.keyDown(link, { key: " " });
+      expect(onOpenLink.mock.calls).toEqual([["https://example.com/k"], ["https://example.com/k"]]);
+    });
+
+    test("an unrelated key on the link does nothing", () => {
+      const onOpenLink = renderWithLinks(stdoutRow("https://example.com/k"));
+      fireEvent.keyDown(screen.getByTestId("output-link"), { key: "a" });
+      expect(onOpenLink).not.toHaveBeenCalled();
+    });
+
+    test("a javascript: URL never becomes a control, and its text is still readable", () => {
+      const onOpenLink = renderWithLinks(stdoutRow("javascript:alert(1)"));
+      expect(screen.queryAllByTestId("output-link")).toEqual([]);
+      expect(screen.getByText("javascript:alert(1)")).toBeTruthy();
+      expect(onOpenLink).not.toHaveBeenCalled();
+    });
+
+    test("a URL nested inside a logged object is openable once the node is expanded", () => {
+      const onOpenLink = renderWithLinks({
+        kind: "console",
+        level: "log",
+        line: 1,
+        groupDepth: 0,
+        args: [
+          {
+            t: "object",
+            id: 1,
+            ctor: "Object",
+            props: [[{ k: "home" }, { t: "string", v: "https://example.com/nested" }]],
+          },
+        ],
+        seq: 1,
+        t: 0,
+      } as RunEvent);
+      // Collapsed, the value is a one-line summary inside a button, which carries no link by design.
+      expect(screen.queryAllByTestId("output-link")).toEqual([]);
+      fireEvent.click(document.querySelector(".v-toggle") as HTMLButtonElement);
+      const link = screen.getByTestId("output-link");
+      // A nested string prints quoted; the quotes are not part of what opens.
+      expect(link.textContent).toBe("https://example.com/nested");
+      fireEvent.click(link, { metaKey: true });
+      expect(onOpenLink.mock.calls).toEqual([["https://example.com/nested"]]);
+    });
+
+    test("an error message's URL is openable", () => {
+      const onOpenLink = renderWithLinks({
+        kind: "error",
+        phase: "runtime",
+        name: "Error",
+        message: "read https://example.com/help for details",
+        line: 1,
+        stack: [],
+        seq: 1,
+        t: 0,
+      } as RunEvent);
+      fireEvent.click(screen.getByTestId("output-link"), { metaKey: true });
+      expect(onOpenLink.mock.calls).toEqual([["https://example.com/help"]]);
+    });
+
+    test("with no route to Main the URL renders as plain text rather than a dead control", () => {
+      render(
+        <EntryRow
+          entry={{ key: "k", event: stdoutRow("https://example.com/y") as DisplayEvent }}
+          stale={false}
+          expand={noExpand}
+          onReveal={() => {}}
+          onHover={() => {}}
+        />,
+      );
+      expect(screen.queryAllByTestId("output-link")).toEqual([]);
+      expect(screen.getByText("https://example.com/y")).toBeTruthy();
+    });
+  });
 });

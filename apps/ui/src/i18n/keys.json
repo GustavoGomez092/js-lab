@@ -374,6 +374,7 @@
   "output.noMatches",
   "output.noOutput",
   "output.noOutputNoKeys",
+  "output.openLink",
   "output.region",
   "output.setWorkingDirectory",
   "output.showAll",

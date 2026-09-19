@@ -108,6 +108,60 @@ describe("app.command", () => {
     expect(Object.keys(HELP_URLS).sort()).toEqual(["documentation", "reportIssue", "whatsNew"]);
   });
 
+  /**
+   * OU-13. `link.open` carries a URL lifted from text the user's own program printed, so this handler is a
+   * security boundary and not a convenience: the UI decides what is CLICKABLE, and this decides what OPENS.
+   * Both apply the same allowlist, which is why a UI that was somehow talked into sending `javascript:` still
+   * cannot make Main open it.
+   */
+  describe("link.open (OU-13)", () => {
+    test("an https URL from an output row reaches the one external-link path", () => {
+      const { deps, handlers } = setup();
+      handlers.messages["link.open"]({ url: "https://example.com/docs?q=1#top" });
+      expect(deps.openExternal.mock.calls).toEqual([["https://example.com/docs?q=1#top"]]);
+      // A URL must never be handed to openPath, which would try to open it as a filesystem path.
+      expect(deps.openPath).not.toHaveBeenCalled();
+    });
+
+    test("a javascript: URL is refused here, and the rejection is logged", () => {
+      const { deps, handlers } = setup();
+      handlers.messages["link.open"]({ url: "javascript:alert(1)" });
+      expect(deps.openExternal).not.toHaveBeenCalled();
+      const rejected = (deps.log.mock.calls as unknown[][]).filter(
+        (call) => call[0] === "Rejected invalid link.open payload",
+      );
+      expect(rejected).toHaveLength(1);
+    });
+
+    test("every disallowed spelling is refused, and an ordinary https URL in the same run is not", () => {
+      const { deps, handlers } = setup();
+      for (const url of [
+        "javascript:alert(1)",
+        "JaVaScRiPt:alert(1)",
+        "  javascript:alert(1)",
+        "java\tscript:alert(1)",
+        "file:///etc/passwd",
+        "data:text/html,<script>alert(1)</script>",
+        "vbscript:msgbox(1)",
+        "https://user:pass@evil.example/",
+        "not a url",
+      ]) {
+        handlers.messages["link.open"]({ url });
+      }
+      // The control that keeps this from passing on a handler that refuses everything.
+      expect(deps.openExternal).not.toHaveBeenCalled();
+      handlers.messages["link.open"]({ url: "https://example.com/" });
+      expect(deps.openExternal.mock.calls).toEqual([["https://example.com/"]]);
+    });
+
+    test("the Settings window has no link.open at all (spec §7.5, FA-m11)", () => {
+      const { deps } = setup();
+      expect("link.open" in createSettingsAppHandlers(deps).messages).toBe(false);
+      // The control: the action it DOES carry is present, so this is not passing on an empty handler set.
+      expect("app.command" in createSettingsAppHandlers(deps).messages).toBe(true);
+    });
+  });
+
   test("the Settings window RPC rejects main-window actions such as closeWindow and runs its own (FA-m11)", async () => {
     const { deps } = setup();
     const handlers = createSettingsAppHandlers(deps);

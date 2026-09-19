@@ -7,6 +7,7 @@ import { ContextMenu, type MenuEntry } from "../tabs/ContextMenu";
 import { copyEntry } from "./copy";
 import { entryLevel } from "./filters";
 import { formatPrimitive, tableModel } from "./format";
+import { LinkedText } from "./LinkedText";
 import { type ExpandHandle, ValueView } from "./ValueView";
 
 interface EntryRowProps {
@@ -26,6 +27,11 @@ interface EntryRowProps {
    * same place instead of growing a second notification path.
    */
   onCopyStatus?(status: "copied" | "failed"): void;
+  /**
+   * OU-13: opens an http(s) URL the user activated in this row, in their browser. Left off by callers that have
+   * no route to Main, which renders the row's URLs as ordinary text rather than as controls that do nothing.
+   */
+  onOpenLink?(url: string): void;
 }
 
 type ErrorEvent = Extract<RunEvent, { kind: "error" }>;
@@ -46,6 +52,7 @@ export function EntryRow({
   onChangeWorkingDirectory,
   hasWorkingDirectory,
   onCopyStatus,
+  onOpenLink,
 }: EntryRowProps) {
   const { event } = entry;
   const line = event.kind === "result" || event.kind === "console" || event.kind === "error" ? event.line : undefined;
@@ -99,9 +106,13 @@ export function EntryRow({
     >
       <span className="entry-stripe" aria-hidden="true" />
       <div className="entry-body">
-        {event.kind === "result" && <ValueView value={event.value} expand={expand} />}
-        {event.kind === "console" && <ConsoleBody event={event} expand={expand} />}
-        {(event.kind === "stdout" || event.kind === "stderr") && <pre className="entry-stream">{event.text}</pre>}
+        {event.kind === "result" && <ValueView value={event.value} expand={expand} onOpenLink={onOpenLink} />}
+        {event.kind === "console" && <ConsoleBody event={event} expand={expand} onOpenLink={onOpenLink} />}
+        {(event.kind === "stdout" || event.kind === "stderr") && (
+          <pre className="entry-stream">
+            <LinkedText text={event.text} onOpenLink={onOpenLink} />
+          </pre>
+        )}
         {event.kind === "error" && (
           <ErrorBody
             event={event}
@@ -109,6 +120,7 @@ export function EntryRow({
             onInstall={onInstall}
             onChangeWorkingDirectory={onChangeWorkingDirectory}
             hasWorkingDirectory={hasWorkingDirectory}
+            onOpenLink={onOpenLink}
           />
         )}
       </div>
@@ -146,7 +158,15 @@ export function EntryRow({
   );
 }
 
-function ConsoleBody({ event, expand }: { event: ConsoleEvent; expand: ExpandHandle }) {
+function ConsoleBody({
+  event,
+  expand,
+  onOpenLink,
+}: {
+  event: ConsoleEvent;
+  expand: ExpandHandle;
+  onOpenLink?(url: string): void;
+}) {
   const first = event.args[0];
   const table = event.level === "table" && first ? tableModel(first) : null;
   if (table) {
@@ -178,7 +198,7 @@ function ConsoleBody({ event, expand }: { event: ConsoleEvent; expand: ExpandHan
     <span className="entry-args">
       {event.args.map((arg, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: console arguments have no identity
-        <ValueView key={index} value={arg} expand={expand} />
+        <ValueView key={index} value={arg} expand={expand} onOpenLink={onOpenLink} />
       ))}
     </span>
   );
@@ -190,12 +210,14 @@ function ErrorBody({
   onInstall,
   onChangeWorkingDirectory,
   hasWorkingDirectory,
+  onOpenLink,
 }: {
   event: ErrorEvent;
   onReveal(line: number): void;
   onInstall?(name: string): void;
   onChangeWorkingDirectory?(): void;
   hasWorkingDirectory?: boolean;
+  onOpenLink?(url: string): void;
 }) {
   const userFrames = event.stack.filter((frame) => frame.user && frame.line != null);
   const internal = event.stack.length - userFrames.length;
@@ -203,7 +225,7 @@ function ErrorBody({
     <div className="entry-error">
       <strong>
         {event.phase === "unhandledRejection" ? strings.output.uncaughtInPromise : ""}
-        {event.name}: {event.message}
+        {event.name}: <LinkedText text={event.message} onOpenLink={onOpenLink} />
       </strong>
       {event.codeFrame && <pre className="entry-codeframe">{event.codeFrame}</pre>}
       {userFrames.map((frame, index) => (

@@ -2,6 +2,7 @@ import type { EncodedValue } from "@jslab/rpc-schema";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import { strings } from "../strings";
 import { childrenOf, formatPrimitive, summarize } from "./format";
+import { LinkedText } from "./LinkedText";
 
 /** OU-02: `offset` asks for a page of a collection; omitted, it means the first page, exactly as before. */
 export type ExpandHandle = (handle: string, offset?: number) => Promise<EncodedValue | null>;
@@ -13,6 +14,12 @@ interface ValueViewProps {
   label?: string;
   /** §11: an ancestor asking this subtree to open. Set only by `ValueView` itself. */
   cascade?: Cascade | null;
+  /**
+   * OU-13: opens a URL found in this value's text. Passed down the recursion unchanged, so a URL nested inside
+   * an object, an array or a Map entry is as openable as one logged on its own -- every one of those children
+   * renders through this same component's primitive branch.
+   */
+  onOpenLink?(url: string): void;
 }
 
 const EXPIRED = "Value no longer available. Re-run to inspect.";
@@ -68,7 +75,7 @@ function firstChildToggle(button: HTMLElement): HTMLButtonElement | null {
 /** The row of the node that contains this one, or null at the root of an entry. */
 const parentToggle = (button: HTMLElement) => ownToggle(nodeOf(button)?.parentElement?.closest(".v-node"));
 
-export function ValueView({ value, expand, nested = false, label, cascade = null }: ValueViewProps) {
+export function ValueView({ value, expand, nested = false, label, cascade = null, onOpenLink }: ValueViewProps) {
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState<EncodedValue | "expired" | null>(null);
   const [loading, setLoading] = useState(false);
@@ -124,7 +131,13 @@ export function ValueView({ value, expand, nested = false, label, cascade = null
     return (
       <span className="v v-string">
         {labelNode}
-        {formatPrimitive(full !== null ? { t: "string", v: full } : value, nested)}
+        {full !== null ? (
+          // OU-13: linkified only once the WHOLE string has arrived. A truncated URL carries no visible mark of
+          // being cut off, so linkifying it would show a complete-looking address that opens a prefix of itself.
+          <LinkedText text={formatPrimitive({ t: "string", v: full }, nested) ?? full} onOpenLink={onOpenLink} />
+        ) : (
+          formatPrimitive(value, nested)
+        )}
         {full === null && (
           <button type="button" className="v-more" onClick={loadRest}>
             … {truncated.total - value.v.length} more characters
@@ -174,7 +187,11 @@ export function ValueView({ value, expand, nested = false, label, cascade = null
     return (
       <span className={`v v-${shown.t}`}>
         {labelNode}
-        {primitive}
+        {/* OU-13. The one place every primitive renders -- a top-level result, a console argument, and every
+            nested child of an object, array, Set or Map -- so linkifying here covers structured values too.
+            A COLLAPSED node's one-line summary is deliberately not linkified: it renders inside the `.v-toggle`
+            button, and a button cannot contain another button. */}
+        <LinkedText text={primitive} onOpenLink={onOpenLink} />
       </span>
     );
   }
@@ -288,6 +305,7 @@ export function ValueView({ value, expand, nested = false, label, cascade = null
                 expand={expand}
                 nested
                 cascade={outgoing}
+                onOpenLink={onOpenLink}
               />
             ) : (
               <div

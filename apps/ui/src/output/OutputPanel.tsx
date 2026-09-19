@@ -165,6 +165,8 @@ export function OutputPanel({
                 onChangeWorkingDirectory={() => (tabId ? api.pickWorkingDirectory(tabId) : undefined)}
                 hasWorkingDirectory={hasWorkingDirectory}
                 onCopyStatus={showCopyStatus}
+                // OU-13: Main owns the one external-link path; the UI only says which URL the user activated.
+                onOpenLink={(url) => api.openExternal(url)}
               />
             </div>
           );

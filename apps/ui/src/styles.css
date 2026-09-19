@@ -489,6 +489,20 @@ button:disabled {
   text-align: left;
 }
 
+/* OU-13. A URL in output is a real button, so it is an ordinary Tab stop and opens with Enter -- a link that
+   answered only Cmd-click would be unreachable by keyboard. It inherits the row's font and sits inline in the
+   text, so a row reads as one sentence rather than as text with a widget dropped into it. */
+.entry-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .entry-action {
   margin-top: 4px;
   padding: 2px 8px;

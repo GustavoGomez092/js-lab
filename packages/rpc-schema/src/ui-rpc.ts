@@ -298,6 +298,86 @@ export const npmSpecSchema = z
       /^https?:\/\/\S+$/.test(spec),
   );
 
+// ---------- OU-13: URLs in output text, opened in the user's browser (spec §18) ----------
+
+/**
+ * The only schemes JSLab will hand to the OS from output text, as an ALLOWLIST.
+ *
+ * Output is produced by the user's own running program: a script can `console.log` any string it likes, and
+ * OU-13 turns strings into things the user clicks. Deciding by "which schemes are dangerous" is the wrong shape
+ * -- `javascript:`, `data:`, `vbscript:` and `file:` are merely the ones we thought of today -- so nothing is
+ * clickable unless its scheme is named right here.
+ */
+export const EXTERNAL_URL_PROTOCOLS = ["http:", "https:"] as const;
+
+/** Longest URL that may be linkified or opened; the same bound `npmSpecSchema` already puts on a tarball URL. */
+export const MAX_EXTERNAL_URL_CHARS = 2048;
+
+/**
+ * Whether `raw` holds a character the WHATWG URL parser would SILENTLY REMOVE: it strips leading and trailing
+ * C0 controls and spaces, and it deletes every tab, LF and CR anywhere in the input.
+ *
+ * That removal is both halves of the classic bypass. It is how a tab inside `java<TAB>script:`, or a leading
+ * control character, reaches the parser as a bare `javascript:` scheme; and it is a display/destination split,
+ * because without this rule the text `ht<TAB>tps://evil.example` would render as itself while opening
+ * `https://evil.example`. Refusing these outright makes `new URL(raw)` see exactly the characters the user sees,
+ * so the protocol check below is a check on the literal text rather than on a normalised rewrite of it.
+ *
+ * Written as a code-point scan rather than a character class so this file stays pure ASCII -- the equivalent
+ * regex has to spell out control characters, and a literal one in source is a hazard the tooling trips over.
+ */
+function hasHiddenChars(raw: string): boolean {
+  for (let index = 0; index < raw.length; index += 1) {
+    const code = raw.charCodeAt(index);
+    if (code <= 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether `raw` may be turned into something the user can click, and handed to `openExternal`.
+ *
+ * The single authority for that question. The UI imports it to decide what becomes a link at all, and Main
+ * re-validates with it at the RPC boundary (`linkOpenParamsSchema`), so a UI that was somehow talked into
+ * sending a `javascript:` URL still cannot make Main open one.
+ */
+export function isSafeExternalUrl(raw: string): boolean {
+  if (raw.length === 0 || raw.length > MAX_EXTERNAL_URL_CHARS) return false;
+  if (hasHiddenChars(raw)) return false;
+  /**
+   * The authority form (`scheme://host`), spelled out in the text itself.
+   *
+   * For a "special" scheme the WHATWG parser fills in a missing authority: `new URL("https:example")` yields
+   * `https://example/`. Without this rule the row would display `https:example` while opening something with a
+   * `//` in it -- the same display/destination split `hasHiddenChars` above exists to prevent.
+   *
+   * Deliberately generic rather than an `^https?://` test: it says only that the text must name a host, leaving
+   * WHICH schemes are allowed entirely to the allowlist below. That separation is what keeps the allowlist
+   * load-bearing -- `ftp://example.com` and `file:///etc/passwd` both satisfy this line and are refused there.
+   */
+  const schemeEnd = raw.indexOf(":");
+  if (schemeEnd < 0 || !raw.startsWith("//", schemeEnd + 1)) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  // `new URL` lower-cases the scheme, so `JaVaScRiPt:` is compared here as `javascript:` and fails the allowlist.
+  if (!(EXTERNAL_URL_PROTOCOLS as readonly string[]).includes(parsed.protocol)) return false;
+  // `https://user:pass@evil.example` puts `user` where a reader looks for the host. Rather than trying to render
+  // that safely, it is simply never clickable -- it stays ordinary selectable, copyable text.
+  return parsed.username === "" && parsed.password === "";
+}
+
+/**
+ * `link.open` (UI → Main). The URL crosses into Main, so Main validates it with the very rule the UI used to
+ * decide the thing was clickable (spec §18) -- one allowlist, checked on both sides of the wire.
+ */
+export const linkOpenParamsSchema = z.object({
+  url: z.string().max(MAX_EXTERNAL_URL_CHARS).refine(isSafeExternalUrl),
+});
+
 export const MAX_NPMRC_CHARS = 65_536;
 /**
  * The cap the *read* side enforces. `MAX_NPMRC_CHARS` bounded `npmrc.save` and nothing ever bounded the read, so
@@ -734,6 +814,12 @@ export type MainMessages = {
   "npm.updateAll": Record<string, never>;
   "wd.pick": TabParams;
   "wd.clear": TabParams;
+  /**
+   * OU-13: open a URL the user activated in an output row, through Main's ONE external-link path (`openExternal`
+   * in index.ts, which E2E runs record to `e2e-external.txt` instead of launching a browser). A message rather
+   * than a request because nothing is returned and nothing waits on it -- exactly like `app.command`'s Help links.
+   */
+  "link.open": { url: string };
   /** Spec §13.1 Options menu: opens the file dialog, parses the chosen file, and answers with `snippets.imported`. */
   "snippets.importDialog": Record<string, never>;
   /** Spec §13.1 Options menu: saveDialog with the default name `jslab-snippets.json`; answers `snippets.exported`. */

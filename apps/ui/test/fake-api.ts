@@ -95,6 +95,7 @@ export function createFakeApi() {
     snippetsExportDialog: mock((_snippets: Snippet[]) => {}),
     pickWorkingDirectory: mock((_tabId: string) => {}),
     clearWorkingDirectory: mock((_tabId: string) => {}),
+    openExternal: mock((_url: string) => {}),
     appCommand: mock((_action: AppAction) => {}),
     publishCommands: mock((_ids: string[]) => {}),
     e2eRespond: mock((_response: E2EResponse) => {}),

@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { type AppAction, appCommandSchema, settingsAppCommandSchema } from "@jslab/rpc-schema";
+import { type AppAction, appCommandSchema, linkOpenParamsSchema, settingsAppCommandSchema } from "@jslab/rpc-schema";
 import { buildDebugReport } from "../logging/debug-report";
 import type { Redactor } from "../logging/redact";
 import type { KeybindingsStore } from "../services/keybindings-store";
@@ -60,6 +60,16 @@ export function createAppHandlers(deps: AppHandlerDeps) {
     requests: {},
     messages: {
       "app.command": message(appCommandSchema, "app.command", ({ action }) => runAppAction(deps, action)),
+      /**
+       * OU-13: a URL the user activated in an output row. The payload comes from text the user's own program
+       * printed, so `linkOpenParamsSchema` re-applies the scheme allowlist here -- the UI's own check decides
+       * what is clickable, and this one decides what actually opens. A rejected payload is logged and dropped by
+       * `message()`, exactly as any other invalid inbound payload is.
+       *
+       * Deliberately absent from `createSettingsAppHandlers`: the Settings window has no output rows, and giving
+       * it a way to open arbitrary URLs would widen that window's RPC for nothing (spec §7.5, FA-m11).
+       */
+      "link.open": message(linkOpenParamsSchema, "link.open", ({ url }) => deps.openExternal(url)),
     },
   };
 }

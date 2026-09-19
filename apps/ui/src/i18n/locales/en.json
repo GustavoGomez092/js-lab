@@ -477,6 +477,7 @@
     "noMatches": "No entries match this filter",
     "noOutput": "No output yet — press {{keys}}",
     "noOutputNoKeys": "No output yet",
+    "openLink": "Open link in your browser",
     "region": "Output",
     "setWorkingDirectory": "Set Working Directory…",
     "showAll": "Show all",

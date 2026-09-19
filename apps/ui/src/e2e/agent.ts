@@ -91,6 +91,8 @@ export interface E2EAgentDeps {
 
 /** E2E-only command: clicks a temporary link inside the page, as a user clicking a web link would (R-M1-17(e)). */
 export const E2E_OPEN_LINK = "e2e.openLink";
+/** E2E-only command: activates the first URL rendered in an output row (OU-13), by Cmd-click or by keyboard. */
+export const E2E_OPEN_OUTPUT_LINK = "e2e.openOutputLink";
 export const E2E_COMPLETIONS = "e2e.completions";
 export const E2E_INSTALL_ACTIONS = "e2e.installActions";
 export const E2E_FOLD_ALL = "e2e.foldAll";
@@ -108,6 +110,31 @@ function openLink(args: unknown): { executed: string } {
     link.remove();
   }
   return { executed: E2E_OPEN_LINK };
+}
+
+/**
+ * OU-13. Activates a URL the running program printed into the output panel.
+ *
+ * A named trigger rather than a general "click any selector" hook, for the same reason `e2e.foldAll` is named:
+ * the agent offers the gestures the product actually supports, not an escape hatch around them. Both gestures
+ * are real DOM events on the real rendered control -- `bubbles` because React listens at the tree root -- so the
+ * component's own handler is what decides whether anything opens.
+ *
+ * The keyboard path asserts the control took focus before pressing Enter, which is the accessibility claim
+ * itself: a link only a modified click could reach would fail here rather than pass quietly.
+ */
+function openOutputLink(args: unknown): { executed: string; href: string } {
+  const via = (args as { via?: unknown } | undefined)?.via ?? "click";
+  const link = document.querySelector<HTMLElement>('[data-testid="output-link"]');
+  if (!link) throw new Error("e2e.openOutputLink found no link in the output");
+  if (via === "keyboard") {
+    link.focus();
+    if (document.activeElement !== link) throw new Error("e2e.openOutputLink could not focus the link");
+    link.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  } else {
+    link.dispatchEvent(new MouseEvent("click", { metaKey: true, bubbles: true, cancelable: true }));
+  }
+  return { executed: E2E_OPEN_OUTPUT_LINK, href: link.textContent ?? "" };
 }
 
 /**
@@ -135,6 +162,7 @@ export function createE2EAgent(deps: E2EAgentDeps) {
       case "command": {
         const { id, args } = params as { id: string; args?: unknown };
         if (id === E2E_OPEN_LINK) return openLink(args);
+        if (id === E2E_OPEN_OUTPUT_LINK) return openOutputLink(args);
         if (id === E2E_COMPLETIONS) {
           const offset = Number((args as { offset?: unknown } | undefined)?.offset ?? 0);
           return { executed: E2E_COMPLETIONS, completions: (await deps.completions?.(offset)) ?? [] };

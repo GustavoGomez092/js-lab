@@ -332,6 +332,8 @@ export const strings = {
     changeWorkingDirectory: t("output.changeWorkingDirectory"),
     /** R24-4: a relative module-not-found row offers to set a working directory when the tab has none. */
     setWorkingDirectory: t("output.setWorkingDirectory"),
+    /** OU-13: the hint on a URL in output. The button's own text is the URL, so this describes the action only. */
+    openLink: t("output.openLink"),
   },
   webDialog: {
     /** Task 13 (spec §5.12): JSLab's own non-blocking stand-in for `alert()`. */

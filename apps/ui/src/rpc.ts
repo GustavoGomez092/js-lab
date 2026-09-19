@@ -83,6 +83,7 @@ export function createRpcApi(): MainApi {
     snippetsExportDialog: (snippets) => rpc.send["snippets.exportDialog"]({ snippets }),
     pickWorkingDirectory: (tabId) => rpc.send["wd.pick"]({ tabId }),
     clearWorkingDirectory: (tabId) => rpc.send["wd.clear"]({ tabId }),
+    openExternal: (url) => rpc.send["link.open"]({ url }),
     appCommand: (action) => rpc.send["app.command"]({ action }),
     publishCommands: (ids) => rpc.send["commands.published"]({ ids }),
     e2eRespond: (response) => rpc.send["e2e.response"](response),

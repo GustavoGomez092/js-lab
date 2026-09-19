@@ -308,7 +308,7 @@
       "settingsRestored": "Settings were restored from the backup because the file was unreadable.",
       "settingsRestoredMissing": "Settings were restored from the backup because settings.json was missing.",
       "settingsTooLarge": "settings.json is too large for JSLab to save ({{bytes}} bytes; the limit is {{maxBytes}}). Changes made in this window won't be saved to it and will be lost when JSLab restarts. Choose Help → Copy Debug Log to find the file.",
-      "tabsDropped_one": "{{count}} tab in session.json couldn't be read and were skipped. Their buffer files were kept.",
+      "tabsDropped_one": "{{count}} tab in session.json couldn't be read and was skipped. Its buffer file was kept.",
       "tabsDropped_other": "{{count}} tabs in session.json couldn't be read and were skipped. Their buffer files were kept.",
       "unexpectedError": "Something went wrong. Choose Help → Copy Debug Log to report it."
     },
@@ -436,10 +436,10 @@
     "update": "Update {{name}}",
     "updateAll": "Update All",
     "updateAllTitle": {
-      "plain_one": "Update {{count}} package to their latest versions.",
+      "plain_one": "Update {{count}} package to its latest version.",
       "plain_other": "Update {{count}} packages to their latest versions.",
-      "withMajors_one": "Update {{count}} package to their latest versions, including {{majorCount}} major updates.",
-      "withMajors_other": "Update {{count}} packages to their latest versions, including {{majorCount}} major updates."
+      "withMajors_one": "{{body}} This includes {{count}} major update.",
+      "withMajors_other": "{{body}} This includes {{count}} major updates."
     },
     "updateButton": "Update",
     "version": "Installed",

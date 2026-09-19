@@ -87,4 +87,31 @@ describe("interpolated strings keep their English output (spec §17)", () => {
       "Couldn't install zod. Check your connection.",
     );
   });
+
+  /**
+   * Defect A (queued follow-up batch): `updateAllTitle` had two independent bugs. First, `majorCount` is a
+   * second count i18next does not pluralize, so `majors: 1` used to render "including 1 major updates".
+   * Second, the `_one` forms mismatched a singular count with "their latest versions" regardless of majors.
+   * R-M5E-T9-PLURAL-1: a single key cannot pluralize on two independent counts, so the majors clause is its
+   * own pluralized key composed onto the base sentence via the `{{body}}` idiom (see the npm progress test
+   * above). Every assertion here is anchored to the actual rendered words, not to a catalogue lookup, so a
+   * regression in either the base grammar or the majors-count pluralization is caught.
+   */
+  test("npm.updateAllTitle pluralizes the package count and the major count independently", () => {
+    expect(strings.npm.updateAllTitle(1, 0)).toBe("Update 1 package to its latest version.");
+    expect(strings.npm.updateAllTitle(1, 1)).toBe(
+      "Update 1 package to its latest version. This includes 1 major update.",
+    );
+    expect(strings.npm.updateAllTitle(2, 0)).toBe("Update 2 packages to their latest versions.");
+    expect(strings.npm.updateAllTitle(2, 1)).toBe(
+      "Update 2 packages to their latest versions. This includes 1 major update.",
+    );
+    expect(strings.npm.updateAllTitle(2, 3)).toBe(
+      "Update 2 packages to their latest versions. This includes 3 major updates.",
+    );
+    // Meaning-anchored, not catalogue-anchored: a singular package count must never carry a plural
+    // possessive, and a majors count of exactly 1 must never say "updates" (plural).
+    expect(strings.npm.updateAllTitle(1, 0)).not.toMatch(/their latest versions/);
+    expect(strings.npm.updateAllTitle(1, 1)).not.toMatch(/1 major updates\b/);
+  });
 });

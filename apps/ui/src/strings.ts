@@ -464,12 +464,19 @@ export const strings = {
     removeButton: t("npm.removeButton"),
     updateAll: t("npm.updateAll"),
     // R26-1: the toolbar's Update All tooltip, distinct from its (unchanged) accessible name.
-    // `majors` keeps the placeholder name `majorCount`: `count` is taken by the form selector, and i18next
-    // would otherwise pluralize on the wrong number.
-    updateAllTitle: (count: number, majors: number) =>
-      majors > 0
-        ? t("npm.updateAllTitle.withMajors", { count, majorCount: majors })
-        : t("npm.updateAllTitle.plain", { count }),
+    // R-M5E-T9-PLURAL-1: a single i18next key cannot pluralize on two independent counts (the package
+    // count and the major count), so the majors clause is its own pluralized key, composed onto the base
+    // sentence via the `{{body}}` idiom used elsewhere in this catalogue (see `npm.running.queued` and
+    // `npm.done.withKeys` above). The base sentence is resolved first, with `count` selecting ITS plural
+    // form; it is then re-passed as `{{body}}` into a second t() call whose own `count` (the majors
+    // number) selects the majors clause's plural form independently. This replaces an earlier
+    // construction that kept the placeholder name `majorCount` specifically because `count` was taken by
+    // the base sentence's form selector -- which correctly avoided pluralizing on the wrong number, but
+    // left `majorCount` unpluralized entirely (a fixed count of 1 still rendered "major updates").
+    updateAllTitle: (count: number, majors: number) => {
+      const body = t("npm.updateAllTitle.plain", { count });
+      return majors > 0 ? t("npm.updateAllTitle.withMajors", { body, count: majors }) : body;
+    },
     showTypes: t("npm.showTypes"),
     allowScripts: t("npm.allowScripts"),
     // R26-5: shown only once the first list has loaded, so a load-in-progress sheet never flashes "no packages".

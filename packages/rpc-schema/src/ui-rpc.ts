@@ -529,6 +529,13 @@ export type SettingsWindowRequests = {
   "settings.get": { params: Record<string, never>; response: { settings: Settings; e2e: boolean } };
   "settings.update": { params: SettingsUpdateParams; response: Settings };
   "fonts.list": { params: Record<string, never>; response: { fonts: SystemFontList | null; refreshing: boolean } };
+  /**
+   * TL-23's Refresh control: the model ids a provider actually reports (spec §14.3's `listModels`).
+   *
+   * On the SETTINGS window's surface rather than the main window's, because the AI tab is what asks -- the main
+   * window has no model picker and never needs this.
+   */
+  "ai.models.list": { params: AiModelsListParams; response: AiModelList };
   "npmrc.get": { params: Record<string, never>; response: { content: string } };
   "npmrc.save": { params: { content: string }; response: SaveResult };
   "npmrc.reset": { params: Record<string, never>; response: { content: string } };
@@ -764,6 +771,35 @@ export interface AiError {
    * The provider's own words, for the detail line. Never a key and never a translated string: it is a remote
    * server's text, so the panel shows it as data beneath a translated headline.
    */
+  detail: string;
+}
+
+/**
+ * TL-23: which provider's models to list, and whether to go back to the server for them.
+ *
+ * `provider` is a bare string rather than an `AiProvider` enum for the same reason `ai.provider` accepts all six
+ * ids: Main answers "that provider has no adapter in this build" as data, which is a better failure than a
+ * rejected payload the Settings window cannot explain to anyone.
+ */
+export const aiModelsListParamsSchema = z.object({
+  provider: z.string().max(64),
+  /** True only for the Refresh control: ask the provider again even when a recent answer is cached. */
+  refresh: z.boolean(),
+});
+export type AiModelsListParams = z.infer<typeof aiModelsListParamsSchema>;
+
+/**
+ * The answer to `ai.models.list`. Never a rejection: the field this feeds has to stay usable when the provider
+ * is unreachable, so a failure is reported as data.
+ *
+ * `error` is classified by Main and translated by the UI (the same split as `AiError.kind`), while `detail` is
+ * the provider's own words, shown beneath the translated headline and never treated as a key.
+ */
+export interface AiModelList {
+  /** The model ids the provider reports, or null when the list could not be fetched. */
+  models: string[] | null;
+  error: AiErrorKind | null;
+  /** Empty when there is no failure to describe. */
   detail: string;
 }
 

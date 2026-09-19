@@ -743,6 +743,14 @@
     },
     "loadFailed": "Settings failed to load: {{message}}",
     "loadingFonts": "Loading installed fonts…",
+    "models": {
+      "empty": "No models installed",
+      "loading": "Loading models…",
+      "picker": "Installed models",
+      "refresh": "Refresh models",
+      "unavailable": "Couldn't load models",
+      "useDefault": "Default"
+    },
     "npm": {
       "allowInstallScripts": {
         "help": "Run packages' install scripts. Each package is added to trustedDependencies; scripts run with your permissions. Applies to future installs. Packages you already trusted keep running their install scripts.",

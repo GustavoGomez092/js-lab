@@ -24,6 +24,9 @@ import Electrobun, {
   Updater,
   Utils,
 } from "electrobun/main";
+import { AiModelListService } from "./ai/model-list";
+import { createOllamaAdapter } from "./ai/ollama";
+import { createAdapterRegistry } from "./ai/provider";
 import { e2eBunCacheDir, resolveAppPaths } from "./app-paths";
 import { E2EBridge } from "./cli/e2e-bridge";
 import { type CliInstallResult, cliStatus, installCli, nodeInstallFs, uninstallCli } from "./cli/install";
@@ -51,6 +54,7 @@ import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
 import { createOllamaAiHandlers } from "./rpc/ai-handlers";
+import { createAiModelHandlers } from "./rpc/ai-model-handlers";
 import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } from "./rpc/app-handlers";
 import { createEnvHandlers } from "./rpc/env-handlers";
 import { createFileHandlers } from "./rpc/file-handlers";
@@ -288,6 +292,22 @@ async function start(): Promise<void> {
   // Warm the cache early so the Settings window's font picker has the list (spec §9.4). E2E runs seed the cache.
   if (!e2eEnabled) void systemFonts.list();
 
+  /**
+   * One Keychain and one adapter registry, shared by both AI consumers (spec §14.3).
+   *
+   * `ai.send` on the main window and TL-23's `ai.models.list` on the Settings window have to agree about which
+   * providers exist and which stored key belongs to each. Handing them the SAME registry and the SAME store is
+   * what makes that structural: two registries would be the seam where "implemented in this build" could answer
+   * differently depending on which window asked, and a model picker that disagreed with the panel it configures
+   * is worse than one that is missing.
+   *
+   * Deliberately NOT warmed at startup the way the font cache above is: contacting a provider is a network
+   * request to someone else's machine, so it waits until the AI tab is actually opened and asks.
+   */
+  const secrets = new SecretStore();
+  const aiRegistry = createAdapterRegistry([createOllamaAdapter()]);
+  const aiModels = new AiModelListService({ registry: aiRegistry, settings, secrets, log });
+
   // The bridge sends through `rpc`, which is defined next; send runs only after startup.
   const e2eBridge = new E2EBridge((request) => rpc.send["e2e.request"](request));
   let socketServer: SocketServer | null = null;
@@ -471,7 +491,8 @@ async function start(): Promise<void> {
       // -- the view sends a prompt and receives text. XT-08's store finally has its first consumer.
       createOllamaAiHandlers({
         settings,
-        secrets: new SecretStore(),
+        secrets,
+        registry: aiRegistry,
         // Spec §14.3: where `ai.conversationSave` lands. Main owns the file; the UI owns the conversation.
         conversation,
         send: {
@@ -707,6 +728,8 @@ async function start(): Promise<void> {
       // a separate instance above, and must never open this window's gate.
       createSettingsHandlers({ settings, e2e: e2eEnabled, log, onViewReady: () => settingsE2E.viewReady() }),
       createFontHandlers({ fonts: systemFonts, log }),
+      // TL-23: the model picker's Refresh. On THIS surface, because the Settings window is what asks.
+      createAiModelHandlers({ models: aiModels, log }),
       createNpmrcHandlers({ path: paths.packagesNpmrc, onSaved: () => npm.resetOutdated(), log }),
       createKeybindingHandlers({ store: keybindings, registeredCommands: () => publishedCommands, t, log }),
       createSettingsAppHandlers(appHandlerDeps),

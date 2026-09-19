@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build:cli": "bun build apps/desktop/src/cli/main.ts --compile --outfile apps/desktop/dist/bin/jslab",
+    "bench": "bun apps/desktop/bench/main.ts",
     "test": "bun run --filter '*' test",
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "biome check .",

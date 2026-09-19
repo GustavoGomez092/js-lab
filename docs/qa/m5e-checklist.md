@@ -173,3 +173,54 @@ column count — and that 32% is a pixel figure that neither derives nor validat
       in the main window naming the restart, and clears itself after 8s (`info`, `NOTICE_AUTO_DISMISS_MS`).
 - [ ] **`<html lang>`.** With VoiceOver on and a `ja` UI, the interface is announced in a Japanese voice rather
       than an English one reading Japanese text.
+
+## End-to-end coverage (Task 15)
+
+`packages/e2e/scenarios/i18n.test.ts` drives the three things only a real launch can reach: the native menu under
+`app.uiLanguage: "ja"`, the Settings window under `es` (a separate React tree with its own RPC), and the restart
+semantics. It asserts the §17 fallback contract as a pair — an unseeded key renders as readable English
+("Reopen Closed Tab") **and** no menu label is a raw dotted key.
+
+Two things it deliberately does **not** do, so nobody reads more into a green run than is there:
+
+- **It does not assert the `languageChanged` notice.** The notice is `info` severity and removes itself after
+  `NOTICE_AUTO_DISMISS_MS` (8s), while the E2E bridge's first `e2e.state` round trip after a launch can go
+  unanswered until its own 15s timeout. 15s outlasts 8s, so no amount of polling or relaunching makes such an
+  assertion reliable — `help.test.ts` retries five whole launches for exactly this reason. The scenario asserts
+  the durable half instead (the setting reaches `settings.json`; the running window stays English; the next
+  launch is Japanese). The notice keeps its deterministic coverage in
+  `apps/desktop/test/startup-notices.test.ts` and `packages/rpc-schema`, plus Q4 below.
+- **It does not verify layout.** Its two `app.screenshot()` calls capture images and compare them to nothing.
+
+## Manual QA
+
+Build first — `bun run e2e` does not build:
+
+```bash
+export PATH="$HOME/.hutch/bin:$PATH"
+REPO="$(git rev-parse --show-toplevel)"
+cd "$REPO/apps/desktop" && hutch run build:dev && cd "$REPO"
+```
+
+Never run the Hutch installer, `hutch init` or `hutch upgrade`.
+
+> [!NOTE]
+> Q1–Q4 overlap the six boxes in "Layout under translation (Task 14)" above; they are the milestone-level pass
+> over the same surfaces, not six additional findings. Q1 covers the menu-bar box, Q2 and Q3 the Settings-nav and
+> status-bar boxes, Q4 the restart-notice box. Doing the Task 14 boxes and Q1–Q4 as separate sweeps repeats the
+> same work; tick both sets from one pass. Q5 and Q6 are genuinely new.
+
+- [ ] **Q1 Japanese chrome.** Launch with `app.uiLanguage: "ja"`. The menu bar reads ファイル / 編集 / 表示. No menu
+      item shows a dotted key such as `menu.file`. CJK renders in a real CJK face, not a fallback box.
+- [ ] **Q2 Japanese layout.** With a Japanese UI, check the status bar, the tab bar with four tabs open, and every
+      Settings tab. Nothing is clipped mid-character, no control overlaps its neighbour, and the window does not
+      scroll horizontally. **This is the check the width budget only approximates** — the unit suite has no layout
+      engine and cannot see any of it.
+- [ ] **Q3 Spanish and Portuguese length.** Repeat Q2 for `es` and `pt`, where labels are longer than English
+      rather than wider. Settings labels are the likeliest to wrap.
+- [ ] **Q4 Restart semantics.** Change the language in Settings. A notice appears in the main window, the menus stay
+      in the old language, and the new language is in force after a restart.
+- [ ] **Q5 Fallback is invisible, not broken.** In `ja`, open the NPM panel and the Environment Variables sheet —
+      both are mostly untranslated. They must read as clean English, never as dotted keys or blanks.
+- [ ] **Q6 Unknown system locale.** With `app.uiLanguage: "system"` on a Mac set to a language JSLab does not ship
+      (German, say), the app opens in English and does not warn.

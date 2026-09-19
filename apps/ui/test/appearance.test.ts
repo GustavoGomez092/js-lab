@@ -4,7 +4,14 @@ import { createViewCommands } from "../src/commands/view-commands";
 import { editorOptionsFor } from "../src/editor/editor-options";
 import { createVimStatusNode } from "../src/editor/vim-status";
 import { createAppStore } from "../src/state/store";
-import { applyAppearanceVariables, fontAvailable, fontStack, startAppearanceSync } from "../src/themes/fonts";
+import {
+  applyAppearanceVariables,
+  CJK_FALLBACK,
+  DEFAULT_FONT,
+  fontAvailable,
+  fontStack,
+  startAppearanceSync,
+} from "../src/themes/fonts";
 import { createFakeApi } from "./fake-api";
 
 function hydrated(font = "JetBrains Mono") {
@@ -33,7 +40,8 @@ function countSetProperty(root: HTMLElement) {
 describe("editor options", () => {
   test("defaults map to Monaco options", () => {
     expect(editorOptionsFor(defaultSettings())).toEqual({
-      fontFamily: '"JetBrains Mono Variable", ui-monospace, Menlo, monospace',
+      fontFamily:
+        '"JetBrains Mono Variable", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", "PingFang TC", ui-monospace, Menlo, monospace',
       fontSize: 14,
       fontLigatures: true,
       lineNumbers: "on",
@@ -70,7 +78,8 @@ describe("editor options", () => {
       appearance: { font: "Fira Code", fontSize: 18, fontLigatures: false, uiScale: 1.1 },
     });
     expect(editorOptionsFor(settings)).toMatchObject({
-      fontFamily: '"Fira Code", ui-monospace, Menlo, monospace',
+      fontFamily:
+        '"Fira Code", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", "PingFang TC", ui-monospace, Menlo, monospace',
       fontSize: 20,
       fontLigatures: false,
       lineNumbers: "off",
@@ -84,16 +93,22 @@ describe("editor options", () => {
       padding: { top: 13, bottom: 13 },
     });
     expect(editorOptionsFor(settings, true).fontFamily).toBe(
-      '"JetBrains Mono Variable", ui-monospace, Menlo, monospace',
+      '"JetBrains Mono Variable", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", "PingFang TC", ui-monospace, Menlo, monospace',
     );
   });
 });
 
 describe("fonts", () => {
   test("bundled names map to their web font family; other names are system fonts", () => {
-    expect(fontStack("Hack")).toBe('"Hack", ui-monospace, Menlo, monospace');
-    expect(fontStack("SF Mono")).toBe('"SF Mono", ui-monospace, Menlo, monospace');
-    expect(fontStack('Evil"Font')).toBe('"EvilFont", ui-monospace, Menlo, monospace');
+    expect(fontStack("Hack")).toBe(
+      '"Hack", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", "PingFang TC", ui-monospace, Menlo, monospace',
+    );
+    expect(fontStack("SF Mono")).toBe(
+      '"SF Mono", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", "PingFang TC", ui-monospace, Menlo, monospace',
+    );
+    expect(fontStack('Evil"Font')).toBe(
+      '"EvilFont", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", "PingFang TC", ui-monospace, Menlo, monospace',
+    );
   });
 
   test("availability compares text widths against generic fallbacks", () => {
@@ -213,5 +228,27 @@ describe("vim status node", () => {
     slotted.remove();
     expect(slot.children.length).toBe(0);
     slot.remove();
+  });
+});
+
+describe("CJK coverage (spec §9.4, §17)", () => {
+  test("the stack names CJK families explicitly, after the chosen font and before the generic", () => {
+    const stack = fontStack(DEFAULT_FONT);
+    expect(stack.startsWith('"JetBrains Mono Variable"')).toBe(true);
+    expect(stack).toContain("Hiragino Sans");
+    expect(stack).toContain("PingFang SC");
+    expect(stack.endsWith("monospace")).toBe(true);
+    // The chosen font must still win for Latin text, so the CJK families come after it.
+    expect(stack.indexOf("JetBrains Mono Variable")).toBeLessThan(stack.indexOf("Hiragino Sans"));
+  });
+
+  test("every bundled font gets the same fallback, since none of the six covers CJK", () => {
+    for (const font of ["Fira Code", "Hack", "Ubuntu Mono", "Source Code Pro", "DejaVu Sans Mono"]) {
+      expect(fontStack(font)).toContain(CJK_FALLBACK);
+    }
+  });
+
+  test("a font name containing a quote still produces a well-formed stack", () => {
+    expect(fontStack('Ev"il')).not.toContain('""');
   });
 });

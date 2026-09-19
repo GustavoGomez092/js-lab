@@ -22,8 +22,16 @@ export function fontFamily(name: string): string {
   return BUNDLED_FONTS.find((font) => font.name === name)?.family ?? name;
 }
 
+/**
+ * None of the six bundled fonts (spec §9.4) carries a CJK glyph, and neither does `ui-monospace` or `Menlo`.
+ * Without these, every Japanese and Chinese run in the UI falls through to last-resort substitution -- which
+ * renders, so it is easy to miss, at metrics the stack was never tuned for. Naming them makes the line box
+ * predictable. Hiragino Sans and PingFang SC ship with macOS, which is the only platform v1 targets (spec §2 D9).
+ */
+export const CJK_FALLBACK = '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "PingFang SC", "PingFang TC"';
+
 export function fontStack(name: string): string {
-  return `"${fontFamily(name).replaceAll('"', "")}", ui-monospace, Menlo, monospace`;
+  return `"${fontFamily(name).replaceAll('"', "")}", ${CJK_FALLBACK}, ui-monospace, Menlo, monospace`;
 }
 
 /** A font is available when it changes the measured width against at least one generic family. */

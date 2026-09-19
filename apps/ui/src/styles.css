@@ -1119,6 +1119,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -1341,6 +1342,9 @@ button:disabled {
 
 .status-item {
   padding: 0 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-wd {
@@ -1405,6 +1409,7 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  word-break: keep-all;
 }
 
 .tab-dirty {
@@ -1786,6 +1791,11 @@ button:disabled {
   justify-content: space-between;
   padding: 12px 0;
   border-bottom: 1px solid var(--border-muted);
+}
+
+.field-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .field-text label {

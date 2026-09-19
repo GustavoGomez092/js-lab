@@ -244,6 +244,10 @@ describe("layout under translation", () => {
     apps.push(setup);
     await setup.quit();
 
+    // The number of nav tabs is read from the first reading rather than written down here; see the assertion
+    // below for why an exact count is the wrong thing for this test to own.
+    let navButtonCount: number | null = null;
+
     const settingsSizes = [
       { label: "wide 980x760", frame: { x: 80, y: 80, width: 980, height: 760 } },
       { label: "narrow 620x460", frame: { x: 80, y: 80, width: 620, height: 460 } },
@@ -297,7 +301,21 @@ describe("layout under translation", () => {
         // (2) No nav button escapes the fixed 180px nav track.
         const nav = metrics.boxes.nav as BoxMetrics;
         const buttons = metrics.groups.navButtons ?? [];
-        expect(buttons.length, `${where}: the Settings nav must have buttons`).toBe(8);
+        // A floor and an invariant, not a census. This asserted `toBe(8)` -- an exact count of `SETTINGS_TABS`,
+        // which legitimately grows: it went 7 → 8 → 9 and turned this test red each time, for a change that was
+        // correct every time. The count was never what this test is about; it is the non-vacuity guard for the
+        // loop below, whose job is only to prove the selector matched a real nav instead of silently matching
+        // nothing. So it is now a floor that a tab addition or removal does not disturb.
+        //
+        // What replaces the exact number is an assertion that is actually about translation: every locale and
+        // window size must render the SAME number of tabs. A locale that drops or duplicates a tab still fails,
+        // and that is a regression this test could not previously distinguish from a deliberate tab bump.
+        expect(buttons.length, `${where}: the Settings nav must have buttons`).toBeGreaterThanOrEqual(5);
+        navButtonCount ??= buttons.length;
+        expect(
+          buttons.length,
+          `${where}: the Settings nav rendered a different number of tabs (${buttons.length}) than the first reading (${navButtonCount}) -- a tab is missing or duplicated under this locale`,
+        ).toBe(navButtonCount);
         for (const button of buttons) {
           expect(
             button.right,

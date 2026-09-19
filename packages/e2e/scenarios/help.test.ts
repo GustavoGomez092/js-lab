@@ -19,7 +19,14 @@ test("Copy Debug Log produces a redacted report and logs rotate under logs/ (ST-
   const report = JSON.parse(await waitFor(() => (existsSync(clip) ? readFileSync(clip, "utf8") : null)));
   expect(readFileSync(clip, "utf8")).not.toContain(homedir());
   expect(report).toMatchObject({ electrobunVersion: "2.0.1", arch: "arm64" });
-  expect(report.settings.version).toBe(3);
+  // Not a literal. `SETTINGS_VERSION` legitimately changes (it has, twice) and this test is about the REPORT,
+  // not about which version is current -- a hardcoded number here only made a correct bump turn it red. What the
+  // report must actually do is carry the version the app itself has; a stale or invented version in
+  // `redactSettings` is the real regression. Mutation-checked by hardcoding a version in
+  // apps/desktop/src/main/logging/debug-report.ts, which turns this red.
+  const live = (await app.state()).ui.settings as { version?: number } | undefined;
+  expect(typeof live?.version, "the app must report its own settings version").toBe("number");
+  expect(report.settings.version, "the debug report must carry the app's own settings version").toBe(live?.version);
   expect(Array.isArray(report.log)).toBe(true);
   expect(existsSync(join(app.userData, "logs", "main.log"))).toBe(true);
   await app.command("help.openLogsFolder");

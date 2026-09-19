@@ -83,7 +83,9 @@ describe("settings", () => {
 
   test("the M2 sections match spec §8 defaults", () => {
     const s = defaultSettings();
-    expect(s.version).toBe(3);
+    // The literal, not SETTINGS_VERSION: comparing the constant to a value derived from it asserts nothing.
+    // TL-18 took this to 4 by adding the `ai` section.
+    expect(s.version).toBe(4);
     expect(s.run.formatOnRun).toBe(false);
     expect(s.tabs).toEqual({ confirmClose: false });
     expect(s.app).toEqual({ uiLanguage: "system" });
@@ -155,6 +157,45 @@ describe("settings", () => {
     expect(readSetting(defaultSettings(), "editor.nope")).toBeUndefined();
     expect(settingPatch("view.statusBar", false)).toEqual({ view: { statusBar: false } });
     expect(mergeSettings(defaultSettings(), settingPatch("view.statusBar", false)).view.statusBar).toBe(false);
+  });
+
+  /**
+   * A key whose FIELD contains a dot -- `ai.model.ollama` is the field `model.ollama` of section `ai` (spec §8).
+   *
+   * `key.split(".")` destructured as `[section, field]` yields the field `model`, which no section holds: the
+   * read returns undefined and the patch writes the wrong key, dropping the provider entirely. Both helpers
+   * therefore split at the FIRST dot only, and both directions are pinned here because they fail differently --
+   * the read shows a blank field, the patch silently saves nothing.
+   */
+  test("a setting key whose field contains a dot addresses the right field (ai.model.<provider>)", () => {
+    const s = defaultSettings();
+    expect(readSetting(s, "ai.model.ollama")).toBe("");
+    expect(settingPatch("ai.model.ollama", "mistral:latest")).toEqual({ ai: { "model.ollama": "mistral:latest" } });
+
+    const updated = mergeSettings(s, settingPatch("ai.model.ollama", "mistral:latest"));
+    expect(readSetting(updated, "ai.model.ollama")).toBe("mistral:latest");
+    // The neighbouring key must not have been written instead, which is exactly what the old split did.
+    expect(readSetting(updated, "ai.baseUrl.ollama")).toBe("");
+    expect((updated.ai as Record<string, unknown>).model).toBeUndefined();
+
+    // Single-dot keys keep behaving exactly as before.
+    expect(settingPatch("view.statusBar", true)).toEqual({ view: { statusBar: true } });
+  });
+
+  test("the ai section carries the spec §8 defaults, and repairs a bad provider", () => {
+    const s = defaultSettings();
+    expect(s.ai).toEqual({
+      provider: "none",
+      "model.ollama": "",
+      "baseUrl.ollama": "",
+      includeOutput: true,
+    });
+    // Blank is a real value here -- it is how "use the default" is expressed -- so it must survive a round trip
+    // rather than being repaired back to a fallback the way `text()` fields are.
+    expect(settingsSchema.parse({ ai: { "baseUrl.ollama": "" } }).ai["baseUrl.ollama"]).toBe("");
+    expect(settingsSchema.parse({ ai: { provider: "nonesuch" } }).ai.provider).toBe("none");
+    // Every provider in the seam is ACCEPTED on disk, so a value written by a later build survives a downgrade.
+    expect(settingsSchema.parse({ ai: { provider: "anthropic" } }).ai.provider).toBe("anthropic");
   });
 
   test("v3 adds the NPM and Build sections with the spec §8 defaults", () => {

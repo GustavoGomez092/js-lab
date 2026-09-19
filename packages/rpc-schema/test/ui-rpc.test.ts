@@ -176,7 +176,16 @@ describe("inbound validators", () => {
       settingsUpdateParamsSchema.safeParse({ patch: { editor: { lineWrap: false }, view: { layout: "vertical" } } })
         .success,
     ).toBe(true);
-    expect(settingsUpdateParamsSchema.safeParse({ patch: { ai: { provider: "openai" } } }).success).toBe(false);
+    // A section name no schema defines. This used to be spelled `ai`, which stopped being unknown the moment
+    // TL-18 added that section -- so the "unknown sections are rejected" claim needs a name that really is one.
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { nosuchsection: { enabled: true } } }).success).toBe(false);
+    // ...and the AI section really is known now, dotted field name included (`ai.model.ollama`, spec §8). That
+    // second case is the wire's half of the first-dot key split: a record key with a dot in it must be accepted,
+    // or the Settings window could never patch a per-provider model at all.
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { ai: { provider: "ollama" } } }).success).toBe(true);
+    expect(settingsUpdateParamsSchema.safeParse({ patch: { ai: { "model.ollama": "mistral:latest" } } }).success).toBe(
+      true,
+    );
     expect(settingsUpdateParamsSchema.safeParse({ patch: { editor: { lineWrap: { nested: true } } } }).success).toBe(
       false,
     );

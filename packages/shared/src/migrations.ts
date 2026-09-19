@@ -19,6 +19,12 @@ export const SETTINGS_MIGRATIONS: Record<number, (raw: RawSettings) => RawSettin
   },
   // v2 (M2) → v3 (M3): the npm and build sections are filled by the schema's defaults; every v2 value is kept.
   2: (raw) => ({ ...raw, version: 3 }),
+  // v3 (M3) → v4 (M5, AI chat): the `ai` section is filled by the schema's defaults, so an existing settings.json
+  // gains `provider: "none"` and `includeOutput: true` without the user losing anything. This entry is not
+  // optional bookkeeping: `migrateSettings` THROWS on a version with no migration, so bumping SETTINGS_VERSION
+  // without it makes every existing settings.json unreadable -- which `loadJson` then treats as corrupt and
+  // replaces with defaults, silently resetting every setting the user had.
+  3: (raw) => ({ ...raw, version: 4 }),
 };
 
 export function migrateSettings(input: unknown): unknown {

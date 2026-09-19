@@ -1,4 +1,5 @@
 import type {
+  AiErrorKind,
   BootstrapPayload,
   DiagnosticPayload,
   InstalledPackage,
@@ -168,6 +169,36 @@ function evictOperations(operations: readonly NpmOperation[]): NpmOperation[] {
 /** Which panel the side bar shows (Task 16, M4). M5a adds the read-only transpiled output (spec §7.4, R-M5a-6). */
 export type SideBarPanel = "snippets" | "ai" | "transpiled";
 
+/** One turn on screen (spec §14.1). `id` is React's key; it is never sent to a provider. */
+export interface AiChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  /** Assistant turns only: true while chunks are still arriving. */
+  streaming: boolean;
+  /** True when the turn ended because the user pressed Stop, so the panel can mark it interrupted. */
+  stopped: boolean;
+  /** Set when the turn failed; the panel shows a translated headline plus this detail, and offers Retry. */
+  error: { kind: AiErrorKind; detail: string } | null;
+}
+
+/**
+ * The conversation (spec §14.1).
+ *
+ * Held in the STORE rather than in the panel, so closing the side bar mid-reply does not lose the reply: the
+ * `ai.chunk` messages keep arriving and keep being applied, and reopening the panel shows the finished answer.
+ * A panel-local `useState` would have unmounted with the side bar and dropped every chunk after it.
+ */
+export interface AiChatState {
+  messages: AiChatMessage[];
+  /** The in-flight request, or null. What `ai.stop` names, and what makes a stale reply identifiable. */
+  requestId: string | null;
+  /** The last prompt sent, so Retry can resend it after a failure. */
+  lastPrompt: string | null;
+}
+
+export const initialAiChat = (): AiChatState => ({ messages: [], requestId: null, lastPrompt: null });
+
 /**
  * The one channel the snippet commands use to reach the panel (Task 9). `nonce` is bumped on every request for the
  * same reason `revealRequest` carries one: pressing ⌘B twice, or Create Snippet… twice over the same selection, must
@@ -234,6 +265,8 @@ export interface AppState {
   snippetsRequest: SnippetsRequest | null;
   /** Counts snippet requests. Separate from `snippetsRequest` so clearing the request never rewinds the count. */
   snippetsNonce: number;
+  /** Spec §14.1: the AI chat conversation. App state, not tab state -- one conversation, whatever tab is active. */
+  aiChat: AiChatState;
 
   // Mirrors of the active tab, so M1 components keep reading a single tab.
   tab: TabState | null;
@@ -337,6 +370,15 @@ export interface AppState {
   receiveSnippets(snippets: Snippet[]): void;
   requestSnippets(kind: SnippetsRequest["kind"], body?: string): void;
   clearSnippetsRequest(): void;
+
+  /** Spec §14.1: records the user's turn and opens an empty assistant turn for the reply to stream into. */
+  aiStartRequest(requestId: string, prompt: string): void;
+  /** Appends one streamed chunk. Ignored unless `requestId` is the request currently in flight. */
+  aiAppendChunk(requestId: string, text: string): void;
+  aiFinishRequest(requestId: string, stopped: boolean): void;
+  aiFailRequest(requestId: string, error: { kind: AiErrorKind; detail: string }): void;
+  /** Spec §14.1's New Chat: clears the conversation. */
+  aiNewChat(): void;
 }
 
 export function shouldAutoRun(state: Pick<AppState, "settings" | "safeMode" | "autoRunArmed">): boolean {
@@ -480,6 +522,7 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
       snippetsLoaded: false,
       snippetsRequest: null,
       snippetsNonce: 0,
+      aiChat: initialAiChat(),
       tab: null,
       code: "",
       autoRunArmed: false,
@@ -970,6 +1013,70 @@ export function createAppStore(options: { timers?: TimerApi } = {}) {
             }
           : previous.logs;
         set({ npm: { ...previous, logs, carries: { ...previous.carries, [opId]: carry } } });
+      },
+
+      aiStartRequest(requestId, prompt) {
+        const chat = get().aiChat;
+        set({
+          aiChat: {
+            messages: [
+              ...chat.messages,
+              { id: `${requestId}-user`, role: "user", content: prompt, streaming: false, stopped: false, error: null },
+              { id: requestId, role: "assistant", content: "", streaming: true, stopped: false, error: null },
+            ],
+            requestId,
+            lastPrompt: prompt,
+          },
+        });
+      },
+
+      aiAppendChunk(requestId, text) {
+        const chat = get().aiChat;
+        // A chunk for anything but the in-flight request is dropped. Without this, a late chunk from a request
+        // the user stopped (or from one abandoned by New Chat) would be appended to whatever reply is on screen.
+        if (chat.requestId !== requestId) return;
+        set({
+          aiChat: {
+            ...chat,
+            messages: chat.messages.map((message) =>
+              message.id === requestId ? { ...message, content: message.content + text } : message,
+            ),
+          },
+        });
+      },
+
+      aiFinishRequest(requestId, stopped) {
+        const chat = get().aiChat;
+        if (chat.requestId !== requestId) return;
+        set({
+          aiChat: {
+            ...chat,
+            requestId: null,
+            messages: chat.messages.map((message) =>
+              message.id === requestId ? { ...message, streaming: false, stopped } : message,
+            ),
+          },
+        });
+      },
+
+      aiFailRequest(requestId, error) {
+        const chat = get().aiChat;
+        if (chat.requestId !== requestId) return;
+        set({
+          aiChat: {
+            ...chat,
+            requestId: null,
+            messages: chat.messages.map((message) =>
+              message.id === requestId ? { ...message, streaming: false, error } : message,
+            ),
+          },
+        });
+      },
+
+      aiNewChat() {
+        // `requestId` is cleared with the messages, so chunks from a reply that was still streaming when New Chat
+        // was pressed are dropped by the guards above rather than landing in the fresh conversation.
+        set({ aiChat: initialAiChat() });
       },
 
       receiveSnippets(snippets) {

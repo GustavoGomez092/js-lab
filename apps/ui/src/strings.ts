@@ -379,6 +379,52 @@ export const strings = {
       duplicateKey: t("env.errors.duplicateKey"),
     },
   },
+  /** Spec §14.1: the AI Chat panel. */
+  ai: {
+    title: t("ai.title"),
+    newChat: t("ai.newChat"),
+    stop: t("ai.stop"),
+    send: t("ai.send"),
+    inputLabel: t("ai.inputLabel"),
+    placeholder: t("ai.placeholder"),
+    conversation: t("ai.conversation"),
+    you: t("ai.you"),
+    assistant: t("ai.assistant"),
+    thinking: t("ai.thinking"),
+    stopped: t("ai.stopped"),
+    empty: t("ai.empty"),
+    /**
+     * The header's provider and model line; clicking it opens Settings → AI (spec §14.1).
+     *
+     * Two forms, because a blank `ai.model.<provider>` means "the manifest's default" and only Main knows what
+     * that resolves to. Interpolating an empty string into the two-part form would render a dangling separator.
+     */
+    providerModel: (provider: string, model: string) => t("ai.providerModel", { provider, model }),
+    providerOnly: (provider: string) => t("ai.providerOnly", { provider }),
+    // Spec §14.1: "No provider configured: the panel shows a card with 'Choose a provider'".
+    chooseProvider: t("ai.chooseProvider"),
+    chooseProviderHelp: t("ai.chooseProviderHelp"),
+    // Spec §14.1: each code block's three actions.
+    copy: t("ai.copy"),
+    copied: t("ai.copied"),
+    copyFailed: t("ai.copyFailed"),
+    insertAtCursor: t("ai.insertAtCursor"),
+    replaceEditor: t("ai.replaceEditor"),
+    retry: t("ai.retry"),
+    // Spec §14.3: errors are shown inline with a retry button. One headline per classified kind.
+    errors: {
+      auth: t("ai.errors.auth"),
+      rateLimit: t("ai.errors.rateLimit"),
+      network: t("ai.errors.network"),
+      contextTooLong: t("ai.errors.contextTooLong"),
+      modelNotFound: t("ai.errors.modelNotFound"),
+      http: t("ai.errors.http"),
+      stalled: t("ai.errors.stalled"),
+      tooLarge: t("ai.errors.tooLarge"),
+      notConfigured: t("ai.errors.notConfigured"),
+      unknown: t("ai.errors.unknown"),
+    },
+  },
   snippets: {
     title: t("snippets.title"),
     searchLabel: t("snippets.searchLabel"),
@@ -575,6 +621,7 @@ export const strings = {
       formatting: t("settings.tabs.formatting"),
       appearance: t("settings.tabs.appearance"),
       keybindings: t("settings.tabs.keybindings"),
+      ai: t("settings.tabs.ai"),
       npm: t("settings.tabs.npm"),
       build: t("settings.tabs.build"),
       advanced: t("settings.tabs.advanced"),
@@ -660,6 +707,13 @@ export const strings = {
       },
     },
     fields: {
+      "ai.provider": { label: t("settings.ai.provider.label"), help: t("settings.ai.provider.help") },
+      "ai.model.ollama": { label: t("settings.ai.model.ollama.label"), help: t("settings.ai.model.ollama.help") },
+      "ai.baseUrl.ollama": {
+        label: t("settings.ai.baseUrl.ollama.label"),
+        help: t("settings.ai.baseUrl.ollama.help"),
+      },
+      "ai.includeOutput": { label: t("settings.ai.includeOutput.label"), help: t("settings.ai.includeOutput.help") },
       "run.autoRun": { label: t("settings.run.autoRun.label"), help: t("settings.run.autoRun.help") },
       "run.autoLog": { label: t("settings.run.autoLog.label"), help: t("settings.run.autoLog.help") },
       "run.defaultRuntime": {
@@ -887,6 +941,12 @@ export const strings = {
         none: t("settings.options.decorators.none"),
         "2023-11": t("settings.options.decorators.2023-11"),
         legacy: t("settings.options.decorators.legacy"),
+      },
+      // Spec §14.3's provider table. Only the ids this build implements are offered (see SETTINGS_FIELDS), so
+      // the five unimplemented ones deliberately have no label here -- a label would be a promise.
+      aiProvider: {
+        none: t("settings.options.aiProvider.none"),
+        ollama: t("settings.options.aiProvider.ollama"),
       },
     },
   },

@@ -50,6 +50,7 @@ import { MAX_SHORT_SUBPROCESS_OUTPUT_BYTES } from "./platform/subprocess-output"
 import { runSystemProfiler, SystemFontsService } from "./platform/system-fonts";
 import { captureWindow, windowNumberOf } from "./platform/window-capture";
 import { flushBeforeQuit } from "./quit";
+import { createOllamaAiHandlers } from "./rpc/ai-handlers";
 import { type AppHandlerDeps, createAppHandlers, createSettingsAppHandlers } from "./rpc/app-handlers";
 import { createEnvHandlers } from "./rpc/env-handlers";
 import { createFileHandlers } from "./rpc/file-handlers";
@@ -65,6 +66,7 @@ import { createWorkingDirectoryHandlers } from "./rpc/wd-handlers";
 import { createWebRunnerHandlers } from "./rpc/web-runner-handlers";
 import { createWorkspaceHandlers, mergeHandlers } from "./rpc/workspace-handlers";
 import { createRpcHandlers } from "./rpc-handlers";
+import { SecretStore } from "./secrets/keychain";
 import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
 import { ThemeStore } from "./services/theme-store";
@@ -457,6 +459,18 @@ async function start(): Promise<void> {
         send: {
           imported: (payload) => rpc.send["snippets.imported"](payload),
           exported: (payload) => rpc.send["snippets.exported"](payload),
+        },
+        log,
+      }),
+      // Spec §14.3: every provider request is made HERE, in Main, and the key is read from the Keychain here too
+      // -- the view sends a prompt and receives text. XT-08's store finally has its first consumer.
+      createOllamaAiHandlers({
+        settings,
+        secrets: new SecretStore(),
+        send: {
+          chunk: (payload) => rpc.send["ai.chunk"](payload),
+          done: (payload) => rpc.send["ai.done"](payload),
+          error: (payload) => rpc.send["ai.error"](payload),
         },
         log,
       }),

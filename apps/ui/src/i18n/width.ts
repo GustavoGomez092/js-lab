@@ -101,6 +101,7 @@ export const WIDTH_BUDGETS: Record<string, number> = {
   "settings.tabs.formatting": 16,
   "settings.tabs.appearance": 16,
   "settings.tabs.keybindings": 16,
+  "settings.tabs.ai": 16,
   "settings.tabs.npm": 16,
   "settings.tabs.build": 16,
   "settings.tabs.advanced": 16,

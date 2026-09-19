@@ -1,3 +1,4 @@
+import { AiChatPanel, type AiCodeActions } from "../ai/AiChatPanel";
 import type { MainApi } from "../api";
 import { TranspiledPanel } from "../output/TranspiledPanel";
 import type { SnippetBodyFactory } from "../snippets/body-editor";
@@ -22,6 +23,7 @@ export function SideBar({
   api,
   dialogs,
   actions,
+  aiActions,
   colorize,
   createBody,
 }: {
@@ -30,11 +32,16 @@ export function SideBar({
   api: MainApi;
   dialogs: Pick<Dialogs, "confirm">;
   actions: SnippetActions;
+  /** Spec §14.1: what the AI panel's Insert at Cursor / Replace Editor buttons do. */
+  aiActions: AiCodeActions;
   /** Filled by Task 10 through the Monaco bridge; absent in tests, where the preview falls back to plain text. */
   colorize?: SnippetColorize;
   createBody?: SnippetBodyFactory;
 }) {
   if (panel === "transpiled") return <TranspiledPanel store={store} api={api} />;
+  if (panel === "ai") {
+    return <AiChatPanel store={store} api={api} actions={aiActions} {...(colorize ? { colorize } : {})} />;
+  }
   if (panel === "snippets") {
     return (
       <SnippetsPanel

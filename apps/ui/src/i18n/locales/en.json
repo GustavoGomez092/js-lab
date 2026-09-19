@@ -1,4 +1,40 @@
 {
+  "ai": {
+    "title": "AI Chat",
+    "newChat": "New Chat",
+    "stop": "Stop",
+    "send": "Send",
+    "inputLabel": "Message",
+    "placeholder": "Ask about your code…",
+    "conversation": "Conversation",
+    "you": "You",
+    "assistant": "Assistant",
+    "thinking": "Thinking…",
+    "stopped": "Stopped, part-way through the reply",
+    "empty": "Ask a question about the code in this tab.",
+    "providerModel": "{{provider}} · {{model}}",
+    "providerOnly": "{{provider}}",
+    "chooseProvider": "Choose a provider",
+    "chooseProviderHelp": "Pick an AI provider before asking about your code.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyFailed": "Couldn't copy to the clipboard",
+    "insertAtCursor": "Insert at Cursor",
+    "replaceEditor": "Replace Editor",
+    "retry": "Retry",
+    "errors": {
+      "auth": "The provider rejected the credentials for this request.",
+      "rateLimit": "The provider is rate limiting this request. Try again shortly.",
+      "network": "Couldn't reach the provider.",
+      "contextTooLong": "The request is longer than this model accepts. Try a shorter file or a new chat.",
+      "modelNotFound": "The provider has no such model.",
+      "http": "The provider refused the request.",
+      "stalled": "The provider stopped responding part-way through the reply.",
+      "tooLarge": "The reply grew past the size JSLab will accept.",
+      "notConfigured": "No AI provider is configured.",
+      "unknown": "The request failed."
+    }
+  },
   "app": {
     "name": "JSLab",
     "settingsWindowTitle": "JSLab Settings"
@@ -136,7 +172,8 @@
     "tools": {
       "environmentVariables": "Environment Variables…",
       "npmPackages": "NPM Packages…",
-      "snippets": "Snippets…"
+      "snippets": "Snippets…",
+      "aiChat": "AI Chat…"
     },
     "view": {
       "commandPalette": "Show Command Palette",
@@ -770,6 +807,10 @@
         "pt": "Português",
         "system": "System",
         "zh": "中文"
+      },
+      "aiProvider": {
+        "none": "None",
+        "ollama": "Ollama (Local)"
       }
     },
     "output": {
@@ -891,7 +932,8 @@
       "formatting": "Formatting",
       "general": "General",
       "keybindings": "Keybindings",
-      "npm": "NPM"
+      "npm": "NPM",
+      "ai": "AI"
     },
     "updates": {
       "auto": {
@@ -925,7 +967,29 @@
         "label": "Tab Bar"
       }
     },
-    "windowTitle": "Settings"
+    "windowTitle": "Settings",
+    "ai": {
+      "provider": {
+        "label": "Provider",
+        "help": "Which AI service answers questions about your code. None turns AI Chat off."
+      },
+      "model": {
+        "ollama": {
+          "label": "Ollama Model",
+          "help": "Model name to ask for. Blank uses the default that ships with this version."
+        }
+      },
+      "baseUrl": {
+        "ollama": {
+          "label": "Ollama Base URL",
+          "help": "Blank uses the standard endpoint, http://localhost:11434."
+        }
+      },
+      "includeOutput": {
+        "label": "Send Recent Output",
+        "help": "Include the most recent run output as context, up to 20 KB."
+      }
+    }
   },
   "shell": {
     "activity": "Activity",

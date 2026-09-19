@@ -258,6 +258,9 @@ export const DEFAULT_KEYBINDINGS: readonly KeybindingRule[] = [
   { key: "alt+cmd+o", command: "view.focusOutput" },
   { key: "alt+cmd+e", command: "view.focusEditor" },
   { key: "ctrl+cmd+f", command: "view.toggleFullScreen" },
+  // Spec §14.1: "Panel (`Ctrl+Cmd+I`, activity bar)". Note ⌘I alone is already tools.npmPackages, which is why
+  // the spec puts AI Chat on the ⌃⌘ pair rather than the bare chord.
+  { key: "ctrl+cmd+i", command: "tools.aiChat" },
   { key: "cmd+shift+p", command: "view.commandPalette" },
 ];
 

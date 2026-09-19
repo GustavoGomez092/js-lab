@@ -31,7 +31,45 @@ export function effectiveRuntime(runtime: Runtime): Runtime {
 }
 
 export const UI_LANGUAGES = ["system", "en", "es", "ja", "zh", "pt"] as const;
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
+
+/**
+ * Every AI provider the design names (spec §14.3), in the spec's own table order.
+ *
+ * This is the SEAM, not a claim about what works: it is what `ai.<provider>` Keychain accounts, `models.json`
+ * and Main's adapter registry are all keyed by, so adding a provider is adding an adapter and its two settings
+ * keys rather than touching any of those three lookups.
+ */
+export const AI_PROVIDERS = ["openai", "anthropic", "gemini", "mistral", "ollama", "custom"] as const;
+export type AiProvider = (typeof AI_PROVIDERS)[number];
+
+/**
+ * The providers this build actually implements, exactly as `AVAILABLE_RUNTIMES` does for runtimes -- and for the
+ * same reason that constant exists: offering a choice the app cannot carry out is worse than not offering it.
+ * Ollama is first because it needs no credentials, so it is the one provider testable end to end today.
+ *
+ * `ai.provider` below still ACCEPTS every id in `AI_PROVIDERS`, so a value written by a later build survives a
+ * downgrade and a re-upgrade instead of being repaired away; only what the picker offers is narrowed.
+ */
+export const AVAILABLE_AI_PROVIDERS: readonly AiProvider[] = ["ollama"];
+
+export function isAiProviderAvailable(provider: string): provider is AiProvider {
+  return (AVAILABLE_AI_PROVIDERS as readonly string[]).includes(provider);
+}
+
+/** `ai.provider`'s "not configured yet" value (spec §8 writes it as `null`; see `AI_PROVIDER_CHOICES`). */
+export const AI_PROVIDER_NONE = "none";
+
+/**
+ * What `ai.provider` may hold.
+ *
+ * Spec §8 types this key `enum | null` with a `null` default. `null` is not representable on this wire:
+ * `settingsUpdateParamsSchema` (packages/rpc-schema) accepts only `boolean | number | string` as a setting value,
+ * so a patch setting the provider back to `null` would be rejected by Main and the user could never UNconfigure
+ * a provider. The sentinel `"none"` carries the same meaning through a channel that exists, and keeps the key a
+ * plain enum for the settings field table.
+ */
+export const AI_PROVIDER_CHOICES = [AI_PROVIDER_NONE, ...AI_PROVIDERS] as const;
 /** `build.decorators` (spec §8 Build): standard 2023-11 decorators, TypeScript's legacy decorators, or no decorators. */
 export const DECORATOR_MODES = ["none", "2023-11", "legacy"] as const;
 export type DecoratorMode = (typeof DECORATOR_MODES)[number];
@@ -43,6 +81,14 @@ const bool = (fallback: boolean) => z.boolean().catch(fallback);
 const int = (fallback: number, min: number, max: number) => z.number().int().min(min).max(max).catch(fallback);
 const num = (fallback: number, min: number, max: number) => z.number().min(min).max(max).catch(fallback);
 const text = (fallback: string) => z.string().min(1).max(200).catch(fallback);
+/**
+ * A free-text field whose EMPTY value is meaningful, so it cannot use `text()` above (which requires min(1) and
+ * would repair `""` back to its fallback). Spec §8 gives `ai.baseUrl.<provider>` the default `""` and defines it
+ * as "Blank = the provider's standard endpoint"; `ai.model.<provider>` uses the same convention for "the default
+ * model from the manifest", which is what keeps `models.json` the single owner of that default (spec §14.3)
+ * rather than freezing a model name into every user's settings.json the first time it is written.
+ */
+const blankable = (max: number) => z.string().max(max).catch("");
 const choice = <const T extends readonly [string, ...string[]]>(values: T, fallback: T[number]) =>
   z.enum(values).catch(fallback);
 
@@ -129,6 +175,22 @@ export const settingsSchema = z.looseObject({
     allowInstallScripts: bool(false),
     autoInstallTypes: bool(false),
   }),
+  /**
+   * Spec §8 (AI) and §14. Only the keys this build can honour are present: the Ollama slice of the
+   * `ai.model.<provider>` / `ai.baseUrl.<provider>` families. A second provider adds its own two keys here and a
+   * field apiece in `apps/ui/src/settings/fields.ts` -- nothing else in the settings machinery has to move.
+   *
+   * The API key is deliberately absent: spec §14.3 keeps keys in the Keychain (account `ai.<provider>`), never in
+   * settings.json, which is read and written in the clear and copied verbatim into the debug report.
+   */
+  ai: section({
+    provider: choice(AI_PROVIDER_CHOICES, AI_PROVIDER_NONE),
+    // Dotted field names, so the key really is `ai.model.ollama` as spec §8 writes it. `readSetting` and
+    // `settingPatch` split a key at its FIRST dot for exactly this reason.
+    "model.ollama": blankable(200),
+    "baseUrl.ollama": blankable(2048),
+    includeOutput: bool(true),
+  }),
   build: section({
     decorators: choice(DECORATOR_MODES, "2023-11"),
     pipelineOperator: bool(false),
@@ -153,6 +215,7 @@ export const SETTINGS_SECTIONS = [
   "view",
   "updates",
   "npm",
+  "ai",
   "build",
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -180,14 +243,28 @@ export function mergeSettings(current: Settings, patch: DeepPartial<Settings>): 
   return settingsSchema.parse(deepMerge(current, patch));
 }
 
+/**
+ * A setting key split at its FIRST dot: the section, and the field name within it -- which may itself contain
+ * dots (`ai.model.ollama` is the field `model.ollama` of section `ai`, spec §8).
+ *
+ * `key.split(".")` destructured as `[section, field]` was silently wrong for such a key: it yielded the field
+ * `model`, which no section holds, so `readSetting` returned `undefined` and `settingPatch` built a patch that
+ * wrote the WRONG key and dropped the provider entirely. Every existing key has exactly one dot, so this is
+ * identical to the old behaviour for all of them.
+ */
+function splitSettingKey(key: SettingKey): [SettingsSection, string] {
+  const dot = key.indexOf(".");
+  return [key.slice(0, dot) as SettingsSection, key.slice(dot + 1)];
+}
+
 export function readSetting(settings: Settings, key: SettingKey): unknown {
-  const [sectionName, field] = key.split(".") as [SettingsSection, string];
+  const [sectionName, field] = splitSettingKey(key);
   const values = settings[sectionName] as Record<string, unknown> | undefined;
   return values && Object.hasOwn(values, field) ? values[field] : undefined;
 }
 
 export function settingPatch(key: SettingKey, value: unknown): DeepPartial<Settings> {
-  const [sectionName, field] = key.split(".") as [SettingsSection, string];
+  const [sectionName, field] = splitSettingKey(key);
   return { [sectionName]: { [field]: value } } as DeepPartial<Settings>;
 }
 

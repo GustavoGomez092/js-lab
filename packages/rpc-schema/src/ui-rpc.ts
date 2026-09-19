@@ -660,6 +660,95 @@ export const settingsUpdateParamsSchema = z.object({
 });
 export type SettingsUpdateParams = z.infer<typeof settingsUpdateParamsSchema>;
 
+// ---------- TL-18/TL-19/TL-21: AI chat (spec §14) ----------
+
+/**
+ * One turn of a conversation. `system` never crosses this wire in the UI → Main direction -- the system prompt is
+ * bundled with the app (spec §14.2) and built in Main, so a renderer cannot replace the assistant's instructions.
+ */
+export const AI_ROLES = ["user", "assistant"] as const;
+export type AiRole = (typeof AI_ROLES)[number];
+export interface AiMessage {
+  role: AiRole;
+  content: string;
+}
+
+/** One message's text on the wire. Main trims history to the model's budget; this only bounds a single turn. */
+export const MAX_AI_MESSAGE_CHARS = 100_000;
+/** Most turns one request may carry. Main trims oldest-first inside this (spec §14.2). */
+export const MAX_AI_HISTORY_MESSAGES = 200;
+/**
+ * The run output the UI may attach (spec §14.2 caps what is SENT to the model at 20 KB).
+ *
+ * Wider than that budget on purpose: the UI sends the tail of the output and Main owns the 20 KB truncation, so
+ * the cap that reaches the model is decided in one place. Without a wire bound, though, a run that printed
+ * megabytes would ship all of it to Main just to be thrown away.
+ */
+export const MAX_AI_OUTPUT_CHARS = 200_000;
+
+export const aiMessageSchema = z.object({
+  role: z.enum(AI_ROLES),
+  content: z.string().max(MAX_AI_MESSAGE_CHARS),
+});
+
+/**
+ * `ai.send` (UI → Main). Carries the request's whole context, because Main holds none of it: the conversation
+ * lives in the UI store and the run output exists only in the renderer.
+ *
+ * `requestId` is what `ai.chunk` / `ai.done` / `ai.error` are correlated by, and what `ai.stop` names. A reply
+ * for a request the panel has abandoned is therefore identifiable and dropped, rather than being appended to
+ * whatever conversation happens to be on screen.
+ */
+export const aiSendParamsSchema = z.object({
+  requestId: z.uuid(),
+  tabId,
+  prompt: z.string().min(1).max(MAX_AI_MESSAGE_CHARS),
+  code: z.string().max(MAX_TEXT_CHARS),
+  language: z.enum(LANGUAGES),
+  runtime: z.enum(RUNTIMES).catch(DEFAULT_RUNTIME),
+  /** The tab's working-directory name (not its path): spec §14.2 marks the code with the WD name. */
+  workingDirectoryName: z.string().max(200).optional(),
+  /** Rendered run output, already tail-trimmed by the UI. Absent when `ai.includeOutput` is off (spec §8). */
+  output: z.string().max(MAX_AI_OUTPUT_CHARS).optional(),
+  history: z.array(aiMessageSchema).max(MAX_AI_HISTORY_MESSAGES),
+});
+export type AiSendParams = z.infer<typeof aiSendParamsSchema>;
+
+/** `ai.stop`: abort the named in-flight request. Really aborts the HTTP request (spec §14.1's Stop button). */
+export const aiStopParamsSchema = z.object({ requestId: z.uuid() });
+
+/**
+ * How an AI request failed, classified so the panel can say something useful and offer Retry (spec §14.3 names
+ * 401, 429, network and context-too-long). Same shape as `NpmErrorKind`: Main classifies, the UI translates -- so
+ * no provider message has to be a translated string coming out of Main.
+ */
+export const AI_ERROR_KINDS = [
+  "auth",
+  "rateLimit",
+  "network",
+  "contextTooLong",
+  "modelNotFound",
+  "http",
+  /** The stream stopped producing bytes without ending (spec-silent; see `ai/stream.ts`). */
+  "stalled",
+  /** The response exceeded the streaming byte cap without ending. */
+  "tooLarge",
+  /** No provider configured, or one this build does not implement. */
+  "notConfigured",
+  "unknown",
+] as const;
+export type AiErrorKind = (typeof AI_ERROR_KINDS)[number];
+
+export interface AiError {
+  requestId: string;
+  kind: AiErrorKind;
+  /**
+   * The provider's own words, for the detail line. Never a key and never a translated string: it is a remote
+   * server's text, so the panel shows it as data beneath a translated headline.
+   */
+  detail: string;
+}
+
 export const E2E_UI_METHODS = ["type", "key", "command", "state", "output"] as const;
 export type E2EUiMethod = (typeof E2E_UI_METHODS)[number];
 
@@ -850,6 +939,13 @@ export type MainMessages = {
    * this message is how the catalogue served to Settings can say which of its rows the running window really has.
    */
   "commands.published": { ids: string[] };
+  /**
+   * Spec §14.3: "the UI sends `ai.send`". A message and not a request, because the answer is a STREAM -- the
+   * reply arrives as many `ai.chunk`s and one terminator, which no single request/response pair can express.
+   */
+  "ai.send": AiSendParams;
+  /** Spec §14.1's Stop button. Aborts the real HTTP request, so the model stops being billed/computed. */
+  "ai.stop": { requestId: string };
 };
 
 /** Messages received by the UI, sent by Main. */
@@ -918,4 +1014,12 @@ export type ViewMessages = {
    * `webRunner.ensure` for a replacement is never sent ahead of the `webRunner.destroy` for what it replaces.
    */
   "webRunner.destroy": { tabId: string; generation: number };
+  /** Spec §14.3: one piece of the assistant's reply. `text` is appended verbatim, in arrival order. */
+  "ai.chunk": { requestId: string; text: string };
+  /**
+   * The stream ended. `stopped` is true when it ended because the user pressed Stop, so the panel can mark the
+   * reply as interrupted rather than complete -- a distinction `ai.done` alone cannot carry.
+   */
+  "ai.done": { requestId: string; stopped: boolean };
+  "ai.error": AiError;
 };

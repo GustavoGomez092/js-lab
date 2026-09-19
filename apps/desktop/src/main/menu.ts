@@ -218,6 +218,7 @@ export function buildMenu(model: MenuModel): MenuItem[] {
         item("tools.npmPackages"),
         item("tools.environmentVariables"),
         item("tools.snippets"),
+        item("tools.aiChat"),
         separator,
         item("snippets.import"),
         item("snippets.export"),

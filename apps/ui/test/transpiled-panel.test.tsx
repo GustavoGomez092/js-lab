@@ -108,12 +108,15 @@ describe("transpiled output panel (spec §7.4)", () => {
    * is exactly how M5b Task 9's original rewrite would have deleted M5a's transpiled panel -- with no type error and
    * no merge conflict. This test is what makes a dropped branch visible.
    */
-  test("the side bar renders a panel for every member of the union, and the placeholder only for AI Chat", async () => {
+  test("the side bar renders a panel for every member of the union, and no branch swallows another", async () => {
     const { store, api } = setup();
     const dialogs = { confirm: async () => "cancel" };
     const actions = { insert: () => {}, insertInNewTab: async () => {} };
+    const aiActions = { insertAtCursor: () => {}, replaceEditor: () => {} };
     const show = (panel: AppState["sideBarPanel"]) =>
-      render(<SideBar panel={panel} store={store} api={api} dialogs={dialogs} actions={actions} />).container;
+      render(
+        <SideBar panel={panel} store={store} api={api} dialogs={dialogs} actions={actions} aiActions={aiActions} />,
+      ).container;
 
     // Seeded with empty divs rather than null, so a render that never happened FAILS these assertions instead of
     // satisfying them: an empty div has neither a panel nor the placeholder text.
@@ -136,13 +139,21 @@ describe("transpiled output panel (spec §7.4)", () => {
     expect(snippets.querySelector(".snippets-panel")).not.toBeNull();
     expect(snippets.querySelector(".transpiled-panel")).toBeNull();
 
-    // The placeholder is AI Chat's alone now: "snippets" stopped being a placeholder when the panel landed.
-    expect(ai.textContent).toContain(strings.shell.sideBarPlaceholder);
+    // The AI branch (TL-18). It used to be the placeholder; now it is a real panel, so this asserts the panel
+    // rather than the copy -- and that it swallowed neither of the two above.
+    expect(ai.querySelector(".ai-panel")).not.toBeNull();
     expect(ai.querySelector(".transpiled-panel")).toBeNull();
     expect(ai.querySelector(".snippets-panel")).toBeNull();
-    // ...and the two real panels are NOT the placeholder, so a fallback that swallowed a branch fails here too.
-    expect(transpiled.textContent).not.toContain(strings.shell.sideBarPlaceholder);
-    expect(snippets.textContent).not.toContain(strings.shell.sideBarPlaceholder);
+
+    /**
+     * The placeholder now belongs to NO member of the union: every branch returns before the final fallback, so
+     * that fallback is exactly what a forgotten branch would fall through to. Asserting it is unreachable is
+     * therefore the same guard this test always was, stated against today's code -- if a future rewrite drops a
+     * branch, that panel renders the placeholder and one of these three fails.
+     */
+    for (const container of [transpiled, snippets, ai]) {
+      expect(container.textContent).not.toContain(strings.shell.sideBarPlaceholder);
+    }
 
     // Every panel keeps the `side-bar` class: apps/ui/isolated/app.test.tsx decides the side bar is open by it.
     for (const container of [transpiled, snippets, ai]) {

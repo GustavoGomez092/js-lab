@@ -99,6 +99,92 @@
     "noValue": "Logpoint has no value to log on this line",
     "tooltip": "Logpoint — this line's value is shown in the output"
   },
+  "main": {
+    "cli": {
+      "installFailed": "Couldn't install the jslab command: {{message}}"
+    },
+    "dialogs": {
+      "startupFailed": "JSLab couldn't start: {{message}}"
+    },
+    "files": {
+      "bufferUnreadable": "JSLab couldn't read this tab's contents, so it won't save over the file on disk.",
+      "confirmExpired": "That save request expired. Save again.",
+      "expired": "That file request expired. Open the file again.",
+      "notText": "{{name}} isn't a text file.",
+      "openInAnotherTab": "{{name}} is already open in another tab.",
+      "tabGone": "That tab is no longer open.",
+      "tooLarge": "{{name}} is larger than 50 MB and can't be opened.",
+      "unreadable": "{{name}} couldn't be read."
+    },
+    "keybindings": {
+      "fileInvalid": "keybindings.json isn't valid JSON. Open it, fix it, then relaunch JSLab.",
+      "saveFailed": "Couldn't save your keybindings. Your changes are still here."
+    },
+    "log": {
+      "cliSocket": "jslab CLI socket listening on {{path}}",
+      "cliSocketFailed": "Couldn't start the jslab CLI socket; the jslab command can't reach this instance",
+      "e2eEnabled": "E2E automation enabled on {{path}}",
+      "keybindingsInvalid": "keybindings.json at {{path}} is not valid JSON; using the default keymap",
+      "loginShellFailed": "Couldn't read the login shell environment ({{reason}}); using the app's environment",
+      "noticeFailed": "Couldn't show the unexpected-error notice",
+      "npmHomeNpmrcMoved": "Moved an .npmrc found in npm-home to {{path}}; npm operations never read one there",
+      "npmManifestUnreadable": "npm's package.json at {{path}} could not be read as JSON",
+      "npmNpmrcTooLarge": "npm's .npmrc at {{path}} is {{size}} bytes, over the {{maxBytes}}-byte limit, and was not read",
+      "npmNpmrcUnreadable": "npm's .npmrc at {{path}} could not be read",
+      "npmOperationEventFailed": "npm operation event could not be delivered",
+      "npmPostChangeFailed": "npm post-change step failed",
+      "npmTypesCheckFailed": "Couldn't check the registry for types",
+      "quitFlushFailed": "Couldn't save the session and settings before quitting",
+      "quitFlushTimedOut": "Couldn't save the session and settings within {{timeoutMs}} ms before quitting; quitting anyway",
+      "relaunchFailed": "Could not relaunch JSLab after Restart in Safe Mode; quitting without reopening",
+      "restartRequested": "Restart in Safe Mode requested",
+      "safeMode": "starting in Safe Mode ({{reason}})",
+      "settingsWriteFailed": "Couldn't save settings.json",
+      "settingsWriteTimedOut": "settings.json write did not finish within {{timeoutMs}} ms",
+      "startupDialogFailed": "startup failure dialog could not be shown",
+      "startupFailed": "startup failed",
+      "startupLogFailed": "the startup-failure log call itself failed",
+      "themeUnreadable": "Couldn't read the selected theme file",
+      "uncaughtException": "Uncaught exception",
+      "unhandledRejection": "Unhandled rejection",
+      "vendorCacheInvalidateFailed": "Couldn't clear the web runner's vendor cache after a package change"
+    },
+    "notices": {
+      "buffersUnreadable_one": "{{count}} tab's contents couldn't be read, so it opened empty and read-only. JSLab won't save it over its file.",
+      "buffersUnreadable_other": "{{count}} tabs' contents couldn't be read, so they opened empty and read-only. JSLab won't save them over their files.",
+      "copySaved": " A copy was saved as {{file}}",
+      "sessionNewer": "session.json was written by a newer version of JSLab (version {{version}}). Tab changes in this window won't be saved to it.",
+      "sessionReset": "Your tabs couldn't be restored because session.json was unreadable.",
+      "sessionRestored": "Your tabs were restored from the backup because session.json was unreadable.",
+      "sessionRestoredMissing": "Your tabs were restored from the backup because session.json was missing.",
+      "settingsNewer": "settings.json was written by a newer version of JSLab (version {{version}}). Changes made in this window won't be saved to it.",
+      "settingsReset": "Settings were reset because the file was unreadable.",
+      "settingsRestored": "Settings were restored from the backup because the file was unreadable.",
+      "settingsRestoredMissing": "Settings were restored from the backup because settings.json was missing.",
+      "settingsTooLarge": "settings.json is too large for JSLab to save ({{bytes}} bytes; the limit is {{maxBytes}}). Changes made in this window won't be saved to it and will be lost when JSLab restarts. Choose Help → Copy Debug Log to find the file.",
+      "tabsDropped_one": "{{count}} tab in session.json couldn't be read and were skipped. Their buffer files were kept.",
+      "tabsDropped_other": "{{count}} tabs in session.json couldn't be read and were skipped. Their buffer files were kept.",
+      "unexpectedError": "Something went wrong. Choose Help → Copy Debug Log to report it."
+    },
+    "runs": {
+      "workingDirectoryNotFound": "Working directory not found: {{path}}"
+    },
+    "snippets": {
+      "tooLarge": "That file is larger than 5 MB, so it isn't a snippet library."
+    },
+    "themes": {
+      "builtinName": "JSLab already has a built-in theme with that name. Rename the theme and import it again.",
+      "lowContrastSyntax": "Some of its syntax colours are hard to read on its editor background.",
+      "notJson": "That file isn't a valid VS Code theme.",
+      "pickExpired": "That import expired. Choose the file again.",
+      "semanticDropped": "Its semantic token colours aren't supported, so some code may look plainer.",
+      "tooLarge": "That file is too large to import.",
+      "unreadable": "That theme file couldn't be read."
+    },
+    "window": {
+      "settingsTitle": "JSLab Settings"
+    }
+  },
   "notices": {
     "copyDebugLog": "Copy Debug Log",
     "dismissAll": "Dismiss all"
@@ -810,7 +896,8 @@
     "renameTitle": "Rename Tab",
     "reveal": "Reveal in Finder",
     "save": "Rename",
-    "unsaved": "Unsaved changes"
+    "unsaved": "Unsaved changes",
+    "untitled": "Untitled"
   },
   "themes": {
     "cancel": "Cancel",

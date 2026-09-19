@@ -69,7 +69,7 @@ import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
 import { ThemeStore } from "./services/theme-store";
 import { startupNotices } from "./startup-notices";
-import { strings } from "./strings";
+import { installStrings, strings } from "./strings";
 import { afterUiFlush, createUiFlushHandlers, createUiFlushWaiter } from "./ui-flush";
 import { onReload, shouldReloadView } from "./ui-watchdog";
 import { type DisplayInfo, displayForFrame, frameToSave, restoreFrame } from "./windows/frame-restore";
@@ -137,7 +137,10 @@ const errorPolicy = createErrorPolicy({
   // `ffi.request.showMessageBox`) shows a native dialog independent of any BrowserWindow -- exactly what's needed
   // here, since startup can fail before a window exists.
   showFatal: async (message) => {
-    await Utils.showMessageBox({ type: "error", title: "JSLab", message: strings.dialogs.startupFailed(message) });
+    // Before resolveAppPaths, so there is no translator yet -- and a startup that failed this early may have
+    // failed at reading the bundle the locale files themselves live in. English is the honest fallback here
+    // (spec §20: one dialog, then exit 1).
+    await Utils.showMessageBox({ type: "error", title: "JSLab", message: `JSLab couldn't start: ${message}` });
   },
   // Utils.quit() itself falls back to process.exit() when native FFI isn't available (see Utils.ts), and returns
   // false only if a quit is already in flight; process.exit covers that remaining case.
@@ -156,6 +159,13 @@ async function start(): Promise<void> {
     execPath: process.execPath,
     env: process.env,
   });
+
+  // Spec §17, the first of two installs. Main's strings have to resolve before `createMainServices` below, which
+  // can raise a settings notice while it opens the stores -- and that is strictly earlier than
+  // `settings.current.app.uiLanguage`, the setting naming the user's language, can possibly be read. The system
+  // locale is the honest answer until then; the second install below corrects it if the user chose one explicitly.
+  const systemLocale = Intl.DateTimeFormat().resolvedOptions().locale || process.env.LANG;
+  installStrings(createTranslator({ dir: paths.localesDir, locale: resolveLocale("system", systemLocale) }));
 
   // Spec §18: env.json values are masked in logs and the debug report once the env store is open.
   let envSecrets: () => readonly string[] = () => [];
@@ -233,6 +243,12 @@ async function start(): Promise<void> {
     onNpmChanged: (list) => rpc.send["npm.changed"](list),
   });
   const { settings, session, env, npm, types, runLock, safeMode, transform, spares, coordinator } = services;
+  // Spec §17: fixed for the life of this launch, which is what "changing the language needs a restart" means.
+  // Settings are open now, so the user's own choice replaces the system-locale guess installed above.
+  const locale = resolveLocale(settings.current.app.uiLanguage, systemLocale);
+  // Main's own `t()`, reading the very locale files the UI ships (AppPaths.localesDir).
+  const t = createTranslator({ dir: paths.localesDir, locale });
+  installStrings(t);
   envSecrets = () => env.secrets();
   if (settings.recovered !== "none") log(`settings.json recovered from ${settings.recovered}`);
   if (session.recovered !== "none") log(`session.json recovered from ${session.recovered}`);
@@ -536,15 +552,7 @@ async function start(): Promise<void> {
     env: process.env,
     probe: (target, signal) => fetch(target, { method: "HEAD", signal }),
   });
-  // Spec §17: fixed for the life of this launch, which is what "changing the language needs a restart" means.
-  const locale = resolveLocale(
-    settings.current.app.uiLanguage,
-    Intl.DateTimeFormat().resolvedOptions().locale || process.env.LANG,
-  );
   const localizedUrl = withLocale(url, locale);
-  // Spec §17: Main's own `t()`, reading the very locale files the UI ships (AppPaths.localesDir). Fixed for the
-  // life of this launch, like `locale` itself.
-  const t = createTranslator({ dir: paths.localesDir, locale });
   const displays = (): DisplayInfo[] => Screen.getAllDisplays();
   // A blocked web or mail link opens in the default browser; E2E runs record it instead (never the user's browser).
   const openExternal = (link: string) =>

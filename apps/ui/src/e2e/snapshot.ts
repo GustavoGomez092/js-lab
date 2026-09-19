@@ -12,6 +12,7 @@ import { filterCounts } from "../output/filters";
 import { entryToText } from "../output/text";
 import { initialOutput, visibleEntries } from "../state/output";
 import type { AppState } from "../state/store";
+import { strings } from "../strings";
 
 export interface TabSnapshot {
   id: string;
@@ -83,8 +84,8 @@ export function snapshotState(state: AppState): UiSnapshot {
     return [
       {
         id,
-        title: deriveTitle(tab, code),
-        label: tabLabel(deriveTitle(tab, code), tab.workingDirectory),
+        title: deriveTitle(tab, code, strings.tabs.untitled),
+        label: tabLabel(deriveTitle(tab, code, strings.tabs.untitled), tab.workingDirectory),
         workingDirectory: tab.workingDirectory,
         titleIsCustom: tab.titleIsCustom,
         language: tab.language,

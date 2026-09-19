@@ -34,12 +34,17 @@ const NON_WHITESPACE = /\S/g;
  * Custom title, then file name, then the first non-blank line trimmed to TITLE_MAX. The scan stops at that line
  * (FB-I2): it finds the first non-whitespace character and that line's `\n`, instead of splitting the whole buffer.
  */
-export function deriveTitle(tab: Pick<TabState, "title" | "titleIsCustom" | "filePath">, code: string): string {
+export function deriveTitle(
+  tab: Pick<TabState, "title" | "titleIsCustom" | "filePath">,
+  code: string,
+  /** Spec §17: `packages/shared` has no translator, so the caller supplies the localized fallback. */
+  untitled = "Untitled",
+): string {
   if (tab.titleIsCustom && tab.title.trim()) return tab.title;
   if (tab.filePath) return baseName(tab.filePath);
   NON_WHITESPACE.lastIndex = 0;
   const found = NON_WHITESPACE.exec(code);
-  if (!found) return "Untitled";
+  if (!found) return untitled;
   const start = found.index;
   const newline = code.indexOf("\n", start);
   const end = newline < 0 ? code.length : newline;

@@ -72,6 +72,11 @@ export const strings = {
     renameHelp: t("tabs.renameHelp"),
     cancel: t("tabs.cancel"),
     save: t("tabs.save"),
+    /**
+     * Spec §17: the derived title of an empty, fileless tab. `deriveTitle` lives in `packages/shared`, which has
+     * no translator of its own, so it takes this as a parameter rather than hard-coding the English.
+     */
+    untitled: t("tabs.untitled"),
     // Task 15 (spec §5.12, EX-35): the per-tab audio indicator's accessible name, carrying the tab title so a
     // screen reader user with several tabs open can tell which one it's about (the motivating scenario for this
     // whole task) -- and its current state (playing vs. muted), announced honestly, not just drawn.

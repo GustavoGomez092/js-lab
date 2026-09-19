@@ -202,6 +202,7 @@ Details are in the [roadmap](docs/superpowers/plans/2026-09-12-jslab-roadmap.md)
 
 ## Docs
 
+- [User manual](docs/user/README.md)
 - [Design specification](docs/superpowers/specs/2026-09-12-jslab-design.md)
 - [Feature parity checklist](docs/parity.md)
 - [M2 manual QA checklist](docs/qa/m2-checklist.md)

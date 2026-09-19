@@ -30,10 +30,15 @@ tests that task adds — not a figure remembered from another milestone.
 > With `hutch` absent from `PATH` the postinstall exits 1, which aborts the install and leaves a half-linked
 > tree — `happy-dom` dangles and the UI suites then report a plausible-looking but fake test count.
 
-The suite gate is the **real** two-Bun form. `bun14 run test` uses 1.4.0 only as the task runner, while each
-package's script is `bun test ./test`, so the inner binary would still come from `PATH`. Use a bare
-`bun run test` under the toolchain `PATH` above, never a bare root `bun test` (a single process cross-contaminates
-globals and invents ~250 failures).
+The suite gate is the **real** two-Bun form. Invoking the root task with a 1.4.0 binary *by absolute path* would
+use 1.4.0 only as the task runner, while each package's script is `bun test ./test`, so the inner binary would
+still come from `PATH`. Use a bare `bun run test` under the toolchain `PATH` above, never a bare root `bun test`
+(a single process cross-contaminates globals and invents ~250 failures).
+
+> [!NOTE]
+> An earlier draft of this paragraph named a `bun14` command. **There is no such command on this machine**
+> (`which bun14` finds nothing), and there never needs to be: putting the toolchain directory on `PATH`, as the
+> export above does, is what makes both the task runner and every inner `bun test` 1.4.0.
 
 - **`bun run lint --max-diagnostics=300`**: exit 0 — **14 warnings, 16 infos** (unchanged from the M4 baseline).
 - **`bun run typecheck`**: exit 0 across **13 packages**, each reporting individually.
@@ -224,3 +229,73 @@ Never run the Hutch installer, `hutch init` or `hutch upgrade`.
       both are mostly untranslated. They must read as clean English, never as dotted keys or blanks.
 - [ ] **Q6 Unknown system locale.** With `app.uiLanguage: "system"` on a Mac set to a language JSLab does not ship
       (German, say), the app opens in English and does not warn.
+
+## Phase B exit gate
+
+Measured on `db3fef1` — this branch with `integration/all-fixes` (`29c86da`) merged in, so these are the numbers
+for the tree the milestone actually exits on. The machine held no other test or e2e runner during any leg
+(asserted with `pgrep -x bun` in the same invocation as each run; the three long-lived `bun dev` servers, an
+orphaned verdaccio, and the user's live app from `.worktrees/jslab-build` are not runners and were excluded).
+
+| Gate | Result |
+| --- | --- |
+| `bun run lint --max-diagnostics=300` | exit 0 — **16 warnings, 21 infos**, 672 files, Biome 2.5.13 |
+| `bun run typecheck` | exit 0, every package reporting individually |
+| `bun run i18n:check` | exit 0 — **761** keys, coverage `es 23  ja 25  zh 25  pt 24` |
+| `bun run test` (Bun 1.3.13) | **2388 ran, 2383 pass, 5 fail** |
+| `bun run test` (Bun 1.4.0) | **2388 ran, 2388 pass, 0 fail** |
+| `bun run e2e` (Bun 1.3.13) | exit 0 — **101 pass, 0 fail** across **37** scenario files, 267 `expect()` calls, 1922 s |
+
+**The lint figures deliberately differ from the Phase A baseline recorded above** (14 warnings, 16 infos). Biome
+reports **16 warnings and 21 infos** on this tree: a drift of +2 warnings and +5 infos accumulated across Phase
+B's extraction sweep (Tasks 8-14), not introduced by this task — `packages/e2e/scenarios/i18n.test.ts` checks
+clean on its own (`biome check`, exit 0, no diagnostics). Both numbers are real measurements of different trees;
+they are reconciled here so the two sections do not silently contradict each other.
+
+### Both toolchain legs ran, and the banners differ
+
+Leg A printed `bun test v1.3.13` and leg B `bun test v1.4.0`, each across all 15 package invocations with no
+mixed banner in either log. That check is the only guard against a gate that silently ran one toolchain twice,
+and it passes.
+
+> [!IMPORTANT]
+> **There is no toolchain limitation here, and an earlier ruling in this milestone wrongly recorded one.** The
+> claim was that no Bun 1.4.0 exists on this machine, reached from four true-but-incomplete lookups (`which bun`
+> → 1.3.13, the Homebrew Cellar → only 1.3.13, `~/.bun/bin/bun` → 1.3.12, `~/.hutch/bin` → no bun). All four miss
+> the hutch toolchain, which is deliberately *off* `PATH` and opted into per command — exactly as the
+> `export PATH="$HOME/.hutch/toolchains/bun/1.4.0/macos-arm64:…"` line in the baseline section at the top of this
+> file already prescribes. `~/.hutch/toolchains/bun/1.4.0/macos-arm64/bun --version` prints **1.4.0**. Four
+> wrong places agreeing is not corroboration.
+
+### The five failures, and what 1.4.0 does to them
+
+Identical under both legs in name and count, all in `@jslab/desktop`:
+
+- 4 × `subprocess output caps (R-M5b-S3)` — `saveDialog`, `runSystemProfiler`, `captureWindow` and
+  `readModifierFlags` each "refuses a flooding … WITHOUT buffering its output"
+- 1 × `the browser export condition` — "a `browser` map entry of `false` bundles an empty module instead of the
+  package"
+
+**They pass under 1.4.0.** `@jslab/desktop` reports 912 pass / 5 fail under 1.3.13 and 917 pass / 0 fail under
+1.4.0 — the same five tests, the whole difference between the two legs. This milestone measured that directly
+rather than inheriting it: the standing description of these as "1.3.13 artifacts that pass under 1.4.0" came
+from an earlier session's probe, and it is now confirmed on this tree.
+
+### The E2E suite, and what its log does and does not show
+
+Built in the prescribed order before the run — `bun run build:cli` at the repo root, then `hutch run build:dev`
+in `apps/desktop` — because `bun run e2e` builds nothing, and a stale bundle fails fast while looking healthy.
+
+`packages/e2e/scenarios/i18n.test.ts` is one of the 37 files (36 before this task), and was also measured on its
+own: **3 pass, 0 fail, 11 `expect()` calls, 93.77 s**.
+
+> [!NOTE]
+> Bun's default reporter prints **no line for a passing test** — only failures, plus any stdout a test writes
+> (which is why the webview rect dumps appear and nothing else does). The absence of a scenario's name from the
+> run log is therefore not evidence about that scenario in either direction, and a grep for one is not a check.
+> What the aggregate does establish: all 37 files were collected, nothing was skipped or marked todo, and
+> nothing failed.
+
+The `settingsRecovered` flake — "a corrupt settings.json is recovered with a notice naming the saved copy" — did
+**not** recur in this run; it is among the 101 passes. Nothing about its 8s/15s race has changed, so it can still
+bite a future run. That race is precisely why the i18n scenario asserts no transient notice of its own.

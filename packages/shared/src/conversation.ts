@@ -87,6 +87,15 @@ export function parseConversation(input: unknown): ConversationParseResult {
   // that is not a version) is read as the version 1 it is treated as above, rather than refused for a field the
   // parser has already decided the value of. The schema itself stays strict -- no `.catch()` default, which
   // would make every other malformed version silently acceptable too.
+  //
+  // Worth knowing before the next mutation run: because this line repairs the version FIRST, and
+  // `parseConversation` is the only thing that ever parses with `conversationSchema` (nothing outside this file
+  // does), the schema's `version: z.number().int().min(1)` can never reject anything in practice. Deleting that
+  // constraint therefore SURVIVES mutation -- by design, not for want of a test. The behaviour that is pinned is
+  // the repair itself: see "a malformed version ... is repaired to 1" in `conversation.test.ts`, which uses the
+  // fractional/zero/negative inputs that tell the two layers apart. Remove BOTH and a `1.5` file loads as version
+  // 1.5, setting `newerThanBuild` -- and a file flagged newer is never written back, so the conversation quietly
+  // stops persisting.
   let raw: RawConversation = { ...input, version: fileVersion };
   for (let version = fileVersion; version < CONVERSATION_VERSION; version++) {
     const migrate = CONVERSATION_MIGRATIONS[version];

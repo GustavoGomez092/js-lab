@@ -38,6 +38,30 @@ describe("the conversation file (spec §14.3)", () => {
   });
 
   /**
+   * The repair and the schema shadow each other, so deleting EITHER alone leaves every other test here passing.
+   * `parseConversation` rewrites a malformed version to 1 before `conversationSchema` sees it, and the schema's
+   * `version: z.number().int().min(1)` would reject exactly what the repair fixes. The case above cannot tell
+   * them apart, because a MISSING version is the one input both layers already treat identically.
+   *
+   * These inputs do tell them apart, so this is the test that pins the repair. It matters because the two layers
+   * disagree about the outcome: with both gone a `1.5` file loads as version 1.5, which makes `newerThanBuild`
+   * true -- and a file flagged newer is deliberately never written back, so the conversation would silently stop
+   * persisting -- while `0` and `-3` would throw, which `loadJson` reads as corruption and answers with an empty
+   * conversation, discarding the user's history.
+   */
+  test("a malformed version -- fractional, zero, negative or not a number -- is repaired to 1, never flagged newer", () => {
+    for (const version of [1.5, 0, -3, "x", true, null]) {
+      const { fileVersion, newerThanBuild, conversation } = parseConversation({
+        version,
+        messages: [turn("a", "hi")],
+      });
+      // `version` rides along in both objects purely so a failure names the input that broke.
+      expect({ version, fileVersion, newerThanBuild }).toEqual({ version, fileVersion: 1, newerThanBuild: false });
+      expect(conversation.messages).toHaveLength(1);
+    }
+  });
+
+  /**
    * A newer JSLab's file is READ but flagged, so `ConversationStore` can decline to write it back. Deliberately
    * `CONVERSATION_VERSION + 1` rather than a literal: written as a literal it would silently stop being a
    * *newer* file at the next bump, exactly as the settings suite records happening to its own probe.

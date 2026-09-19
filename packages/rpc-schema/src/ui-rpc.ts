@@ -488,6 +488,12 @@ export const STARTUP_NOTICE_IDS = [
    * the UI re-validates before showing (FA-I3), so this id has to be listed here or the install result is dropped.
    */
   "cliInstall",
+  /**
+   * Spec §17: "Changing the language needs a restart (a notice is shown)." Raised by `settings.onChange` in the
+   * main window, where the menus built in the old language still are — the Settings window's own field carries a
+   * static "Restart required" badge, but the user is looking at the menus.
+   */
+  "languageChanged",
 ] as const;
 
 export const NOTICE_SEVERITIES = ["info", "warning", "error"] as const;
@@ -509,6 +515,10 @@ export const DEFAULT_NOTICE_SEVERITY: Record<(typeof STARTUP_NOTICE_IDS)[number]
   settingsRecovered: "info",
   sessionRecovered: "info",
   cliInstall: "info",
+  // Nothing is broken and nothing was lost — the user asked for a language and is being told when they will see
+  // it. `info` also means it dismisses itself after NOTICE_AUTO_DISMISS_MS, which is right for a confirmation
+  // the user just triggered and would otherwise have to clear by hand.
+  languageChanged: "info",
   // Still usable, but degraded: changes that will not be saved, tabs that did not come back.
   settingsNewer: "warning",
   sessionNewer: "warning",

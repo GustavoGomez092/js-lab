@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { applyDocumentLocale } from "../i18n";
 import { strings } from "../strings";
 import { registerBundledFontFaces } from "../themes/font-faces";
 import "../styles.css";
@@ -9,6 +10,7 @@ const root = document.getElementById("root");
 if (!root) throw new Error("#root element is missing from settings.html");
 
 registerBundledFontFaces();
+applyDocumentLocale();
 const api = createSettingsApi();
 api
   .get()

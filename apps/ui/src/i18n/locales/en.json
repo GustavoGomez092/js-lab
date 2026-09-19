@@ -298,6 +298,7 @@
       "buffersUnreadable_one": "{{count}} tab's contents couldn't be read, so it opened empty and read-only. JSLab won't save it over its file.",
       "buffersUnreadable_other": "{{count}} tabs' contents couldn't be read, so they opened empty and read-only. JSLab won't save them over their files.",
       "copySaved": " A copy was saved as {{file}}",
+      "languageChanged": "Restart JSLab to see it in the language you chose.",
       "sessionNewer": "session.json was written by a newer version of JSLab (version {{version}}). Tab changes in this window won't be saved to it.",
       "sessionReset": "Your tabs couldn't be restored because session.json was unreadable.",
       "sessionRestored": "Your tabs were restored from the backup because session.json was unreadable.",
@@ -516,7 +517,7 @@
   "settings": {
     "app": {
       "uiLanguage": {
-        "help": "Language of menus and panels. More languages arrive in a later version.",
+        "help": "Language of menus and panels. JSLab must be restarted for a change to take effect.",
         "label": "Language"
       }
     },

@@ -34,7 +34,16 @@ not have to finish a language before opening a pull request.
 
 - a key in your file that English does not have — almost always a typo or a key whose control was deleted;
 - a `t("…")` call in the app with no entry in `en.json`, which would otherwise render as the raw key;
-- a drop in the number of translated strings in your language, recorded in `apps/ui/src/i18n/coverage.json`.
+- a drop in the number of translated strings in your language, recorded in `apps/ui/src/i18n/coverage.json`;
+- a translation that is too long for the control it appears in, reported as
+  `es.json: menu.tools is 18 columns, over its 14-column budget`.
+
+The last one applies only to the short labels listed in `apps/ui/src/i18n/width.ts` — menu titles, settings tab
+names, a few status-bar and palette strings — where the control cannot grow to fit. Width is counted in
+columns, so a Chinese or Japanese character counts as two and an accent counts as none. It is a length cap and
+not a layout measurement: clearing it does not prove a label fits, only that it is not wildly too long. If a
+correct translation genuinely needs more room than its budget allows, raise the budget in that file and say in
+your pull request which control you checked it against.
 
 A string copied verbatim from English does not count as translated, so pasting `en.json` into another file
 cannot satisfy the coverage number. When you add translations, raise your language's count in `coverage.json`

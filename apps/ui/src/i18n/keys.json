@@ -232,6 +232,7 @@
   "main.notices.buffersUnreadable_one",
   "main.notices.buffersUnreadable_other",
   "main.notices.copySaved",
+  "main.notices.languageChanged",
   "main.notices.sessionNewer",
   "main.notices.sessionReset",
   "main.notices.sessionRestored",

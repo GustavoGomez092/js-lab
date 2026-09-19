@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { createPrettierWorkerFormatter } from "./format/worker-client";
+import { applyDocumentLocale } from "./i18n";
 import { createRpcApi } from "./rpc";
 import { App } from "./shell/App";
 import { showStartupFailure } from "./shell/startup-failure";
@@ -11,6 +12,7 @@ const root = document.getElementById("root");
 if (!root) throw new Error("#root element is missing from index.html");
 
 registerBundledFontFaces();
+applyDocumentLocale();
 const api = createRpcApi();
 const store = createAppStore();
 

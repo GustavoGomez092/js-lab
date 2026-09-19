@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { COMMANDS, commandTitleKey, LOCALES } from "@jslab/shared";
 import { checkLocales, MIN_KEYS, type SourceFile } from "../src/i18n/check";
+import { checkWidths, WIDTH_BUDGETS } from "../src/i18n/width";
 
 const UI_ROOT = join(import.meta.dir, "..");
 const REPO_ROOT = join(UI_ROOT, "..", "..");
@@ -75,6 +76,17 @@ for (const entry of report.locales) {
   }
   if (strict && entry.missing.length > 0) {
     problems.push(`--strict: ${entry.locale}.json is missing ${entry.missing.length} keys`);
+  }
+}
+
+// The width budget: a translation long enough to outgrow the control it lands in. Always checked, and checked
+// for `en` too -- a budget the source language already breaks is one no translator could meet. This is a length
+// cap and NOT a layout assertion; see src/i18n/width.ts for exactly what it does and does not prove.
+for (const locale of LOCALES) {
+  for (const violation of checkWidths(locales[locale], WIDTH_BUDGETS)) {
+    problems.push(
+      `${locale}.json: ${violation.key} is ${violation.width} columns, over its ${violation.budget}-column budget`,
+    );
   }
 }
 

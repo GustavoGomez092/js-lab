@@ -97,6 +97,11 @@ export function createStrings(t: Translate) {
     },
     notices: {
       copySaved: (file: string) => t("main.notices.copySaved", { file }),
+      /**
+       * Spec §17: the UI language changed, and the menus this window is showing were built in the old one. The
+       * Settings window's own field carries a static "Restart required" badge, but that is the other window.
+       */
+      languageChanged: t("main.notices.languageChanged"),
       settingsReset: t("main.notices.settingsReset"),
       settingsRestored: t("main.notices.settingsRestored"),
       settingsRestoredMissing: t("main.notices.settingsRestoredMissing"),

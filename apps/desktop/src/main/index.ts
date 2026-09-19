@@ -68,7 +68,7 @@ import { createRpcHandlers } from "./rpc-handlers";
 import { KeybindingsStore } from "./services/keybindings-store";
 import { isShiftHeld, requestSafeModeOnNextLaunch } from "./services/safe-mode";
 import { ThemeStore } from "./services/theme-store";
-import { startupNotices } from "./startup-notices";
+import { languageChangeNotice, startupNotices } from "./startup-notices";
 import { installStrings, strings } from "./strings";
 import { afterUiFlush, createUiFlushHandlers, createUiFlushWaiter } from "./ui-flush";
 import { onReload, shouldReloadView } from "./ui-watchdog";
@@ -546,6 +546,16 @@ async function start(): Promise<void> {
   });
 
   settings.onChange((next) => rpc.send["settings.changed"]({ settings: next }));
+
+  // Spec §17: changing the UI language needs a restart, and the notice belongs in the main window -- that is
+  // where the menus the user just changed the language of actually are. Held as a snapshot because subscribers
+  // run after `settings.current` has already been replaced, so there is no "before" left to compare against.
+  let previousSettings = settings.current;
+  settings.onChange((next) => {
+    const notice = languageChangeNotice(previousSettings, next, strings);
+    previousSettings = next;
+    if (notice && mainWindow.isOpen()) rpc.send["app.notice"](notice);
+  });
 
   const url = await resolveMainViewUrl({
     channel: await Updater.localInfo.channel(),

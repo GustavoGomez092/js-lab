@@ -291,6 +291,9 @@ describe("inbound validators", () => {
       settingsRecovered: "info",
       sessionRecovered: "info",
       cliInstall: "info",
+      // Spec §17's restart notice: the user asked for a language and is being told when they will see it.
+      // Nothing failed, so it speaks quietly and clears itself.
+      languageChanged: "info",
       // Something the user still has, but degraded: changes that will not be saved, tabs that did not come back.
       settingsNewer: "warning",
       sessionNewer: "warning",

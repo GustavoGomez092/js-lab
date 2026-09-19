@@ -135,3 +135,41 @@ sat 296 keys below the shipped 760, so it would have stayed silent through a cat
 itself. `keys.json` does not already cover that case: the extractor rewrites the manifest *from* `en.json`, so
 after a regeneration against a truncated tree the two agree perfectly and every drift list is empty — the floor
 is then the only remaining check. 700 keeps ~60 keys of headroom so a legitimate deletion needs no edit here.
+
+## Layout under translation (Task 14)
+
+### What the width budget is, and what it is not
+
+`apps/ui/src/i18n/width.ts` caps the length of 27 short labels — the eleven menu titles, the eight settings tab
+names, the "Restart required" badge, two status-bar items, the three runtime options and the palette
+placeholder. It counts columns, not pixels: a CJK character counts two, a combining accent none.
+
+**It does not check layout, and nothing else does either.** The unit suite runs under happy-dom, which has no
+layout engine — `getBoundingClientRect()` returns zeros and text is never measured — so no test in this
+repository can assert that a translated label fits its control.
+
+> [!IMPORTANT]
+> The M5e plan says the real check is "the screenshot pass in Task 15". **It is not.** Task 15 contains two
+> `app.screenshot()` calls that assert nothing — one of them wrapped in `.catch(() => {})` — and no baseline
+> image is compared to anything. There is no automated layout coverage for any locale. The boxes below are the
+> only real check, and none of them has been performed.
+
+The one genuine browser measurement JSLab has is the output filter-chip row (commit `59a7b62`, ruling
+`R-UI9-COUNTS-1`): worst-case CJK with three-digit counts came out ~32% wider with **no** new wrapping and
+**no** truncation. The chips are therefore deliberately left out of the budget — a real measurement beats a
+column count — and that 32% is a pixel figure that neither derives nor validates the column numbers.
+
+### Manual checks (none performed)
+
+- [ ] **Menu bar in `ja` and `zh`.** Set Settings → General → Language to Japanese, restart, then Chinese.
+      Every menu-bar section title is fully visible; the bar does not crowd, clip or reflow.
+- [ ] **Settings nav column in `es` and `pt`.** All eight tab labels fit the 180px column without wrapping or
+      being cut off. `Compilación` (11 columns) and `Formatação` (10) are the long ones.
+- [ ] **Status bar at minimum window width, CJK locale.** Run-state text, the Safe Mode badge, the layout
+      toggle and both selects stay on one line without overlapping — the row is `white-space: nowrap`.
+- [ ] **"Restart required" badge in `es`.** `Requiere reiniciar` (18 columns, the widest shipped translation)
+      sits beside the Language field label without pushing the control off its row.
+- [ ] **The restart notice.** With the main window open, change the language. A dismissible info banner appears
+      in the main window naming the restart, and clears itself after 8s (`info`, `NOTICE_AUTO_DISMISS_MS`).
+- [ ] **`<html lang>`.** With VoiceOver on and a `ja` UI, the interface is announced in a Japanese voice rather
+      than an English one reading Japanese text.

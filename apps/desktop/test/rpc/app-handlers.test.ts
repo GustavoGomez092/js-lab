@@ -26,7 +26,7 @@ function setup(keybindings = keybindingsFake()) {
   const deps = {
     logTail: mock((_lines: number) => ["a", "Authorization: Bearer secret"]),
     settings: { current: defaultSettings(), reset: mock(async () => defaultSettings()) },
-    paths: { dataDir: "/data", logsDir: "/data/logs" },
+    paths: { dataDir: "/data", logsDir: "/data/logs", noticesFile: "/bundle/THIRD-PARTY-NOTICES.md" },
     keybindings,
     versions: { app: "0.2.0", bun: "1.4.0", electrobun: "2.0.1" },
     os: { macOS: "26.5.2", arch: "arm64" },
@@ -96,6 +96,28 @@ describe("app.command", () => {
       ["https://github.com/GustavoGomez092/js-lab/releases"],
     ]);
     // A link must never be handed to `openPath`, which would try to open a URL as a filesystem path.
+    expect(deps.openPath).not.toHaveBeenCalled();
+  });
+
+  /**
+   * M6. The About dialog's "Open-Source Notices…" control. Two things have to hold and neither is implied by
+   * the other: the action must reach `openPath` (a file in the app bundle) and must NOT reach `openExternal`,
+   * which would try to open a filesystem path as a URL.
+   */
+  test("openThirdPartyNotices opens the bundle's notices file as a path, never as a link", () => {
+    const { deps, handlers } = setup();
+    handlers.messages["app.command"]({ action: "openThirdPartyNotices" });
+    // A literal, not `deps.paths.noticesFile`: asserting against the very field the handler read would pass
+    // just as well if it opened the logs folder instead.
+    expect(deps.openPath.mock.calls).toEqual([["/bundle/THIRD-PARTY-NOTICES.md"]]);
+    expect(deps.openExternal).not.toHaveBeenCalled();
+  });
+
+  test("the Settings window can never open the notices file (spec §7.5, FA-m11)", () => {
+    const { deps } = setup();
+    const settings = createSettingsAppHandlers(deps);
+    settings.messages["app.command"]({ action: "openThirdPartyNotices" });
+    // Rejected by `settingsAppCommandSchema` and logged, exactly as any other action that window may not send.
     expect(deps.openPath).not.toHaveBeenCalled();
   });
 

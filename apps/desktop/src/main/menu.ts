@@ -125,7 +125,10 @@ export function buildMenu(model: MenuModel): MenuItem[] {
     {
       label: t("app.name"),
       submenu: [
-        { role: "about" },
+        // M6: JSLab's own About, not the native `{ role: "about" }` panel. The native one shows only what
+        // Info.plist carries -- it cannot name the Bun or Electrobun version, and cannot open the notices
+        // file -- so shipping both would mean two "About JSLab" that disagree with each other.
+        item("help.about"),
         separator,
         item("app.settings"),
         separator,
@@ -284,7 +287,11 @@ export function buildMenu(model: MenuModel): MenuItem[] {
     {
       label: t("menu.help"),
       submenu: [
-        // ST-11 (spec §7.4): the three link items lead, as they do in the app this menu is measured against.
+        // M6: the same `help.about` command the app menu carries, so the two entry points cannot drift.
+        item("help.about"),
+        separator,
+        // ST-11 (spec §7.4): the three link items lead the rest, as they do in the app this menu is measured
+        // against.
         item("help.documentation"),
         item("help.reportIssue"),
         item("help.whatsNew"),

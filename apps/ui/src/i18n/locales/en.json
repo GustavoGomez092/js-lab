@@ -1,4 +1,14 @@
 {
+  "about": {
+    "bun": "Bun {{version}}",
+    "close": "Close",
+    "copyright": "Copyright (c) 2026 JSLab contributors",
+    "electrobun": "Electrobun {{version}}",
+    "license": "MIT License",
+    "thirdParty": "Open-Source Notices…",
+    "title": "About JSLab",
+    "version": "Version {{version}}"
+  },
   "ai": {
     "title": "AI Chat",
     "newChat": "New Chat",
@@ -98,6 +108,7 @@
       "document": "Format Code"
     },
     "help": {
+      "about": "About JSLab",
       "copyDebugLog": "Copy Debug Log",
       "documentation": "Documentation",
       "installCli": "Install jslab Command…",

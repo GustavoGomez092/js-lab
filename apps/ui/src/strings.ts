@@ -2,6 +2,17 @@ import { t } from "./i18n";
 
 /** Every user-visible UI string, resolved through i18next (spec §17). Keys are this object's own paths. */
 export const strings = {
+  /** M6: the About dialog (`shell/AboutDialog.tsx`). */
+  about: {
+    title: t("about.title"),
+    version: (version: string) => t("about.version", { version }),
+    bun: (version: string) => t("about.bun", { version }),
+    electrobun: (version: string) => t("about.electrobun", { version }),
+    license: t("about.license"),
+    copyright: t("about.copyright"),
+    thirdParty: t("about.thirdParty"),
+    close: t("about.close"),
+  },
   install: {
     /** Spec §6.3. */
     package: (name: string) => t("install.package", { name }),

@@ -25,7 +25,7 @@ function setup(safeMode: RpcHandlerDeps["safeMode"] = { active: false, reason: n
       patchTab: mock(async () => {}),
     },
     safeMode,
-    versions: { app: "0.0.1", bun: "1.3.13" },
+    versions: { app: "0.0.1", bun: "1.3.13", electrobun: "2.0.1" },
     log: mock(() => {}),
     onUiHeartbeat: mock(() => {}),
   } satisfies RpcHandlerDeps;
@@ -42,7 +42,10 @@ describe("requests", () => {
       session: deps.session.session,
       buffers: { t1: "1 + 1" },
       safeMode: { active: false, reason: null },
-      versions: { app: "0.0.1", bun: "1.3.13" },
+      // M6: `electrobun` joins the payload so the About dialog can name the framework version. Until now it
+      // existed only in the debug report, which is why the UI could never show it. Dropping it from
+      // `rpc-handlers.ts` turns this exact-equality assertion red.
+      versions: { app: "0.0.1", bun: "1.3.13", electrobun: "2.0.1" },
     });
   });
 
@@ -131,7 +134,7 @@ describe("requests", () => {
         patchTab: mock(async () => {}),
       },
       safeMode: { active: false, reason: null },
-      versions: { app: "0.0.1", bun: "1.3.13" },
+      versions: { app: "0.0.1", bun: "1.3.13", electrobun: "2.0.1" },
       log: (message) => logged.push(message),
       onUiHeartbeat: () => {},
     });

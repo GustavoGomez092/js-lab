@@ -133,6 +133,39 @@ describe("build wiring: the jslab CLI binary", () => {
   });
 });
 
+/**
+ * M6. Help → About → Open-Source Notices… opens a file that lives INSIDE the app bundle, so three separate
+ * things have to agree or a built app opens nothing: the file exists in the repo, the build stages and copies
+ * it, and `app-paths.ts` points at where it actually lands. Any one of them alone proves nothing.
+ */
+describe("build wiring: THIRD-PARTY-NOTICES.md (M6 About)", () => {
+  const NOTICES = join(import.meta.dir, "..", "..", "..", "THIRD-PARTY-NOTICES.md");
+
+  test("the attribution file exists at the repo root and carries real licence text", () => {
+    expect(existsSync(NOTICES)).toBe(true);
+    const text = readFileSync(NOTICES, "utf8");
+    // Not merely non-empty: a placeholder would satisfy that while shipping no attribution at all.
+    expect(text).toContain("MIT");
+    expect(text.length).toBeGreaterThan(1000);
+  });
+
+  test("hutch stages it into dist/ and electrobun copies it into Resources/app", () => {
+    const bundles = (hutchConfig.scripts as Record<string, string>)["build:bundles"] ?? "";
+    // Staged rather than copied straight from the repo root, because an electrobun `copy` key may not escape
+    // the project directory -- the same constraint the locale files below are subject to.
+    expect(bundles).toContain("cp ../../THIRD-PARTY-NOTICES.md dist/THIRD-PARTY-NOTICES.md");
+    expect(electrobunConfig.build?.copy?.["dist/THIRD-PARTY-NOTICES.md"]).toBe("THIRD-PARTY-NOTICES.md");
+  });
+
+  test("resolveAppPaths points Main at the copy inside the bundle, with an override for dev and tests", () => {
+    const base = { resourcesFolder: "/R", userData: "/U", execPath: "/bun", env: {} };
+    // `copy`'s destinations are relative to Resources/app -- the same reason "dist/runner": "runner" produces
+    // app/runner/bootstrap.js -- so the notices land at app/THIRD-PARTY-NOTICES.md and NOT beside the sources.
+    expect(resolveAppPaths(base).noticesFile).toBe("/R/app/THIRD-PARTY-NOTICES.md");
+    expect(resolveAppPaths({ ...base, env: { JSLAB_NOTICES_FILE: "/tmp/n.md" } }).noticesFile).toBe("/tmp/n.md");
+  });
+});
+
 describe("build wiring: locale files (spec §17, Main reads the same files)", () => {
   const LOCALES_SOURCE = join(import.meta.dir, "..", "..", "ui", "src", "i18n", "locales");
 

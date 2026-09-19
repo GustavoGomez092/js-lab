@@ -104,7 +104,9 @@ describe("application menu", () => {
   test("keeps native roles, never the delete role, and accelerators only for Quit and Hide", () => {
     const items = flatten(buildMenu(model()));
     for (const role of [
-      "about",
+      // M6: "about" is deliberately NOT here any more -- JSLab ships its own About dialog, because the native
+      // panel can name neither the Bun/Electrobun versions nor the open-source notices. The assertion below
+      // pins that the native role is really gone, so this is a swap rather than a silent duplication.
       "hide",
       "quit",
       "undo",
@@ -120,6 +122,9 @@ describe("application menu", () => {
       expect(items.some((item) => item.role === role)).toBe(true);
     }
     expect(items.some((item) => (item.role as string | undefined) === "delete")).toBe(false);
+    // M6: the native About panel is gone in favour of `help.about`. Without this, dropping the role and
+    // forgetting the replacement would look identical to a correct swap.
+    expect(items.some((item) => (item.role as string | undefined) === "about")).toBe(false);
     expect(items.filter((item) => item.accelerator).map((item) => [item.role, item.accelerator])).toEqual([
       ["hide", "h"],
       ["quit", "q"],
@@ -320,6 +325,31 @@ describe("application menu", () => {
     const help = (menu.find((item) => item.label === "Help")?.submenu ?? []).map(
       (item) => item.label?.split("    ")[0],
     );
-    expect(help.slice(0, 5)).toEqual(["Documentation", "Report Issue", "What's New", undefined, "Copy Debug Log"]);
+    expect(help.slice(0, 7)).toEqual([
+      "About JSLab",
+      undefined,
+      "Documentation",
+      "Report Issue",
+      "What's New",
+      undefined,
+      "Copy Debug Log",
+    ]);
+  });
+
+  /**
+   * M6. About is reachable from both the app menu (where a Mac user looks for it) and the Help menu, and both
+   * dispatch the one `help.about` command, so the two entry points cannot drift apart. The English is a
+   * literal for the same reason the ST-11 titles above are.
+   */
+  test("About JSLab sits in the app menu and the Help menu, both on the one command (M6)", () => {
+    const menu = buildMenu(model());
+    const appMenu = menu.find((item) => item.label === "JSLab")?.submenu ?? [];
+    const help = menu.find((item) => item.label === "Help")?.submenu ?? [];
+
+    // The app menu leads with it, in the slot the native `{ role: "about" }` panel used to occupy.
+    expect(appMenu[0]).toMatchObject({ label: "About JSLab", action: menuAction("help.about") });
+    expect(help[0]).toMatchObject({ label: "About JSLab", action: menuAction("help.about") });
+    // Exactly two entries, so a future edit cannot quietly leave a third About somewhere else in the bar.
+    expect(flatten(menu).filter((item) => item.action === menuAction("help.about"))).toHaveLength(2);
   });
 });

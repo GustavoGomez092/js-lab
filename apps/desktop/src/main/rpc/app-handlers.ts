@@ -9,7 +9,7 @@ import { createValidators, type Log } from "./validate";
 export interface AppHandlerDeps {
   logTail(lines: number): string[];
   settings: Pick<SettingsStore, "current" | "reset">;
-  paths: { dataDir: string; logsDir: string };
+  paths: { dataDir: string; logsDir: string; noticesFile: string };
   /**
    * Settings → Keybindings "Open keybindings.json" (spec §6.5). The store owns the path, so this action and the
    * keybindings handlers can never disagree about which file they mean.
@@ -113,6 +113,11 @@ async function runAppAction(deps: AppHandlerDeps, action: AppAction): Promise<vo
       return;
     case "openWhatsNew":
       deps.openExternal(HELP_URLS.whatsNew);
+      return;
+    case "openThirdPartyNotices":
+      // `openPath`, never `openExternal`: this is a file inside the app bundle, not a URL. Handing a path to
+      // the external-link path would try to open it as one.
+      deps.openPath(deps.paths.noticesFile);
       return;
     case "openDataFolder":
       deps.openPath(deps.paths.dataDir);

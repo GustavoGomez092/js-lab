@@ -50,6 +50,14 @@ export interface AppPaths {
    * really does read the same files the UI ships.
    */
   localesDir: string;
+  /**
+   * M6: the attribution file Help → About opens. Authored at the repo root and staged into the bundle by
+   * hutch.config.ts's `build:bundles`, then copied to `Resources/app/THIRD-PARTY-NOTICES.md` by
+   * electrobun.config.ts -- exactly the route the locale files above take, and for the same reason (a
+   * `build.copy` key may not escape the project directory). Main reads the real shipped file; nothing
+   * guesses this path.
+   */
+  noticesFile: string;
   bunBinary: string;
   /** Spec §16.1: the Bun-compiled `jslab` binary the install symlink points at. */
   cliBinary: string;
@@ -85,6 +93,7 @@ export function resolveAppPaths(input: AppPathsInput): AppPaths {
     webRunnerBootstrap: input.env.JSLAB_WEB_RUNNER_BOOTSTRAP ?? join(appDir, "runner", "web-bootstrap.js"),
     transformWorker: input.env.JSLAB_TRANSFORM_WORKER ?? join(appDir, "workers", "transform-worker.js"),
     localesDir: input.env.JSLAB_LOCALES_DIR ?? join(appDir, "locales"),
+    noticesFile: input.env.JSLAB_NOTICES_FILE ?? join(appDir, "THIRD-PARTY-NOTICES.md"),
     bunBinary: input.env.JSLAB_BUN_PATH ?? input.execPath,
     cliBinary: input.env.JSLAB_CLI_BINARY ?? join(appDir, "bin", "jslab"),
   };

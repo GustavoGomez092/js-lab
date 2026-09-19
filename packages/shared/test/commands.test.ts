@@ -132,11 +132,20 @@ describe("command titles come from the catalogue (spec §17)", () => {
     expect(COMMANDS.every((command) => !("title" in command))).toBe(true);
   });
 
-  test("all 118 commands have an entry in en.json", () => {
+  test("all 119 commands have an entry in en.json", () => {
     const missing = COMMANDS.filter((command) => typeof lookup(commandTitleKey(command.id)) !== "string");
     expect(missing.map((command) => command.id)).toEqual([]);
-    // 114 through M5; ST-11 added Help → Documentation / Report Issue / What's New, and TL-18 added AI Chat.
-    expect(COMMANDS.length).toBe(118);
+    // 114 through M5; ST-11 added Help → Documentation / Report Issue / What's New, TL-18 added AI Chat, and
+    // M6 added Help → About.
+    expect(COMMANDS.length).toBe(119);
+  });
+
+  // M6: About replaces the native macOS panel, so it is an ordinary command -- palette-visible, bindable and
+  // dispatchable from both menus that carry it.
+  test("M6 adds the About command to the Help category, visible in the palette", () => {
+    expect(commandMeta("help.about")).toMatchObject({ category: "help" });
+    expect(commandMeta("help.about")?.palette).toBeUndefined();
+    expect(lookup(commandTitleKey("help.about"))).toBe("About JSLab");
   });
 
   test("the entries are nested, never flat dotted keys, because Main walks one segment at a time", () => {

@@ -97,3 +97,41 @@ bun run test
   manifest and the unused-key sweep cannot be true until the extraction sweep produces the real catalogue.
   The unknown-key check, the per-locale `extra` check and the coverage ratchet run now. Task 11 drops the flag
   from `apps/ui/package.json` and from `.github/workflows/ci.yml` in the same commit as the full catalogue.
+
+## Translation provenance
+
+- [x] **`en` is complete and real.** Extracted from copy that shipped in M1–M4; no string was invented. 760 keys.
+- [ ] **Native-speaker review of `es`** — the seeded strings are drafts. Unchecked until a Spanish speaker has read them.
+- [ ] **Native-speaker review of `ja`** — as above.
+- [ ] **Native-speaker review of `zh`** — as above.
+- [ ] **Native-speaker review of `pt`** — as above.
+- [ ] **Full coverage for all four locales.** An M6 parity-gate obligation, verified with `bun run --cwd apps/ui i18n:check --strict`. Out of scope for M5e; see `docs/user/translating.md`.
+
+Do not tick a review box on the strength of the implementation plan, an automated translation, or a spot check
+by a non-speaker. The point of shipping a small seed with English fallback is that an unreviewed string is
+absent rather than wrong.
+
+**What the four files actually contain, stated plainly.** 25 seeded keys each, out of a 760-key catalogue —
+3.3% per language, 100 strings of the 3040 that full coverage would mean. The values are **drafts produced
+during implementation and read by no native speaker of any of the four languages.** They were kept to short,
+unambiguous chrome — the eleven menu section titles, seven settings tab names, five command verbs,
+`files.cancel` and `settings.restartRequired` — where the correct term is not in dispute. No term of art
+(`Auto Log`, `magic comment`, `logpoint`, `loop protection`, `spare`, `trailing comma`) is seeded, because
+machine or unreviewed output for those is wrong in ways the reader cannot detect.
+
+Coverage recorded in `apps/ui/src/i18n/coverage.json` is `es 23, ja 25, zh 25, pt 24` — not 25 each, because a
+value identical to English is not counted as a translation: `NPM` is a product name in all five, `General` and
+`Editor` are already Spanish, and `Editor` is already Portuguese. Those are correct answers that score zero,
+which is the gate behaving as designed (`apps/ui/src/i18n/check.ts`).
+
+Provenance cannot be recorded inside the locale files themselves: JSON carries no comments, and any extra key
+would be a key `en.json` lacks, which the check fails by design. This checklist and `docs/user/translating.md`
+are therefore the only provenance surfaces — keep them in step with the files.
+
+### Size floor
+
+`MIN_KEYS` was ratcheted 464 → 700 in this task (`apps/ui/src/i18n/check.ts`). 464 was the pre-sweep count and
+sat 296 keys below the shipped 760, so it would have stayed silent through a catalogue that lost a third of
+itself. `keys.json` does not already cover that case: the extractor rewrites the manifest *from* `en.json`, so
+after a regeneration against a truncated tree the two agree perfectly and every drift list is empty — the floor
+is then the only remaining check. 700 keeps ~60 keys of headroom so a legitimate deletion needs no edit here.

@@ -42,13 +42,21 @@ export interface CheckReport {
  * A floor, not a census. Its job is to fail the check when it reads an empty or wrong-path catalogue -- the one
  * failure that would otherwise look exactly like success.
  *
- * 464 is what the two string modules measured when Phase B began (420 leaves in `apps/ui/src/strings.ts` plus 44
- * in `apps/desktop/src/main/strings.ts`). Both have grown well past that since: Task 11 alone adds the command
- * titles and the menu labels, and the shipped catalogue is now over 700 keys. The floor is deliberately left at
- * the Phase B number rather than ratcheted to the current total -- it exists to catch a collapse, not to restate
- * a count that every task changes. `keys.json` is what pins the exact set.
+ * It was 464 through Phase B -- what the two string modules measured when that phase began (420 leaves in
+ * `apps/ui/src/strings.ts` plus 44 in `apps/desktop/src/main/strings.ts`, the latter now 63). The sweep finished
+ * at 760, so a 464 floor sat 296 keys below reality and would have sat silent through a catalogue that lost a
+ * third of itself.
+ *
+ * Ratcheted to 700 here because `keys.json` does NOT already cover this case. The manifest catches a drop in
+ * en.json alone, loudly and by name. What it cannot catch is a regeneration from a truncated or wrong-path tree,
+ * because `bun scripts/i18n-extract.ts` rewrites the manifest FROM en.json -- the two then agree perfectly at any
+ * size, every drift list is empty, and the floor is the only check left standing. That is precisely the failure
+ * this constant exists for.
+ *
+ * Still a floor and not a census: 700 leaves ~60 keys of headroom, so legitimately deleting a control does not
+ * force an edit here, while a collapse cannot pass. `keys.json` remains what pins the exact set.
  */
-export const MIN_KEYS = 464;
+export const MIN_KEYS = 700;
 
 /**
  * A call to the translator with a literal key, including a wrapped `t(\n  'some.key'\n)`. The lookbehind is

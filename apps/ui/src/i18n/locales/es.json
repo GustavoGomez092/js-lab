@@ -2,5 +2,50 @@
   "app": {
     "name": "JSLab",
     "settingsWindowTitle": "Preferencias de JSLab"
+  },
+  "commands": {
+    "app": {
+      "settings": "Preferencias…"
+    },
+    "file": {
+      "save": "Guardar"
+    },
+    "run": {
+      "start": "Ejecutar",
+      "stop": "Detener"
+    },
+    "tab": {
+      "new": "Nueva pestaña"
+    }
+  },
+  "files": {
+    "cancel": "Cancelar"
+  },
+  "menu": {
+    "actions": "Acciones",
+    "edit": "Edición",
+    "file": "Archivo",
+    "help": "Ayuda",
+    "language": "Lenguaje",
+    "layout": "Disposición",
+    "runtime": "Entorno",
+    "themes": "Temas",
+    "tools": "Herramientas",
+    "view": {
+      "_": "Ver"
+    },
+    "window": "Ventana"
+  },
+  "settings": {
+    "restartRequired": "Requiere reiniciar",
+    "tabs": {
+      "advanced": "Avanzado",
+      "appearance": "Apariencia",
+      "build": "Compilación",
+      "editor": "Editor",
+      "formatting": "Formato",
+      "general": "General",
+      "npm": "NPM"
+    }
   }
 }

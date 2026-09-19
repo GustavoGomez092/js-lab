@@ -7,7 +7,15 @@ translation or add a language.
 
 Every user-visible string lives in `apps/ui/src/i18n/locales/<lng>.json`, keyed by a dotted, namespaced path
 such as `settings.editor.lineWrap.label`. `en.json` is the source catalogue that every other file is measured
-against. The Japanese, Spanish, Chinese and Portuguese files are written by people.
+against, and it is complete and real: every string in it shipped and was reviewed.
+
+The Japanese, Spanish, Chinese and Portuguese files currently hold a **small seed of draft strings that no
+native speaker has reviewed yet** — around 25 keys each out of 760, confined to short, unambiguous chrome
+(menu titles, settings tab names, the core verbs). Everything else falls back to English on purpose. Terms of
+art like *Auto Log*, *magic comment*, *logpoint* and *loop protection* are deliberately **not** seeded: a
+confidently wrong translation of one of those is worse than English, because a reader cannot tell which
+strings to distrust. `docs/qa/m5e-checklist.md` tracks the native-speaker review of each language, and those
+boxes are unticked. Reviewing one of the four is the single most useful contribution this page is asking for.
 
 A key missing from your language falls back to English, so a partial translation is genuinely useful — you do
 not have to finish a language before opening a pull request.

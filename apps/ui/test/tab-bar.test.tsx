@@ -4,10 +4,22 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { createAppStore } from "../src/state/store";
 import { RenameDialog } from "../src/tabs/RenameDialog";
 import { reorderByDrop } from "../src/tabs/reorder";
+import { strings } from "../src/strings";
 import { TabBar } from "../src/tabs/TabBar";
 import type { TabActions } from "../src/tabs/tab-actions";
 import { createTabSummaryCache } from "../src/tabs/tab-summary";
 import { createFakeApi } from "./fake-api";
+
+/** Mutates the real `strings.tabs.untitled` for the duration of `run`, then restores it (R-M5E-DT-1). */
+async function withLocalizedUntitled<T>(value: string, run: () => T | Promise<T>): Promise<T> {
+  const original = strings.tabs.untitled;
+  (strings.tabs as { untitled: string }).untitled = value;
+  try {
+    return await run();
+  } finally {
+    (strings.tabs as { untitled: string }).untitled = original;
+  }
+}
 
 function fakeTabActions() {
   return {
@@ -211,5 +223,51 @@ describe("working directory label (EX-33)", () => {
       store.getState().applyTabUpdate({ ...(store.getState().tabs.c as TabState), workingDirectory: "/work/api" }),
     );
     expect(screen.getByText("Mine · api")).toBeTruthy();
+  });
+});
+
+/**
+ * R-M5E-DT-1: the headline defect. `TabBar.tsx:67` calls `summaries.title(tab, code)`, and until this fix
+ * `tab-summary.ts:31` wired that up to a BARE `deriveTitle` reference -- so an empty, fileless, non-custom
+ * tab always showed deriveTitle's own hard-coded English default ("Untitled"), never the localized string
+ * that already exists at `strings.tabs.untitled`, no matter what language the app is running in.
+ */
+describe("an untitled tab's label is localized (R-M5E-DT-1)", () => {
+  function setupEmptyTab() {
+    const store = createAppStore();
+    store.getState().hydrate({
+      settings: defaultSettings(),
+      session: defaultSession(() => createTab({ id: "empty" })),
+      buffers: { empty: "" },
+      safeMode: { active: false, reason: null },
+      versions: { app: "0", bun: "1.4.0" },
+    });
+    const { api } = createFakeApi();
+    render(<TabBar store={store} tabs={fakeTabActions()} api={api} />);
+  }
+
+  test("the real tab bar shows the current locale's fallback, not the English literal", async () => {
+    await withLocalizedUntitled("無題", () => {
+      setupEmptyTab();
+      const tab = screen.getByRole("tab");
+      expect(tab.textContent?.replace("×", "")).toBe("無題");
+    });
+  });
+
+  test("the rename dialog pre-fills the current locale's fallback for the same tab", async () => {
+    await withLocalizedUntitled("無題", () => {
+      const store = createAppStore();
+      store.getState().hydrate({
+        settings: defaultSettings(),
+        session: defaultSession(() => createTab({ id: "empty" })),
+        buffers: { empty: "" },
+        safeMode: { active: false, reason: null },
+        versions: { app: "0", bun: "1.4.0" },
+      });
+      render(<RenameDialog store={store} />);
+      act(() => store.getState().openModal({ kind: "rename", tabId: "empty" }));
+      const input = screen.getByLabelText("Tab name") as HTMLInputElement;
+      expect(input.value).toBe("無題");
+    });
   });
 });

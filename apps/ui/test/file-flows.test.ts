@@ -198,6 +198,27 @@ describe("file flows", () => {
   });
 
   /**
+   * R-M5E-DT-1: `file-flows.ts:126` calls `deriveTitle(tab, code)` with no third argument, so the "Save
+   * changes?" / "Close ...?" dialog title fell back to deriveTitle's own hard-coded English default for an
+   * empty, fileless tab -- even though the localized string already exists at `strings.tabs.untitled`.
+   */
+  test("the close confirmation for an empty, untitled tab shows the localized fallback (i18n)", async () => {
+    const { tabs, store, answer } = setup(mergeSettings(defaultSettings(), { tabs: { confirmClose: true } }));
+    // Two tabs stay open ("scratch" and "saved"), so closing "scratch" hits the confirmClose dialog rather
+    // than TF-21's lone-untouched-tab closeWindow shortcut.
+    store.getState().editCode("", "scratch");
+    const original = strings.tabs.untitled;
+    (strings.tabs as { untitled: string }).untitled = "無題";
+    try {
+      const closing = tabs.close("scratch");
+      expect((await answer("close")).title).toBe('Close "無題"?');
+      expect(await closing).toBe(true);
+    } finally {
+      (strings.tabs as { untitled: string }).untitled = original;
+    }
+  });
+
+  /**
    * R-M5a-REGRESSION-2. Before the welcome tab (spec §7.5) a first launch's only tab was empty, so TF-21's
    * "empty" test and "untouched" were the same thing. They no longer are: the welcome tab is untouched but full
    * of sample code, and testing emptiness there closes the TAB and leaves a first-run user looking at an empty
